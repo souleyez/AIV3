@@ -23,7 +23,7 @@ use crate::{
         external_channel_public_text,
     },
     external_channel_static_page_enrich_report_card,
-    sse_support::sse_json_event,
+    sse_support::{sse_json_event, sse_text_delta_events},
 };
 
 pub(crate) const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
@@ -748,6 +748,17 @@ pub(crate) fn external_channel_static_page_sse_event_name(status: &str) -> &'sta
     }
 }
 
+pub(crate) fn external_channel_sse_event_with_delta(
+    event_name: &str,
+    payload: Value,
+    text: &str,
+) -> String {
+    let payload = external_channel_public_stream_payload(payload);
+    let mut encoded = sse_text_delta_events("external_channel.delta", text);
+    encoded.push_str(&sse_json_event(event_name, payload));
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1331,5 +1342,28 @@ mod tests {
             external_channel_static_page_sse_event_name("static_page_publish_failed"),
             "external_channel.static_page_issue"
         );
+    }
+
+    #[test]
+    fn sse_event_with_delta_emits_public_delta_then_named_event() {
+        let body = external_channel_sse_event_with_delta(
+            "external_channel.static_page_progress",
+            json!({
+                "schema": EXTERNAL_CHANNEL_SSE_SCHEMA_V1,
+                "event_id": "pending:000050",
+                "sequence": 50,
+                "phase": "static_page",
+                "status": "static_page_publish_running",
+                "display_text": "处理中",
+                "_stream_dedupe_key": "internal",
+                "data": {"text": "处理中"}
+            }),
+            "处理中",
+        );
+
+        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains("event: external_channel.static_page_progress"));
+        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(!body.contains("_stream_dedupe_key"));
     }
 }

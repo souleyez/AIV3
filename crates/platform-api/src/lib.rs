@@ -5505,13 +5505,6 @@ fn external_channel_static_page_sse_progress_text(
     }
 }
 
-fn external_channel_sse_event_with_delta(event_name: &str, payload: Value, text: &str) -> String {
-    let payload = external_channel_public_stream_payload(payload);
-    let mut encoded = sse_text_delta_events("external_channel.delta", text);
-    encoded.push_str(&sse_json_event(event_name, payload));
-    encoded
-}
-
 fn external_channel_static_page_sse_progress_payload(
     response: ExternalChannelEventResponse,
 ) -> (&'static str, Value, String, String, Option<AssistantRunId>) {
