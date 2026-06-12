@@ -3477,6 +3477,11 @@ Data-ingestion external fixed-task smoke:
   - `aiv3-web.service` was restarted and returned `active`;
   - `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` remained `active`;
   - `node --test apps/web/app/lib/static-page-draft-workspace.test.mjs`: passed on 8 server, 6 tests.
+- GitHub Actions:
+  - latest `DataMax CI` run for docs commit `f6b6787` still failed before executing project steps;
+  - `No-Credential Smoke` and `Rust Minimal` jobs both reported `steps=[]`;
+  - `gh run view 27393737188 --log-failed` returned `log not found: 80956584059`;
+  - this matches the existing runner/job startup failure pattern and does not provide evidence of a project test failure.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
