@@ -3528,11 +3528,18 @@ Data-ingestion external fixed-task smoke:
 - Local verification:
   - `node --test apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 72/72 tests;
   - `npm --prefix apps/web run build`: passed with the existing Next/Turbopack warnings about deprecated `middleware` naming and `next.config.js` NFT tracing.
+- 8-server deployment verification:
+  - local commit `2ded6e8` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `c04ef668b` to `2ded6e812`;
+  - `npm --prefix apps/web run build`: passed with the existing Next/Turbopack warnings about deprecated `middleware` naming and `next.config.js` NFT tracing;
+  - `aiv3-web.service` was restarted for the frontend code change;
+  - `aiv3-web.service`, `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - `node --test apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 72/72 tests.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
-  - no service was restarted during local verification;
+  - only `aiv3-web.service` was restarted for the frontend code change; `platform-api` and workers were not restarted;
   - 120 server was not touched.
 
 ## 2026-06-12 P5 Assistant Stream Content Helper Extraction
