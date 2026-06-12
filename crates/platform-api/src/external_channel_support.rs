@@ -2,8 +2,9 @@ use crate::ApiError;
 use chrono::{DateTime, Utc};
 use contracts::{ExternalChannelPlatformView, ExternalMessageTypeView};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
-use super::external_config_string;
+use super::{external_config_string, remove_payload_keys, set_payload_value};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExternalActionDispatchAuth {
@@ -181,6 +182,172 @@ pub(crate) fn external_channel_default_source_id_from_config(config: &Value) -> 
             "externalSourceId",
         ],
     )
+}
+
+pub(crate) fn new_external_channel_inbound_token() -> String {
+    format!(
+        "v3in_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+}
+
+pub(crate) fn remove_external_channel_inbound_token_keys(config: &mut Value) {
+    remove_payload_keys(
+        config,
+        &[
+            "inbound_bearer_token",
+            "inboundBearerToken",
+            "inbound_token",
+            "inboundToken",
+            "external_channel_bearer_token",
+            "externalChannelBearerToken",
+            "callback_bearer_token",
+            "callbackBearerToken",
+            "generic_chat_inbound_bearer_token",
+            "genericChatInboundBearerToken",
+            "inbound_bearer_token_expires_at",
+            "inboundBearerTokenExpiresAt",
+            "inbound_token_rotated_at",
+            "inboundTokenRotatedAt",
+        ],
+    );
+}
+
+pub(crate) fn sanitize_cloned_external_channel_config(config: &mut Value) {
+    remove_external_channel_inbound_token_keys(config);
+    remove_payload_keys(
+        config,
+        &[
+            "reply_dispatch_url",
+            "replyDispatchUrl",
+            "external_reply_dispatch_url",
+            "externalReplyDispatchUrl",
+            "outbound_reply_url",
+            "outboundReplyUrl",
+            "assistant_reply_dispatch_url",
+            "assistantReplyDispatchUrl",
+            "artifact_action_dispatch_url",
+            "artifactActionDispatchUrl",
+            "artifact_dispatch_url",
+            "artifactDispatchUrl",
+            "business_action_dispatch_url",
+            "businessActionDispatchUrl",
+            "business_dispatch_url",
+            "businessDispatchUrl",
+            "external_action_dispatch_url",
+            "externalActionDispatchUrl",
+            "action_dispatch_url",
+            "actionDispatchUrl",
+            "artifact_action_bearer_token",
+            "artifactActionBearerToken",
+            "artifact_bearer_token",
+            "artifactBearerToken",
+            "artifact_action_signing_secret",
+            "artifactActionSigningSecret",
+            "artifact_signing_secret",
+            "artifactSigningSecret",
+            "business_action_bearer_token",
+            "businessActionBearerToken",
+            "business_bearer_token",
+            "businessBearerToken",
+            "business_action_signing_secret",
+            "businessActionSigningSecret",
+            "business_signing_secret",
+            "businessSigningSecret",
+            "external_action_bearer_token",
+            "externalActionBearerToken",
+            "action_bearer_token",
+            "actionBearerToken",
+            "external_action_signing_secret",
+            "externalActionSigningSecret",
+            "action_signing_secret",
+            "actionSigningSecret",
+            "reply_dispatch_bearer_token",
+            "replyDispatchBearerToken",
+            "external_reply_bearer_token",
+            "externalReplyBearerToken",
+            "outbound_reply_bearer_token",
+            "outboundReplyBearerToken",
+            "reply_dispatch_signing_secret",
+            "replyDispatchSigningSecret",
+            "external_reply_signing_secret",
+            "externalReplySigningSecret",
+            "outbound_reply_signing_secret",
+            "outboundReplySigningSecret",
+            "dispatch_bearer_token",
+            "dispatchBearerToken",
+            "dispatch_signing_secret",
+            "dispatchSigningSecret",
+            "management_control",
+            "temporary_access",
+            "channel_management",
+        ],
+    );
+}
+
+pub(crate) fn apply_external_channel_inbound_token_config(
+    config: &mut Value,
+    token: &str,
+    now: DateTime<Utc>,
+    temporary: bool,
+    expires_at: Option<DateTime<Utc>>,
+) {
+    set_payload_value(config, "inbound_bearer_token", json!(token));
+    set_payload_value(config, "inbound_token_rotated_at", json!(now));
+    if let Some(expires_at) = expires_at {
+        set_payload_value(config, "inbound_bearer_token_expires_at", json!(expires_at));
+    }
+    set_payload_value(
+        config,
+        "temporary_access",
+        json!({
+            "temporary": temporary,
+            "expires_at": expires_at,
+            "updated_at": now,
+        }),
+    );
+}
+
+pub(crate) fn external_channel_inbound_token_rotated_at(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &["inbound_token_rotated_at", "inboundTokenRotatedAt"],
+    )
+}
+
+pub(crate) fn external_channel_inbound_token_expires_at(config: &Value) -> Option<DateTime<Utc>> {
+    external_config_string(
+        config,
+        &[
+            "inbound_bearer_token_expires_at",
+            "inboundBearerTokenExpiresAt",
+        ],
+    )
+    .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+    .map(|value| value.with_timezone(&Utc))
+}
+
+pub(crate) fn external_channel_inbound_token_expired(config: &Value, now: DateTime<Utc>) -> bool {
+    external_channel_inbound_token_expires_at(config).is_some_and(|expires_at| expires_at <= now)
+}
+
+pub(crate) fn external_channel_temporary_access_summary(config: &Value) -> Value {
+    let temporary_access = config
+        .get("temporary_access")
+        .or_else(|| config.get("temporaryAccess"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let temporary = temporary_access
+        .get("temporary")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "temporary": temporary,
+        "expires_at": external_channel_inbound_token_expires_at(config),
+        "expired": external_channel_inbound_token_expired(config, Utc::now()),
+        "token_rotated_at": external_channel_inbound_token_rotated_at(config),
+    })
 }
 
 pub(crate) fn external_action_dispatch_url_from_config(
@@ -378,5 +545,74 @@ mod tests {
             .payload
             .message
             .contains("within 64 characters"));
+    }
+
+    #[test]
+    fn external_channel_inbound_token_helpers_preserve_rotation_and_expiry_shape() {
+        let now = DateTime::parse_from_rfc3339("2026-06-12T08:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        let expires_at = DateTime::parse_from_rfc3339("2026-06-12T08:30:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        let mut config = json!({});
+
+        let token = new_external_channel_inbound_token();
+        assert!(token.starts_with("v3in_"));
+        assert_eq!(token.len(), "v3in_".len() + 64);
+
+        apply_external_channel_inbound_token_config(
+            &mut config,
+            "v3in_fixed",
+            now,
+            true,
+            Some(expires_at),
+        );
+
+        assert_eq!(config["inbound_bearer_token"], json!("v3in_fixed"));
+        assert_eq!(
+            external_channel_inbound_token_rotated_at(&config),
+            Some("2026-06-12T08:00:00Z".to_string())
+        );
+        assert_eq!(
+            external_channel_inbound_token_expires_at(&config),
+            Some(expires_at)
+        );
+        assert!(!external_channel_inbound_token_expired(&config, now));
+        assert!(external_channel_inbound_token_expired(
+            &config,
+            expires_at + chrono::Duration::seconds(1)
+        ));
+
+        let summary = external_channel_temporary_access_summary(&config);
+        assert_eq!(summary["temporary"], json!(true));
+        assert_eq!(summary["token_rotated_at"], json!("2026-06-12T08:00:00Z"));
+        assert_eq!(summary["expires_at"], json!(expires_at));
+        assert!(summary["expired"].is_boolean());
+    }
+
+    #[test]
+    fn external_channel_config_sanitizer_preserves_public_fields_and_removes_secret_aliases() {
+        let mut config = json!({
+            "display_hint": "keep",
+            "inbound_bearer_token": "secret",
+            "inboundBearerTokenExpiresAt": "2026-06-12T08:00:00Z",
+            "reply_dispatch_url": "https://callback.example/reply",
+            "external_action_signing_secret": "secret",
+            "management_control": {"last_action": "disable"},
+            "temporary_access": {"temporary": true},
+            "channel_management": {"internal": true}
+        });
+
+        sanitize_cloned_external_channel_config(&mut config);
+
+        assert_eq!(config["display_hint"], json!("keep"));
+        assert!(config.get("inbound_bearer_token").is_none());
+        assert!(config.get("inboundBearerTokenExpiresAt").is_none());
+        assert!(config.get("reply_dispatch_url").is_none());
+        assert!(config.get("external_action_signing_secret").is_none());
+        assert!(config.get("management_control").is_none());
+        assert!(config.get("temporary_access").is_none());
+        assert!(config.get("channel_management").is_none());
     }
 }
