@@ -3481,6 +3481,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Home API Client SSE Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving SSE stream client slice;
+  - keep the change limited to `parseSseEventBlock` and `fetchSseJson` used by `HomePageClient.js`.
+- Code changes:
+  - added `apps/web/app/lib/home-sse-client.test.mjs`;
+  - extended `apps/web/app/lib/home-api-client.js` with `parseSseEventBlock`, `createFetchSseJsonClient`, and `fetchSseJson`;
+  - updated `apps/web/app/HomePageClient.js` to import `fetchSseJson` from the shared API client module;
+  - removed now-unused `buildApiError` and `readLocalSecretBindingIdsHeader` imports from `HomePageClient.js`.
+- Test-first check:
+  - first run before adding SSE exports failed as expected because `home-api-client.js` did not export `createFetchSseJsonClient`;
+  - after implementation, `node --test apps/web/app/lib/home-sse-client.test.mjs apps/web/app/lib/home-api-client.test.mjs` passed 9/9.
+- Local verification:
+  - `node --test apps/web/app/lib/home-sse-client.test.mjs apps/web/app/lib/home-api-client.test.mjs`: passed 9/9;
+  - `node --test apps/web/app/lib/local-secret-fingerprint.test.mjs apps/web/app/lib/dataset-identity.test.mjs apps/web/app/lib/local-account-state.test.mjs apps/web/app/lib/account-auth.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/assistant-run-progress.test.mjs`: passed 51/51;
+  - `npm --prefix apps/web run build`: passed.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Home API Client FetchJson Extraction
 
 - Purpose:

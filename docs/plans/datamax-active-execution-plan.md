@@ -287,6 +287,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 自动数据集 key/title 生成 helper 已拆到 `apps/web/app/lib/dataset-identity.js`，并补充 Node 单测；默认时间、随机后缀、`zh-CN` 标题时间格式和现有调用语义保持不变。
 - 2026-06-12: `HomePageClient.js` 本地密钥 SHA-256 指纹 helper 已拆到 `apps/web/app/lib/local-secret-fingerprint.js`，并补充 Node 单测；trim、空值 fallback、`crypto.subtle` 能力错误提示和 hex 输出语义保持不变。
 - 2026-06-12: `HomePageClient.js` JSON API 请求 helper 已拆到 `apps/web/app/lib/home-api-client.js`，并补充 Node 单测；JSON body 序列化、FormData 透传、DataMax browser-scope headers、timeout ApiError、JSON/text 错误解析和现有调用语义保持不变。
+- 2026-06-12: `HomePageClient.js` SSE 流式请求和事件块解析 helper 已并入 `apps/web/app/lib/home-api-client.js`，并补充 Node 单测；SSE headers、JSON body 序列化、delta/completed/error 事件处理、plain text fallback 和无 stream body 错误提示保持不变。
 
 **Regression commands:**
 
