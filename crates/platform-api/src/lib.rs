@@ -22180,38 +22180,6 @@ fn ensure_external_channel_inbound_bearer_auth(
     Ok(())
 }
 
-fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
-    external_config_string(
-        config,
-        &[
-            "inbound_bearer_token",
-            "inboundBearerToken",
-            "inbound_token",
-            "inboundToken",
-            "external_channel_bearer_token",
-            "externalChannelBearerToken",
-            "callback_bearer_token",
-            "callbackBearerToken",
-            "generic_chat_inbound_bearer_token",
-            "genericChatInboundBearerToken",
-        ],
-    )
-}
-
-fn external_channel_default_source_id_from_config(config: &Value) -> Option<String> {
-    external_config_string(
-        config,
-        &[
-            "default_source_id",
-            "defaultSourceId",
-            "source_id",
-            "sourceId",
-            "external_source_id",
-            "externalSourceId",
-        ],
-    )
-}
-
 fn ensure_external_channel_database_source_allowed(
     connection: &ExternalChannelConnectionSummary,
     source_id: &str,

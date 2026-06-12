@@ -3464,6 +3464,32 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Inbound Config Refactor
+
+- Purpose:
+  - continue reducing `crates/platform-api/src/lib.rs` complexity through one behavior-preserving slice;
+  - move external inbound bearer token and default source id config helpers into `external_channel_support`;
+  - keep third-party API contracts, payload field values, auth, URLs, and response shapes unchanged.
+- Code changes:
+  - moved `external_channel_inbound_bearer_token_from_config` and `external_channel_default_source_id_from_config` from `lib.rs` into `crates/platform-api/src/external_channel_support.rs`;
+  - kept function names and call sites unchanged via the existing `external_channel_support::*` import.
+- Local verification:
+  - `cargo test -p platform-api external_channel_inbound_bearer_auth_accepts_only_configured_token --lib`: passed, 1/1;
+  - `cargo test -p platform-api external_channel_inbound_bearer_auth_rejects_expired_token --lib`: passed, 1/1;
+  - `cargo test -p platform-api sanitize_cloned_external_channel_config_removes_secret_material_and_dispatch_urls --lib`: passed, 1/1;
+  - `cargo fmt --check`: passed after mechanical formatting;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `npm --prefix apps/web run build`: passed with existing Next.js warnings about deprecated `middleware` convention and NFT tracing from `apps/web/next.config.js`;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 External Dispatch URL Config Refactor
 
 - Purpose:

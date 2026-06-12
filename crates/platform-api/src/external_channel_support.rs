@@ -83,6 +83,38 @@ pub(crate) fn external_action_dispatch_auth_configured(auth: &ExternalActionDisp
     auth.bearer_token.is_some() || auth.signing_secret.is_some()
 }
 
+pub(crate) fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "inbound_bearer_token",
+            "inboundBearerToken",
+            "inbound_token",
+            "inboundToken",
+            "external_channel_bearer_token",
+            "externalChannelBearerToken",
+            "callback_bearer_token",
+            "callbackBearerToken",
+            "generic_chat_inbound_bearer_token",
+            "genericChatInboundBearerToken",
+        ],
+    )
+}
+
+pub(crate) fn external_channel_default_source_id_from_config(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "default_source_id",
+            "defaultSourceId",
+            "source_id",
+            "sourceId",
+            "external_source_id",
+            "externalSourceId",
+        ],
+    )
+}
+
 pub(crate) fn external_action_dispatch_url_from_config(
     config: &Value,
     action_type: &str,
