@@ -2206,16 +2206,6 @@ async fn enforce_email_challenge_rate_limit(
     Ok(())
 }
 
-fn resend_after_seconds(created_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
-    let resend_at = created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS);
-    let remaining = (resend_at - now).num_seconds();
-    (remaining > 0).then_some(remaining as u32)
-}
-
-fn local_key_fingerprint(local_key: &str) -> String {
-    sha256_hex([local_key.trim().as_bytes()])
-}
-
 fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
     let mut hasher = Sha256::new();
     for part in parts {

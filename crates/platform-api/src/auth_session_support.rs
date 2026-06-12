@@ -1,9 +1,10 @@
 use super::{
-    auth_email, trim_optional, validate_required, AUTH_SESSION_COOKIE_NAME, AUTH_SESSION_TTL_DAYS,
-    DEFAULT_AUTH_SESSION_PEPPER,
+    auth_email, trim_optional, validate_required, AUTH_EMAIL_RESEND_AFTER_SECONDS,
+    AUTH_SESSION_COOKIE_NAME, AUTH_SESSION_TTL_DAYS, DEFAULT_AUTH_SESSION_PEPPER,
 };
 use crate::ApiError;
 use axum::http::{header, HeaderMap, HeaderValue};
+use chrono::{DateTime, Duration, Utc};
 use contracts::{AuthAuditEventView, AuthSessionView, AuthUserView};
 use domain_model::{AuthAuditEvent, AuthChallengePurpose, User, UserSession, UserSessionId};
 use serde_json::{json, Map, Value};
@@ -57,11 +58,7 @@ pub(crate) fn auth_env(key: &str, fallback: &str) -> String {
 
 pub(crate) fn auth_session_token_hash(session_token: &str) -> String {
     let pepper = auth_env("AUTH_SESSION_PEPPER", DEFAULT_AUTH_SESSION_PEPPER);
-    let mut hasher = Sha256::new();
-    for part in [pepper.as_bytes(), b":", session_token.as_bytes()] {
-        hasher.update(part);
-    }
-    format!("{:x}", hasher.finalize())
+    auth_sha256_hex([pepper.as_bytes(), b":", session_token.as_bytes()])
 }
 
 pub(crate) fn new_auth_session_token() -> String {
@@ -70,6 +67,16 @@ pub(crate) fn new_auth_session_token() -> String {
 
 pub(crate) fn normalize_device_fingerprint(device_fingerprint: Option<String>) -> String {
     trim_optional(device_fingerprint).unwrap_or_else(|| "unknown-device".to_string())
+}
+
+pub(crate) fn resend_after_seconds(created_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
+    let resend_at = created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS);
+    let remaining = (resend_at - now).num_seconds();
+    (remaining > 0).then_some(remaining as u32)
+}
+
+pub(crate) fn local_key_fingerprint(local_key: &str) -> String {
+    auth_sha256_hex([local_key.trim().as_bytes()])
 }
 
 pub(crate) fn auth_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -165,4 +172,55 @@ fn safe_auth_audit_details(metadata: &Value) -> Value {
         }
     }
     Value::Object(details)
+}
+
+fn auth_sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resend_after_seconds_preserves_positive_boundary() {
+        let created_at = DateTime::parse_from_rfc3339("2026-06-12T10:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            resend_after_seconds(created_at, created_at + Duration::seconds(1)),
+            Some((AUTH_EMAIL_RESEND_AFTER_SECONDS - 1) as u32)
+        );
+        assert_eq!(
+            resend_after_seconds(
+                created_at,
+                created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS)
+            ),
+            None
+        );
+        assert_eq!(
+            resend_after_seconds(
+                created_at,
+                created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS + 1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn local_key_fingerprint_trims_and_uses_sha256_hex() {
+        let expected = auth_sha256_hex([b"local-secret".as_slice()]);
+
+        assert_eq!(local_key_fingerprint("local-secret"), expected);
+        assert_eq!(local_key_fingerprint("  local-secret\n"), expected);
+        assert_eq!(
+            local_key_fingerprint("different"),
+            auth_sha256_hex([b"different".as_slice()])
+        );
+    }
 }
