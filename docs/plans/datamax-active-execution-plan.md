@@ -300,6 +300,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 静态页草稿异步状态、自动续接渲染判断、可复用模板选择、report shelf 可见性和草稿排序 helper 已拆到 `apps/web/app/lib/static-page-draft-workspace.js`，并补充 Node 单测；预览完成提示、渲染完成提示、data-report 静默规则和模板复用优先级保持不变。
 - 2026-06-12: `HomePageClient.js` 静态页规划交接 HTML artifact、模板参考摘要、缺失证据摘要和结构信号摘要 helper 已并入 `apps/web/app/lib/html-artifact-utils.js`，并补充 Node 单测；交接卡片 payload、Image2 bridge 文案和结构信号截断规则保持不变。
 - 2026-06-12: `HomePageClient.js` 后端 selected scope/dataset preselection 解析和候选范围提示 helper 已并入 `apps/web/app/lib/scope-planner.js`，并补充 Node 单测；UI 选中数据集恢复、all-visible preselection 策略和提示文案保持不变。
+- 2026-06-12: `HomePageClient.js` assistant continuation、CC 转发、静态页编辑、静态页/报表触发和显式拒绝输出判断 helper 已拆到 `apps/web/app/lib/home-chat-intents.js`，并补充 Node 单测；`取高是什么意思？`、`风险识别系统有哪些项目经历？` 等解释型问题不误触发报表的语义保持不变。
 
 **Regression commands:**
 

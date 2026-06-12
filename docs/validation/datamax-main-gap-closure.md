@@ -3457,6 +3457,24 @@ Data-ingestion external fixed-task smoke:
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
 
+## 2026-06-12 P5 Home Chat Intent Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - isolate assistant continuation, CC forwarding, static-page edit, static-page/report trigger, and explicit no-output classifiers behind tested pure functions;
+  - keep report/static-page false-positive guards stable for explanatory questions such as `取高是什么意思？` and `风险识别系统有哪些项目经历？`.
+- Code changes:
+  - added `apps/web/app/lib/home-chat-intents.js`;
+  - added `apps/web/app/lib/home-chat-intents.test.mjs`;
+  - replaced the inline chat/static-page intent helper blocks in `apps/web/app/HomePageClient.js` with imports while preserving existing call sites.
+- Local verification:
+  - `node --test apps/web/app/lib/home-chat-intents.test.mjs apps/web/app/lib/scope-planner.test.mjs apps/web/app/lib/assistant-stream-content.test.mjs apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 62 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P5 Scope UI Helper Extraction
 
 - Purpose:
