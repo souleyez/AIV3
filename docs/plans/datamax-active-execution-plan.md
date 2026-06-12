@@ -376,6 +376,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `external_channel_support` inbound token/config helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` external database source id 和 external channel allowed database source helper 已并入 `external_channel_support` 模块并补模块单测；source id trim/长度/路径字符规则、allowed/default source 判定、配置 key alias、错误码和错误文案保持不变。
 - 2026-06-13: `external_channel_support` database source helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` external reply/action dispatch URL 与 secret 校验 helper 已并入 `external_channel_support` 模块并补模块单测；URL 长度/字符/协议/host 规则、reply secret printable 规则、action secret redacted/长度/control-char 规则、错误码和错误文案保持不变。
 
 **Regression commands:**
 

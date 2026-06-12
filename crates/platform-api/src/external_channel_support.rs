@@ -519,6 +519,92 @@ pub(crate) fn external_channel_outbound_reply_dispatch_url_from_config(
     )
 }
 
+pub(crate) fn validate_external_reply_dispatch_url(
+    value: &str,
+) -> std::result::Result<(), ApiError> {
+    if value.chars().count() > 2048 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            "reply_dispatch_url must be a printable URL within 2048 characters".to_string(),
+        ));
+    }
+    let url = reqwest::Url::parse(value).map_err(|error| {
+        ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            format!("reply_dispatch_url must be a valid URL: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            "reply_dispatch_url must use http or https and include a host".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_external_reply_dispatch_secret(
+    field: &str,
+    value: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    let Some(value) = value.and_then(non_empty_trimmed_string) else {
+        return Ok(None);
+    };
+    if value.chars().count() > 4096 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_secret_invalid",
+            format!("{field} must be printable text within 4096 characters"),
+        ));
+    }
+    Ok(Some(value))
+}
+
+pub(crate) fn validate_external_action_dispatch_url(
+    value: &str,
+) -> std::result::Result<(), ApiError> {
+    if value.chars().count() > 2048 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            "action_dispatch_url must be a printable URL within 2048 characters".to_string(),
+        ));
+    }
+    let url = reqwest::Url::parse(value).map_err(|error| {
+        ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            format!("action_dispatch_url must be a valid URL: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            "action_dispatch_url must use http or https and include a host".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_external_action_dispatch_secret(
+    field: &str,
+    value: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    let Some(value) = value.and_then(non_empty_trimmed_string) else {
+        return Ok(None);
+    };
+    if value == "[redacted]" || value.chars().count() < 8 || value.chars().count() > 4096 {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_secret_invalid",
+            format!("{field} must be a non-redacted secret between 8 and 4096 characters"),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_secret_invalid",
+            format!("{field} must not contain control characters"),
+        ));
+    }
+    Ok(Some(value))
+}
+
 pub(crate) fn external_action_dispatch_auth_mode(
     auth: &ExternalActionDispatchAuth,
 ) -> &'static str {
@@ -731,6 +817,73 @@ mod tests {
         ])
         .expect("source id list should normalize");
         assert_eq!(ids, vec!["db-a".to_string(), "db-b".to_string()]);
+    }
+
+    #[test]
+    fn external_reply_dispatch_validation_preserves_url_and_secret_rules() {
+        assert!(validate_external_reply_dispatch_url("https://reply.example.com/path").is_ok());
+
+        let invalid_scheme = validate_external_reply_dispatch_url("ftp://reply.example.com/path")
+            .expect_err("ftp should be rejected");
+        assert_eq!(
+            invalid_scheme.payload.code,
+            "external_reply_dispatch_url_invalid"
+        );
+        assert!(invalid_scheme
+            .payload
+            .message
+            .contains("must use http or https and include a host"));
+
+        assert_eq!(
+            validate_external_reply_dispatch_secret(
+                "reply_dispatch_bearer_token",
+                Some("  printable-token  ")
+            )
+            .expect("secret should trim"),
+            Some("printable-token".to_string())
+        );
+        let invalid_secret = validate_external_reply_dispatch_secret(
+            "reply_dispatch_bearer_token",
+            Some("bad\nsecret"),
+        );
+        let invalid_secret = invalid_secret.expect_err("control characters are rejected");
+        assert_eq!(
+            invalid_secret.payload.code,
+            "external_reply_dispatch_secret_invalid"
+        );
+    }
+
+    #[test]
+    fn external_action_dispatch_validation_preserves_url_and_secret_rules() {
+        assert!(validate_external_action_dispatch_url("http://actions.example.com/hook").is_ok());
+
+        let invalid_url =
+            validate_external_action_dispatch_url("not a url").expect_err("bad url is rejected");
+        assert_eq!(
+            invalid_url.payload.code,
+            "external_action_dispatch_url_invalid"
+        );
+        assert!(invalid_url.payload.message.contains("must be a valid URL"));
+
+        assert_eq!(
+            validate_external_action_dispatch_secret(
+                "action_bearer_token",
+                Some("  long-enough-secret  ")
+            )
+            .expect("secret should trim"),
+            Some("long-enough-secret".to_string())
+        );
+        let redacted =
+            validate_external_action_dispatch_secret("action_bearer_token", Some("[redacted]"))
+                .expect_err("redacted secret should be rejected");
+        assert_eq!(
+            redacted.payload.code,
+            "external_action_dispatch_secret_invalid"
+        );
+        assert!(redacted
+            .payload
+            .message
+            .contains("non-redacted secret between 8 and 4096 characters"));
     }
 
     #[test]
