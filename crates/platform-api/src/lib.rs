@@ -189,6 +189,7 @@ mod document_model_facing_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_text;
+mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
 pub mod external_feishu;
@@ -239,6 +240,7 @@ use document_model_facing_support::format_document_lifecycle_view;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_text::*;
+use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
 #[cfg(test)]
@@ -4755,216 +4757,7 @@ fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> St
     external_channel_sse_completion_with_done(response, true)
 }
 
-const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
 const EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: &str = "_stream_dedupe_key";
-
-fn external_channel_sse_envelope(
-    run_id: Option<AssistantRunId>,
-    idempotency_key: &str,
-    conversation_external_id: &str,
-    sequence: i64,
-    phase: &str,
-    status: &str,
-    display_text: &str,
-    status_url: Option<String>,
-    poll_after_seconds: Option<u64>,
-    data: Value,
-) -> Value {
-    let event_run_id = run_id
-        .map(|run_id| run_id.to_string())
-        .unwrap_or_else(|| "pending".to_string());
-    json!({
-        "schema": EXTERNAL_CHANNEL_SSE_SCHEMA_V1,
-        "event_id": format!("{event_run_id}:{sequence:06}"),
-        "sequence": sequence,
-        "assistant_run_id": run_id,
-        "idempotency_key": idempotency_key,
-        "conversation_external_id": conversation_external_id,
-        "phase": phase,
-        "status": status,
-        "display_text": display_text,
-        "status_url": status_url,
-        "poll_after_seconds": poll_after_seconds,
-        "data": data,
-    })
-}
-
-fn external_channel_sse_public_payload(
-    run_id: Option<AssistantRunId>,
-    idempotency_key: &str,
-    conversation_external_id: &str,
-    sequence: i64,
-    phase: &str,
-    status: &str,
-    display_text: &str,
-    status_url: Option<String>,
-    poll_after_seconds: Option<u64>,
-    data: Value,
-) -> Value {
-    let mut payload = external_channel_sse_envelope(
-        run_id,
-        idempotency_key,
-        conversation_external_id,
-        sequence,
-        phase,
-        status,
-        display_text,
-        status_url,
-        poll_after_seconds,
-        data.clone(),
-    );
-    if let (Some(payload), Some(data)) = (payload.as_object_mut(), data.as_object()) {
-        for (key, value) in data {
-            payload.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-    payload
-}
-
-fn external_channel_static_page_sse_sequence(status: &str) -> i64 {
-    match status {
-        "started" => 0,
-        "retrieval_started" => 5,
-        "answer_retrying" => 55,
-        "static_page_planning" => 10,
-        "static_page_image_preview_queued" | "static_page_generation_queued" => 20,
-        "static_page_effect_image_ready" | "static_page_preview_ready" => 30,
-        "static_page_publish_queued" => 40,
-        "static_page_publish_running" => 41,
-        "static_page_publish_retrying" => 42,
-        "static_page_publish_failed" | "static_page_publish_needs_human" => 80,
-        "static_page_publish_cancelled" => 81,
-        "static_page_published" | "static_page_stable_artifact_reused" => 90,
-        "needs_input" => 70,
-        "continue_polling" | "static_page_continue_polling" => 95,
-        "completed" => 100,
-        _ => 50,
-    }
-}
-
-fn external_channel_card_status_url(card: Option<&Value>) -> Option<String> {
-    card.and_then(|card| card.get("status_url"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn external_channel_card_poll_after_seconds(card: Option<&Value>) -> Option<u64> {
-    card.and_then(|card| card.get("poll_after_seconds"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
-        })
-}
-
-fn external_channel_status_is_continuable(status: &str) -> bool {
-    matches!(
-        status.trim().to_ascii_lowercase().as_str(),
-        "accepted"
-            | "queued"
-            | "running"
-            | "retrying"
-            | "processing"
-            | "continue_polling"
-            | "static_page_continue_polling"
-            | "static_page_generation_pending"
-            | "static_page_generation_queued"
-            | "static_page_generation_running"
-            | "static_page_generation_retrying"
-            | "static_page_image_preview_queued"
-            | "static_page_image_preview_running"
-            | "static_page_image_preview_retrying"
-            | "static_page_image2_auto_publish_pending"
-            | "static_page_image2_auto_publish_running"
-            | "static_page_image2_auto_publish_retrying"
-            | "static_page_publish_queued"
-            | "static_page_publish_running"
-            | "static_page_publish_retrying"
-    )
-}
-
-fn external_channel_value_is_true(value: &Value) -> bool {
-    match value {
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_u64().map(|value| value > 0).unwrap_or(false),
-        Value::String(value) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "y" | "retryable" | "continue_polling"
-        ),
-        _ => false,
-    }
-}
-
-fn external_channel_static_page_has_background_continuation(card: Option<&Value>) -> bool {
-    let Some(card) = card else {
-        return false;
-    };
-
-    if external_channel_card_poll_after_seconds(Some(card)).is_some() {
-        return true;
-    }
-
-    for pointer in [
-        "/retryable",
-        "/background_continuation",
-        "/backgroundContinuation",
-        "/continue_polling",
-        "/continuePolling",
-        "/continues_in_background",
-        "/continuesInBackground",
-        "/runtime_event/retryable",
-        "/runtime_event/background_continuation",
-        "/runtime_event/backgroundContinuation",
-        "/runtime_event/continue_polling",
-        "/runtime_event/continuePolling",
-        "/runtimeEvent/retryable",
-        "/runtimeEvent/background_continuation",
-        "/runtimeEvent/backgroundContinuation",
-        "/runtimeEvent/continue_polling",
-        "/runtimeEvent/continuePolling",
-    ] {
-        if card
-            .pointer(pointer)
-            .map(external_channel_value_is_true)
-            .unwrap_or(false)
-        {
-            return true;
-        }
-    }
-
-    for pointer in [
-        "/workflow_status",
-        "/workflowStatus",
-        "/workflow/status",
-        "/runtime_event/status",
-        "/runtime_event/workflow_status",
-        "/runtime_event/workflowStatus",
-        "/runtimeEvent/status",
-        "/runtimeEvent/workflow_status",
-        "/runtimeEvent/workflowStatus",
-    ] {
-        if card
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(external_channel_status_is_continuable)
-            .unwrap_or(false)
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn external_channel_static_page_cancelled_should_continue(
-    status: &str,
-    card: Option<&Value>,
-) -> bool {
-    status.trim() == "static_page_publish_cancelled"
-        && external_channel_static_page_has_background_continuation(card)
-}
 
 fn external_channel_public_stream_payload(mut payload: Value) -> Value {
     if let Some(object) = payload.as_object_mut() {
