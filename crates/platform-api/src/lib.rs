@@ -188,6 +188,7 @@ mod document_media_model_facing;
 mod document_model_facing_support;
 mod external_channel_public_artifact;
 mod external_channel_public_text;
+mod external_channel_static_page_focus;
 mod external_channel_support;
 pub mod external_feishu;
 mod external_integration_summary;
@@ -236,6 +237,7 @@ use document_media_model_facing::*;
 use document_model_facing_support::format_document_lifecycle_view;
 use external_channel_public_artifact::*;
 use external_channel_public_text::*;
+use external_channel_static_page_focus::*;
 use external_channel_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
@@ -5907,175 +5909,6 @@ fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>)
     accepted_reason
         && accepted_marker
         && external_channel_static_page_baseline_public_url(card).is_some()
-}
-
-fn external_channel_static_page_customer_ready_text() -> &'static str {
-    "已依据客户需求生成可访问的报表页面。"
-}
-
-fn external_channel_static_page_template_adaptation_from_payload(
-    payload: &Value,
-) -> Option<&Value> {
-    [
-        payload.get("template_adaptation"),
-        payload.get("templateAdaptation"),
-        payload.pointer("/source_refs/template_adaptation"),
-        payload.pointer("/source_refs/templateAdaptation"),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|value| !value.is_null())
-}
-
-fn external_channel_static_page_focus_label_from_url(public_url: &str) -> Option<String> {
-    let url = reqwest::Url::parse(public_url).ok()?;
-    url.query_pairs()
-        .find(|(key, _)| key == "focus")
-        .map(|(_, value)| value.into_owned())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn external_channel_static_page_user_intent_from_payload(payload: &Value) -> Option<&str> {
-    [
-        payload.pointer("/template_adaptation/userIntent"),
-        payload.pointer("/templateAdaptation/userIntent"),
-        payload.pointer("/template_adaptation/user_intent"),
-        payload.pointer("/templateAdaptation/user_intent"),
-        payload.pointer("/source_refs/template_adaptation/userIntent"),
-        payload.pointer("/source_refs/templateAdaptation/userIntent"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-    .map(str::trim)
-    .find(|value| !value.is_empty())
-}
-
-fn external_channel_static_page_focus_module_labels(payload: Option<&Value>) -> Vec<String> {
-    let mut labels = Vec::new();
-    let Some(payload) = payload else {
-        return labels;
-    };
-    let Some(adaptation) = external_channel_static_page_template_adaptation_from_payload(payload)
-    else {
-        return labels;
-    };
-    let Some(focus_items) = adaptation.get("focus").and_then(Value::as_array) else {
-        return labels;
-    };
-    for item in focus_items {
-        let Some(label) = item.get("label").and_then(Value::as_str).map(str::trim) else {
-            continue;
-        };
-        if label.is_empty() || label == "当前意向优先" {
-            continue;
-        }
-        if !labels.iter().any(|existing| existing == label) {
-            labels.push(label.to_string());
-        }
-        if labels.len() >= 3 {
-            break;
-        }
-    }
-    labels
-}
-
-fn external_channel_static_page_default_modules_for_focus(focus: &str) -> Vec<String> {
-    match focus {
-        "取高机会" => vec![
-            "取高线距离排行".to_string(),
-            "当前/预测/取高线/需助推".to_string(),
-            "预计取高增收".to_string(),
-        ],
-        "经营总览" => vec![
-            "经营健康度".to_string(),
-            "月度销售趋势".to_string(),
-            "机会/风险品类占比".to_string(),
-        ],
-        "经营健康度" => vec![
-            "经营健康度".to_string(),
-            "月度销售趋势".to_string(),
-            "机会/风险品类占比".to_string(),
-        ],
-        "风险店铺" => vec![
-            "持续低活跃品牌".to_string(),
-            "最新低活跃品牌".to_string(),
-            "客流降低预警".to_string(),
-        ],
-        "低活跃" | "低活跃风险" => vec![
-            "最新低活跃品牌".to_string(),
-            "持续低活跃品牌".to_string(),
-            "风险品类占比".to_string(),
-        ],
-        "品牌明细" => vec![
-            "品牌/门店明细".to_string(),
-            "合同与租金字段".to_string(),
-            "可筛选明细表".to_string(),
-        ],
-        "品类业态" | "品类分析" => vec![
-            "品类业态分布".to_string(),
-            "区域/门店对比".to_string(),
-            "结构变化分析".to_string(),
-        ],
-        _ => Vec::new(),
-    }
-}
-
-fn external_channel_static_page_focus_label(
-    payload: Option<&Value>,
-    public_url: &str,
-) -> Option<String> {
-    if let Some(focus) = external_channel_static_page_focus_label_from_url(public_url) {
-        return Some(focus);
-    }
-    if let Some(intent) = payload.and_then(external_channel_static_page_user_intent_from_payload) {
-        if let Some(focus) = static_page_prompt_focus_query_value(intent) {
-            return Some(focus.to_string());
-        }
-    }
-    external_channel_static_page_focus_module_labels(payload)
-        .into_iter()
-        .next()
-}
-
-fn external_channel_static_page_public_url_with_payload_focus(
-    public_url: &str,
-    payload: &Value,
-) -> String {
-    if external_channel_static_page_focus_label_from_url(public_url).is_some() {
-        return public_url.to_string();
-    }
-    let Some(focus) = external_channel_static_page_focus_label(Some(payload), public_url) else {
-        return public_url.to_string();
-    };
-    static_page_public_url_with_focus_label(public_url, &focus)
-}
-
-fn external_channel_static_page_customer_ready_text_for_payload(
-    base_text: &str,
-    payload: Option<&Value>,
-    public_url: &str,
-) -> String {
-    let mut text = base_text.to_string();
-    let focus = external_channel_static_page_focus_label(payload, public_url);
-    if let Some(focus) = focus.as_deref() {
-        text.push_str("\n系统识别到本轮关注焦点：");
-        text.push_str(focus);
-        text.push('。');
-    }
-    let mut modules = external_channel_static_page_focus_module_labels(payload);
-    if modules.is_empty() {
-        if let Some(focus) = focus.as_deref() {
-            modules = external_channel_static_page_default_modules_for_focus(focus);
-        }
-    }
-    if !modules.is_empty() {
-        text.push_str("\n报表会优先呈现：");
-        text.push_str(&modules.join("、"));
-        text.push('。');
-    }
-    text
 }
 
 fn external_channel_static_page_reply_with_public_artifact_terminal(
