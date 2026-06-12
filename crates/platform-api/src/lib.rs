@@ -11753,16 +11753,6 @@ fn external_channel_create_connection_id(
     Ok(connection_id)
 }
 
-fn validate_external_channel_allowed_database_source_ids(
-    values: &[String],
-) -> std::result::Result<Vec<String>, ApiError> {
-    let mut ids = BTreeSet::new();
-    for value in values {
-        ids.insert(validate_external_database_source_id(value)?);
-    }
-    Ok(ids.into_iter().collect())
-}
-
 #[derive(Debug)]
 struct PreparedExternalReplyDispatchConfig {
     config_redacted: Value,
@@ -13273,26 +13263,6 @@ fn normalize_external_database_connector_kind(kind: &str) -> std::result::Result
             }),
         )),
     }
-}
-
-fn validate_external_database_source_id(value: &str) -> std::result::Result<String, ApiError> {
-    let value = non_empty_trimmed_string(value).ok_or_else(|| {
-        ApiError::bad_request(
-            "validation_error",
-            "source_external_id must not be empty".to_string(),
-        )
-    })?;
-    if value.chars().count() > 128
-        || value
-            .chars()
-            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '?' | '#'))
-    {
-        return Err(ApiError::bad_request(
-            "validation_error",
-            "source_external_id must be printable text within 128 characters and must not contain path separators".to_string(),
-        ));
-    }
-    Ok(value)
 }
 
 fn normalize_external_database_source_table_names(
@@ -19148,82 +19118,6 @@ fn ensure_external_channel_inbound_bearer_auth(
         return Err(external_channel_auth_failed());
     }
     Ok(())
-}
-
-fn ensure_external_channel_database_source_allowed(
-    connection: &ExternalChannelConnectionSummary,
-    source_id: &str,
-) -> std::result::Result<(), ApiError> {
-    if external_channel_database_source_allowed(&connection.config_redacted, source_id) {
-        return Ok(());
-    }
-    Err(ApiError::forbidden(
-        "database_source_not_allowed",
-        "database source is not allowed for this external channel".to_string(),
-    ))
-}
-
-fn external_channel_database_source_allowed(config: &Value, source_id: &str) -> bool {
-    let Some(source_id) = non_empty_trimmed_string(source_id) else {
-        return false;
-    };
-    if external_channel_default_source_id_from_config(config)
-        .as_deref()
-        .is_some_and(|default_source_id| default_source_id == source_id)
-    {
-        return true;
-    }
-    external_channel_allowed_database_source_ids(config)
-        .iter()
-        .any(|allowed| allowed == &source_id)
-}
-
-fn external_channel_allowed_database_source_ids(config: &Value) -> BTreeSet<String> {
-    let mut source_ids = BTreeSet::new();
-    for key in [
-        "allowed_database_source_ids",
-        "allowedDatabaseSourceIds",
-        "database_source_ids",
-        "databaseSourceIds",
-        "allowed_source_ids",
-        "allowedSourceIds",
-    ] {
-        collect_external_config_string_values(config.get(key), &mut source_ids);
-    }
-    if let Some(database_sources) = config
-        .get("database_sources")
-        .or_else(|| config.get("databaseSources"))
-        .and_then(Value::as_array)
-    {
-        for source in database_sources {
-            match source {
-                Value::String(value) => {
-                    if let Some(value) = non_empty_trimmed_string(value) {
-                        source_ids.insert(value);
-                    }
-                }
-                Value::Object(object) => {
-                    for key in [
-                        "source_external_id",
-                        "sourceExternalId",
-                        "source_id",
-                        "sourceId",
-                    ] {
-                        if let Some(value) = object
-                            .get(key)
-                            .and_then(Value::as_str)
-                            .and_then(non_empty_trimmed_string)
-                        {
-                            source_ids.insert(value);
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    source_ids
 }
 
 fn collect_external_config_string_values(value: Option<&Value>, output: &mut BTreeSet<String>) {

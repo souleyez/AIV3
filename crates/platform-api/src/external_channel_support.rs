@@ -2,9 +2,14 @@ use crate::ApiError;
 use chrono::{DateTime, Utc};
 use contracts::{ExternalChannelPlatformView, ExternalMessageTypeView};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
-use super::{external_config_string, remove_payload_keys, set_payload_value};
+use super::{
+    collect_external_config_string_values, external_config_string, remove_payload_keys,
+    set_payload_value, ExternalChannelConnectionSummary,
+};
+use crate::text_normalization::non_empty_trimmed_string;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExternalActionDispatchAuth {
@@ -150,6 +155,38 @@ pub(crate) fn validate_external_channel_platform(value: &str) -> std::result::Re
         ));
     }
     Ok(())
+}
+
+pub(crate) fn validate_external_database_source_id(
+    value: &str,
+) -> std::result::Result<String, ApiError> {
+    let value = non_empty_trimmed_string(value).ok_or_else(|| {
+        ApiError::bad_request(
+            "validation_error",
+            "source_external_id must not be empty".to_string(),
+        )
+    })?;
+    if value.chars().count() > 128
+        || value
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '?' | '#'))
+    {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            "source_external_id must be printable text within 128 characters and must not contain path separators".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+pub(crate) fn validate_external_channel_allowed_database_source_ids(
+    values: &[String],
+) -> std::result::Result<Vec<String>, ApiError> {
+    let mut ids = BTreeSet::new();
+    for value in values {
+        ids.insert(validate_external_database_source_id(value)?);
+    }
+    Ok(ids.into_iter().collect())
 }
 
 pub(crate) fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
@@ -350,6 +387,82 @@ pub(crate) fn external_channel_temporary_access_summary(config: &Value) -> Value
     })
 }
 
+pub(crate) fn ensure_external_channel_database_source_allowed(
+    connection: &ExternalChannelConnectionSummary,
+    source_id: &str,
+) -> std::result::Result<(), ApiError> {
+    if external_channel_database_source_allowed(&connection.config_redacted, source_id) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(
+        "database_source_not_allowed",
+        "database source is not allowed for this external channel".to_string(),
+    ))
+}
+
+pub(crate) fn external_channel_database_source_allowed(config: &Value, source_id: &str) -> bool {
+    let Some(source_id) = non_empty_trimmed_string(source_id) else {
+        return false;
+    };
+    if external_channel_default_source_id_from_config(config)
+        .as_deref()
+        .is_some_and(|default_source_id| default_source_id == source_id)
+    {
+        return true;
+    }
+    external_channel_allowed_database_source_ids(config)
+        .iter()
+        .any(|allowed| allowed == &source_id)
+}
+
+pub(crate) fn external_channel_allowed_database_source_ids(config: &Value) -> BTreeSet<String> {
+    let mut source_ids = BTreeSet::new();
+    for key in [
+        "allowed_database_source_ids",
+        "allowedDatabaseSourceIds",
+        "database_source_ids",
+        "databaseSourceIds",
+        "allowed_source_ids",
+        "allowedSourceIds",
+    ] {
+        collect_external_config_string_values(config.get(key), &mut source_ids);
+    }
+    if let Some(database_sources) = config
+        .get("database_sources")
+        .or_else(|| config.get("databaseSources"))
+        .and_then(Value::as_array)
+    {
+        for source in database_sources {
+            match source {
+                Value::String(value) => {
+                    if let Some(value) = non_empty_trimmed_string(value) {
+                        source_ids.insert(value);
+                    }
+                }
+                Value::Object(object) => {
+                    for key in [
+                        "source_external_id",
+                        "sourceExternalId",
+                        "source_id",
+                        "sourceId",
+                    ] {
+                        if let Some(value) = object
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .and_then(non_empty_trimmed_string)
+                        {
+                            source_ids.insert(value);
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    source_ids
+}
+
 pub(crate) fn external_action_dispatch_url_from_config(
     config: &Value,
     action_type: &str,
@@ -545,6 +658,79 @@ mod tests {
             .payload
             .message
             .contains("within 64 characters"));
+    }
+
+    #[test]
+    fn external_database_source_id_validation_preserves_trim_length_and_path_rules() {
+        assert_eq!(
+            validate_external_database_source_id(" source-main ")
+                .expect("source id should be valid"),
+            "source-main"
+        );
+
+        let empty = validate_external_database_source_id("   ").expect_err("empty id is invalid");
+        assert_eq!(empty.payload.code, "validation_error");
+        assert!(empty.payload.message.contains("must not be empty"));
+
+        let invalid_path =
+            validate_external_database_source_id("source/main").expect_err("slash is invalid");
+        assert_eq!(invalid_path.payload.code, "validation_error");
+        assert!(invalid_path
+            .payload
+            .message
+            .contains("must not contain path separators"));
+    }
+
+    #[test]
+    fn external_channel_allowed_database_source_ids_collects_aliases_and_database_sources() {
+        let config = json!({
+            "allowed_database_source_ids": ["db-a", " db-b "],
+            "databaseSourceIds": "db-c, db-a",
+            "allowedSourceIds": ["db-d"],
+            "database_sources": [
+                "db-e",
+                {"source_external_id": "db-f"},
+                {"sourceId": "db-g"},
+                {"source_id": "   "}
+            ],
+            "default_source_id": "db-default"
+        });
+
+        let ids = external_channel_allowed_database_source_ids(&config)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                "db-a".to_string(),
+                "db-b".to_string(),
+                "db-c".to_string(),
+                "db-d".to_string(),
+                "db-e".to_string(),
+                "db-f".to_string(),
+                "db-g".to_string()
+            ]
+        );
+        assert!(external_channel_database_source_allowed(
+            &config,
+            " db-default "
+        ));
+        assert!(external_channel_database_source_allowed(&config, "db-g"));
+        assert!(!external_channel_database_source_allowed(
+            &config,
+            "db-missing"
+        ));
+    }
+
+    #[test]
+    fn external_channel_allowed_database_source_id_validation_dedupes_sorted_ids() {
+        let ids = validate_external_channel_allowed_database_source_ids(&[
+            " db-b ".to_string(),
+            "db-a".to_string(),
+            "db-b".to_string(),
+        ])
+        .expect("source id list should normalize");
+        assert_eq!(ids, vec!["db-a".to_string(), "db-b".to_string()]);
     }
 
     #[test]
