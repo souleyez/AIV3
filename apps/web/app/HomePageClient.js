@@ -37,6 +37,13 @@ import {
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
 import { buildDefaultConversationTitle } from './lib/conversation-title';
+import {
+  createLocalThreadId,
+  readLocalAssistantRunId,
+  readLocalThreadId,
+  writeLocalAssistantRunId,
+  writeLocalThreadId,
+} from './lib/local-browser-state';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
@@ -84,44 +91,10 @@ const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
-const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
-const LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY = 'aidp-v3-local-assistant-run-id';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
 const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-function readLocalThreadId() {
-  if (typeof window === 'undefined') {
-    return 'server-render-thread';
-  }
-  try {
-    const existing = window.localStorage.getItem(LOCAL_THREAD_ID_STORAGE_KEY);
-    if (existing) {
-      return existing;
-    }
-    const next = createLocalThreadId();
-    window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, next);
-    return next;
-  } catch {
-    return 'browser-thread-unavailable';
-  }
-}
-
-function createLocalThreadId() {
-  return globalThis.crypto?.randomUUID?.() || `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function writeLocalThreadId(threadId) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, threadId);
-  } catch {
-    // The browser cache is a convenience; AssistantRun can still use the current in-memory thread.
-  }
-}
 
 function readLocalChatSessions() {
   if (typeof window === 'undefined') {
@@ -1558,32 +1531,6 @@ function promptRejectsStaticPageOutput(prompt) {
   const negativeLead = /(?:不要|别|不用|无需|不需要|禁止|避免|先别|不要再)(?:生成|制作|创建|输出|发布|渲染|做|做成|给|提供|返回|出|产出)?(?:任何|新的|新)?(?:静态页|静态页面|页面|网页|html|HTML|可视化页|报表|看板|链接|页面链接|报表链接)/.test(compact);
   const negativeTail = /(?:静态页|静态页面|页面|网页|html|HTML|可视化页|报表|看板|链接|页面链接|报表链接)(?:也)?(?:不要|别|不用|无需|不需要|禁止|避免)(?:生成|制作|创建|输出|发布|渲染|做|做成|给|提供|返回|出|产出)?/.test(compact);
   return negativeLead || negativeTail;
-}
-
-function readLocalAssistantRunId() {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  try {
-    return window.localStorage.getItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function writeLocalAssistantRunId(runId) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    if (runId) {
-      window.localStorage.setItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY, runId);
-    } else {
-      window.localStorage.removeItem(LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY);
-    }
-  } catch {
-    // AssistantRun id is a convenience cache; chat still works without it.
-  }
 }
 
 export default function HomePageClient() {

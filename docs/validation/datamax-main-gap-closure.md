@@ -3469,6 +3469,35 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Local Browser State Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving `HomePageClient.js` browser-state slice;
+  - keep the change limited to local thread id and AssistantRun id browser cache helpers.
+- Code changes:
+  - added `apps/web/app/lib/local-browser-state.js`;
+  - added `apps/web/app/lib/local-browser-state.test.mjs`;
+  - updated `apps/web/app/HomePageClient.js` to import local thread id and AssistantRun id helpers from the new module.
+- Test-first check:
+  - first run before adding the helper module failed as expected with `ERR_MODULE_NOT_FOUND` for `local-browser-state.js`;
+  - after implementation, `node --test apps/web/app/lib/local-browser-state.test.mjs` passed 7/7.
+- Local verification:
+  - `node --test apps/web/app/lib/local-browser-state.test.mjs`: passed 7/7;
+  - `node --test apps/web/app/lib/conversation-title.test.mjs`: passed 5/5;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed 4/4;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed 26/26;
+  - `npm --prefix apps/web run build`: passed;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 External Message Summary Refactor
 
 - Purpose:
