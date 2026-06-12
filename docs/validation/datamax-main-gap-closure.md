@@ -3457,6 +3457,24 @@ Data-ingestion external fixed-task smoke:
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
 
+## 2026-06-12 P5 Static Page Planning Handoff Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - move static-page planning handoff HTML artifact creation, template-reference compaction, missing-evidence compaction, and structure-signal compaction into the existing HTML artifact helper module;
+  - keep planning handoff cards, Image2 bridge metadata, evidence summary fields, module summaries, and structure-signal truncation stable.
+- Code changes:
+  - extended `apps/web/app/lib/html-artifact-utils.js` with static-page planning handoff helper functions;
+  - extended `apps/web/app/lib/html-artifact-utils.test.mjs` with planning handoff and compaction coverage;
+  - replaced the inline static-page planning handoff helper block in `apps/web/app/HomePageClient.js` with an import while preserving the existing call site.
+- Local verification:
+  - `node --test apps/web/app/lib/html-artifact-utils.test.mjs apps/web/app/lib/static-page-draft-workspace.test.mjs apps/web/app/lib/static-page-report-shelf.test.mjs apps/web/app/lib/report-template-utils.test.mjs`: passed, 26 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P5 Static Page Draft Workspace Helper Extraction
 
 - Purpose:

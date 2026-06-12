@@ -116,6 +116,189 @@ export function buildStaticPagePublishedHtmlArtifact(draft) {
   };
 }
 
+function firstObjectValue(...values) {
+  for (const value of values) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const found = value.find((item) => item && typeof item === 'object' && !Array.isArray(item));
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function compactStaticPageTemplateReference(draft) {
+  const reference = firstObjectValue(
+    draft?.templateReference,
+    draft?.template_reference,
+    draft?.designReferences,
+    draft?.design_references,
+    draft?.source?.templateReference,
+    draft?.source?.template_reference,
+    draft?.source?.templateReferences,
+    draft?.source?.template_references,
+  );
+  if (!reference) return null;
+  const providerPolicy = reference.providerPolicy || reference.provider_policy || {};
+  return {
+    source: reference.source || 'html-anything',
+    templateId: reference.templateId || reference.template_id || reference.id || '',
+    label: reference.label || reference.name || '',
+    importPolicy: reference.importPolicy || reference.import_policy || '',
+    styleDirection: reference.styleDirection || reference.style_direction || '',
+    designIntent: reference.designIntent || reference.design_intent || '',
+    promptHints: Array.isArray(reference.promptHints || reference.prompt_hints)
+      ? (reference.promptHints || reference.prompt_hints).slice(0, 6)
+      : [],
+    forbiddenOutput: Array.isArray(providerPolicy.forbiddenOutput || providerPolicy.forbidden_output)
+      ? (providerPolicy.forbiddenOutput || providerPolicy.forbidden_output).slice(0, 8)
+      : [],
+  };
+}
+
+export function compactStaticPageMissingEvidence(draft) {
+  const missingEvidence = firstObjectValue(
+    draft?.missingEvidence,
+    draft?.missing_evidence,
+    draft?.source?.missingEvidence,
+    draft?.source?.missing_evidence,
+  );
+  if (!missingEvidence) return null;
+  return {
+    status: missingEvidence.status || 'unknown',
+    items: Array.isArray(missingEvidence.items)
+      ? missingEvidence.items.slice(0, 8).map((item) => ({
+        code: item?.code || '',
+        message: item?.message || '',
+        recommendedAction: item?.recommendedAction || item?.recommended_action || '',
+        detailTargetCount: item?.detailTargetCount || item?.detail_target_count || null,
+      }))
+      : [],
+  };
+}
+
+function pushCompactText(out, value, limit = 80) {
+  if (typeof value === 'string') {
+    const text = value.trim().replace(/\s+/g, ' ').slice(0, limit);
+    if (text && !out.includes(text)) {
+      out.push(text);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => pushCompactText(out, item, limit));
+  }
+}
+
+export function compactStaticPageStructureSignals(draft) {
+  const raw = firstObjectValue(
+    draft?.structureSignals,
+    draft?.structure_signals,
+    draft?.dataSnapshot?.structureSignals,
+    draft?.dataSnapshot?.structure_signals,
+    draft?.source?.structureSignals,
+    draft?.source?.structure_signals,
+  );
+  if (!raw) return null;
+  const sectionTitleHints = [];
+  pushCompactText(sectionTitleHints, raw.sectionTitleHints || raw.section_title_hints);
+  const fieldCandidates = Array.isArray(raw.fieldCandidates || raw.field_candidates)
+    ? (raw.fieldCandidates || raw.field_candidates).slice(0, 4).map((candidate) => {
+      pushCompactText(sectionTitleHints, candidate?.sectionTitleHints || candidate?.section_title_hints);
+      return {
+        sourceId: candidate?.sourceId || candidate?.source_id || '',
+        fieldPath: candidate?.fieldPath || candidate?.field_path || '',
+        label: candidate?.label || '',
+        kind: candidate?.kind || '',
+        sectionTitleHints: Array.isArray(candidate?.sectionTitleHints || candidate?.section_title_hints)
+          ? (candidate.sectionTitleHints || candidate.section_title_hints).slice(0, 8)
+          : [],
+      };
+    })
+    : [];
+  const boundModules = Array.isArray(raw.boundModules || raw.bound_modules)
+    ? (raw.boundModules || raw.bound_modules).slice(0, 8).map((module) => ({
+      moduleId: module?.moduleId || module?.module_id || '',
+      title: module?.title || '',
+      fieldPath: module?.fieldPath || module?.field_path || '',
+      bindingQualityStatus: module?.bindingQualityStatus || module?.binding_quality_status || module?.status || '',
+    }))
+    : [];
+  if (!sectionTitleHints.length && !fieldCandidates.length && !boundModules.length) {
+    return null;
+  }
+  return {
+    status: raw.status || (sectionTitleHints.length ? 'available' : 'none'),
+    policy: raw.policy || 'source_structure_only_no_body_no_sample_rows',
+    sectionTitleHints: sectionTitleHints.slice(0, 12),
+    fieldCandidates,
+    boundModules,
+  };
+}
+
+export function buildStaticPagePlanningHtmlArtifact(draft) {
+  if (!draft) return null;
+  const id = draft.backendDraftId || draft.id || 'local-static-page-draft';
+  const templateReference = compactStaticPageTemplateReference(draft);
+  const missingEvidence = compactStaticPageMissingEvidence(draft);
+  const structureSignals = compactStaticPageStructureSignals(draft);
+  return {
+    kind: 'html_artifact',
+    version: 1,
+    id: `html-static-page-handoff-${id}`,
+    title: `${draft.objective || draft.title || '静态页规划'} · 交接`,
+    sourceType: 'static_page',
+    templateId: 'static_page_planning_handoff',
+    interactionMode: 'read_only',
+    ownerScope: {
+      type: 'static_page_draft',
+      id,
+    },
+    dataRefs: [
+      draft.datasetId ? { kind: 'dataset', id: draft.datasetId, label: '选中数据集' } : null,
+      draft.sessionId ? { kind: 'chat_session', id: draft.sessionId, label: '关联会话' } : null,
+      draft.backendDraftId ? { kind: 'static_page_draft', id: draft.backendDraftId, label: '后端草稿' } : null,
+    ].filter(Boolean),
+    provenance: {
+      producer: 'v3-static-page-workspace',
+      reason: 'static page planning handoff',
+      sourceRunId: draft.assistantRunId || draft.source?.assistantRunId || '',
+    },
+    createdAt: draft.backendUpdatedAt || draft.updated_at || draft.updatedAt || draft.created_at || new Date(0).toISOString(),
+    payload: {
+      objective: draft.objective || draft.title || '静态页规划',
+      templateReference,
+      evidenceSummary: draft.templateEvidenceSummary || draft.template_evidence_summary || draft.source?.templateEvidenceSummary || null,
+      missingEvidence,
+      structureSignals,
+      visualBridge: {
+        providerLane: 'gpt-image-2-cloudflare-queue',
+        role: 'effect_preview_reference_only',
+        rule: '可视化只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
+        status: draft.previewContract?.status || draft.imageJob?.status || 'not_requested',
+        imageJobStatus: draft.imageJob?.status || 'not_requested',
+        imageJobId: draft.imageJob?.id || '',
+        previewAssetKey: draft.previewImage?.assetKey || draft.previewContract?.assetKey || '',
+        draftFingerprint: draft.previewContract?.draftFingerprint || '',
+        styleDirection: draft.styleDirection || '',
+        renderModel: draft.renderSpec?.componentModel || '',
+        finalRenderStatus: draft.finalPage?.status || 'not_requested',
+      },
+      modules: (Array.isArray(draft.modules) ? draft.modules : []).map((module) => ({
+        id: module.id,
+        title: module.title,
+        content: module.content,
+        dataBinding: module.dataBinding?.label || module.dataBinding?.fieldPath || '待绑定',
+        visualizationType: module.visualizationType,
+        layout: module.layout,
+        dataQuality: module.dataQuality || module.dataQualityStatus || '',
+      })),
+    },
+  };
+}
+
 export function firstReportAssetPath(assetManifest = {}) {
   if (!assetManifest || typeof assetManifest !== 'object') return '';
   if (typeof assetManifest.path === 'string' && assetManifest.path.trim()) return assetManifest.path.trim();
