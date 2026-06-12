@@ -181,6 +181,7 @@ mod external_message_summary;
 mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
+mod model_facing_document_focus;
 mod model_facing_format;
 mod model_facing_policy;
 mod model_gateway_admin;
@@ -218,6 +219,9 @@ use external_observability::EXTERNAL_OBSERVABILITY_ACCESS_HEADER;
 use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
+};
+use model_facing_document_focus::{
+    format_model_facing_document_focus, infer_model_facing_document_focus, ModelFacingDocumentFocus,
 };
 use model_facing_format::*;
 use model_facing_policy::*;
@@ -3122,38 +3126,6 @@ fn chat_message_turn(message: &ChatMessageView) -> Option<&contracts::ChatTurnRu
         .message_manifest_view
         .as_ref()
         .and_then(|manifest| manifest.turn.as_ref())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ModelFacingDocumentFocus {
-    Unknown,
-    SingleDocument,
-    MultiDocument,
-}
-
-fn format_model_facing_document_focus(value: ModelFacingDocumentFocus) -> &'static str {
-    match value {
-        ModelFacingDocumentFocus::Unknown => "unknown",
-        ModelFacingDocumentFocus::SingleDocument => "single_document",
-        ModelFacingDocumentFocus::MultiDocument => "multi_document",
-    }
-}
-
-fn infer_model_facing_document_focus(
-    distinct_document_count: usize,
-    indexed_document_count: usize,
-) -> ModelFacingDocumentFocus {
-    let count = if distinct_document_count > 0 {
-        distinct_document_count
-    } else {
-        indexed_document_count
-    };
-
-    match count {
-        0 => ModelFacingDocumentFocus::Unknown,
-        1 => ModelFacingDocumentFocus::SingleDocument,
-        _ => ModelFacingDocumentFocus::MultiDocument,
-    }
 }
 
 fn dataset_output_has_answer_content(output: &DatasetOutputView) -> bool {

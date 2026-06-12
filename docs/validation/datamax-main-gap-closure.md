@@ -3766,6 +3766,38 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Model-Facing Document Focus Helper Local Verification
+
+- Purpose:
+  - continue the P5 `platform-api` behavior-preserving reduction;
+  - move model-facing document focus enum, protocol string formatter, and distinct/indexed document count inference helper out of `crates/platform-api/src/lib.rs`;
+  - keep `unknown`/`single_document`/`multi_document` wire strings and distinct-document-count-before-indexed-count inference unchanged.
+- Code change:
+  - added `crates/platform-api/src/model_facing_document_focus.rs`;
+  - moved `ModelFacingDocumentFocus`, `format_model_facing_document_focus`, and `infer_model_facing_document_focus` into the new module;
+  - added module-level Rust tests for protocol strings and distinct/indexed count precedence.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api model_facing_document_focus --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api document_focus --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api derive_model_facing_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Model-Facing Policy Helper Local Verification
 
 - Purpose:
