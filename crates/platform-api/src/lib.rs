@@ -11737,30 +11737,6 @@ async fn external_source_connection_exists(
     Ok(exists)
 }
 
-fn external_control_reason_present(reason: Option<&str>) -> bool {
-    reason.map(str::trim).is_some_and(|value| !value.is_empty())
-}
-
-fn external_control_integration_kind(channel_count: u64, source_count: u64) -> String {
-    match (channel_count > 0, source_count > 0) {
-        (true, true) => "mixed".to_string(),
-        (true, false) => "channel".to_string(),
-        (false, true) => "source".to_string(),
-        (false, false) => "unknown".to_string(),
-    }
-}
-
-fn external_control_config_patch(action: &str, reason_present: bool, now: DateTime<Utc>) -> Value {
-    json!({
-        "management_control": {
-            "last_action": action,
-            "reason_present": reason_present,
-            "updated_at": now,
-            "secret_material_included": false,
-        }
-    })
-}
-
 fn external_channel_create_connection_id(
     request: &CreateExternalChannelConnectionRequest,
 ) -> std::result::Result<String, ApiError> {

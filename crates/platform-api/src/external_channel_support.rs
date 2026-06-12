@@ -1,6 +1,7 @@
 use crate::ApiError;
+use chrono::{DateTime, Utc};
 use contracts::{ExternalChannelPlatformView, ExternalMessageTypeView};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::external_config_string;
 
@@ -81,6 +82,34 @@ pub(crate) fn external_channel_outbound_reply_dispatch_auth_from_config(
 
 pub(crate) fn external_action_dispatch_auth_configured(auth: &ExternalActionDispatchAuth) -> bool {
     auth.bearer_token.is_some() || auth.signing_secret.is_some()
+}
+
+pub(crate) fn external_control_reason_present(reason: Option<&str>) -> bool {
+    reason.map(str::trim).is_some_and(|value| !value.is_empty())
+}
+
+pub(crate) fn external_control_integration_kind(channel_count: u64, source_count: u64) -> String {
+    match (channel_count > 0, source_count > 0) {
+        (true, true) => "mixed".to_string(),
+        (true, false) => "channel".to_string(),
+        (false, true) => "source".to_string(),
+        (false, false) => "unknown".to_string(),
+    }
+}
+
+pub(crate) fn external_control_config_patch(
+    action: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> Value {
+    json!({
+        "management_control": {
+            "last_action": action,
+            "reason_present": reason_present,
+            "updated_at": now,
+            "secret_material_included": false,
+        }
+    })
 }
 
 pub(crate) fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
@@ -227,5 +256,44 @@ pub(crate) fn external_message_type_wire_value(
         ExternalMessageTypeView::Card => "card",
         ExternalMessageTypeView::Event => "event",
         ExternalMessageTypeView::Unknown => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_control_reason_present_trims_without_storing_reason_text() {
+        assert!(!external_control_reason_present(None));
+        assert!(!external_control_reason_present(Some("   ")));
+        assert!(external_control_reason_present(Some(" operator approved ")));
+    }
+
+    #[test]
+    fn external_control_config_patch_never_stores_operator_reason_text() {
+        let now = Utc::now();
+        let patch = external_control_config_patch("rotate_secret", true, now);
+        let patch_text = patch.to_string();
+
+        assert_eq!(
+            patch["management_control"]["last_action"],
+            json!("rotate_secret")
+        );
+        assert_eq!(patch["management_control"]["reason_present"], json!(true));
+        assert_eq!(
+            patch["management_control"]["secret_material_included"],
+            json!(false)
+        );
+        assert!(!patch_text.contains("operator approved"));
+        assert!(!patch_text.contains("secret-token"));
+    }
+
+    #[test]
+    fn external_control_integration_kind_tracks_mixed_connections() {
+        assert_eq!(external_control_integration_kind(1, 0), "channel");
+        assert_eq!(external_control_integration_kind(0, 1), "source");
+        assert_eq!(external_control_integration_kind(1, 1), "mixed");
+        assert_eq!(external_control_integration_kind(0, 0), "unknown");
     }
 }
