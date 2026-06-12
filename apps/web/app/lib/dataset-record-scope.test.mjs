@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  datasetSelectionStateAfterToggle,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
   documentMembershipCurrentDatasetIds,
   documentMembershipResponseDatasetIds,
+  documentMembershipResponseSelectionUpdate,
   documentMembershipToggleIntent,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
@@ -42,6 +44,23 @@ describe('dataset record scope helpers', () => {
       ['ds-a', 'ds-c'],
     );
     assert.deepEqual(toggleSelectedDatasetIds([], 'ds-a'), ['ds-a']);
+  });
+
+  it('builds selected dataset state after toggling one dataset', () => {
+    assert.deepEqual(
+      datasetSelectionStateAfterToggle([' ds-a ', 'ds-b', 'ds-a'], 'ds-c'),
+      {
+        selectedDatasetId: 'ds-a',
+        selectedDatasetIds: ['ds-a', 'ds-b', 'ds-c'],
+      },
+    );
+    assert.deepEqual(
+      datasetSelectionStateAfterToggle(['ds-a'], 'ds-a'),
+      {
+        selectedDatasetId: null,
+        selectedDatasetIds: [],
+      },
+    );
   });
 
   it('collects document, report, and static page draft dataset ownership fields', () => {
@@ -179,6 +198,25 @@ describe('dataset record scope helpers', () => {
         datasetIds: ['camel-skip'],
       }),
       [],
+    );
+  });
+
+  it('builds document membership response selection updates only when response keeps dataset ids', () => {
+    assert.deepEqual(
+      documentMembershipResponseSelectionUpdate({
+        datasetIds: ['ds-a', 'ds-b'],
+      }),
+      {
+        selectedDatasetId: 'ds-a',
+        selectedDatasetIds: ['ds-a', 'ds-b'],
+      },
+    );
+    assert.equal(
+      documentMembershipResponseSelectionUpdate({
+        dataset_ids: [],
+        datasetIds: ['camel-skip'],
+      }),
+      null,
     );
   });
 

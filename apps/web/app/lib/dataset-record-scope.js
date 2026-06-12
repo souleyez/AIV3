@@ -25,6 +25,14 @@ export function toggleSelectedDatasetIds(currentDatasetIds, datasetId) {
     : [...currentIds, datasetId];
 }
 
+export function datasetSelectionStateAfterToggle(currentDatasetIds, datasetId) {
+  const selectedDatasetIds = toggleSelectedDatasetIds(currentDatasetIds, datasetId);
+  return {
+    selectedDatasetId: selectedDatasetIds[0] || null,
+    selectedDatasetIds,
+  };
+}
+
 export function documentDatasetIds(document) {
   return normalizeDatasetIds([
     document?.dataset_id,
@@ -69,6 +77,17 @@ export function documentMembershipResponseDatasetIds(response) {
       || response?.document?.datasetIds
       || [],
   );
+}
+
+export function documentMembershipResponseSelectionUpdate(response) {
+  const selectedDatasetIds = documentMembershipResponseDatasetIds(response);
+  if (!selectedDatasetIds.length) {
+    return null;
+  }
+  return {
+    selectedDatasetId: selectedDatasetIds[0],
+    selectedDatasetIds,
+  };
 }
 
 export function reportRecordDatasetIds(record) {

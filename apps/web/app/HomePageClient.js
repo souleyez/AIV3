@@ -65,9 +65,10 @@ import {
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
+  datasetSelectionStateAfterToggle,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
-  documentMembershipResponseDatasetIds,
+  documentMembershipResponseSelectionUpdate,
   documentMembershipToggleIntent,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
@@ -75,7 +76,6 @@ import {
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
-  toggleSelectedDatasetIds,
 } from './lib/dataset-record-scope';
 import {
   clearLocalSecretState,
@@ -3715,10 +3715,10 @@ export default function HomePageClient() {
         `/api/v3/documents/${selectedDocumentId}/dataset-memberships/${datasetId}`,
         { method: toggleIntent.method },
       );
-      const nextIds = documentMembershipResponseDatasetIds(response);
-      if (nextIds.length) {
-        setSelectedDatasetIds(nextIds);
-        setSelectedDatasetId(nextIds[0]);
+      const selectionUpdate = documentMembershipResponseSelectionUpdate(response);
+      if (selectionUpdate) {
+        setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
+        setSelectedDatasetId(selectionUpdate.selectedDatasetId);
       }
       if (response?.document) {
         setDocuments((current) => current.map((document) => (
@@ -3751,10 +3751,10 @@ export default function HomePageClient() {
     setError('');
     setComposingNewSession(false);
     setAssistantRunProgress(null);
-    const nextIds = toggleSelectedDatasetIds(selectedDatasetIds, datasetId);
-    setSelectedDatasetIds(nextIds);
-    setSelectedDatasetId(nextIds[0] || null);
-    refreshStaticPageDraftShelf({ silent: true, datasetIds: nextIds });
+    const selectionUpdate = datasetSelectionStateAfterToggle(selectedDatasetIds, datasetId);
+    setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
+    setSelectedDatasetId(selectionUpdate.selectedDatasetId);
+    refreshStaticPageDraftShelf({ silent: true, datasetIds: selectionUpdate.selectedDatasetIds });
     setMobileSidebarOpen(false);
     setMobilePanel('chat');
   }
