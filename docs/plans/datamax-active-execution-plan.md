@@ -306,6 +306,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 静态页规划 summary、字段候选和 selected scope helper 已拆到 `apps/web/app/lib/static-page-conversation-context.js`，并补充 Node 单测；数据集/文档标题线索、最近消息截断、普通对话 fallback、conversation memory 和 selected scope payload 语义保持不变。
 - 2026-06-12: `HomePageClient.js` 静态页 source refs 和预览进度文案 helper 已并入 `apps/web/app/lib/static-page-conversation-context.js`，并补充 Node 单测；local thread id 传递、Image2 固定任务 source refs、预览链接优先级和非 URL asset 不出链接语义保持不变。
 - 2026-06-12: `HomePageClient.js` 本地消息构造 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；本地消息 id、role、content、created_at shape 和原有调用语义保持不变。
+- 2026-06-12: `HomePageClient.js` 静态页 draft 查找、HTML artifact owner scope 和成品 artifact 匹配 helper 已并入 `apps/web/app/lib/html-artifact-utils.js`，并补充 Node 单测；local/backend draft id 查找、`ownerScope`/`owner_scope` 兼容和 `static_page_published_preview` 模板过滤语义保持不变。
 
 **Regression commands:**
 

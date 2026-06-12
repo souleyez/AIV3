@@ -8,7 +8,10 @@ import {
   compactStaticPageMissingEvidence,
   compactStaticPageStructureSignals,
   compactStaticPageTemplateReference,
+  findPublishedStaticPageArtifactForDraft,
+  findStaticPageDraftByAnyId,
   firstReportAssetPath,
+  htmlArtifactOwnerScope,
   isReportRenderHtmlArtifact,
   mergeHtmlArtifacts,
   replaceReportRenderHtmlArtifacts,
@@ -80,6 +83,49 @@ describe('HTML artifact helpers', () => {
     assert.equal(artifact.payload.dataPath, '/generated-artifacts/page/table-data.csv');
     assert.equal(artifact.payload.snapshotPath, '/generated-artifacts/page/data.json');
     assert.equal(artifact.payload.summary, '已生成。');
+  });
+
+  it('finds static page drafts by local or backend id', () => {
+    const localDraft = { id: 'local-1', backendDraftId: 'backend-1' };
+    const mappedDraft = { id: 'mapped-local', backendDraftId: 'mapped-backend' };
+
+    assert.equal(
+      findStaticPageDraftByAnyId('backend-1', { 'mapped-local': mappedDraft }, [localDraft]),
+      localDraft,
+    );
+    assert.equal(
+      findStaticPageDraftByAnyId('mapped-local', { 'mapped-local': mappedDraft }, [localDraft]),
+      mappedDraft,
+    );
+    assert.equal(findStaticPageDraftByAnyId('', {}, [localDraft]), null);
+    assert.equal(findStaticPageDraftByAnyId('missing', {}, null), null);
+  });
+
+  it('finds published static page artifacts by owner scope and template id', () => {
+    const draft = { id: 'local-1', backendDraftId: 'backend-1' };
+    const wrongTemplate = {
+      id: 'artifact-wrong-template',
+      templateId: 'static_page_planning_handoff',
+      ownerScope: { type: 'static_page_draft', id: 'backend-1' },
+    };
+    const wrongOwner = {
+      id: 'artifact-wrong-owner',
+      templateId: 'static_page_published_preview',
+      ownerScope: { type: 'report_render_output', id: 'backend-1' },
+    };
+    const matchedBySnakeCase = {
+      id: 'artifact-match',
+      template_id: 'static_page_published_preview',
+      owner_scope: { type: 'static_page_draft', id: 'backend-1' },
+    };
+
+    assert.deepEqual(htmlArtifactOwnerScope(matchedBySnakeCase), { type: 'static_page_draft', id: 'backend-1' });
+    assert.equal(
+      findPublishedStaticPageArtifactForDraft(draft, [wrongTemplate, wrongOwner, matchedBySnakeCase]),
+      matchedBySnakeCase,
+    );
+    assert.equal(findPublishedStaticPageArtifactForDraft(null, [matchedBySnakeCase]), null);
+    assert.equal(findPublishedStaticPageArtifactForDraft(draft, null), null);
   });
 
   it('compacts static page planning references, missing evidence, and structure signals', () => {

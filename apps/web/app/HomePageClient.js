@@ -42,6 +42,9 @@ import {
   buildStaticPagePlanningHtmlArtifact,
   buildReportRenderHtmlArtifact,
   buildStaticPagePublishedHtmlArtifact,
+  findPublishedStaticPageArtifactForDraft,
+  findStaticPageDraftByAnyId,
+  htmlArtifactOwnerScope,
   mergeHtmlArtifacts,
   replaceReportRenderHtmlArtifacts,
   staticPageRenderedUrlFromDraft,
@@ -2529,25 +2532,7 @@ export default function HomePageClient() {
   }
 
   function staticPageDraftByAnyId(draftId) {
-    if (!draftId) return null;
-    return staticPageDrafts[draftId]
-      || staticPageDraftItems.find((draft) => draft?.id === draftId || draft?.backendDraftId === draftId)
-      || null;
-  }
-
-  function htmlArtifactOwnerScope(artifact) {
-    return artifact?.ownerScope || artifact?.owner_scope || {};
-  }
-
-  function publishedStaticPageArtifactForDraft(draft) {
-    if (!draft) return null;
-    const ownerIds = new Set([draft.id, draft.backendDraftId].filter(Boolean));
-    return htmlArtifacts.find((artifact) => {
-      const templateId = artifact?.templateId || artifact?.template_id;
-      if (templateId !== 'static_page_published_preview') return false;
-      const ownerScope = htmlArtifactOwnerScope(artifact);
-      return ownerScope?.type === 'static_page_draft' && ownerIds.has(ownerScope.id);
-    }) || null;
+    return findStaticPageDraftByAnyId(draftId, staticPageDrafts, staticPageDraftItems);
   }
 
   function handlePreviewStaticPageDraft(draftId) {
@@ -2558,7 +2543,7 @@ export default function HomePageClient() {
     setActiveStaticPageDraftId(draft.id);
     setStaticPageEditorOpen(false);
     setMobilePanel('chat');
-    const artifact = publishedStaticPageArtifactForDraft(draft);
+    const artifact = findPublishedStaticPageArtifactForDraft(draft, htmlArtifacts);
     if (artifact?.id) {
       setActiveHtmlArtifactId(artifact.id);
       setBanner('已在主站打开静态页预览；后续直接在对话里说修改要求，会沿用这个项目。');
@@ -3665,7 +3650,7 @@ export default function HomePageClient() {
         : '报表页面已生成。',
       { final: true },
     );
-    const artifact = publishedStaticPageArtifactForDraft(draft);
+    const artifact = findPublishedStaticPageArtifactForDraft(draft, htmlArtifacts);
     if (artifact?.id && activeHtmlArtifactId !== artifact.id) {
       setActiveHtmlArtifactId(artifact.id);
       setStaticPageEditorOpen(false);
@@ -3744,7 +3729,7 @@ export default function HomePageClient() {
     if (staticPageEditorOpen) {
       return;
     }
-    const artifact = publishedStaticPageArtifactForDraft(rendered.draft);
+    const artifact = findPublishedStaticPageArtifactForDraft(rendered.draft, htmlArtifacts);
     setActiveStaticPageDraftId(rendered.draft.id);
     setMobilePanel('chat');
     if (artifact?.id && activeHtmlArtifactId !== artifact.id) {

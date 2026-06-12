@@ -116,6 +116,30 @@ export function buildStaticPagePublishedHtmlArtifact(draft) {
   };
 }
 
+export function findStaticPageDraftByAnyId(draftId, draftsById = {}, draftItems = []) {
+  if (!draftId) return null;
+  return draftsById?.[draftId]
+    || (Array.isArray(draftItems)
+      ? draftItems.find((draft) => draft?.id === draftId || draft?.backendDraftId === draftId)
+      : null)
+    || null;
+}
+
+export function htmlArtifactOwnerScope(artifact) {
+  return artifact?.ownerScope || artifact?.owner_scope || {};
+}
+
+export function findPublishedStaticPageArtifactForDraft(draft, artifacts = []) {
+  if (!draft) return null;
+  const ownerIds = new Set([draft.id, draft.backendDraftId].filter(Boolean));
+  return (Array.isArray(artifacts) ? artifacts : []).find((artifact) => {
+    const templateId = artifact?.templateId || artifact?.template_id;
+    if (templateId !== 'static_page_published_preview') return false;
+    const ownerScope = htmlArtifactOwnerScope(artifact);
+    return ownerScope?.type === 'static_page_draft' && ownerIds.has(ownerScope.id);
+  }) || null;
+}
+
 function firstObjectValue(...values) {
   for (const value of values) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {

@@ -3397,6 +3397,28 @@ Data-ingestion external fixed-task smoke:
   - local verification did not restart services; 8-server deployment restarted only `aiv3-web.service`;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Static Page Artifact Lookup Helper Extraction
+
+- Purpose:
+  - continue reducing `apps/web/app/HomePageClient.js` complexity with one behavior-preserving static-page helper slice;
+  - make static-page draft lookup and published HTML artifact matching directly testable before further static-page workspace refactors.
+- Code changes:
+  - moved static-page draft lookup into `findStaticPageDraftByAnyId` in `apps/web/app/lib/html-artifact-utils.js`;
+  - moved HTML artifact owner scope compatibility parsing into `htmlArtifactOwnerScope`;
+  - moved published static-page artifact matching into `findPublishedStaticPageArtifactForDraft`;
+  - updated `HomePageClient.js` to call the shared helpers;
+  - added deterministic coverage in `apps/web/app/lib/html-artifact-utils.test.mjs`.
+- Local verification:
+  - `node --test apps/web/app/lib/html-artifact-utils.test.mjs apps/web/app/lib/static-page-draft-workspace.test.mjs apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 30/30;
+  - `npm --prefix apps/web run build`: passed;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0 Self-Test After Local Message Helper Deployment
 
 - Purpose:
