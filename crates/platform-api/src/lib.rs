@@ -6347,32 +6347,6 @@ fn external_channel_static_page_sse_continue_polling_event(
     )
 }
 
-fn external_channel_retrieval_started_sse_event(message: &ExternalBotMessageView) -> String {
-    let text = "DataMax 正在检索可见文档、数据源和会话上下文。";
-    let data = json!({
-        "conversation_external_id": message.conversation_external_id.clone(),
-        "message_external_id": message.message_external_id.clone(),
-        "idempotency_key": message.idempotency_key.clone(),
-        "status": "processing",
-        "text": text,
-    });
-    sse_json_event(
-        "external_channel.retrieval_started",
-        external_channel_sse_public_payload(
-            None,
-            &message.idempotency_key,
-            &message.conversation_external_id,
-            external_channel_static_page_sse_sequence("retrieval_started"),
-            "retrieval",
-            "processing",
-            text,
-            None,
-            None,
-            data,
-        ),
-    )
-}
-
 async fn external_channel_static_page_sse_continue_polling_event_persisted(
     state: &AppState,
     response: ExternalChannelEventResponse,

@@ -1,5 +1,5 @@
 use axum::http::HeaderMap;
-use contracts::ExternalChannelEventResponse;
+use contracts::{ExternalBotMessageView, ExternalChannelEventResponse};
 use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -90,6 +90,34 @@ pub(crate) fn external_channel_sse_public_payload(
         }
     }
     payload
+}
+
+pub(crate) fn external_channel_retrieval_started_sse_event(
+    message: &ExternalBotMessageView,
+) -> String {
+    let text = "DataMax 正在检索可见文档、数据源和会话上下文。";
+    let data = json!({
+        "conversation_external_id": message.conversation_external_id.clone(),
+        "message_external_id": message.message_external_id.clone(),
+        "idempotency_key": message.idempotency_key.clone(),
+        "status": "processing",
+        "text": text,
+    });
+    sse_json_event(
+        "external_channel.retrieval_started",
+        external_channel_sse_public_payload(
+            None,
+            &message.idempotency_key,
+            &message.conversation_external_id,
+            external_channel_static_page_sse_sequence("retrieval_started"),
+            "retrieval",
+            "processing",
+            text,
+            None,
+            None,
+            data,
+        ),
+    )
 }
 
 pub(crate) fn external_channel_static_page_sse_sequence(status: &str) -> i64 {
@@ -815,7 +843,10 @@ pub(crate) fn external_channel_live_answer_stream_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use contracts::{ExternalBotReplyTypeView, ExternalBotReplyView};
+    use contracts::{
+        ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelPlatformView,
+        ExternalMessageTypeView,
+    };
     use domain_model::{AssistantRunEventId, TenantId};
     use uuid::Uuid;
 
@@ -859,6 +890,35 @@ mod tests {
         }
     }
 
+    fn external_bot_message() -> ExternalBotMessageView {
+        ExternalBotMessageView {
+            platform: ExternalChannelPlatformView::GenericChat,
+            tenant_external_id: "tenant-1".to_string(),
+            bot_external_id: "bot-1".to_string(),
+            conversation_external_id: "conv-1".to_string(),
+            thread_external_id: None,
+            sender_external_id: "sender-1".to_string(),
+            message_external_id: "msg-1".to_string(),
+            message_type: ExternalMessageTypeView::Text,
+            text: Some("查询文档".to_string()),
+            default_prompt: None,
+            output_format: None,
+            render_mode: None,
+            artifact_type: None,
+            template: None,
+            mention_external_user_ids: Vec::new(),
+            attachment_refs: Vec::new(),
+            business_datasource_ids: Vec::new(),
+            available_document_external_ids: Vec::new(),
+            available_document_source_id: None,
+            dataset_external_id: None,
+            dataset_external_ids: Vec::new(),
+            requested_skills: Vec::new(),
+            idempotency_key: "idem-retrieval".to_string(),
+            received_at: chrono::Utc::now(),
+        }
+    }
+
     #[test]
     fn external_channel_sse_public_payload_preserves_envelope_fields_over_data() {
         let run_id = AssistantRunId::new();
@@ -885,6 +945,21 @@ mod tests {
         assert_eq!(payload["phase"], json!("processing"));
         assert_eq!(payload["custom"], json!("kept"));
         assert_eq!(payload["data"]["sequence"], json!(999));
+    }
+
+    #[test]
+    fn retrieval_started_sse_event_keeps_public_wire_contract() {
+        let body = external_channel_retrieval_started_sse_event(&external_bot_message());
+
+        assert!(body.contains("event: external_channel.retrieval_started"));
+        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(body.contains("\"sequence\":5"));
+        assert!(body.contains("\"phase\":\"retrieval\""));
+        assert!(body.contains("\"status\":\"processing\""));
+        assert!(body.contains("\"conversation_external_id\":\"conv-1\""));
+        assert!(body.contains("\"message_external_id\":\"msg-1\""));
+        assert!(body.contains("\"idempotency_key\":\"idem-retrieval\""));
+        assert!(body.contains("DataMax 正在检索可见文档、数据源和会话上下文。"));
     }
 
     #[test]
