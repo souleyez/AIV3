@@ -3785,6 +3785,7 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
   - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
   - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed after moving test-only service handoff imports behind `#[cfg(test)]`;
   - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
   - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
   - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;

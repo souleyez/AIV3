@@ -1,7 +1,11 @@
+#[cfg(test)]
 use contracts::{
     ChatSessionReportEntryResolutionView, ManifestServiceHandoffSourceView,
+    ModelFacingReportEntryStateView,
+};
+use contracts::{
     ManifestServiceHandoffView, ModelFacingCapabilityClassView, ModelFacingEvidenceStateView,
-    ModelFacingNextActionView, ModelFacingReportEntryStateView, ModelFacingServiceLaneView,
+    ModelFacingNextActionView, ModelFacingServiceLaneView,
 };
 
 use crate::model_facing_format::{
