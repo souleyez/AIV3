@@ -11,6 +11,7 @@ use crate::{
         external_channel_public_artifact_url_from_links_value,
         external_channel_public_artifact_url_from_reply,
         external_channel_public_artifact_url_from_value,
+        external_channel_text_with_public_artifact_link,
     },
     external_channel_public_card::{
         external_channel_public_card_value,
@@ -23,6 +24,10 @@ use crate::{
         external_channel_public_text,
     },
     external_channel_static_page_enrich_report_card,
+    external_channel_static_page_focus::{
+        external_channel_static_page_customer_ready_text,
+        external_channel_static_page_customer_ready_text_for_payload,
+    },
     sse_support::{sse_json_event, sse_text_delta_events},
 };
 
@@ -708,6 +713,68 @@ pub(crate) fn external_channel_static_page_sse_status(
         "static_page_continue_polling".to_string()
     } else {
         raw_status
+    }
+}
+
+pub(crate) fn external_channel_static_page_sse_progress_text(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(response);
+    if let Some(public_url) = external_channel_public_artifact_url_from_reply(&response.reply) {
+        if status == "static_page_published" {
+            return external_channel_text_with_public_artifact_link(
+                external_channel_static_page_customer_ready_text_for_payload(
+                    external_channel_static_page_customer_ready_text(),
+                    response.reply.card.as_ref(),
+                    &public_url,
+                ),
+                &public_url,
+            );
+        }
+        if status == "static_page_stable_artifact_reused" {
+            return external_channel_text_with_public_artifact_link(
+                external_channel_static_page_customer_ready_text_for_payload(
+                    external_channel_static_page_customer_ready_text(),
+                    response.reply.card.as_ref(),
+                    &public_url,
+                ),
+                &public_url,
+            );
+        }
+    }
+    if let Some(text) = response
+        .reply
+        .text
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return external_channel_public_text(text);
+    }
+    match status.as_str() {
+        "static_page_effect_image_ready" => {
+            "页面可视化预览已生成，DataMax 将继续生成最终静态页。".to_string()
+        }
+        "static_page_publish_queued" => {
+            "下一步：DataMax 正在整理数据证据并生成最终静态页。".to_string()
+        }
+        "static_page_publish_running" => "下一步：DataMax 正在生成可访问的静态页。".to_string(),
+        "static_page_publish_retrying" => {
+            "静态页发布遇到临时波动，DataMax 会继续重试或切换可用发布链路。".to_string()
+        }
+        "static_page_published" => external_channel_static_page_customer_ready_text().to_string(),
+        "static_page_publish_failed" => {
+            "静态页最终发布暂未完成，DataMax 已记录原因，可继续重试或人工接管。".to_string()
+        }
+        "static_page_publish_needs_human" => {
+            "静态页发布需要人工处理，DataMax 已保留当前中间产物和原因。".to_string()
+        }
+        "static_page_publish_cancelled" => {
+            "静态页发布任务已取消，DataMax 已保留当前中间状态。".to_string()
+        }
+        "static_page_continue_polling" => {
+            "静态页生成仍在后台继续，第三方可按 status_url 继续轮询。".to_string()
+        }
+        _ => "DataMax 静态页任务仍在处理中。".to_string(),
     }
 }
 
@@ -1438,6 +1505,42 @@ mod tests {
         assert_eq!(
             external_channel_static_page_sse_status(&cancelled_but_running),
             "static_page_continue_polling"
+        );
+    }
+
+    #[test]
+    fn static_page_sse_progress_text_promotes_public_artifact_link() {
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/demo/index.html";
+        let response = external_channel_response(
+            Some(json!({
+                "status": "static_page_publish_running",
+                "public_url": public_url,
+                "template_adaptation": {"focus": [{"label": "取高机会"}]},
+            })),
+            None,
+            Vec::new(),
+        );
+
+        let text = external_channel_static_page_sse_progress_text(&response);
+
+        assert!(text.contains("已依据客户需求生成可访问的报表页面"));
+        assert!(text.contains("系统识别到本轮关注焦点：取高机会"));
+        assert!(text.contains("页面链接：[点击查看报表]"));
+        assert!(text.contains(public_url));
+        assert!(!text.contains("static_page_publish_running"));
+    }
+
+    #[test]
+    fn static_page_sse_progress_text_uses_public_status_fallbacks() {
+        let response = external_channel_response(
+            Some(json!({"status": "static_page_publish_retrying"})),
+            None,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            external_channel_static_page_sse_progress_text(&response),
+            "静态页发布遇到临时波动，DataMax 会继续重试或切换可用发布链路。"
         );
     }
 
