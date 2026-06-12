@@ -18,6 +18,13 @@ export function normalizeDatasetIds(ids) {
     .filter(Boolean))];
 }
 
+export function toggleSelectedDatasetIds(currentDatasetIds, datasetId) {
+  const currentIds = normalizeDatasetIds(currentDatasetIds);
+  return currentIds.includes(datasetId)
+    ? currentIds.filter((item) => item !== datasetId)
+    : [...currentIds, datasetId];
+}
+
 export function documentDatasetIds(document) {
   return normalizeDatasetIds([
     document?.dataset_id,

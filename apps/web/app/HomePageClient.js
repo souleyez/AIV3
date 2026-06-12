@@ -73,6 +73,7 @@ import {
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
+  toggleSelectedDatasetIds,
 } from './lib/dataset-record-scope';
 import {
   clearLocalSecretState,
@@ -3752,10 +3753,7 @@ export default function HomePageClient() {
     setError('');
     setComposingNewSession(false);
     setAssistantRunProgress(null);
-    const currentIds = normalizeDatasetIds(selectedDatasetIds);
-    const nextIds = currentIds.includes(datasetId)
-      ? currentIds.filter((item) => item !== datasetId)
-      : [...currentIds, datasetId];
+    const nextIds = toggleSelectedDatasetIds(selectedDatasetIds, datasetId);
     setSelectedDatasetIds(nextIds);
     setSelectedDatasetId(nextIds[0] || null);
     refreshStaticPageDraftShelf({ silent: true, datasetIds: nextIds });

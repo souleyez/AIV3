@@ -11,6 +11,7 @@ import {
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
+  toggleSelectedDatasetIds,
 } from './dataset-record-scope.js';
 
 describe('dataset record scope helpers', () => {
@@ -26,6 +27,18 @@ describe('dataset record scope helpers', () => {
     assert.equal(sameDatasetIds(['a', 'b', 'a'], ['a', 'b']), true);
     assert.equal(sameDatasetIds(['a', 'b'], ['b', 'a']), false);
     assert.equal(sameDatasetIds([], null), true);
+  });
+
+  it('toggles selected dataset ids while preserving existing ordering', () => {
+    assert.deepEqual(
+      toggleSelectedDatasetIds([' ds-a ', 'ds-b', 'ds-a'], 'ds-c'),
+      ['ds-a', 'ds-b', 'ds-c'],
+    );
+    assert.deepEqual(
+      toggleSelectedDatasetIds(['ds-a', 'ds-b', 'ds-c'], 'ds-b'),
+      ['ds-a', 'ds-c'],
+    );
+    assert.deepEqual(toggleSelectedDatasetIds([], 'ds-a'), ['ds-a']);
   });
 
   it('collects document, report, and static page draft dataset ownership fields', () => {
