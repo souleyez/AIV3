@@ -6121,43 +6121,6 @@ async fn external_channel_static_page_sse_preview_ready_events(
     Some(encoded)
 }
 
-fn external_channel_static_page_preview_public_url(asset_ref: &str) -> Option<String> {
-    let trimmed = asset_ref.trim();
-    if trimmed.is_empty() || trimmed.starts_with("data:image/") || trimmed.starts_with("blob:") {
-        return None;
-    }
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
-            url.set_query(None);
-            url.set_fragment(None);
-            return Some(truncate_assistant_supply_text(url.as_str(), 500));
-        }
-        return None;
-    }
-    if trimmed.starts_with("/generated-artifacts/") {
-        return Some(format!(
-            "{}{}",
-            external_channel_api_public_base_url(),
-            truncate_assistant_supply_text(trimmed, 500)
-        ));
-    }
-    if trimmed.starts_with("generated-artifacts/") {
-        return Some(format!(
-            "{}/{}",
-            external_channel_api_public_base_url(),
-            truncate_assistant_supply_text(trimmed, 500)
-        ));
-    }
-    if trimmed.starts_with("static-page-previews/") {
-        return Some(format!(
-            "{}/{}",
-            external_channel_generated_artifact_public_base_url(),
-            truncate_assistant_supply_text(trimmed, 500)
-        ));
-    }
-    Some(truncate_assistant_supply_text(trimmed, 500))
-}
-
 async fn external_channel_static_page_sse_prompt_events(
     state: &AppState,
     response: &ExternalChannelEventResponse,

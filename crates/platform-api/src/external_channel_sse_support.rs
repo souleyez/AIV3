@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration as StdDuration};
 
 use crate::{
-    codex_host_fixed_task_public_artifact_url_allowed,
+    codex_host_fixed_task_public_artifact_url_allowed, external_channel_api_public_base_url,
+    external_channel_generated_artifact_public_base_url,
     external_channel_public_artifact::{
         external_channel_public_artifact_url_from_links_value,
         external_channel_public_artifact_url_from_reply,
@@ -29,6 +30,7 @@ use crate::{
         external_channel_static_page_customer_ready_text_for_payload,
     },
     sse_support::{sse_json_event, sse_text_delta_events},
+    truncate_assistant_supply_text,
 };
 
 pub(crate) const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
@@ -812,6 +814,43 @@ pub(crate) fn external_channel_static_page_sse_progress_key(
     format!("{status}|{public_url}|{preview}|{runtime}")
 }
 
+pub(crate) fn external_channel_static_page_preview_public_url(asset_ref: &str) -> Option<String> {
+    let trimmed = asset_ref.trim();
+    if trimmed.is_empty() || trimmed.starts_with("data:image/") || trimmed.starts_with("blob:") {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+            url.set_query(None);
+            url.set_fragment(None);
+            return Some(truncate_assistant_supply_text(url.as_str(), 500));
+        }
+        return None;
+    }
+    if trimmed.starts_with("/generated-artifacts/") {
+        return Some(format!(
+            "{}{}",
+            external_channel_api_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    if trimmed.starts_with("generated-artifacts/") {
+        return Some(format!(
+            "{}/{}",
+            external_channel_api_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    if trimmed.starts_with("static-page-previews/") {
+        return Some(format!(
+            "{}/{}",
+            external_channel_generated_artifact_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    Some(truncate_assistant_supply_text(trimmed, 500))
+}
+
 pub(crate) fn external_channel_static_page_sse_is_terminal(
     response: &ExternalChannelEventResponse,
 ) -> bool {
@@ -1572,6 +1611,31 @@ mod tests {
         assert_eq!(
             external_channel_static_page_sse_event_name("static_page_publish_failed"),
             "external_channel.static_page_issue"
+        );
+    }
+
+    #[test]
+    fn static_page_preview_public_url_normalizes_safe_preview_refs() {
+        assert_eq!(
+            external_channel_static_page_preview_public_url("static-page-previews/job/preview.png")
+                .as_deref(),
+            Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+            )
+        );
+        assert_eq!(
+            external_channel_static_page_preview_public_url(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png?token=secret#frag"
+            )
+            .as_deref(),
+            Some("https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png")
+        );
+        assert!(
+            external_channel_static_page_preview_public_url("data:image/png;base64,abc").is_none()
+        );
+        assert!(
+            external_channel_static_page_preview_public_url("blob:https://example.test/1")
+                .is_none()
         );
     }
 
