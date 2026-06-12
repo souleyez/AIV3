@@ -3462,6 +3462,18 @@ Data-ingestion external fixed-task smoke:
 - Known warnings:
   - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
   - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- 8-server post-sync verification:
+  - local commit `8463d7b` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` is at `8463d7bb4ac5c344ab4c7bb56629d450222b09f3`;
+  - `node --test apps/web/app/lib/local-account-state.test.mjs`: passed 5/5 on 8 server;
+  - `node --test apps/web/app/lib/account-auth.test.mjs`: passed 4/4 on 8 server;
+  - `npm --prefix apps/web run build`: passed on 8 server with the same existing Next warnings;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this frontend helper extraction.
+- GitHub Actions:
+  - DataMax CI run `27390571110` for head `8463d7bb4ac5c344ab4c7bb56629d450222b09f3` completed as `failure`;
+  - both jobs, `Rust Minimal` and `No-Credential Smoke`, ended with `steps=[]`;
+  - `gh run view 27390571110 --log-failed` returned `log not found`, matching the existing GitHub Actions account/runner startup failure mode rather than a project test failure.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
