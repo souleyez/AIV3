@@ -399,6 +399,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 第三方客户可见文本清洗 helper 已拆到 `external_channel_public_text` 模块并补模块单测；状态映射、内部技术名替换、内嵌 JSON 剥离、重复产物链接去重、空白压缩、内部上下文兜底文案和截断语义保持不变。
 - 2026-06-13: `external_channel_public_text` 第三方客户可见文本 helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 第三方公开产物链接 helper 已拆到 `external_channel_public_artifact` 模块并补模块单测；公开产物 URL 提取、reply 卡片 fallback、客户可见报表链接追加和 artifact link 去重语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `external_channel_public_artifact` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
