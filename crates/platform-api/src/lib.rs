@@ -175,6 +175,7 @@ use zip::ZipArchive;
 pub mod auth_email;
 mod auth_session_support;
 mod chat_message_model_facing;
+mod chat_session_model_facing;
 mod dataset_output_model_facing;
 mod document_compare_model_facing;
 mod document_media_model_facing;
@@ -203,6 +204,7 @@ mod workflow_runtime_summary;
 
 use auth_session_support::*;
 use chat_message_model_facing::*;
+use chat_session_model_facing::*;
 use dataset_output_model_facing::*;
 use document_compare_model_facing::*;
 use document_media_model_facing::*;
@@ -233,9 +235,6 @@ use external_observability::EXTERNAL_OBSERVABILITY_ACCESS_HEADER;
 use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
-};
-use model_facing_document_focus::{
-    format_model_facing_document_focus, infer_model_facing_document_focus, ModelFacingDocumentFocus,
 };
 use model_facing_format::*;
 use model_facing_policy::*;
@@ -1748,284 +1747,6 @@ fn derive_model_facing_summary(
     )
 }
 
-fn derive_chat_session_model_facing_summary(
-    session: &ChatSessionView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let base_capability_class = infer_chat_session_model_facing_capability_class(session);
-    let evidence_state = infer_chat_session_model_facing_evidence_state(session);
-    let report_entry = chat_session_report_entry(session);
-    let mut signals = collect_chat_session_model_facing_signals(session);
-
-    match report_entry.map(|entry| entry.state.clone()) {
-        Some(contracts::ModelFacingReportEntryStateView::ConfirmationRequired) => {
-            let mut summary = build_model_facing_summary(
-                base_capability_class,
-                evidence_state,
-                vec![contracts::ModelFacingNextActionView::RequestReportEntryConfirmation],
-                signals,
-            );
-            summary.report_entry_state =
-                contracts::ModelFacingReportEntryStateView::ConfirmationRequired;
-            summary
-        }
-        Some(contracts::ModelFacingReportEntryStateView::Confirmed) => {
-            if let Some(report_plan_id) =
-                report_entry.and_then(|entry| entry.confirmed_report_plan_id)
-            {
-                signals.push(format!("confirmed_report_plan_id={report_plan_id}"));
-            }
-            build_model_facing_summary(
-                contracts::ModelFacingCapabilityClassView::ReportPlanning,
-                evidence_state,
-                vec![contracts::ModelFacingNextActionView::ContinueReportPlanning],
-                signals,
-            )
-        }
-        _ => {
-            let allowed_next_actions = infer_chat_session_model_facing_next_actions(
-                session,
-                &base_capability_class,
-                &evidence_state,
-            );
-            build_model_facing_summary(
-                base_capability_class,
-                evidence_state,
-                allowed_next_actions,
-                signals,
-            )
-        }
-    }
-}
-
-fn infer_chat_session_model_facing_capability_class(
-    session: &ChatSessionView,
-) -> contracts::ModelFacingCapabilityClassView {
-    let has_answer_content = chat_session_has_answer_content(session);
-    let retrieval_evidence_count = count_chat_session_model_facing_retrieval_evidences(session);
-
-    if !has_answer_content
-        && retrieval_evidence_count == 0
-        && (session.latest_memory_directory_id.is_some()
-            || session
-                .latest_dataset_output
-                .as_ref()
-                .and_then(|output| output.memory_directory_id)
-                .is_some())
-    {
-        return contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness;
-    }
-    if !has_answer_content && retrieval_evidence_count > 0 {
-        return contracts::ModelFacingCapabilityClassView::EvidenceRetrieval;
-    }
-
-    contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
-}
-
-fn infer_chat_session_model_facing_evidence_state(
-    session: &ChatSessionView,
-) -> contracts::ModelFacingEvidenceStateView {
-    if latest_chat_session_turn(session)
-        .map(|turn| {
-            turn.status == contracts::ChatTurnStatusView::Failed
-                || turn.artifact_commit_status
-                    == contracts::ChatTurnArtifactCommitStatusView::Failed
-                || turn.stream_status == contracts::ChatTurnStreamStatusView::Failed
-                || turn.tool_loop_status == contracts::ChatTurnToolLoopStatusView::Failed
-                || turn.provider_status == contracts::ChatTurnProviderStatusView::Failed
-        })
-        .unwrap_or(false)
-    {
-        return contracts::ModelFacingEvidenceStateView::Degraded;
-    }
-
-    let has_memory_directory = session.latest_memory_directory_id.is_some()
-        || session
-            .latest_dataset_output
-            .as_ref()
-            .and_then(|output| output.memory_directory_id)
-            .is_some();
-    let retrieval_evidence_count = count_chat_session_model_facing_retrieval_evidences(session);
-    let has_answer_content = chat_session_has_answer_content(session);
-    let document_focus = chat_session_document_focus(session);
-
-    if retrieval_evidence_count > 0 {
-        if document_focus == ModelFacingDocumentFocus::SingleDocument && has_answer_content {
-            return contracts::ModelFacingEvidenceStateView::LiveDetail;
-        }
-        if document_focus == ModelFacingDocumentFocus::MultiDocument
-            || (has_memory_directory && has_answer_content)
-        {
-            return contracts::ModelFacingEvidenceStateView::Mixed;
-        }
-        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
-    }
-    if has_memory_directory {
-        return contracts::ModelFacingEvidenceStateView::CatalogMemory;
-    }
-
-    contracts::ModelFacingEvidenceStateView::CatalogMemory
-}
-
-fn infer_chat_session_model_facing_next_actions(
-    session: &ChatSessionView,
-    capability_class: &contracts::ModelFacingCapabilityClassView,
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-) -> Vec<contracts::ModelFacingNextActionView> {
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return vec![contracts::ModelFacingNextActionView::RetryExecution];
-    }
-
-    let document_focus = chat_session_document_focus(session);
-    let mut actions = Vec::new();
-    if let Some(turn) = latest_chat_session_turn(session) {
-        if turn.tool_loop_status == contracts::ChatTurnToolLoopStatusView::Pending {
-            actions.push(contracts::ModelFacingNextActionView::WaitForToolLoop);
-        }
-        if turn.artifact_commit_status == contracts::ChatTurnArtifactCommitStatusView::Pending {
-            actions.push(contracts::ModelFacingNextActionView::FinalizeArtifactCommit);
-        }
-    }
-    match capability_class {
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness => {
-            actions.push(contracts::ModelFacingNextActionView::RefreshDirectory);
-            actions.push(contracts::ModelFacingNextActionView::AnswerDirectly);
-        }
-        contracts::ModelFacingCapabilityClassView::EvidenceRetrieval => {
-            if document_focus == ModelFacingDocumentFocus::MultiDocument {
-                actions.push(contracts::ModelFacingNextActionView::CompareDocuments);
-            }
-            actions.push(contracts::ModelFacingNextActionView::ReadDocumentDetail);
-        }
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis => {
-            let retrieval_evidence_count =
-                count_chat_session_model_facing_retrieval_evidences(session);
-            if document_focus == ModelFacingDocumentFocus::MultiDocument
-                || retrieval_evidence_count > 1
-            {
-                actions.push(contracts::ModelFacingNextActionView::CompareDocuments);
-            }
-            if retrieval_evidence_count > 0 {
-                actions.push(contracts::ModelFacingNextActionView::ReadDocumentDetail);
-            }
-            actions.push(contracts::ModelFacingNextActionView::AnswerDirectly);
-        }
-        contracts::ModelFacingCapabilityClassView::ReportPlanning => {
-            actions.push(contracts::ModelFacingNextActionView::ContinueReportPlanning);
-        }
-        contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            actions.push(contracts::ModelFacingNextActionView::GenerateReportOutput);
-        }
-        contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            actions.push(contracts::ModelFacingNextActionView::RetryExecution);
-        }
-    }
-    actions
-}
-
-fn collect_chat_session_model_facing_signals(session: &ChatSessionView) -> Vec<String> {
-    let document_focus = chat_session_document_focus(session);
-    let distinct_document_count = chat_session_distinct_document_count(session);
-    let indexed_document_count = chat_session_indexed_document_count(session);
-    let mut signals = vec![
-        format!("workflow_kind={}", WorkflowKind::ChatSession.as_str()),
-        format!(
-            "retrieval_evidence_count={}",
-            count_chat_session_model_facing_retrieval_evidences(session)
-        ),
-        format!(
-            "answer_content_present={}",
-            chat_session_has_answer_content(session)
-        ),
-        format!(
-            "document_focus={}",
-            format_model_facing_document_focus(document_focus)
-        ),
-        format!("distinct_document_count={distinct_document_count}"),
-        format!("indexed_document_count={indexed_document_count}"),
-        format!(
-            "has_memory_directory={}",
-            session.latest_memory_directory_id.is_some()
-                || session
-                    .latest_dataset_output
-                    .as_ref()
-                    .and_then(|output| output.memory_directory_id)
-                    .is_some()
-        ),
-    ];
-    if let Some(turn) = latest_chat_session_turn(session) {
-        signals.push(format!(
-            "chat_turn_status={}",
-            format_chat_turn_status(&turn.status)
-        ));
-        signals.push(format!(
-            "artifact_commit_status={}",
-            format_chat_turn_artifact_commit_status(&turn.artifact_commit_status)
-        ));
-    }
-    if let Some(report_entry) = chat_session_report_entry(session) {
-        signals.push(format!(
-            "report_entry_state={}",
-            format_model_facing_report_entry_state(&report_entry.state)
-        ));
-        if let Some(resolved_action) = report_entry.resolved_action.as_ref() {
-            signals.push(format!(
-                "report_entry_resolved_action={}",
-                format_chat_session_report_entry_resolution(resolved_action)
-            ));
-        }
-        if let Some(report_plan_id) = report_entry.confirmed_report_plan_id {
-            signals.push(format!("confirmed_report_plan_id={report_plan_id}"));
-        }
-    }
-    signals
-}
-
-fn count_chat_session_model_facing_retrieval_evidences(session: &ChatSessionView) -> usize {
-    let latest_assistant_message_count = session
-        .latest_assistant_message
-        .as_ref()
-        .and_then(|message| message.message_manifest_view.as_ref())
-        .and_then(|manifest| manifest.output.as_ref())
-        .map(|output| {
-            output
-                .sections
-                .iter()
-                .map(|section| section.retrieval_evidence_ids.len())
-                .sum::<usize>()
-        })
-        .unwrap_or(0);
-    let latest_dataset_output_count = session
-        .latest_dataset_output
-        .as_ref()
-        .map(|output| output.retrieval_evidence_ids.len())
-        .unwrap_or(0);
-
-    latest_assistant_message_count.max(latest_dataset_output_count)
-}
-
-fn latest_chat_session_turn(session: &ChatSessionView) -> Option<&contracts::ChatTurnRuntimeView> {
-    session
-        .latest_assistant_message
-        .as_ref()
-        .and_then(|message| message.message_manifest_view.as_ref())
-        .and_then(|manifest| manifest.turn.as_ref())
-        .or_else(|| {
-            session
-                .session_manifest_view
-                .as_ref()
-                .and_then(|manifest| manifest.last_turn.as_ref())
-        })
-}
-
-fn chat_session_report_entry(
-    session: &ChatSessionView,
-) -> Option<&contracts::ChatSessionReportEntryView> {
-    session
-        .session_manifest_view
-        .as_ref()
-        .and_then(|manifest| manifest.report_entry.as_ref())
-}
-
 async fn load_report_plan_service_handoff(
     state: &AppState,
     report_plan_id: ReportPlanId,
@@ -2208,44 +1929,6 @@ fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String
     }
     terms.truncate(40);
     terms
-}
-
-fn chat_session_has_answer_content(session: &ChatSessionView) -> bool {
-    session
-        .latest_assistant_message
-        .as_ref()
-        .map(chat_message_has_answer_content)
-        .unwrap_or(false)
-}
-
-fn chat_session_distinct_document_count(session: &ChatSessionView) -> usize {
-    session
-        .latest_dataset_output
-        .as_ref()
-        .map(dataset_output_distinct_document_count)
-        .unwrap_or(0)
-}
-
-fn chat_session_indexed_document_count(session: &ChatSessionView) -> usize {
-    session
-        .latest_assistant_message
-        .as_ref()
-        .map(chat_message_indexed_document_count)
-        .or_else(|| {
-            session
-                .latest_dataset_output
-                .as_ref()
-                .and_then(|output| output.output_manifest_view.as_ref())
-                .map(|manifest| manifest.indexed_document_count)
-        })
-        .unwrap_or(0)
-}
-
-fn chat_session_document_focus(session: &ChatSessionView) -> ModelFacingDocumentFocus {
-    infer_model_facing_document_focus(
-        chat_session_distinct_document_count(session),
-        chat_session_indexed_document_count(session),
-    )
 }
 
 fn infer_model_facing_capability_class(
