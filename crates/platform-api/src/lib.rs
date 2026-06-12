@@ -5159,7 +5159,7 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
     encoded
 }
 
-fn external_channel_public_response(
+pub(crate) fn external_channel_public_response(
     mut response: ExternalChannelEventResponse,
 ) -> ExternalChannelEventResponse {
     response.reply = external_channel_public_reply(response.reply);
@@ -6190,62 +6190,6 @@ async fn external_channel_static_page_sse_prompt_events(
         payload,
     ));
     encoded
-}
-
-fn external_channel_static_page_sse_continue_polling_payload(
-    response: ExternalChannelEventResponse,
-) -> (Value, String, String, Option<AssistantRunId>) {
-    let status = external_channel_static_page_sse_status(&response);
-    let progress_key = external_channel_static_page_sse_progress_key(&response);
-    let public_response = external_channel_public_response(response);
-    let public_status = external_channel_public_status(&status);
-    let conversation_external_id = public_response
-        .reply
-        .target_conversation_external_id
-        .clone();
-    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
-    let poll_after_seconds =
-        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
-    let text = "本次流式连接已达到等待上限，DataMax 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
-    let data = json!({
-        "assistant_run_id": public_response.assistant_run_id,
-        "idempotency_key": public_response.idempotency_key.clone(),
-        "status": public_status.clone(),
-        "card": public_response.reply.card.clone(),
-        "text": text,
-    });
-    let payload = external_channel_sse_public_payload(
-        public_response.assistant_run_id,
-        &public_response.idempotency_key,
-        &conversation_external_id,
-        external_channel_static_page_sse_sequence("static_page_continue_polling"),
-        "static_page",
-        &public_status,
-        text,
-        status_url,
-        poll_after_seconds.or(Some(30)),
-        data,
-    );
-    let dedupe_key =
-        format!("external_channel.static_page_continue_polling:{public_status}:{progress_key}");
-    (
-        payload,
-        text.to_string(),
-        dedupe_key,
-        public_response.assistant_run_id,
-    )
-}
-
-#[cfg(test)]
-fn external_channel_static_page_sse_continue_polling_event(
-    response: ExternalChannelEventResponse,
-) -> String {
-    let (payload, text, _, _) = external_channel_static_page_sse_continue_polling_payload(response);
-    external_channel_sse_event_with_delta(
-        "external_channel.static_page_continue_polling",
-        payload,
-        &text,
-    )
 }
 
 async fn external_channel_static_page_sse_continue_polling_event_persisted(

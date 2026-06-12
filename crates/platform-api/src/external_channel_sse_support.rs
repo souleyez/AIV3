@@ -20,6 +20,7 @@ use crate::{
         external_channel_public_status_allows_preview_link,
         prune_external_channel_public_card_links,
     },
+    external_channel_public_response,
     external_channel_public_text::{
         external_channel_public_status, external_channel_public_stream_text,
         external_channel_public_text,
@@ -851,6 +852,62 @@ pub(crate) fn external_channel_static_page_preview_public_url(asset_ref: &str) -
     Some(truncate_assistant_supply_text(trimmed, 500))
 }
 
+pub(crate) fn external_channel_static_page_sse_continue_polling_payload(
+    response: ExternalChannelEventResponse,
+) -> (Value, String, String, Option<AssistantRunId>) {
+    let status = external_channel_static_page_sse_status(&response);
+    let progress_key = external_channel_static_page_sse_progress_key(&response);
+    let public_response = external_channel_public_response(response);
+    let public_status = external_channel_public_status(&status);
+    let conversation_external_id = public_response
+        .reply
+        .target_conversation_external_id
+        .clone();
+    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
+    let poll_after_seconds =
+        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
+    let text = "本次流式连接已达到等待上限，DataMax 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
+    let data = json!({
+        "assistant_run_id": public_response.assistant_run_id,
+        "idempotency_key": public_response.idempotency_key.clone(),
+        "status": public_status.clone(),
+        "card": public_response.reply.card.clone(),
+        "text": text,
+    });
+    let payload = external_channel_sse_public_payload(
+        public_response.assistant_run_id,
+        &public_response.idempotency_key,
+        &conversation_external_id,
+        external_channel_static_page_sse_sequence("static_page_continue_polling"),
+        "static_page",
+        &public_status,
+        text,
+        status_url,
+        poll_after_seconds.or(Some(30)),
+        data,
+    );
+    let dedupe_key =
+        format!("external_channel.static_page_continue_polling:{public_status}:{progress_key}");
+    (
+        payload,
+        text.to_string(),
+        dedupe_key,
+        public_response.assistant_run_id,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn external_channel_static_page_sse_continue_polling_event(
+    response: ExternalChannelEventResponse,
+) -> String {
+    let (payload, text, _, _) = external_channel_static_page_sse_continue_polling_payload(response);
+    external_channel_sse_event_with_delta(
+        "external_channel.static_page_continue_polling",
+        payload,
+        &text,
+    )
+}
+
 pub(crate) fn external_channel_static_page_sse_is_terminal(
     response: &ExternalChannelEventResponse,
 ) -> bool {
@@ -1637,6 +1694,47 @@ mod tests {
             external_channel_static_page_preview_public_url("blob:https://example.test/1")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn static_page_continue_polling_payload_uses_public_envelope() {
+        let mut response = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_running",
+                "status_url": "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply",
+                "poll_after_seconds": 15,
+                "codex_host_workflow_execution_id": "hidden",
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+        response.assistant_run_id = Some(AssistantRunId::new());
+        response.idempotency_key = "generic:tenant:static-page-timeout".to_string();
+
+        let (payload, text, dedupe_key, run_id) =
+            external_channel_static_page_sse_continue_polling_payload(response);
+
+        assert_eq!(payload["schema"], json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1));
+        assert_eq!(
+            payload["status_url"],
+            json!(
+                "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply"
+            )
+        );
+        assert_eq!(payload["poll_after_seconds"], json!(15));
+        assert_eq!(payload["sequence"], json!(95));
+        assert_eq!(payload["phase"], json!("static_page"));
+        assert_eq!(
+            payload["data"]["status"],
+            json!("static_page_publish_running")
+        );
+        assert!(payload
+            .pointer("/data/card/codex_host_workflow_execution_id")
+            .is_none());
+        assert!(text.contains("DataMax 会继续后台生成"));
+        assert!(dedupe_key.starts_with("external_channel.static_page_continue_polling:"));
+        assert!(run_id.is_some());
     }
 
     #[test]
