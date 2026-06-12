@@ -84,6 +84,7 @@ import {
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
+  staticPageDraftShelfDatasetScope,
 } from './lib/dataset-record-scope';
 import {
   clearLocalSecretState,
@@ -695,16 +696,11 @@ export default function HomePageClient() {
     const { silent = true, datasetIds = reportShelfFetchDatasetIds } = options;
     const queries = [];
     const localThreadId = readLocalThreadId();
-    const priorityDatasetIds = normalizeDatasetIds(reportShelfDatasetIds);
-    const targetDatasetIds = normalizeDatasetIds([
-      ...priorityDatasetIds,
-      ...(Array.isArray(datasetIds) ? datasetIds : [datasetIds]),
-      ...reportShelfVisibleDatasetIds,
-    ]);
-    const orderedDatasetIds = [
-      ...priorityDatasetIds,
-      ...targetDatasetIds.filter((datasetId) => !priorityDatasetIds.includes(datasetId)),
-    ];
+    const { orderedDatasetIds } = staticPageDraftShelfDatasetScope(
+      reportShelfDatasetIds,
+      datasetIds,
+      reportShelfVisibleDatasetIds,
+    );
     queries.push({
       query: new URLSearchParams({
         visible_templates: 'true',

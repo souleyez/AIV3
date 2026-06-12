@@ -54,6 +54,23 @@ export function combinedDatasetIds(primaryDatasetIds, secondaryDatasetIds) {
   return normalizeDatasetIds([...asDatasetIdArray(primaryDatasetIds), ...asDatasetIdArray(secondaryDatasetIds)]);
 }
 
+export function staticPageDraftShelfDatasetScope(priorityDatasetIds, refreshDatasetIds, visibleDatasetIds) {
+  const normalizedPriorityDatasetIds = normalizeDatasetIds(priorityDatasetIds);
+  const targetDatasetIds = normalizeDatasetIds([
+    ...normalizedPriorityDatasetIds,
+    ...asDatasetIdArray(refreshDatasetIds),
+    ...asDatasetIdArray(visibleDatasetIds),
+  ]);
+  return {
+    priorityDatasetIds: normalizedPriorityDatasetIds,
+    targetDatasetIds,
+    orderedDatasetIds: [
+      ...normalizedPriorityDatasetIds,
+      ...targetDatasetIds.filter((datasetId) => !normalizedPriorityDatasetIds.includes(datasetId)),
+    ],
+  };
+}
+
 export function datasetSelectionStateAfterToggle(currentDatasetIds, datasetId) {
   const selectedDatasetIds = toggleSelectedDatasetIds(currentDatasetIds, datasetId);
   return {

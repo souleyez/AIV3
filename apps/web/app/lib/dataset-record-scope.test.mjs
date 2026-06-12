@@ -24,6 +24,7 @@ import {
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
+  staticPageDraftShelfDatasetScope,
   toggleSelectedDatasetIds,
 } from './dataset-record-scope.js';
 
@@ -100,6 +101,29 @@ describe('dataset record scope helpers', () => {
     assert.deepEqual(
       combinedDatasetIds(['visible-a', 'selected-a'], ['selected-a', 'selected-b']),
       ['visible-a', 'selected-a', 'selected-b'],
+    );
+  });
+
+  it('builds static page draft shelf dataset query order from priority and visible scopes', () => {
+    assert.deepEqual(
+      staticPageDraftShelfDatasetScope(
+        [' selected-a ', 'selected-b', 'selected-a'],
+        ['refresh-a', 'selected-b', null],
+        ['visible-a', 'refresh-a', 'visible-b'],
+      ),
+      {
+        priorityDatasetIds: ['selected-a', 'selected-b'],
+        targetDatasetIds: ['selected-a', 'selected-b', 'refresh-a', 'visible-a', 'visible-b'],
+        orderedDatasetIds: ['selected-a', 'selected-b', 'refresh-a', 'visible-a', 'visible-b'],
+      },
+    );
+    assert.deepEqual(
+      staticPageDraftShelfDatasetScope([], 'single-refresh', []),
+      {
+        priorityDatasetIds: [],
+        targetDatasetIds: ['single-refresh'],
+        orderedDatasetIds: ['single-refresh'],
+      },
     );
   });
 
