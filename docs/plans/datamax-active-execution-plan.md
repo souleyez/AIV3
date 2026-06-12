@@ -282,6 +282,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: external action/reply dispatch URL config helper 已并入 `external_channel_support` 模块；action-specific endpoint 优先级、通用 fallback 和 redacted URL 跳过逻辑保持不变。
 - 2026-06-12: external inbound bearer/default source id config helper 已并入 `external_channel_support` 模块；inbound token alias、generic-chat alias 和 source id alias 读取逻辑保持不变。
 - 2026-06-12: `EXTERNAL_OBSERVABILITY_ACCESS_HEADER` 已改为 test-only import；普通 `platform-api` 编译不再产生 unused import warning，测试中 header 常量仍可用。
+- 2026-06-12: `crates/platform-api/src/lib.rs` workflow runtime summary 基础格式化和工具执行状态计数 helper 已拆到 `workflow_runtime_summary` 模块；summary 文本缩进、可选字段输出和 `requested/completed/failed` 计数语义保持不变。
 - 2026-06-12: `HomePageClient.js` 对话标题生成逻辑已拆到 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；对话标题时间格式、空标题 fallback 和长 prompt 截断行为保持不变。
 - 2026-06-12: `HomePageClient.js` 本地浏览器状态读写 helper 已拆到 `apps/web/app/lib/local-browser-state.js`，并补充 Node 单测；local thread id 和 AssistantRun id 的 localStorage key、SSR fallback、浏览器存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` 本地对话列表缓存读写已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；local chat sessions storage key、normalize 后写入、无 window/坏 JSON/存储失败 fallback 保持不变。

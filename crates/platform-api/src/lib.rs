@@ -143,7 +143,6 @@ use static_page_runtime::{
 use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet},
     convert::Infallible,
-    fmt::Display,
     fs::{self, File},
     hash::{Hash, Hasher},
     io::{Read, Write},
@@ -188,6 +187,7 @@ mod model_gateway_status;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
+mod workflow_runtime_summary;
 
 use auth_session_support::*;
 use external_channel_support::*;
@@ -229,6 +229,10 @@ use react_agent_tools::{
     assistant_run_react_action_label, assistant_run_react_policy_observation,
     execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
+};
+use workflow_runtime_summary::{
+    begin_summary_block, format_tool_status_summary, push_optional_summary_line, push_summary_line,
+    summarize_tool_execution_status_counts,
 };
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
@@ -1653,49 +1657,6 @@ pub fn render_report_render_output_runtime_summary(
     }
 
     Some(lines.join("\n"))
-}
-
-fn begin_summary_block(title: &str) -> Vec<String> {
-    vec![title.to_string()]
-}
-
-fn push_summary_line(lines: &mut Vec<String>, label: &str, value: impl Display) {
-    lines.push(format!("  {label}: {value}"));
-}
-
-fn push_optional_summary_line<T: Display>(lines: &mut Vec<String>, label: &str, value: Option<T>) {
-    if let Some(value) = value {
-        push_summary_line(lines, label, value);
-    }
-}
-
-fn format_tool_status_summary(
-    requested_count: usize,
-    completed_count: usize,
-    failed_count: usize,
-) -> String {
-    format!("requested={requested_count}, completed={completed_count}, failed={failed_count}")
-}
-
-fn summarize_tool_execution_status_counts(
-    tool_executions: &[ToolExecutionView],
-) -> Option<(usize, usize, usize)> {
-    if tool_executions.is_empty() {
-        return None;
-    }
-
-    let mut requested_count = 0usize;
-    let mut completed_count = 0usize;
-    let mut failed_count = 0usize;
-    for execution in tool_executions {
-        match execution.status {
-            contracts::ManifestToolCallStatusView::Requested => requested_count += 1,
-            contracts::ManifestToolCallStatusView::Completed => completed_count += 1,
-            contracts::ManifestToolCallStatusView::Failed => failed_count += 1,
-        }
-    }
-
-    Some((requested_count, completed_count, failed_count))
 }
 
 fn format_model_facing_capability_class(
