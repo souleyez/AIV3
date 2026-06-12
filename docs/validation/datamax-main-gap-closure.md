@@ -3370,6 +3370,26 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Local Chat Message Helper Extraction
+
+- Purpose:
+  - continue reducing `apps/web/app/HomePageClient.js` complexity with one behavior-preserving frontend slice;
+  - make local chat message construction directly testable before further chat/streaming refactors.
+- Code changes:
+  - moved `createLocalMessage` from `apps/web/app/HomePageClient.js` into `apps/web/app/lib/local-chat-sessions.js`;
+  - updated `HomePageClient.js` to import the helper;
+  - added deterministic coverage in `apps/web/app/lib/local-chat-sessions.test.mjs` for the local message id, role, content, and `created_at` shape.
+- Local verification:
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs apps/web/app/lib/codex-customer-artifacts.test.mjs`: passed, 110/110;
+  - `npm --prefix apps/web run build`: passed;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-2 Report Trigger And Export Self-Test Refresh
 
 - Purpose:

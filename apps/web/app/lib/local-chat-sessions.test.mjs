@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LOCAL_CHAT_MESSAGES_STORAGE_KEY,
   LOCAL_CHAT_SESSIONS_STORAGE_KEY,
+  createLocalMessage,
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
@@ -53,6 +54,21 @@ test('local chat option ids round-trip safely', () => {
   assert.equal(isLocalChatSessionOptionId(optionId), true);
   assert.equal(localThreadIdFromSessionOptionId(optionId), 'thread-1');
   assert.equal(localThreadIdFromSessionOptionId('backend-session-1'), '');
+});
+
+test('createLocalMessage keeps the local chat message shape', () => {
+  const message = createLocalMessage('assistant', '正在生成回复...', {
+    nowMs: () => 1780000000000,
+    random: () => 0.123456789,
+    createdAt: '2026-06-12T08:00:00.000Z',
+  });
+
+  assert.deepEqual(message, {
+    id: 'local-1780000000000-4fzzzx',
+    role: 'assistant',
+    content: '正在生成回复...',
+    created_at: '2026-06-12T08:00:00.000Z',
+  });
 });
 
 test('local chat sessions normalize, dedupe, and sort by update time', () => {

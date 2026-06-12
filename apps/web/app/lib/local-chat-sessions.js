@@ -47,6 +47,18 @@ export function normalizeLocalChatMessage(message) {
   };
 }
 
+export function createLocalMessage(role, content, options = {}) {
+  const nowMs = typeof options.nowMs === 'function' ? options.nowMs() : Date.now();
+  const random = typeof options.random === 'function' ? options.random() : Math.random();
+  const createdAt = options.createdAt || new Date().toISOString();
+  return {
+    id: `local-${nowMs}-${random.toString(36).slice(2, 8)}`,
+    role,
+    content,
+    created_at: createdAt,
+  };
+}
+
 export function normalizeLocalChatSession(session, options = {}) {
   if (!session || typeof session !== 'object') {
     return null;

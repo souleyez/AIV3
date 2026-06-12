@@ -152,6 +152,7 @@ import {
   summarizeUploadClassification,
 } from './lib/upload-classifier';
 import {
+  createLocalMessage,
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
@@ -180,15 +181,6 @@ function wait(ms) {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
-}
-
-function createLocalMessage(role, content) {
-  return {
-    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    role,
-    content,
-    created_at: new Date().toISOString(),
-  };
 }
 
 export default function HomePageClient() {
