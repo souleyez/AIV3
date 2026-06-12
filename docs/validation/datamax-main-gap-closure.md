@@ -3463,6 +3463,16 @@ Data-ingestion external fixed-task smoke:
   - found-file aggregate size summary: `file_found_count=57`, `total_bytes=69424609`, `max_bytes=33717070`;
   - receipt: `/srv/aiv3/repo/target/document-object-repair-plan-smoke-p2-20260612/20260612031458450-f2yoqlsiv7/report.json`;
   - redaction scan over the receipt found zero matches for database URL, bearer, provider key pattern, raw URL, 64-character hash value, Windows path, or env file path.
+- 8-server post-sync verification:
+  - local commit `a711d72` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `9e3193f37` to `a711d7264`;
+  - `npm run smoke:document-object-repair-plan -- --self-test --pretty`: passed, `runId=20260612031733694-f3bi2201xr-self-test`, `ok=true`;
+  - `npm run smoke:document-object-repair-plan -- --env-file /etc/aiv3/aiv3.env --probe-limit 200 --pretty --output-dir target/document-object-repair-plan-smoke-p2-20260612-postsync`: passed, `runId=20260612031733675-f3bc1qdzq6`, `ok=true`;
+  - post-sync input summary: `document_count=2637`, `already_fingerprinted_document_count=32`, `canonical_document_count=32`, `canonical_missing_fingerprint_count=0`, `local_missing_fingerprint_count=2602`, `remote_missing_fingerprint_count=3`, `missing_locator_fingerprint_count=0`, `probed_count=200`, `not_sampled_local_candidate_count=2402`;
+  - post-sync repair readiness counts: `repair_ready_local_file_found=57`, `review_required_local_file_missing=143`, `not_sampled_local_candidate=2402`, `review_required_remote_locator=3`;
+  - post-sync redaction scan over the receipt found zero matches for database URL, bearer, provider key pattern, raw URL, 64-character hash value, Windows path, or env file path;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this smoke/docs-only update.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, object file read, object content hash, object file delete, P2 real backfill, or production data mutation was performed;
