@@ -3482,6 +3482,16 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
   - `npm --prefix apps/web run build`: passed with existing Next.js warnings about deprecated `middleware` convention and NFT tracing from `apps/web/next.config.js`;
   - `git diff --check`: passed with Windows line-ending warnings only.
+- 8-server post-sync verification:
+  - `/srv/aiv3/repo` fast-forwarded from `28434bb5f` to `ce1852976`;
+  - `git status --short --branch`: clean at `main...origin/main`;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_action_dispatch_url_prefers_action_specific_endpoint --lib`: passed, 1/1;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_outbound_reply_dispatch_uses_reply_specific_endpoint_and_credentials --lib`: passed, 1/1;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this refactor sync.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
