@@ -211,10 +211,11 @@ use external_message_summary::{
     bot_message_payload_summary as external_bot_message_payload_summary,
     requested_skills_summary as external_requested_skills_summary,
 };
+#[cfg(test)]
+use external_observability::EXTERNAL_OBSERVABILITY_ACCESS_HEADER;
 use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
-    EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
 };
 use model_gateway_admin::*;
 use model_gateway_runtime::*;

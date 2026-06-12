@@ -3464,6 +3464,48 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P1/P3/P4 Acceptance Refresh and Warning Cleanup
+
+- Purpose:
+  - refresh current-plan P1 observability/concurrency, P3 Xinbai report template, and P4 data-ingestion staging evidence on head `2801ff1`;
+  - keep production writes disabled and avoid printing credentials or source data;
+  - remove a `platform-api` unused-import warning surfaced by the P4 sync smoke while preserving test access to the observability header constant.
+- P1 local checks:
+  - `npm run smoke:model-gateway-operator -- --self-test`: passed as pending without credentials, `profileId=rightcode-gpt-5-5-default`;
+  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials`: passed as pending without credentials;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, required statuses all observed, `queueCount=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --base-url https://v3.elepcloud.com --allow-missing-credentials`: returned HTTP 401 and pending without credentials, no task payload or credentials printed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`, `completedCount=20`.
+- P3 local checks:
+  - `npm run validate:xinbai-report-template`: passed for `xinbai-functional-modular-template-20260604`;
+  - checked files: `index.html`, `data.json`, `data-snapshot.json`, `manifest.json`, `table-data.csv`, `report.ppt`, `report.md`;
+  - template data summary: `manifest features=99`, `stores=77`, `opportunities=60`, `lowActivity=40`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, exports `table-data.csv`, `report.ppt`, `report.md`.
+- P4 local checks:
+  - `bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test`: passed with synthetic V3 source/sync/dataset fixtures;
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh`: passed after rerun with a longer command timeout;
+  - sync smoke covered `platform-api data_ingestion` 18/18, `external_source_sync` 6/6, `external-source-worker` 11/11, `ingest-worker` 48/48 plus 16/16, `retrieval-worker` 7/7 plus 8/8 plus 8/8 plus 11/11;
+  - sync smoke also passed live-source readiness self-test and `check:pure-third-party-guide-html`;
+  - the first local sync-smoke attempt hit the client-side 180s command timeout before completion; no residual bash/psql process remained, and the rerun completed successfully.
+- Warning cleanup:
+  - changed `EXTERNAL_OBSERVABILITY_ACCESS_HEADER` to a `#[cfg(test)]` import in `crates/platform-api/src/lib.rs`;
+  - `cargo test -p platform-api data_ingestion --lib`: passed, 18/18;
+  - `cargo check -p platform-api`: passed without the previous unused-import warning;
+  - `cargo fmt --check`: passed after mechanical formatting;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `npm --prefix apps/web run build`: passed with existing Next.js warnings about deprecated `middleware` convention and NFT tracing from `apps/web/next.config.js`;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0 Fixed Regression Refresh After Platform Refactors
 
 - Purpose:

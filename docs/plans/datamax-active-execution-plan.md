@@ -277,6 +277,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: external channel platform/message type wire value helper 已并入 `external_channel_support` 模块；`feishu`、`lark`、`we_com`、`generic_chat`、`third_party`、`aigolf` 兼容映射和消息类型字段值保持不变。
 - 2026-06-12: external action/reply dispatch URL config helper 已并入 `external_channel_support` 模块；action-specific endpoint 优先级、通用 fallback 和 redacted URL 跳过逻辑保持不变。
 - 2026-06-12: external inbound bearer/default source id config helper 已并入 `external_channel_support` 模块；inbound token alias、generic-chat alias 和 source id alias 读取逻辑保持不变。
+- 2026-06-12: `EXTERNAL_OBSERVABILITY_ACCESS_HEADER` 已改为 test-only import；普通 `platform-api` 编译不再产生 unused import warning，测试中 header 常量仍可用。
 
 **Regression commands:**
 
