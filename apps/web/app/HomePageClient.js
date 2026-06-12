@@ -54,6 +54,7 @@ import {
   writeLocalAssistantRunId,
   writeLocalThreadId,
 } from './lib/local-browser-state';
+import { fingerprintLocalSecret } from './lib/local-secret-fingerprint';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
@@ -102,21 +103,6 @@ const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-async function fingerprintLocalSecret(secretValue) {
-  const normalized = String(secretValue || '').trim();
-  if (!normalized) {
-    return '';
-  }
-  if (!globalThis.crypto?.subtle) {
-    throw new Error('当前浏览器不支持本地密钥指纹计算。');
-  }
-  const bytes = new TextEncoder().encode(normalized);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 async function fetchJson(url, options = {}) {
   const {

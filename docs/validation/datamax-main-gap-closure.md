@@ -3481,6 +3481,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Local Secret Fingerprint Helper Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving local secret fingerprint slice;
+  - keep the change limited to client-side SHA-256 fingerprint generation for local key and dataset secret flows.
+- Code changes:
+  - added `apps/web/app/lib/local-secret-fingerprint.js`;
+  - added `apps/web/app/lib/local-secret-fingerprint.test.mjs`;
+  - updated `apps/web/app/HomePageClient.js` to import `fingerprintLocalSecret` from the new module.
+- Test-first check:
+  - first run before adding the helper module failed as expected with `ERR_MODULE_NOT_FOUND` for `local-secret-fingerprint.js`;
+  - after implementation, `node --test apps/web/app/lib/local-secret-fingerprint.test.mjs` passed 3/3.
+- Local verification:
+  - `node --test apps/web/app/lib/local-secret-fingerprint.test.mjs`: passed 3/3;
+  - `node --test apps/web/app/lib/dataset-identity.test.mjs apps/web/app/lib/local-account-state.test.mjs apps/web/app/lib/account-auth.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/assistant-run-progress.test.mjs`: passed 48/48;
+  - `npm --prefix apps/web run build`: passed.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no real secret, bearer, cookie, provider key, or database URL was used in tests or documentation;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Dataset Identity Helper Extraction
 
 - Purpose:
