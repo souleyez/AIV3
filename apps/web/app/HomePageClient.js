@@ -71,9 +71,10 @@ import {
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
-  normalizeLocalChatSessions,
+  readLocalChatSessions,
   shouldPersistLocalChatSession,
   upsertLocalChatSession,
+  writeLocalChatSessions,
 } from './lib/local-chat-sessions';
 
 const DATASET_POLL_INTERVAL_MS = 5000;
@@ -89,38 +90,11 @@ const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
-const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
 const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-function readLocalChatSessions() {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-  try {
-    const raw = window.localStorage.getItem(LOCAL_CHAT_SESSIONS_STORAGE_KEY);
-    return normalizeLocalChatSessions(raw ? JSON.parse(raw) : []);
-  } catch {
-    return [];
-  }
-}
-
-function writeLocalChatSessions(sessions) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    window.localStorage.setItem(
-      LOCAL_CHAT_SESSIONS_STORAGE_KEY,
-      JSON.stringify(normalizeLocalChatSessions(sessions)),
-    );
-  } catch {
-    // The local conversation index is a convenience cache; the active chat still works in memory.
-  }
-}
 
 function buildAutoDatasetIdentity(existingCount = 0) {
   const now = new Date();

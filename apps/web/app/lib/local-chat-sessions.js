@@ -1,4 +1,5 @@
 export const LOCAL_CHAT_SESSION_OPTION_PREFIX = 'local-chat:';
+export const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
 
 const DEFAULT_MAX_LOCAL_SESSIONS = 20;
 const DEFAULT_MAX_LOCAL_MESSAGES = 40;
@@ -115,4 +116,30 @@ export function shouldPersistLocalChatSession({ messages = [], assistantRunId = 
   return Array.isArray(messages)
     && messages.some((message) => String(message?.role || '').trim() === 'user'
       && String(message?.content || '').trim());
+}
+
+export function readLocalChatSessions() {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(LOCAL_CHAT_SESSIONS_STORAGE_KEY);
+    return normalizeLocalChatSessions(raw ? JSON.parse(raw) : []);
+  } catch {
+    return [];
+  }
+}
+
+export function writeLocalChatSessions(sessions) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      LOCAL_CHAT_SESSIONS_STORAGE_KEY,
+      JSON.stringify(normalizeLocalChatSessions(sessions)),
+    );
+  } catch {
+    // The local conversation index is a convenience cache; the active chat still works in memory.
+  }
 }
