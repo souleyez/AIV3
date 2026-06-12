@@ -6,6 +6,8 @@ import {
   buildStaticPageConversationSummary,
   buildStaticPageDraftSourceRefs,
   buildStaticPageDraftSelectedScope,
+  buildStaticPageProgressDescriptor,
+  buildStaticPageProgressLocalMessage,
   staticPagePreviewProgressContent,
 } from './static-page-conversation-context.js';
 
@@ -196,4 +198,43 @@ test('staticPagePreviewProgressContent links only safe preview URLs', () => {
     staticPagePreviewProgressContent({ previewContract: { assetKey: 'static-page-previews/local.json' } }),
     '设计图已生成。DataMax 正在继续读取视觉稿并制作最终页面。',
   );
+});
+
+test('static page progress helpers preserve message key, content, and metadata shape', () => {
+  const descriptor = buildStaticPageProgressDescriptor('draft-1:rendered', '  页面已生成  ', { final: true });
+  assert.deepEqual(descriptor, {
+    stableKey: 'static-page:draft-1:rendered',
+    content: '  页面已生成  ',
+    final: true,
+  });
+
+  const message = buildStaticPageProgressLocalMessage(descriptor, {
+    messageFactory: (role, content) => ({
+      id: 'message-1',
+      role,
+      content,
+      created_at: '2026-06-12T00:00:00.000Z',
+    }),
+  });
+
+  assert.deepEqual(message, {
+    id: 'message-1',
+    role: 'assistant',
+    content: '  页面已生成  ',
+    created_at: '2026-06-12T00:00:00.000Z',
+    metadata: {
+      source: 'static_page_progress',
+      key: 'static-page:draft-1:rendered',
+      final: true,
+    },
+  });
+});
+
+test('static page progress local message tolerates invalid descriptor like the previous caller path', () => {
+  assert.equal(buildStaticPageProgressLocalMessage(null), null);
+  assert.deepEqual(buildStaticPageProgressDescriptor(null, '', {}), {
+    stableKey: 'static-page:null',
+    content: '',
+    final: false,
+  });
 });

@@ -2,6 +2,7 @@ import {
   documentDatasetIds,
   normalizeDatasetIds,
 } from './dataset-record-scope.js';
+import { createLocalMessage } from './local-chat-sessions.js';
 
 export function buildStaticPageConversationSummary(prompt = '', options = {}) {
   const draftDataset = options.dataset || null;
@@ -157,4 +158,30 @@ export function staticPagePreviewProgressContent(draft, snapshot = {}) {
     ? `：[打开设计图](${previewUrl})`
     : '';
   return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
+}
+
+export function buildStaticPageProgressDescriptor(key, content, options = {}) {
+  return {
+    stableKey: `static-page:${key}`,
+    content,
+    final: Boolean(options.final),
+  };
+}
+
+export function buildStaticPageProgressLocalMessage(descriptor, options = {}) {
+  if (!descriptor || typeof descriptor !== 'object') {
+    return null;
+  }
+  const messageFactory = typeof options.messageFactory === 'function'
+    ? options.messageFactory
+    : createLocalMessage;
+  const message = messageFactory('assistant', descriptor.content);
+  return {
+    ...message,
+    metadata: {
+      source: 'static_page_progress',
+      key: descriptor.stableKey,
+      final: Boolean(descriptor.final),
+    },
+  };
 }

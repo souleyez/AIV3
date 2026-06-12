@@ -122,6 +122,8 @@ import {
   buildStaticPageConversationSummary,
   buildStaticPageDraftSourceRefs,
   buildStaticPageDraftSelectedScope,
+  buildStaticPageProgressDescriptor,
+  buildStaticPageProgressLocalMessage,
   staticPagePreviewProgressContent,
 } from './lib/static-page-conversation-context';
 import {
@@ -461,23 +463,20 @@ export default function HomePageClient() {
   }
 
   function appendStaticPageProgressMessage(key, content, options = {}) {
-    const stableKey = `static-page:${key}`;
+    const descriptor = buildStaticPageProgressDescriptor(key, content, options);
     setLocalMessages((current) => {
-      if (staticPageProgressMessageKeysRef.current.has(stableKey)
-        || current.some((message) => message?.metadata?.key === stableKey)) {
+      if (staticPageProgressMessageKeysRef.current.has(descriptor.stableKey)
+        || current.some((message) => message?.metadata?.key === descriptor.stableKey)) {
         return current;
       }
-      staticPageProgressMessageKeysRef.current.add(stableKey);
+      staticPageProgressMessageKeysRef.current.add(descriptor.stableKey);
+      const message = buildStaticPageProgressLocalMessage(descriptor);
+      if (!message) {
+        return current;
+      }
       return [
         ...current,
-        {
-          ...createLocalMessage('assistant', content),
-          metadata: {
-            source: 'static_page_progress',
-            key: stableKey,
-            final: Boolean(options.final),
-          },
-        },
+        message,
       ].slice(-40);
     });
   }
