@@ -316,6 +316,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 本地消息追加、内容替换和 40 条截断 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；本地消息 shape、空追加引用、流式中间更新不截断、final 更新截断和缓存读写截断语义保持不变。
 - 2026-06-12: `HomePageClient.js` 本地对话 snapshot 构造 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；thread fallback、标题 fallback、首条用户消息标题、started/updated 时间和 assistantRunId 传递语义保持不变。
 - 2026-06-12: `HomePageClient.js` 对话菜单本地会话选项构造 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；当前本地线程隐藏规则、backend session 选中时展示规则、标题 fallback、更新时间 meta 和 localOnly 标记保持不变。
+- 2026-06-12: `HomePageClient.js` 当前对话标题计算 helper 已并入 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；已选后端会话标题、空标题 fallback、草稿标题 trim、输入优先、首条用户消息 fallback 和默认新对话标题语义保持不变。
 
 **Regression commands:**
 

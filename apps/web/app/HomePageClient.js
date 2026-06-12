@@ -62,7 +62,7 @@ import {
   normalizeCodexCustomerTasksFromAssistantRunResponse,
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
-import { buildDefaultConversationTitle } from './lib/conversation-title';
+import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   documentDatasetIds,
@@ -380,16 +380,13 @@ export default function HomePageClient() {
     () => (selectedSessionId ? messages : localMessages),
     [localMessages, messages, selectedSessionId],
   );
-  const currentConversationTitle = useMemo(() => {
-    if (selectedSession) {
-      return selectedSession.title || '当前对话';
-    }
-    if (draftSessionTitle.trim()) {
-      return draftSessionTitle.trim();
-    }
-    const firstUserMessage = visibleMessages.find((message) => message.role === 'user')?.content || '';
-    return buildDefaultConversationTitle(input || firstUserMessage || '新对话', draftSessionStartedAt);
-  }, [draftSessionStartedAt, draftSessionTitle, input, selectedSession, visibleMessages]);
+  const currentConversationTitle = useMemo(() => buildCurrentConversationTitle({
+    selectedSession,
+    draftSessionTitle,
+    input,
+    messages: visibleMessages,
+    startedAt: draftSessionStartedAt,
+  }), [draftSessionStartedAt, draftSessionTitle, input, selectedSession, visibleMessages]);
   const conversationMenuSessions = useMemo(() => {
     const localSessionOptions = localChatSessionMenuOptions(localChatSessions, {
       localThreadId,

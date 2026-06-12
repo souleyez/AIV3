@@ -21,3 +21,19 @@ export function formatConversationTitleTime(value = new Date()) {
 export function buildDefaultConversationTitle(prompt, startedAt = new Date()) {
   return `${formatConversationTitleTime(startedAt)} · ${compactConversationSummary(prompt)}`;
 }
+
+export function buildCurrentConversationTitle(options = {}) {
+  if (options.selectedSession) {
+    return options.selectedSession.title || '当前对话';
+  }
+  const draftTitle = String(options.draftSessionTitle || '').trim();
+  if (draftTitle) {
+    return draftTitle;
+  }
+  const messages = Array.isArray(options.messages) ? options.messages : [];
+  const firstUserMessage = messages.find((message) => message?.role === 'user')?.content || '';
+  return buildDefaultConversationTitle(
+    options.input || firstUserMessage || '新对话',
+    options.startedAt,
+  );
+}
