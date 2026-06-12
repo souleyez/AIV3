@@ -172,6 +172,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod assistant_run_react_support;
 mod assistant_scope_summary;
 pub mod auth_email;
 mod auth_session_support;
@@ -215,6 +216,7 @@ mod workflow_context_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 
+use assistant_run_react_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
 use chat_message_model_facing::*;
@@ -413,56 +415,6 @@ struct AssistantRunQualityBudget {
     react_step_budget: usize,
     premium_action_budget: usize,
     reason: &'static str,
-}
-
-fn assistant_run_react_completed_event_payload(
-    step_index: usize,
-    action_type: &str,
-    observation_summary: &Value,
-    entrypoint: Option<&str>,
-    observation: &Value,
-) -> Value {
-    let mut payload = json!({
-        "step": step_index,
-        "action_type": action_type,
-        "observation_summary": observation_summary.clone(),
-    });
-    if let Some(entrypoint) = entrypoint {
-        payload["entrypoint"] = json!(entrypoint);
-    }
-    if let Some(html_artifacts) = observation
-        .get("html_artifacts")
-        .and_then(Value::as_array)
-        .filter(|items| !items.is_empty())
-    {
-        payload["html_artifacts"] = Value::Array(html_artifacts.clone());
-    }
-    payload
-}
-
-fn assistant_run_react_output_artifacts_from_observations(observations: &[Value]) -> Vec<Value> {
-    let mut seen = BTreeSet::<String>::new();
-    let mut summaries = Vec::<Value>::new();
-    for artifact in observations
-        .iter()
-        .filter_map(|observation| observation.get("html_artifacts").and_then(Value::as_array))
-        .flat_map(|items| items.iter())
-    {
-        let Some(id) = artifact.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        if !seen.insert(id.to_string()) {
-            continue;
-        }
-        summaries.push(json!({
-            "type": "html_artifact",
-            "id": id,
-            "title": artifact.get("title").and_then(Value::as_str).unwrap_or("HTML 产物"),
-            "template_id": artifact.get("template_id").and_then(Value::as_str).unwrap_or(""),
-            "source_type": artifact.get("source_type").and_then(Value::as_str).unwrap_or(""),
-        }));
-    }
-    summaries
 }
 
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
