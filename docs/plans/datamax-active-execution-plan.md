@@ -295,6 +295,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` assistant_run 流式展示文案、生成产物链接提取、内部 JSON 截断和重复链接清洗 helper 已拆到 `apps/web/app/lib/assistant-stream-content.js`，并补充 Node 单测；流式进度展示、最终报表链接只补一次、内部 payload 不进入用户可见消息的语义保持不变。
 - 2026-06-12: `HomePageClient.js` 数据集 ID normalize、文档/报表/静态页草稿归属提取、数据集范围筛选和排序 helper 已拆到 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；数据集范围授权、报表模板命中和静态页筛选的现有顺序/去重语义保持不变。
 - 2026-06-12: `HomePageClient.js` 已发布报表和报表模板标题/候选 ID/产物 URL 解析 helper 已拆到 `apps/web/app/lib/report-template-utils.js`，并补充 Node 单测；模板命中、标题优先级和产物链接来源优先级保持不变。
+- 2026-06-12: `HomePageClient.js` 静态页报表 shelf/default、artifact key、baseline status 和默认模板写回 helper 已拆到 `apps/web/app/lib/static-page-report-shelf.js`，并补充 Node 单测；相同数据集组合默认模板识别、启停默认模板和 retired 排除语义保持不变。
 
 **Regression commands:**
 
