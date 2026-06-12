@@ -211,6 +211,7 @@ mod report_render_model_facing;
 mod report_render_output_asset;
 mod request_scope_headers;
 mod resource_access;
+mod sse_support;
 mod text_normalization;
 mod workflow_context_support;
 mod workflow_runtime_model_facing;
@@ -281,6 +282,7 @@ use report_render_model_facing::*;
 use report_render_output_asset::*;
 use request_scope_headers::*;
 use resource_access::*;
+use sse_support::*;
 use text_normalization::*;
 use workflow_context_support::*;
 use workflow_runtime_model_facing::*;
@@ -4726,17 +4728,6 @@ async fn append_chat_session_turn(
     ))
 }
 
-fn sse_json_event(event_name: &str, data: Value) -> String {
-    let data = serde_json::to_string(&data).unwrap_or_else(|error| {
-        json!({
-            "error": "sse_payload_serialize_failed",
-            "message": error.to_string(),
-        })
-        .to_string()
-    });
-    format!("event: {event_name}\ndata: {data}\n\n")
-}
-
 fn sse_stream_response<S>(stream: S) -> Response
 where
     S: Stream<Item = std::result::Result<Bytes, Infallible>> + Send + 'static,
@@ -4749,56 +4740,6 @@ where
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(stream))
         .expect("SSE response should build")
-}
-
-fn sse_error_event(error: ApiError) -> String {
-    sse_json_event(
-        "error",
-        json!({
-            "status": error.status.as_u16(),
-            "error": error.payload,
-        }),
-    ) + &sse_json_event("done", json!({"ok": false}))
-}
-
-fn sse_text_delta_events(event_name: &str, text: &str) -> String {
-    let mut encoded = String::new();
-    let mut chunk = String::new();
-    let mut index = 0usize;
-    for ch in text.chars() {
-        chunk.push(ch);
-        if chunk.chars().count() >= 24 {
-            encoded.push_str(&sse_json_event(
-                event_name,
-                json!({
-                    "index": index,
-                    "delta": chunk,
-                }),
-            ));
-            chunk = String::new();
-            index += 1;
-        }
-    }
-    if !chunk.is_empty() {
-        encoded.push_str(&sse_json_event(
-            event_name,
-            json!({
-                "index": index,
-                "delta": chunk,
-            }),
-        ));
-    }
-    encoded
-}
-
-fn sse_text_delta_event(event_name: &str, index: usize, delta: &str) -> String {
-    sse_json_event(
-        event_name,
-        json!({
-            "index": index,
-            "delta": delta,
-        }),
-    )
 }
 
 const ASSISTANT_RUN_SSE_SCHEMA_V1: &str = "v3.assistant_run.sse.v1";
