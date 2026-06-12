@@ -273,6 +273,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: external action 响应/结果 payload 摘要 helper 已并入 `external_integration_summary` 模块；白名单响应字段、body redacted 标记和结果形状摘要保持不变。
 - 2026-06-12: external action/artifact/search/audit 聚合摘要 helper 已并入 `external_integration_summary` 模块；signal 优先级和安全字段摘要保持不变。
 - 2026-06-12: external channel/source drift 和 database dataset readiness 摘要 helper 已并入 `external_integration_summary` 模块；signal 优先级、非负计数和 readiness 嵌入保持不变。
+- 2026-06-12: external bot message/requested skill/artifact template payload 摘要 helper 已拆到 `external_message_summary` 模块；脱敏字段、指纹生成、dataset 计数和模板摘要字段保持不变。
 
 **Regression commands:**
 

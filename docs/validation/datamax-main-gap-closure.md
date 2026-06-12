@@ -3430,6 +3430,31 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Message Summary Refactor
+
+- Purpose:
+  - continue reducing `crates/platform-api/src/lib.rs` complexity through one behavior-preserving slice;
+  - move third-party bot message payload summary helpers into a focused module;
+  - keep third-party API contracts, payload fields, auth, URLs, and response shapes unchanged.
+- Code changes:
+  - added `crates/platform-api/src/external_message_summary.rs`;
+  - moved external bot message payload summary, requested skill summary, artifact template summary, text fingerprint, and attachment URL fingerprint helpers out of `lib.rs`;
+  - kept existing `lib.rs` call-site names through import aliases.
+- Local verification:
+  - `cargo test -p platform-api external_bot_message_summary_redacts_body_and_attachment_url --lib`: passed, 1/1;
+  - `cargo fmt --check`: passed after mechanical formatting;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `npm --prefix apps/web run build`: passed with existing Next.js warnings about deprecated `middleware` convention and NFT tracing from `apps/web/next.config.js`;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 External Integration Management Access Wrapper Split
 
 - Purpose:
