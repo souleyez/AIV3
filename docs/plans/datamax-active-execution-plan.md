@@ -303,6 +303,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` assistant continuation、CC 转发、静态页编辑、静态页/报表触发和显式拒绝输出判断 helper 已拆到 `apps/web/app/lib/home-chat-intents.js`，并补充 Node 单测；`取高是什么意思？`、`风险识别系统有哪些项目经历？` 等解释型问题不误触发报表的语义保持不变。
 - 2026-06-12: `HomePageClient.js` Codex 客户产物/任务聊天展示文案 helper 已并入 `apps/web/app/lib/codex-customer-artifacts.js`，并补充 Node 单测；产物主链接去重、待发布校验提示、终态任务摘要和列表截断语义保持不变。
 - 2026-06-12: `HomePageClient.js` 静态页后端草稿、渲染输出、image job 和 prompt-only 队列操作 helper 已并入 `apps/web/app/lib/static-page-draft.js`，并补充 Node 单测；backend draft 状态合并、dataset scope 去重、最终页字段保留、排队提示和 prompt alias 语义保持不变。
+- 2026-06-12: `HomePageClient.js` 静态页规划 summary、字段候选和 selected scope helper 已拆到 `apps/web/app/lib/static-page-conversation-context.js`，并补充 Node 单测；数据集/文档标题线索、最近消息截断、普通对话 fallback、conversation memory 和 selected scope payload 语义保持不变。
 
 **Regression commands:**
 
