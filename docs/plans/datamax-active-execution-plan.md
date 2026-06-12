@@ -369,6 +369,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `crates/platform-api/src/lib.rs` 第三方系统账户邮箱/展示名 helper 已拆到 `external_system_user` 模块并补模块单测；scope kind/id slug、24 字符截断、12 位 hash 后缀、`aidp.local` 域名和展示名 fallback 保持不变。
 - 2026-06-12: `external_system_user` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-12: `crates/platform-api/src/lib.rs` external management control helper 已并入 `external_channel_support` 模块并补模块单测；reason 仅记录是否存在、integration kind 分类和 management control patch 字段保持不变。
+- 2026-06-12: `external_channel_support` management control helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
