@@ -182,6 +182,7 @@ mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
 mod model_facing_format;
+mod model_facing_policy;
 mod model_gateway_admin;
 mod model_gateway_runtime;
 mod model_gateway_status;
@@ -219,6 +220,7 @@ use external_observability::{
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
 use model_facing_format::*;
+use model_facing_policy::*;
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
@@ -1659,160 +1661,6 @@ pub fn render_report_render_output_runtime_summary(
     }
 
     Some(lines.join("\n"))
-}
-
-fn build_model_facing_summary(
-    capability_class: contracts::ModelFacingCapabilityClassView,
-    evidence_state: contracts::ModelFacingEvidenceStateView,
-    mut allowed_next_actions: Vec<contracts::ModelFacingNextActionView>,
-    signals: Vec<String>,
-) -> contracts::WorkflowModelFacingSummaryView {
-    allowed_next_actions.dedup();
-    let service_lane = infer_model_facing_service_lane(&capability_class);
-    let report_entry_state = infer_model_facing_report_entry_state(&capability_class);
-    let continuation_state =
-        infer_model_facing_continuation_state(&evidence_state, &allowed_next_actions);
-    let recommended_next_action =
-        infer_model_facing_recommended_next_action(&continuation_state, &allowed_next_actions);
-    let recommended_tool_key = recommended_next_action
-        .as_ref()
-        .and_then(default_tool_key_for_model_facing_next_action)
-        .map(str::to_string);
-    let allowed_tool_keys = default_tool_keys_for_model_facing_next_actions(&allowed_next_actions);
-
-    contracts::WorkflowModelFacingSummaryView {
-        capability_class,
-        service_lane,
-        report_entry_state,
-        evidence_state,
-        continuation_state,
-        recommended_next_action,
-        allowed_next_actions,
-        recommended_tool_key,
-        allowed_tool_keys,
-        signals,
-    }
-}
-
-fn infer_model_facing_service_lane(
-    capability_class: &contracts::ModelFacingCapabilityClassView,
-) -> contracts::ModelFacingServiceLaneView {
-    match capability_class {
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness
-        | contracts::ModelFacingCapabilityClassView::EvidenceRetrieval
-        | contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis => {
-            contracts::ModelFacingServiceLaneView::MaterialService
-        }
-        contracts::ModelFacingCapabilityClassView::ReportPlanning
-        | contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            contracts::ModelFacingServiceLaneView::ReportService
-        }
-        contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            contracts::ModelFacingServiceLaneView::ControlledPlatformAction
-        }
-    }
-}
-
-fn infer_model_facing_report_entry_state(
-    capability_class: &contracts::ModelFacingCapabilityClassView,
-) -> contracts::ModelFacingReportEntryStateView {
-    match capability_class {
-        contracts::ModelFacingCapabilityClassView::ReportPlanning
-        | contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            contracts::ModelFacingReportEntryStateView::Confirmed
-        }
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness
-        | contracts::ModelFacingCapabilityClassView::EvidenceRetrieval
-        | contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
-        | contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            contracts::ModelFacingReportEntryStateView::NotApplicable
-        }
-    }
-}
-
-fn infer_model_facing_continuation_state(
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-    allowed_next_actions: &[contracts::ModelFacingNextActionView],
-) -> contracts::ModelFacingContinuationStateView {
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return contracts::ModelFacingContinuationStateView::RetryRequired;
-    }
-    if allowed_next_actions.iter().any(|action| {
-        *action == contracts::ModelFacingNextActionView::RequestReportEntryConfirmation
-    }) {
-        return contracts::ModelFacingContinuationStateView::NeedsUserConfirmation;
-    }
-    if allowed_next_actions.iter().any(|action| {
-        matches!(
-            action,
-            contracts::ModelFacingNextActionView::WaitForToolLoop
-                | contracts::ModelFacingNextActionView::FinalizeArtifactCommit
-        )
-    }) {
-        return contracts::ModelFacingContinuationStateView::WaitingForRuntime;
-    }
-    if allowed_next_actions
-        .iter()
-        .any(|action| *action == contracts::ModelFacingNextActionView::AnswerDirectly)
-        || allowed_next_actions.is_empty()
-    {
-        return contracts::ModelFacingContinuationStateView::ReadyToAnswer;
-    }
-
-    contracts::ModelFacingContinuationStateView::NeedsPlatformContinuation
-}
-
-fn infer_model_facing_recommended_next_action(
-    continuation_state: &contracts::ModelFacingContinuationStateView,
-    allowed_next_actions: &[contracts::ModelFacingNextActionView],
-) -> Option<contracts::ModelFacingNextActionView> {
-    match continuation_state {
-        contracts::ModelFacingContinuationStateView::RetryRequired => allowed_next_actions
-            .iter()
-            .find(|action| **action == contracts::ModelFacingNextActionView::RetryExecution)
-            .cloned()
-            .or_else(|| allowed_next_actions.first().cloned()),
-        contracts::ModelFacingContinuationStateView::NeedsUserConfirmation => allowed_next_actions
-            .iter()
-            .find(|action| {
-                **action == contracts::ModelFacingNextActionView::RequestReportEntryConfirmation
-            })
-            .cloned()
-            .or_else(|| allowed_next_actions.first().cloned()),
-        contracts::ModelFacingContinuationStateView::WaitingForRuntime => allowed_next_actions
-            .iter()
-            .find(|action| **action == contracts::ModelFacingNextActionView::WaitForToolLoop)
-            .cloned()
-            .or_else(|| {
-                allowed_next_actions
-                    .iter()
-                    .find(|action| {
-                        **action == contracts::ModelFacingNextActionView::FinalizeArtifactCommit
-                    })
-                    .cloned()
-            })
-            .or_else(|| allowed_next_actions.first().cloned()),
-        contracts::ModelFacingContinuationStateView::ReadyToAnswer => allowed_next_actions
-            .iter()
-            .find(|action| **action == contracts::ModelFacingNextActionView::AnswerDirectly)
-            .cloned()
-            .or_else(|| allowed_next_actions.first().cloned()),
-        contracts::ModelFacingContinuationStateView::NeedsPlatformContinuation => {
-            allowed_next_actions
-                .iter()
-                .find(|action| {
-                    !matches!(
-                        action,
-                        contracts::ModelFacingNextActionView::AnswerDirectly
-                            | contracts::ModelFacingNextActionView::WaitForToolLoop
-                            | contracts::ModelFacingNextActionView::FinalizeArtifactCommit
-                            | contracts::ModelFacingNextActionView::RetryExecution
-                    )
-                })
-                .cloned()
-                .or_else(|| allowed_next_actions.first().cloned())
-        }
-    }
 }
 
 fn derive_model_facing_summary(
@@ -3382,24 +3230,6 @@ fn chat_session_document_focus(session: &ChatSessionView) -> ModelFacingDocument
     infer_model_facing_document_focus(
         chat_session_distinct_document_count(session),
         chat_session_indexed_document_count(session),
-    )
-}
-
-fn degraded_model_facing_summary(
-    capability_class: contracts::ModelFacingCapabilityClassView,
-    mut signals: Vec<String>,
-) -> contracts::WorkflowModelFacingSummaryView {
-    if !signals
-        .iter()
-        .any(|signal| signal == "execution_status=failed")
-    {
-        signals.push("execution_status=failed".to_string());
-    }
-    build_model_facing_summary(
-        capability_class,
-        contracts::ModelFacingEvidenceStateView::Degraded,
-        vec![contracts::ModelFacingNextActionView::RetryExecution],
-        signals,
     )
 }
 
