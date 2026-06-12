@@ -307,6 +307,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `model_gateway_admin` operator helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-12: `crates/platform-api/src/lib.rs` chat session 标题和 report plan 标题/objective 派生 helper 已拆到 `chat_session_titles` 模块并补模块单测；空标题 fallback、空白规范化、72 字符截断、Report 后缀和 last/initial prompt 优先级保持不变。
 - 2026-06-12: `chat_session_titles` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-12: `crates/platform-api/src/lib.rs` 通用文本规范化 helper 已拆到 `text_normalization` 模块并补模块单测；`Option<String>` trim、空字符串丢弃、非空字符串 trim 语义保持不变。
 - 2026-06-12: `HomePageClient.js` 对话标题生成逻辑已拆到 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；对话标题时间格式、空标题 fallback 和长 prompt 截断行为保持不变。
 - 2026-06-12: `HomePageClient.js` 本地浏览器状态读写 helper 已拆到 `apps/web/app/lib/local-browser-state.js`，并补充 Node 单测；local thread id 和 AssistantRun id 的 localStorage key、SSR fallback、浏览器存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` 本地对话列表缓存读写已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；local chat sessions storage key、normalize 后写入、无 window/坏 JSON/存储失败 fallback 保持不变。

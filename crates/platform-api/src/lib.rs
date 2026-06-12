@@ -202,6 +202,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod text_normalization;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 
@@ -261,6 +262,7 @@ use react_agent_tools::{
 use report_plan_model_facing::*;
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use text_normalization::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
     render_dataset_output_runtime_summary, render_execution_scope_runtime_summary,
@@ -87096,18 +87098,6 @@ fn finalize_report_service_handoff(
         }
         handoff
     })
-}
-
-fn trim_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
-fn non_empty_trimmed_string(value: &str) -> Option<String> {
-    let trimmed = value.trim().to_string();
-    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 #[derive(Clone, Copy, Debug)]
