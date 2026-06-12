@@ -1,8 +1,25 @@
 use axum::http::HeaderMap;
 use domain_model::{AssistantRunEvent, AssistantRunId};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+use crate::{
+    codex_host_fixed_task_public_artifact_url_allowed,
+    external_channel_public_artifact::{
+        external_channel_public_artifact_url_from_links_value,
+        external_channel_public_artifact_url_from_value,
+    },
+    external_channel_public_card::{
+        external_channel_public_card_value,
+        external_channel_public_status_allows_artifact_link_for_card,
+        external_channel_public_status_allows_preview_link,
+        prune_external_channel_public_card_links,
+    },
+    external_channel_public_text::external_channel_public_stream_text,
+    external_channel_static_page_enrich_report_card,
+    sse_support::sse_json_event,
+};
 
 pub(crate) const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
 pub(crate) const EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: &str = "_stream_dedupe_key";
@@ -274,11 +291,305 @@ pub(crate) fn external_channel_public_stream_dedupe_hash(value: &Value) -> Strin
     format!("{digest:x}")
 }
 
+pub(crate) fn external_channel_public_stream_payload(mut payload: Value) -> Value {
+    if let Some(object) = payload.as_object_mut() {
+        object.remove(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY);
+    }
+    compact_external_channel_public_stream_payload(&mut payload);
+    payload
+}
+
+fn compact_external_channel_public_stream_payload(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if object.get("schema").and_then(Value::as_str) != Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1) {
+        return;
+    }
+
+    let raw_data = object.get("data").cloned().unwrap_or(Value::Null);
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| raw_data.get("status").and_then(Value::as_str))
+        .or_else(|| {
+            raw_data
+                .get("response")
+                .and_then(|response| response.get("reply"))
+                .and_then(|reply| reply.get("task_status"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("processing");
+    let phase = object
+        .get("phase")
+        .and_then(Value::as_str)
+        .or_else(|| raw_data.get("phase").and_then(Value::as_str))
+        .unwrap_or_default();
+    let raw_card = object
+        .get("card")
+        .cloned()
+        .or_else(|| raw_data.get("card").cloned())
+        .or_else(|| {
+            raw_data
+                .get("response")
+                .and_then(|response| response.get("reply"))
+                .and_then(|reply| reply.get("card"))
+                .cloned()
+        });
+    let raw_card = raw_card.map(|mut card| {
+        external_channel_static_page_enrich_report_card(&mut card);
+        card
+    });
+    let direct_artifact_url = external_channel_public_artifact_url_from_links_value(
+        object
+            .get("artifact_links")
+            .or_else(|| raw_data.get("artifact_links")),
+    );
+    let include_artifact_link =
+        external_channel_public_status_allows_artifact_link_for_card(status, raw_card.as_ref())
+            || (phase == "completed" && direct_artifact_url.is_some());
+    let include_preview_link = external_channel_public_status_allows_preview_link(status);
+    let display_text = object
+        .get("display_text")
+        .and_then(Value::as_str)
+        .or_else(|| raw_data.get("text").and_then(Value::as_str))
+        .unwrap_or("DataMax 正在处理。");
+    let mut display_text = external_channel_public_stream_text(display_text);
+    if !include_artifact_link
+        && !include_preview_link
+        && display_text.contains("generated-artifacts/")
+    {
+        display_text =
+            "DataMax 已返回当前处理状态，页面仍在后台继续生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。".to_string();
+    }
+    object.insert(
+        "display_text".to_string(),
+        Value::String(display_text.clone()),
+    );
+
+    let card = raw_card
+        .as_ref()
+        .map(|card| {
+            external_channel_public_stream_card_summary(
+                card,
+                include_artifact_link,
+                include_preview_link,
+            )
+        })
+        .filter(|card| !card.as_object().map(Map::is_empty).unwrap_or(false));
+
+    let public_url = if include_artifact_link {
+        raw_card
+            .as_ref()
+            .and_then(external_channel_public_artifact_url_from_value)
+            .or_else(|| direct_artifact_url.clone())
+            .or_else(|| {
+                raw_data
+                    .get("response")
+                    .and_then(|response| response.get("reply"))
+                    .and_then(|reply| {
+                        reply
+                            .get("artifact_links")
+                            .and_then(Value::as_array)
+                            .and_then(|links| {
+                                links.iter().find_map(|link| {
+                                    link.as_str()
+                                        .map(str::trim)
+                                        .filter(|url| {
+                                            codex_host_fixed_task_public_artifact_url_allowed(url)
+                                        })
+                                        .map(ToOwned::to_owned)
+                                })
+                            })
+                    })
+            })
+    } else {
+        None
+    };
+
+    let mut compact_data = Map::new();
+    for key in ["assistant_run_id", "idempotency_key", "status", "phase"] {
+        if let Some(value) = object
+            .get(key)
+            .cloned()
+            .or_else(|| raw_data.get(key).cloned())
+        {
+            compact_data.insert(key.to_string(), value);
+        }
+    }
+    compact_data.insert("text".to_string(), Value::String(display_text));
+    if let Some(status_url) = object
+        .get("status_url")
+        .cloned()
+        .or_else(|| raw_data.get("status_url").cloned())
+        .or_else(|| {
+            raw_card
+                .as_ref()
+                .and_then(|card| card.get("status_url"))
+                .cloned()
+        })
+    {
+        compact_data.insert("status_url".to_string(), status_url.clone());
+        object.insert("status_url".to_string(), status_url);
+    }
+    if let Some(poll_after_seconds) = object
+        .get("poll_after_seconds")
+        .cloned()
+        .or_else(|| raw_data.get("poll_after_seconds").cloned())
+        .or_else(|| {
+            raw_card
+                .as_ref()
+                .and_then(|card| card.get("poll_after_seconds"))
+                .cloned()
+        })
+    {
+        compact_data.insert("poll_after_seconds".to_string(), poll_after_seconds.clone());
+        object.insert("poll_after_seconds".to_string(), poll_after_seconds);
+    }
+    if let Some(card) = card {
+        compact_data.insert("card".to_string(), card.clone());
+        object.insert("card".to_string(), card);
+    } else {
+        object.remove("card");
+    }
+    if let Some(public_url) = public_url {
+        compact_data.insert("public_url".to_string(), Value::String(public_url.clone()));
+        compact_data.insert("artifact_links".to_string(), json!([public_url.clone()]));
+        object.insert("public_url".to_string(), Value::String(public_url.clone()));
+        object.insert("artifact_links".to_string(), json!([public_url]));
+    } else {
+        object.remove("public_url");
+        object.remove("artifact_links");
+    }
+
+    object.insert("data".to_string(), Value::Object(compact_data));
+    for key in [
+        "response",
+        "modules",
+        "data_snapshot",
+        "style_direction",
+        "summary",
+        "source_refs",
+        "runtime_event",
+    ] {
+        object.remove(key);
+    }
+}
+
+fn external_channel_public_stream_card_summary(
+    card: &Value,
+    include_artifact_link: bool,
+    include_preview_link: bool,
+) -> Value {
+    let mut enriched = card.clone();
+    external_channel_static_page_enrich_report_card(&mut enriched);
+    let mut sanitized = external_channel_public_card_value(enriched);
+    prune_external_channel_public_card_links(
+        &mut sanitized,
+        include_artifact_link,
+        include_preview_link,
+    );
+    let Some(input) = sanitized.as_object() else {
+        return Value::Null;
+    };
+    let mut output = Map::new();
+    for key in [
+        "type",
+        "status",
+        "draft_id",
+        "status_url",
+        "poll_after_seconds",
+        "public_url",
+        "generated_artifact_url",
+        "download_url",
+        "html_download_url",
+        "artifact_links",
+        "data_url",
+        "data_snapshot_url",
+        "table_data_url",
+        "ppt_download_url",
+        "markdown_download_url",
+        "text_download_url",
+        "download_exports",
+        "title",
+        "report_title",
+        "display_title",
+        "preview_url",
+        "requires_confirmation",
+        "can_continue_same_conversation",
+        "resume_action",
+    ] {
+        if let Some(value) = input.get(key).cloned() {
+            output.insert(key.to_string(), value);
+        }
+    }
+    Value::Object(output)
+}
+
+#[cfg(test)]
+pub(crate) fn external_channel_public_stream_events(
+    events: &[AssistantRunEvent],
+) -> Vec<(String, Value)> {
+    events
+        .iter()
+        .filter(|event| {
+            event.payload.get("schema").and_then(Value::as_str)
+                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        })
+        .map(|event| {
+            (
+                event.event_name.clone(),
+                external_channel_public_stream_payload(event.payload.clone()),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn external_channel_public_stream_replay_body(
+    events: &[AssistantRunEvent],
+    since_sequence: Option<i32>,
+) -> String {
+    let since_sequence = since_sequence.unwrap_or(0);
+    let mut encoded = String::new();
+    for event in events
+        .iter()
+        .filter(|event| event.sequence_no > since_sequence)
+    {
+        if event.payload.get("schema").and_then(Value::as_str)
+            != Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        {
+            continue;
+        }
+        encoded.push_str(&sse_json_event(
+            &event.event_name,
+            external_channel_public_stream_payload(event.payload.clone()),
+        ));
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use domain_model::{AssistantRunEventId, TenantId};
     use uuid::Uuid;
+
+    fn assistant_run_event(
+        run_id: AssistantRunId,
+        sequence_no: i32,
+        event_name: &str,
+        payload: Value,
+    ) -> AssistantRunEvent {
+        AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId(Uuid::new_v4()),
+            run_id,
+            sequence_no,
+            event_name: event_name.to_string(),
+            payload,
+            created_at: chrono::Utc::now(),
+        }
+    }
 
     #[test]
     fn external_channel_sse_public_payload_preserves_envelope_fields_over_data() {
@@ -447,5 +758,102 @@ mod tests {
                 &json!({"status": "completed", "sequence": 4})
             )
         );
+    }
+
+    #[test]
+    fn public_stream_payload_removes_dedupe_key_and_compacts_internal_fields() {
+        let payload = external_channel_sse_public_payload(
+            None,
+            "idem-1",
+            "conv-1",
+            90,
+            "static_page",
+            "static_page_published",
+            "报表已生成。",
+            Some("https://v3.elepcloud.com/status/run-1".to_string()),
+            None,
+            json!({
+                EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: "internal-dedupe",
+                "card": {
+                    "type": "v3_static_page_pipeline",
+                    "status": "static_page_published",
+                    "draft_id": "draft-1",
+                    "public_url": "https://v3.elepcloud.com/generated-artifacts/demo/index.html",
+                    "data_snapshot": {"rows": [1, 2, 3]},
+                    "runtime_event": {"debug": true}
+                },
+                "response": {"reply": {"text": "internal full response"}},
+                "modules": [{"id": "large"}],
+                "runtime_event": {"debug": true}
+            }),
+        );
+
+        let payload = external_channel_public_stream_payload(payload);
+        let encoded = payload.to_string();
+
+        assert!(payload
+            .get(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY)
+            .is_none());
+        assert!(payload.get("response").is_none());
+        assert!(payload.get("modules").is_none());
+        assert!(payload.get("runtime_event").is_none());
+        assert!(!encoded.contains("internal-dedupe"));
+        assert!(!encoded.contains("internal full response"));
+        assert_eq!(
+            payload["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/demo/index.html")
+        );
+        assert_eq!(
+            payload.pointer("/data/card/public_url"),
+            Some(&json!(
+                "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+            ))
+        );
+    }
+
+    #[test]
+    fn public_stream_replay_body_filters_since_sequence_and_public_schema() {
+        let run_id = AssistantRunId::new();
+        let old_payload = external_channel_sse_public_payload(
+            Some(run_id),
+            "idem-1",
+            "conv-1",
+            1,
+            "static_page",
+            "processing",
+            "old event",
+            None,
+            None,
+            json!({}),
+        );
+        let internal_payload = json!({
+            "schema": "internal",
+            "display_text": "internal event"
+        });
+        let new_payload = external_channel_sse_public_payload(
+            Some(run_id),
+            "idem-1",
+            "conv-1",
+            3,
+            "completed",
+            "completed",
+            "new event",
+            None,
+            None,
+            json!({}),
+        );
+        let events = vec![
+            assistant_run_event(run_id, 1, "external_channel.progress", old_payload),
+            assistant_run_event(run_id, 2, "external_channel.internal", internal_payload),
+            assistant_run_event(run_id, 3, "external_channel.completed", new_payload),
+        ];
+
+        let replay = external_channel_public_stream_replay_body(&events, Some(1));
+
+        assert!(!replay.contains("old event"));
+        assert!(!replay.contains("internal event"));
+        assert!(!replay.contains("external_channel.internal"));
+        assert!(replay.contains("event: external_channel.completed"));
+        assert!(replay.contains("new event"));
     }
 }
