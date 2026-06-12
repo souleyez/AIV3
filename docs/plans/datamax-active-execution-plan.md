@@ -364,6 +364,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `not_found_errors` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-12: `crates/platform-api/src/lib.rs` 请求范围 header helper 已拆到 `request_scope_headers` 模块并补模块单测；active secret binding header 解析、local thread id trim 和 secret binding id merge 去重顺序保持不变。
 - 2026-06-12: `request_scope_headers` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-12: `crates/platform-api/src/lib.rs` dataset visibility/local-thread scope/standard-list hiding helper 已并入 `resource_access` 模块并补模块单测；public/owner/secret binding 可见性、local-only thread bypass、external temporary 和 external document parse 隐藏规则保持不变。
 
 **Regression commands:**
 

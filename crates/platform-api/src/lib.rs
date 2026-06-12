@@ -2967,110 +2967,6 @@ async fn run_model_gateway_profile_probe(
     })
 }
 
-fn dataset_is_visible(
-    dataset: &Dataset,
-    active_secret_binding_ids: &[SecretBindingId],
-    current_user_id: Option<UserId>,
-) -> bool {
-    dataset
-        .owner_user_id
-        .is_some_and(|owner_user_id| Some(owner_user_id) == current_user_id)
-        || (dataset.owner_user_id.is_none() && dataset.visibility == DatasetVisibility::Public)
-        || dataset.default_secret_binding_ids.iter().any(|secret_id| {
-            active_secret_binding_ids
-                .iter()
-                .any(|active_id| active_id == secret_id)
-        })
-}
-
-fn dataset_local_scope_is_visible(dataset: &Dataset, local_thread_id: Option<&str>) -> bool {
-    let local_only = dataset
-        .metadata
-        .get("local_only")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !local_only || dataset.owner_user_id.is_some() {
-        return true;
-    }
-    dataset
-        .metadata
-        .get("local_thread_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|dataset_thread_id| Some(dataset_thread_id) == local_thread_id)
-}
-
-fn dataset_is_visible_by_local_thread_scope(
-    dataset: &Dataset,
-    local_thread_id: Option<&str>,
-) -> bool {
-    dataset.owner_user_id.is_none()
-        && dataset
-            .metadata
-            .get("local_only")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        && dataset
-            .metadata
-            .get("local_thread_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|dataset_thread_id| Some(dataset_thread_id) == local_thread_id)
-}
-
-fn dataset_is_visible_for_request(
-    dataset: &Dataset,
-    active_secret_binding_ids: &[SecretBindingId],
-    current_user_id: Option<UserId>,
-    local_thread_id: Option<&str>,
-) -> bool {
-    (dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
-        && dataset_local_scope_is_visible(dataset, local_thread_id))
-        || dataset_is_visible_by_local_thread_scope(dataset, local_thread_id)
-}
-
-fn dataset_is_hidden_from_standard_dataset_list(dataset: &Dataset) -> bool {
-    dataset_is_external_temporary_scope(dataset)
-        || dataset_is_system_external_document_parse_source(dataset)
-}
-
-fn dataset_is_system_external_document_parse_source(dataset: &Dataset) -> bool {
-    if dataset.key.starts_with("external-parse-dataset-") {
-        return true;
-    }
-    dataset
-        .metadata
-        .get("external_source")
-        .or_else(|| dataset.metadata.get("externalSource"))
-        .and_then(Value::as_object)
-        .and_then(|external_source| {
-            external_source
-                .get("created_by")
-                .or_else(|| external_source.get("createdBy"))
-        })
-        .and_then(Value::as_str)
-        == Some("external_document_parse")
-}
-
-fn filter_visible_datasets(
-    datasets: Vec<Dataset>,
-    active_secret_binding_ids: &[SecretBindingId],
-    current_user_id: Option<UserId>,
-    local_thread_id: Option<&str>,
-) -> Vec<Dataset> {
-    datasets
-        .into_iter()
-        .filter(|dataset| {
-            dataset_is_visible_for_request(
-                dataset,
-                active_secret_binding_ids,
-                current_user_id,
-                local_thread_id,
-            )
-        })
-        .collect()
-}
-
 async fn enrich_visible_datasets_for_scope_planning(
     state: &AppState,
     datasets: Vec<Dataset>,
@@ -76855,10 +76751,6 @@ fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
         .and_then(Value::as_str)
         .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
         .map(DatasetId)
-}
-
-fn dataset_is_external_temporary_scope(dataset: &Dataset) -> bool {
-    dataset.metadata.get("scope_kind").and_then(Value::as_str) == Some("external_temporary")
 }
 
 fn set_selected_scope_conversation_memory(scope: &mut Value, memory_ids: Vec<String>) {

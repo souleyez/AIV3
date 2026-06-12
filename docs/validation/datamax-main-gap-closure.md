@@ -8053,3 +8053,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no service was restarted during local verification;
   - 120 server was not touched.
+
+## 2026-06-12 P5 Dataset Visibility Resource Access Helper Local Verification
+
+- Purpose:
+  - continue the P5 `platform-api` behavior-preserving reduction;
+  - move dataset visibility, browser local-thread scope, standard dataset list hiding, and visible dataset filtering helpers out of `crates/platform-api/src/lib.rs`;
+  - keep public/owner/secret-binding visibility, local-only thread bypass, external temporary scope hiding, and external document parse source hiding unchanged.
+- Code change:
+  - extended `crates/platform-api/src/resource_access.rs`;
+  - moved `dataset_is_visible`, `dataset_local_scope_is_visible`, `dataset_is_visible_by_local_thread_scope`, `dataset_is_visible_for_request`, `dataset_is_hidden_from_standard_dataset_list`, `dataset_is_system_external_document_parse_source`, `dataset_is_external_temporary_scope`, and `filter_visible_datasets` into the resource access module;
+  - added module tests for public/owner/secret-binding visibility, local-thread scoped datasets, and standard-list hiding for temporary and external document parse datasets.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api resource_access --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api dataset_visibility --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api dataset_local_scope --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api standard_dataset_list --lib`: passed, 3/3 tests;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, concurrency `5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed fallback concurrency `2`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
