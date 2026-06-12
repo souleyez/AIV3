@@ -67,6 +67,7 @@ import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   documentDatasetIds,
   documentDatasetSelectionUpdate,
+  documentMembershipCurrentDatasetIds,
   documentMembershipResponseDatasetIds,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
@@ -3705,10 +3706,7 @@ export default function HomePageClient() {
     if (!selectedDocumentId || !datasetId) {
       return false;
     }
-    const documentDatasetIdList = documentDatasetIds(selectedDocument);
-    const currentIds = documentDatasetIdList.length
-      ? documentDatasetIdList
-      : normalizeDatasetIds(selectedDatasetIds);
+    const currentIds = documentMembershipCurrentDatasetIds(selectedDocument, selectedDatasetIds);
     const active = currentIds.includes(datasetId);
     setBanner('');
     setError('');

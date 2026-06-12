@@ -34,6 +34,11 @@ export function documentDatasetIds(document) {
   ]);
 }
 
+export function documentMembershipCurrentDatasetIds(document, fallbackDatasetIds = []) {
+  const documentIds = documentDatasetIds(document);
+  return documentIds.length ? documentIds : normalizeDatasetIds(fallbackDatasetIds);
+}
+
 export function documentDatasetSelectionUpdate(document) {
   const datasetIds = documentDatasetIds(document);
   if (!datasetIds.length) {

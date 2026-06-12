@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   documentDatasetIds,
   documentDatasetSelectionUpdate,
+  documentMembershipCurrentDatasetIds,
   documentMembershipResponseDatasetIds,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
@@ -94,6 +95,24 @@ describe('dataset record scope helpers', () => {
     );
     assert.equal(documentDatasetSelectionUpdate({ id: 'orphan-doc' }), null);
     assert.equal(documentDatasetSelectionUpdate(null), null);
+  });
+
+  it('uses document membership ids before selected dataset fallback ids', () => {
+    assert.deepEqual(
+      documentMembershipCurrentDatasetIds(
+        { dataset_ids: ['doc-a', 'doc-b'] },
+        ['fallback-a'],
+      ),
+      ['doc-a', 'doc-b'],
+    );
+    assert.deepEqual(
+      documentMembershipCurrentDatasetIds(
+        { id: 'orphan-doc' },
+        [' fallback-a ', 'fallback-b', 'fallback-a'],
+      ),
+      ['fallback-a', 'fallback-b'],
+    );
+    assert.deepEqual(documentMembershipCurrentDatasetIds(null, []), []);
   });
 
   it('extracts document membership response dataset ids with existing fallback priority', () => {
