@@ -178,6 +178,7 @@ mod chat_message_model_facing;
 mod chat_session_model_facing;
 mod dataset_output_model_facing;
 mod document_compare_model_facing;
+mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod external_channel_support;
@@ -207,8 +208,10 @@ use chat_message_model_facing::*;
 use chat_session_model_facing::*;
 use dataset_output_model_facing::*;
 use document_compare_model_facing::*;
+use document_detail_model_facing::*;
 use document_media_model_facing::*;
-use document_model_facing_support::*;
+#[cfg(test)]
+use document_model_facing_support::format_document_lifecycle_view;
 use external_channel_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
@@ -1774,161 +1777,6 @@ fn workflow_execution_context_service_handoff(
         .as_object()
         .and_then(|context| context.get("service_handoff"))
         .and_then(parse_manifest_service_handoff)
-}
-
-fn derive_document_detail_model_facing_summary(
-    detail: &DocumentDetailView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let capability_class =
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis;
-    let signals = collect_document_detail_model_facing_signals(detail);
-    let evidence_state = infer_document_detail_model_facing_evidence_state(detail);
-
-    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return degraded_model_facing_summary(capability_class, signals);
-    }
-
-    build_model_facing_summary(
-        capability_class,
-        evidence_state,
-        vec![contracts::ModelFacingNextActionView::AnswerDirectly],
-        signals,
-    )
-}
-
-fn infer_document_detail_model_facing_evidence_state(
-    detail: &DocumentDetailView,
-) -> contracts::ModelFacingEvidenceStateView {
-    if detail.document.lifecycle == contracts::DocumentLifecycleView::Failed
-        || document_detail_failed_retrieval_evidence_count(detail) > 0
-    {
-        return contracts::ModelFacingEvidenceStateView::Degraded;
-    }
-
-    if !detail.retrieval_evidences.is_empty()
-        || detail.document.lifecycle == contracts::DocumentLifecycleView::Indexed
-    {
-        return contracts::ModelFacingEvidenceStateView::LiveDetail;
-    }
-    if !detail.chunks.is_empty() {
-        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
-    }
-
-    contracts::ModelFacingEvidenceStateView::CatalogMemory
-}
-
-fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> Vec<String> {
-    let section_title_hints = collect_document_detail_section_title_hints(detail);
-    let noun_terms = collect_document_detail_noun_terms(detail);
-    let mut signals = vec![
-        "workflow_kind=document_detail".to_string(),
-        "document_focus=single_document".to_string(),
-        format!(
-            "document_lifecycle={}",
-            format_document_lifecycle_view(detail.document.lifecycle.clone())
-        ),
-        format!("chunk_count={}", detail.chunks.len()),
-        format!(
-            "indexed_chunk_count={}",
-            detail
-                .chunks
-                .iter()
-                .filter(|chunk| chunk.state == contracts::DocumentChunkStateView::Indexed)
-                .count()
-        ),
-        format!(
-            "retrieval_evidence_count={}",
-            detail.retrieval_evidences.len()
-        ),
-        format!(
-            "failed_retrieval_evidence_count={}",
-            document_detail_failed_retrieval_evidence_count(detail)
-        ),
-        format!("section_title_hint_count={}", section_title_hints.len()),
-        format!("noun_term_hint_count={}", noun_terms.len()),
-    ];
-    if !section_title_hints.is_empty() {
-        signals.push("rag_signal=section_title_hints".to_string());
-        signals.push(format!(
-            "section_title_hints={}",
-            section_title_hints
-                .iter()
-                .take(6)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("|")
-        ));
-    }
-    if !noun_terms.is_empty() {
-        signals.push("rag_signal=noun_term_hints".to_string());
-        signals.push(format!(
-            "noun_terms={}",
-            noun_terms
-                .iter()
-                .take(10)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("|")
-        ));
-    }
-    if let Some(parse_quality_status) = detail.parse_state.parse_quality_status.as_deref() {
-        signals.push(format!("parse_quality_status={parse_quality_status}"));
-    }
-    if let Some(parse_quality_summary) = detail.parse_state.parse_quality_summary.as_ref() {
-        if let Some(parse_method) = parse_quality_summary
-            .get("parse_method")
-            .and_then(Value::as_str)
-        {
-            signals.push(format!("parse_method={parse_method}"));
-        }
-        if let Some(selected_method) = parse_quality_summary
-            .pointer("/candidate_selection/selected_method")
-            .and_then(Value::as_str)
-        {
-            signals.push(format!("parse_candidate_selected_method={selected_method}"));
-        }
-        if let Some(vlm_selected) = parse_quality_summary
-            .pointer("/vlm_rescue/selected")
-            .and_then(Value::as_str)
-        {
-            signals.push(format!("parse_vlm_rescue_selected={vlm_selected}"));
-        }
-        if let Some(auto_reparse_status) = parse_quality_summary
-            .pointer("/auto_reparse/status")
-            .and_then(Value::as_str)
-        {
-            signals.push(format!("auto_reparse_status={auto_reparse_status}"));
-        }
-    }
-    signals
-}
-
-fn collect_document_detail_section_title_hints(detail: &DocumentDetailView) -> Vec<String> {
-    let mut hints = Vec::new();
-    for chunk in &detail.chunks {
-        for hint in document_chunk_value_section_title_hints(&chunk.metadata, &chunk.content, 6) {
-            push_string_hint(&mut hints, hint);
-        }
-        if hints.len() >= 24 {
-            break;
-        }
-    }
-    hints.truncate(24);
-    hints
-}
-
-fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String> {
-    let mut terms = Vec::new();
-    for chunk in &detail.chunks {
-        for term in document_chunk_value_noun_terms(&chunk.metadata) {
-            push_string_hint(&mut terms, term);
-        }
-        if terms.len() >= 40 {
-            break;
-        }
-    }
-    terms.truncate(40);
-    terms
 }
 
 fn infer_model_facing_capability_class(
@@ -71008,7 +70856,7 @@ fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     hints
 }
 
-fn document_chunk_value_section_title_hints(
+pub(crate) fn document_chunk_value_section_title_hints(
     metadata: &Value,
     content: &str,
     limit: usize,
@@ -71083,7 +70931,7 @@ fn document_chunk_noun_terms(chunk: &DocumentChunk) -> Vec<String> {
     terms
 }
 
-fn document_chunk_value_noun_terms(metadata: &Value) -> Vec<String> {
+pub(crate) fn document_chunk_value_noun_terms(metadata: &Value) -> Vec<String> {
     let mut terms = Vec::new();
     if let Some(value) = metadata
         .get("understanding")
@@ -71228,7 +71076,7 @@ fn collect_string_list(value: &Value, output: &mut Vec<String>) {
     }
 }
 
-fn push_string_hint(output: &mut Vec<String>, text: impl AsRef<str>) {
+pub(crate) fn push_string_hint(output: &mut Vec<String>, text: impl AsRef<str>) {
     let normalized = text.as_ref().trim().chars().take(80).collect::<String>();
     if !normalized.is_empty() && !output.iter().any(|existing| existing == &normalized) {
         output.push(normalized);

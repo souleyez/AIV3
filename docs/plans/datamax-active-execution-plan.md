@@ -297,6 +297,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `crates/platform-api/src/lib.rs` dataset output 的 model-facing summary/signal helper 已拆到 `dataset_output_model_facing` 模块；EvidenceRetrieval/LiveDetail/Mixed/CatalogMemory/Degraded 判断、document focus 计数、service handoff 和 report entry next action 语义保持不变。
 - 2026-06-12: `crates/platform-api/src/lib.rs` chat session 的 model-facing summary/signal helper 已拆到 `chat_session_model_facing` 模块；latest assistant/dataset output 供料计数、last turn 降级、runtime wait、report entry confirmation/confirmed 和 document focus 语义保持不变。
 - 2026-06-12: `chat_session_model_facing` 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 均通过。
+- 2026-06-12: `crates/platform-api/src/lib.rs` document detail 的 model-facing summary/signal helper 已拆到 `document_detail_model_facing` 模块；document lifecycle、retrieval evidence degraded、section title/noun hint、parse quality signal 和 AnswerDirectly/RetryExecution 语义保持不变。
 - 2026-06-12: `HomePageClient.js` 对话标题生成逻辑已拆到 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；对话标题时间格式、空标题 fallback 和长 prompt 截断行为保持不变。
 - 2026-06-12: `HomePageClient.js` 本地浏览器状态读写 helper 已拆到 `apps/web/app/lib/local-browser-state.js`，并补充 Node 单测；local thread id 和 AssistantRun id 的 localStorage key、SSR fallback、浏览器存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` 本地对话列表缓存读写已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；local chat sessions storage key、normalize 后写入、无 window/坏 JSON/存储失败 fallback 保持不变。
