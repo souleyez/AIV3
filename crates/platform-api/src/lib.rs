@@ -195,6 +195,7 @@ mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
 mod report_plan_model_facing;
+mod report_render_model_facing;
 mod report_render_output_asset;
 mod workflow_runtime_summary;
 
@@ -249,6 +250,7 @@ use react_agent_tools::{
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
 use report_plan_model_facing::*;
+use report_render_model_facing::*;
 use report_render_output_asset::*;
 use workflow_runtime_summary::{
     begin_summary_block, format_tool_status_summary, push_optional_summary_line, push_summary_line,
@@ -2629,76 +2631,6 @@ fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String
     }
     terms.truncate(40);
     terms
-}
-
-fn derive_report_render_output_model_facing_summary(
-    output: &ReportRenderOutputView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let capability_class = contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing;
-    let evidence_state = infer_report_render_output_model_facing_evidence_state(output);
-    let allowed_next_actions =
-        infer_report_render_output_model_facing_next_actions(output, &evidence_state);
-    let mut signals = collect_report_render_output_model_facing_signals(output);
-    if let Some(handoff) = output.service_handoff.as_ref() {
-        signals.extend(collect_service_handoff_signals(handoff));
-    }
-    let mut summary = build_model_facing_summary(
-        capability_class,
-        evidence_state,
-        allowed_next_actions,
-        signals,
-    );
-    if let Some(handoff) = output.service_handoff.as_ref() {
-        summary.service_lane = handoff.service_lane.clone();
-        summary.report_entry_state = handoff.report_entry_state.clone();
-    }
-    summary
-}
-
-fn infer_report_render_output_model_facing_evidence_state(
-    output: &ReportRenderOutputView,
-) -> contracts::ModelFacingEvidenceStateView {
-    match output.status {
-        contracts::ReportRenderOutputStatusView::Rendered => {
-            contracts::ModelFacingEvidenceStateView::Mixed
-        }
-        contracts::ReportRenderOutputStatusView::Failed => {
-            contracts::ModelFacingEvidenceStateView::Degraded
-        }
-    }
-}
-
-fn infer_report_render_output_model_facing_next_actions(
-    output: &ReportRenderOutputView,
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-) -> Vec<contracts::ModelFacingNextActionView> {
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return vec![contracts::ModelFacingNextActionView::RetryExecution];
-    }
-
-    let mut actions = Vec::new();
-    if report_render_output_has_asset_path(output) {
-        actions.push(contracts::ModelFacingNextActionView::PublishReport);
-    }
-    actions
-}
-
-fn collect_report_render_output_model_facing_signals(
-    output: &ReportRenderOutputView,
-) -> Vec<String> {
-    let mut signals = vec![
-        "workflow_kind=report_render".to_string(),
-        format!("report_render_status={:?}", output.status),
-        format!("surface={}", output.surface.as_str()),
-        format!(
-            "has_asset_path={}",
-            report_render_output_has_asset_path(output)
-        ),
-    ];
-    if let Some(kind) = report_render_output_asset_kind(output) {
-        signals.push(format!("asset_kind={kind}"));
-    }
-    signals
 }
 
 fn count_chat_message_model_facing_retrieval_evidences(message: &ChatMessageView) -> usize {
