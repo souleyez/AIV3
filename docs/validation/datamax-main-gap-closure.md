@@ -3468,9 +3468,35 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/ui-notice-message.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 24/24;
   - `npm --prefix apps/web run build`: passed;
   - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- 8-server verification:
+  - `/srv/aiv3/repo` fast-forwarded from `daf8516eb` to `c16f788ba`;
+  - `npm --prefix apps/web run build`: passed;
+  - restarted `aiv3-web.service`;
+  - `aiv3-web.service`, `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`: all `active`;
+  - `node --test apps/web/app/lib/ui-notice-message.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 24/24;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - local verification did not restart services; 8-server deployment restarted only `aiv3-web.service`;
+  - 120 server was not touched.
+
+## 2026-06-12 P0 Self-Test After UI Notice Helper Deployment
+
+- Purpose:
+  - run the fixed P0 self-test suite after deploying the UI notice helper extraction;
+  - verify report trigger/export, scoped document chat, video/PPT handling, static-page 5-way contract, Cloudflare fallback 2-way contract, and local assistant/message/notice tests remain intact.
+- Local verification:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, report `target/external-report-focus-smoke/external-report-focus-self-test-20260612051624.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `runId=20260612051624`, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`, required exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `runId=20260612051624-self-test`, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `runId=20260612051624`, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `runId=20260612051624-self-test`, `ok=true`, default concurrency 5;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed concurrency 2;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/ui-notice-message.test.mjs`: passed, 43/43.
+- Safety:
+  - self-tests did not call live third-party endpoints or mutate production data;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no service was restarted;
   - 120 server was not touched.
