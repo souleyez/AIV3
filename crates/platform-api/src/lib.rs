@@ -194,6 +194,7 @@ mod model_gateway_status;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
+mod report_plan_model_facing;
 mod report_render_output_asset;
 mod workflow_runtime_summary;
 
@@ -247,6 +248,7 @@ use react_agent_tools::{
     execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
+use report_plan_model_facing::*;
 use report_render_output_asset::*;
 use workflow_runtime_summary::{
     begin_summary_block, format_tool_status_summary, push_optional_summary_line, push_summary_line,
@@ -2627,83 +2629,6 @@ fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String
     }
     terms.truncate(40);
     terms
-}
-
-fn derive_report_plan_model_facing_summary(
-    plan: &ReportPlanSummary,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let capability_class = contracts::ModelFacingCapabilityClassView::ReportPlanning;
-    let evidence_state = infer_report_plan_model_facing_evidence_state(plan);
-    let allowed_next_actions = infer_report_plan_model_facing_next_actions(plan, &evidence_state);
-    let mut signals = collect_report_plan_model_facing_signals(plan);
-    if let Some(handoff) = plan.service_handoff.as_ref() {
-        signals.extend(collect_service_handoff_signals(handoff));
-    }
-    let mut summary = build_model_facing_summary(
-        capability_class,
-        evidence_state,
-        allowed_next_actions,
-        signals,
-    );
-    if let Some(handoff) = plan.service_handoff.as_ref() {
-        summary.service_lane = handoff.service_lane.clone();
-        summary.report_entry_state = handoff.report_entry_state.clone();
-    }
-    summary
-}
-
-fn infer_report_plan_model_facing_evidence_state(
-    plan: &ReportPlanSummary,
-) -> contracts::ModelFacingEvidenceStateView {
-    let has_current_ast_version = plan.current_ast_version_id.is_some();
-    match plan.status {
-        contracts::ReportPlanStatusView::Draft => {
-            contracts::ModelFacingEvidenceStateView::CatalogMemory
-        }
-        contracts::ReportPlanStatusView::Planned
-        | contracts::ReportPlanStatusView::Rendered
-        | contracts::ReportPlanStatusView::Published => {
-            if has_current_ast_version {
-                contracts::ModelFacingEvidenceStateView::Mixed
-            } else {
-                contracts::ModelFacingEvidenceStateView::Degraded
-            }
-        }
-    }
-}
-
-fn infer_report_plan_model_facing_next_actions(
-    plan: &ReportPlanSummary,
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-) -> Vec<contracts::ModelFacingNextActionView> {
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return vec![contracts::ModelFacingNextActionView::RetryExecution];
-    }
-
-    if plan.current_ast_version_id.is_some()
-        && matches!(
-            plan.status,
-            contracts::ReportPlanStatusView::Planned
-                | contracts::ReportPlanStatusView::Rendered
-                | contracts::ReportPlanStatusView::Published
-        )
-    {
-        return vec![contracts::ModelFacingNextActionView::GenerateReportOutput];
-    }
-
-    vec![contracts::ModelFacingNextActionView::ContinueReportPlanning]
-}
-
-fn collect_report_plan_model_facing_signals(plan: &ReportPlanSummary) -> Vec<String> {
-    vec![
-        "workflow_kind=report_plan".to_string(),
-        format!("report_plan_status={:?}", plan.status),
-        format!(
-            "has_current_ast_version={}",
-            plan.current_ast_version_id.is_some()
-        ),
-        format!("theme_key={}", plan.theme_key),
-    ]
 }
 
 fn derive_report_render_output_model_facing_summary(
