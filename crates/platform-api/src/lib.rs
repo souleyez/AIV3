@@ -21398,57 +21398,6 @@ async fn persist_external_action_dispatch_outcome(
     Ok(())
 }
 
-fn external_action_dispatch_url_from_config(config: &Value, action_type: &str) -> Option<String> {
-    let action_specific = if action_type.starts_with("external_artifact.") {
-        external_config_string(
-            config,
-            &[
-                "artifact_action_dispatch_url",
-                "artifactActionDispatchUrl",
-                "artifact_dispatch_url",
-                "artifactDispatchUrl",
-            ],
-        )
-    } else {
-        external_config_string(
-            config,
-            &[
-                "business_action_dispatch_url",
-                "businessActionDispatchUrl",
-                "business_dispatch_url",
-                "businessDispatchUrl",
-            ],
-        )
-    };
-    action_specific.or_else(|| {
-        external_config_string(
-            config,
-            &[
-                "external_action_dispatch_url",
-                "externalActionDispatchUrl",
-                "action_dispatch_url",
-                "actionDispatchUrl",
-            ],
-        )
-    })
-}
-
-fn external_channel_outbound_reply_dispatch_url_from_config(config: &Value) -> Option<String> {
-    external_config_string(
-        config,
-        &[
-            "external_reply_dispatch_url",
-            "externalReplyDispatchUrl",
-            "reply_dispatch_url",
-            "replyDispatchUrl",
-            "outbound_reply_url",
-            "outboundReplyUrl",
-            "assistant_reply_dispatch_url",
-            "assistantReplyDispatchUrl",
-        ],
-    )
-}
-
 fn external_action_dispatch_payload(record: &ExternalActionDispatchRecord) -> Value {
     json!({
         "action_id": record.action_id,

@@ -83,6 +83,62 @@ pub(crate) fn external_action_dispatch_auth_configured(auth: &ExternalActionDisp
     auth.bearer_token.is_some() || auth.signing_secret.is_some()
 }
 
+pub(crate) fn external_action_dispatch_url_from_config(
+    config: &Value,
+    action_type: &str,
+) -> Option<String> {
+    let action_specific = if action_type.starts_with("external_artifact.") {
+        external_config_string(
+            config,
+            &[
+                "artifact_action_dispatch_url",
+                "artifactActionDispatchUrl",
+                "artifact_dispatch_url",
+                "artifactDispatchUrl",
+            ],
+        )
+    } else {
+        external_config_string(
+            config,
+            &[
+                "business_action_dispatch_url",
+                "businessActionDispatchUrl",
+                "business_dispatch_url",
+                "businessDispatchUrl",
+            ],
+        )
+    };
+    action_specific.or_else(|| {
+        external_config_string(
+            config,
+            &[
+                "external_action_dispatch_url",
+                "externalActionDispatchUrl",
+                "action_dispatch_url",
+                "actionDispatchUrl",
+            ],
+        )
+    })
+}
+
+pub(crate) fn external_channel_outbound_reply_dispatch_url_from_config(
+    config: &Value,
+) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "external_reply_dispatch_url",
+            "externalReplyDispatchUrl",
+            "reply_dispatch_url",
+            "replyDispatchUrl",
+            "outbound_reply_url",
+            "outboundReplyUrl",
+            "assistant_reply_dispatch_url",
+            "assistantReplyDispatchUrl",
+        ],
+    )
+}
+
 pub(crate) fn external_action_dispatch_auth_mode(
     auth: &ExternalActionDispatchAuth,
 ) -> &'static str {
