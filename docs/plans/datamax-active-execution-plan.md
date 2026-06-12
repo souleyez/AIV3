@@ -325,6 +325,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 文档数据集归属当前范围 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；文档已有归属优先、无归属时退回当前选中数据集的语义保持不变。
 - 2026-06-12: `HomePageClient.js` 文档数据集归属切换意图 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；归属命中判断、PUT/DELETE 方法和完成提示文案语义保持不变。
 - 2026-06-12: `HomePageClient.js` 数据集选择状态 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；普通数据集切换、文档归属响应后的首选数据集和空响应不更新语义保持不变。
+- 2026-06-12: `HomePageClient.js` 目录刷新后的数据集选择保留 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；仅保留仍存在的数据集、合法 preferred 优先和失效 active 清空语义保持不变。
 
 **Regression commands:**
 

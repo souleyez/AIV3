@@ -66,6 +66,7 @@ import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   datasetSelectionStateAfterToggle,
+  datasetIdsAfterCatalogRefresh,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
   documentMembershipResponseSelectionUpdate,
@@ -73,6 +74,7 @@ import {
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   sameDatasetIds,
+  selectedDatasetIdAfterCatalogRefresh,
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
@@ -1265,29 +1267,14 @@ export default function HomePageClient() {
       const nextReportPlans = Array.isArray(planItems) ? planItems : [];
       const nextPublishedReports = sortByDateDesc(reportItems, 'updated_at');
       const nextDocuments = Array.isArray(documentItems) ? sortByDateDesc(documentItems, 'updated_at') : [];
-      const nextDatasetIdSet = new Set(nextDatasets.map((item) => item.id).filter(Boolean));
 
       startTransition(() => {
         setDatasets(nextDatasets);
         setReportPlans(nextReportPlans);
         setPublishedReports(nextPublishedReports);
         setDocuments(nextDocuments);
-        setSelectedDatasetIds((current) => {
-          const retained = normalizeDatasetIds(current).filter((datasetId) => nextDatasetIdSet.has(datasetId));
-          if (preferredDatasetId && nextDatasetIdSet.has(preferredDatasetId)) {
-            return normalizeDatasetIds([preferredDatasetId, ...retained]);
-          }
-          return retained;
-        });
-        setSelectedDatasetId((current) => {
-          if (preferredDatasetId && nextDatasets.some((item) => item.id === preferredDatasetId)) {
-            return preferredDatasetId;
-          }
-          if (current && nextDatasets.some((item) => item.id === current)) {
-            return current;
-          }
-          return null;
-        });
+        setSelectedDatasetIds((current) => datasetIdsAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
+        setSelectedDatasetId((current) => selectedDatasetIdAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
       });
       setError('');
     } catch (loadError) {

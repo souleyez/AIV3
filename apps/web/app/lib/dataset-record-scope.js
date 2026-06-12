@@ -33,6 +33,30 @@ export function datasetSelectionStateAfterToggle(currentDatasetIds, datasetId) {
   };
 }
 
+function datasetIdSet(items) {
+  return new Set((Array.isArray(items) ? items : []).map((item) => item?.id).filter(Boolean));
+}
+
+export function datasetIdsAfterCatalogRefresh(currentDatasetIds, nextDatasets, preferredDatasetId = null) {
+  const availableIds = datasetIdSet(nextDatasets);
+  const retained = normalizeDatasetIds(currentDatasetIds).filter((datasetId) => availableIds.has(datasetId));
+  if (preferredDatasetId && availableIds.has(preferredDatasetId)) {
+    return normalizeDatasetIds([preferredDatasetId, ...retained]);
+  }
+  return retained;
+}
+
+export function selectedDatasetIdAfterCatalogRefresh(currentDatasetId, nextDatasets, preferredDatasetId = null) {
+  const availableIds = datasetIdSet(nextDatasets);
+  if (preferredDatasetId && availableIds.has(preferredDatasetId)) {
+    return preferredDatasetId;
+  }
+  if (currentDatasetId && availableIds.has(currentDatasetId)) {
+    return currentDatasetId;
+  }
+  return null;
+}
+
 export function documentDatasetIds(document) {
   return normalizeDatasetIds([
     document?.dataset_id,

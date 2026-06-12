@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  datasetIdsAfterCatalogRefresh,
   datasetSelectionStateAfterToggle,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
@@ -13,6 +14,7 @@ import {
   normalizeDatasetIds,
   reportRecordDatasetIds,
   sameDatasetIds,
+  selectedDatasetIdAfterCatalogRefresh,
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
@@ -61,6 +63,29 @@ describe('dataset record scope helpers', () => {
         selectedDatasetIds: [],
       },
     );
+  });
+
+  it('keeps catalog refresh dataset selection scoped to available datasets', () => {
+    const nextDatasets = [{ id: 'ds-a' }, { id: 'ds-b' }, { id: 'ds-c' }];
+    assert.deepEqual(
+      datasetIdsAfterCatalogRefresh([' ds-b ', 'missing', 'ds-b'], nextDatasets, 'ds-a'),
+      ['ds-a', 'ds-b'],
+    );
+    assert.deepEqual(
+      datasetIdsAfterCatalogRefresh(['ds-b', 'missing'], nextDatasets, 'missing'),
+      ['ds-b'],
+    );
+    assert.deepEqual(
+      datasetIdsAfterCatalogRefresh(['missing'], nextDatasets, null),
+      [],
+    );
+  });
+
+  it('keeps catalog refresh active dataset id when still available', () => {
+    const nextDatasets = [{ id: 'ds-a' }, { id: 'ds-b' }];
+    assert.equal(selectedDatasetIdAfterCatalogRefresh('ds-b', nextDatasets, 'ds-a'), 'ds-a');
+    assert.equal(selectedDatasetIdAfterCatalogRefresh('ds-b', nextDatasets, 'missing'), 'ds-b');
+    assert.equal(selectedDatasetIdAfterCatalogRefresh('missing', nextDatasets, null), null);
   });
 
   it('collects document, report, and static page draft dataset ownership fields', () => {
