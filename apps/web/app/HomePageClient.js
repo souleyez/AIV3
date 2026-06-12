@@ -115,13 +115,22 @@ import {
 import {
   applyStaticPageOperation,
   applyStaticPageOperations,
+  buildConfirmedStaticPagePreview,
   buildInitialStaticPageDraft,
   buildMockStaticPagePreview,
+  buildPromptOnlyStaticPageQueueOperation,
   buildStaticPageImagePayload,
   buildStaticPageImagePromptText,
   canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  isBackendStaticPageImageJobId,
+  mergeBackendStaticPageDraft,
+  mergeStaticPageImageJob,
+  mergeStaticPageRenderOutput,
+  normalizeBackendStaticPageDraft,
+  staticPageImageJobQueueOperation,
+  staticPageOperationIsPromptOnly,
   staticPageDirectHtmlBlockReason,
   staticPageFinalRenderBlockReason,
   staticPagePreviewBlockReason,
@@ -693,208 +702,6 @@ export default function HomePageClient() {
     return staticPageRenderedUrlFromDraft(draftOrOutput);
   }
 
-  function mergeBackendStaticPageDraft(localDraft, backendDraft) {
-    const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
-      ? backendDraft.draft_payload
-      : {};
-    const matchedDatasetIds = [
-      ...new Set([
-        ...(Array.isArray(localDraft?.matchedDatasetIds) ? localDraft.matchedDatasetIds : []),
-        ...(Array.isArray(localDraft?.matched_dataset_ids) ? localDraft.matched_dataset_ids : []),
-        ...(Array.isArray(payload?.matchedDatasetIds) ? payload.matchedDatasetIds : []),
-        ...(Array.isArray(payload?.matched_dataset_ids) ? payload.matched_dataset_ids : []),
-        ...(Array.isArray(backendDraft?.matchedDatasetIds) ? backendDraft.matchedDatasetIds : []),
-        ...(Array.isArray(backendDraft?.matched_dataset_ids) ? backendDraft.matched_dataset_ids : []),
-      ]),
-    ];
-    const merged = {
-      ...localDraft,
-      ...payload,
-      id: backendDraft?.id || localDraft.id,
-      localDraftId: localDraft.localDraftId || localDraft.id,
-      backendDraftId: backendDraft?.id || localDraft.backendDraftId || '',
-      assistantRunId: backendDraft?.assistant_run_id || localDraft.assistantRunId || '',
-      backendStatus: backendDraft?.status || localDraft.backendStatus || '',
-      backendUpdatedAt: backendDraft?.updated_at || localDraft.backendUpdatedAt || '',
-      source_refs: backendDraft?.source_refs || localDraft.source_refs || payload.source_refs || null,
-      sourceRefs: backendDraft?.source_refs || localDraft.sourceRefs || payload.sourceRefs || payload.source_refs || null,
-      draft_payload: backendDraft?.draft_payload || localDraft.draft_payload || payload,
-      draftPayload: backendDraft?.draft_payload || localDraft.draftPayload || payload,
-      matchedDatasetIds,
-    };
-    if (backendDraft?.status === 'rendered' && merged.finalPage?.status === 'rendered') {
-      merged.status = 'rendered';
-    }
-    if (backendDraft?.status === 'confirmed' && merged.status !== 'rendered') {
-      merged.status = 'effect_confirmed';
-    }
-    return merged;
-  }
-
-  function normalizeBackendStaticPageDraft(backendDraft) {
-    const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
-      ? backendDraft.draft_payload
-      : {};
-    return mergeBackendStaticPageDraft({
-      ...payload,
-      id: payload.id || backendDraft?.id,
-      localDraftId: payload.localDraftId || backendDraft?.source_refs?.local_draft_id || backendDraft?.id,
-    }, backendDraft);
-  }
-
-  function mergeStaticPageRenderOutput(draft, renderOutput) {
-    if (!draft || !renderOutput) {
-      return draft;
-    }
-    const renderStatus = renderOutput.status || draft.finalPage?.status || 'rendered';
-    const nextStatus = renderStatus === 'rendered'
-      ? 'rendered'
-      : ['queued', 'rendering'].includes(renderStatus)
-        ? 'rendering'
-        : draft.status;
-    return {
-      ...draft,
-      status: nextStatus,
-      finalPage: {
-        ...(draft.finalPage || {}),
-        status: renderStatus,
-        renderer: 'platform-api-static-page-renderer',
-        renderOutputId: renderOutput.id,
-        imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
-        assetManifest: renderOutput.asset_manifest || draft.finalPage?.assetManifest || {},
-        html: renderOutput.html || draft.finalPage?.html || '',
-        htmlPreviewUrl: renderOutput.html_preview_url || renderOutput.htmlPreviewUrl || draft.finalPage?.htmlPreviewUrl || '',
-        htmlDownloadUrl: renderOutput.html_download_url || renderOutput.htmlDownloadUrl || draft.finalPage?.htmlDownloadUrl || '',
-        directHtml: Boolean(draft.finalPage?.directHtml || renderOutput.asset_manifest?.directHtml || renderOutput.asset_manifest?.direct_html),
-      },
-    };
-  }
-
-  function mergeStaticPageImageJob(draft, imageJob) {
-    if (!draft || !imageJob) {
-      return draft;
-    }
-    const status = imageJob.status === 'confirmed' ? 'confirmed' : imageJob.status;
-    const nextStatus = (() => {
-      if (draft.status === 'rendered' || draft.status === 'effect_confirmed') {
-        return draft.status;
-      }
-      if (status === 'preview_ready') {
-        return 'preview_ready';
-      }
-      if (status === 'confirmed') {
-        return 'effect_confirmed';
-      }
-      if (status === 'queued' || status === 'running') {
-        return 'queued';
-      }
-      if (status === 'failed') {
-        return 'planning';
-      }
-      return draft.status;
-    })();
-    return {
-      ...draft,
-      status: nextStatus,
-      imageJob: {
-        ...(draft.imageJob || {}),
-        id: imageJob.id,
-        status,
-        queuePosition: imageJob.queue_position ?? null,
-        queueMessage: imageJob.failure_reason
-          || (status === 'preview_ready' ? '可视化已生成，将自动继续制作页面。' : STATIC_PAGE_QUEUE_MESSAGE),
-      },
-      previewImage: imageJob.preview_asset_key
-        ? buildConfirmedStaticPagePreview(draft, imageJob, draft.previewImage)
-        : draft.previewImage,
-      previewContract: imageJob.preview_asset_key && status === 'preview_ready'
-        ? {
-            ...(draft.previewContract || {}),
-            status: 'preview_ready',
-            imageJobId: imageJob.id,
-            assetKey: imageJob.preview_asset_key,
-            queuePosition: null,
-          }
-        : imageJob.preview_asset_key && status === 'confirmed'
-          ? {
-              ...(draft.previewContract || {}),
-              status: 'confirmed',
-              imageJobId: imageJob.id,
-              assetKey: imageJob.preview_asset_key,
-              queuePosition: null,
-            }
-          : draft.previewContract,
-    };
-  }
-
-  function isBackendStaticPageImageJobId(jobId) {
-    return Boolean(jobId) && !String(jobId).startsWith('mock-image-job-');
-  }
-
-  function staticPageImageJobQueueOperation(imageJob, fallback = {}) {
-    return {
-      type: 'queue_image_job',
-      jobId: imageJob?.id || fallback.jobId || fallback.id,
-      queuePosition: imageJob?.queue_position ?? imageJob?.queuePosition ?? fallback.queuePosition ?? null,
-      queueMessage: fallback.queueMessage || STATIC_PAGE_QUEUE_MESSAGE,
-    };
-  }
-
-  function staticPageOperationIsPromptOnly(operation = {}) {
-    const payload = operation.imagePromptPayload || operation.image_prompt_payload || {};
-    return Boolean(
-      operation.promptOnly
-        || operation.prompt_only
-        || payload.promptOnly
-        || payload.prompt_only,
-    );
-  }
-
-  function buildPromptOnlyStaticPageQueueOperation(draft, operation = {}) {
-    const prompt = String(
-      operation.prompt
-        || operation.promptText
-        || operation.prompt_text
-        || buildStaticPageImagePromptText(draft),
-    ).trim();
-    const providedPayload = operation.imagePromptPayload || operation.image_prompt_payload;
-    const basePayload = providedPayload && typeof providedPayload === 'object' && !Array.isArray(providedPayload)
-      ? providedPayload
-      : buildStaticPageImagePayload(draft, {
-        oneClick: Boolean(operation.oneClick || draft?.source?.oneClick),
-        promptText: prompt,
-        promptOnly: true,
-      });
-    const imagePromptPayload = {
-      ...basePayload,
-      prompt,
-      promptText: prompt,
-      prompt_text: prompt,
-      promptOnly: true,
-      prompt_only: true,
-    };
-    return {
-      ...operation,
-      type: 'queue_image_job',
-      prompt,
-      promptText: prompt,
-      prompt_text: prompt,
-      promptOnly: true,
-      prompt_only: true,
-      queueMessage: operation.queueMessage || STATIC_PAGE_QUEUE_MESSAGE,
-      imagePromptPayload,
-    };
-  }
-
-  function buildConfirmedStaticPagePreview(draft, imageJob, fallbackPreview = null) {
-    return {
-      ...(fallbackPreview || buildMockStaticPagePreview(draft)),
-      kind: 'static-page-effect-preview',
-      assetKey: imageJob?.preview_asset_key || fallbackPreview?.assetKey || `static-page-previews/${imageJob?.id || draft.id}.json`,
-      imageJobId: imageJob?.id || draft?.imageJob?.id || null,
-    };
-  }
-
   function replaceDraftWithOperation(baseDraft, operation) {
     const draft = applyStaticPageOperation(baseDraft, operation);
     setStaticPageDrafts((current) => ({
@@ -1015,7 +822,7 @@ export default function HomePageClient() {
 
     const latestJob = Array.isArray(imageJobs) ? imageJobs[0] : null;
     const latestRender = Array.isArray(renderOutputs) ? renderOutputs[0] : null;
-    draft = mergeStaticPageImageJob(draft, latestJob);
+    draft = mergeStaticPageImageJob(draft, latestJob, { queueMessage: STATIC_PAGE_QUEUE_MESSAGE });
     draft = mergeStaticPageRenderOutput(draft, latestRender);
     return draft;
   }
@@ -1203,7 +1010,10 @@ export default function HomePageClient() {
     });
     const imageJob = response?.image_job;
     const latestDraft = staticPageDrafts[baseDraft.id] || staticPageDrafts[baseDraft.backendDraftId] || baseDraft;
-    const draft = replaceDraftWithOperation(latestDraft, staticPageImageJobQueueOperation(imageJob, operation));
+    const draft = replaceDraftWithOperation(
+      latestDraft,
+      staticPageImageJobQueueOperation(imageJob, operation, { queueMessage: STATIC_PAGE_QUEUE_MESSAGE }),
+    );
     appendStaticPageProgressMessage(
       `${baseDraft.id}:image-queued:${imageJob?.id || 'pending'}`,
       '已确认生图文案，可视化任务已入队。可视化只作为预览，完成后会自动继续生成静态页。',
@@ -3270,7 +3080,7 @@ export default function HomePageClient() {
 
     if (operation.type === 'queue_image_job') {
       const queueOperation = staticPageOperationIsPromptOnly(operation)
-        ? buildPromptOnlyStaticPageQueueOperation(activeStaticPageDraft, operation)
+        ? buildPromptOnlyStaticPageQueueOperation(activeStaticPageDraft, operation, { queueMessage: STATIC_PAGE_QUEUE_MESSAGE })
         : operation;
       const blockReason = staticPageOperationIsPromptOnly(queueOperation)
         ? ''
@@ -3388,7 +3198,7 @@ export default function HomePageClient() {
         return renderedDraft;
       }
 
-      const queueOperation = buildPromptOnlyStaticPageQueueOperation(draft, operation);
+      const queueOperation = buildPromptOnlyStaticPageQueueOperation(draft, operation, { queueMessage: STATIC_PAGE_QUEUE_MESSAGE });
       const blockReason = staticPageOperationIsPromptOnly(queueOperation)
         ? ''
         : staticPagePreviewBlockReason(draft);

@@ -8,8 +8,10 @@ import {
   buildStaticPageDataSourceCandidates,
   buildStaticPageFieldCandidates,
   buildStaticPageFinalRenderPayload,
+  buildConfirmedStaticPagePreview,
   buildStaticPageImagePayload,
   buildStaticPageImagePromptText,
+  buildPromptOnlyStaticPageQueueOperation,
   buildStaticPageModuleUpdateOperation,
   buildStaticPagePreviewContract,
   buildStaticPageRenderSpec,
@@ -17,6 +19,13 @@ import {
   canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
+  isBackendStaticPageImageJobId,
+  mergeBackendStaticPageDraft,
+  mergeStaticPageImageJob,
+  mergeStaticPageRenderOutput,
+  normalizeBackendStaticPageDraft,
+  staticPageImageJobQueueOperation,
+  staticPageOperationIsPromptOnly,
   staticPageDirectHtmlBlockReason,
   staticPageFinalRenderBlockReason,
   staticPagePreviewBlockReason,
@@ -214,6 +223,169 @@ test('template design references flow into preview image and final render payloa
   assert.equal(imagePayload.productionRules.codexHostEscalation.publishMode, 'new_generated_artifact_only');
   assert.equal(canRequestStaticPageDirectHtml(draft), false);
   assert.match(staticPageDirectHtmlBlockReason(draft), /GPT-Image2/);
+});
+
+test('backend static page draft merge preserves status and dataset scope', () => {
+  const localDraft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-local',
+    conversationSummary: '经营月报',
+  });
+  const merged = mergeBackendStaticPageDraft(
+    {
+      ...localDraft,
+      id: 'local-draft',
+      status: 'planning',
+      matchedDatasetIds: ['dataset-local'],
+    },
+    {
+      id: 'backend-draft',
+      status: 'confirmed',
+      assistant_run_id: 'assistant-run-1',
+      updated_at: '2026-06-12T00:00:00Z',
+      matched_dataset_ids: ['dataset-backend'],
+      source_refs: { local_draft_id: 'local-draft' },
+      draft_payload: {
+        objective: '后端保存目标',
+        matched_dataset_ids: ['dataset-payload'],
+      },
+    },
+  );
+
+  assert.equal(merged.id, 'backend-draft');
+  assert.equal(merged.localDraftId, 'local-draft');
+  assert.equal(merged.backendDraftId, 'backend-draft');
+  assert.equal(merged.assistantRunId, 'assistant-run-1');
+  assert.equal(merged.status, 'effect_confirmed');
+  assert.deepEqual(merged.matchedDatasetIds, ['dataset-local', 'dataset-payload', 'dataset-backend']);
+  assert.deepEqual(merged.sourceRefs, { local_draft_id: 'local-draft' });
+
+  const normalized = normalizeBackendStaticPageDraft({
+    id: 'backend-only',
+    status: 'rendered',
+    source_refs: { local_draft_id: 'local-only' },
+    draft_payload: {
+      status: 'rendering',
+      finalPage: { status: 'rendered' },
+    },
+  });
+
+  assert.equal(normalized.id, 'backend-only');
+  assert.equal(normalized.localDraftId, 'local-only');
+  assert.equal(normalized.status, 'rendered');
+});
+
+test('render output merge updates final page without losing existing values', () => {
+  const draft = {
+    ...buildInitialStaticPageDraft({ conversationSummary: '经营分析' }),
+    status: 'effect_confirmed',
+    finalPage: {
+      status: 'queued',
+      imageJobId: 'image-existing',
+      htmlPreviewUrl: '/generated-artifacts/old/index.html',
+      directHtml: true,
+    },
+  };
+
+  const queued = mergeStaticPageRenderOutput(draft, {
+    id: 'render-1',
+    status: 'queued',
+    asset_manifest: { report: true },
+    html_download_url: '/generated-artifacts/new/index.html',
+  });
+
+  assert.equal(queued.status, 'rendering');
+  assert.equal(queued.finalPage.status, 'queued');
+  assert.equal(queued.finalPage.renderer, 'platform-api-static-page-renderer');
+  assert.equal(queued.finalPage.renderOutputId, 'render-1');
+  assert.equal(queued.finalPage.imageJobId, 'image-existing');
+  assert.equal(queued.finalPage.htmlPreviewUrl, '/generated-artifacts/old/index.html');
+  assert.equal(queued.finalPage.htmlDownloadUrl, '/generated-artifacts/new/index.html');
+  assert.equal(queued.finalPage.directHtml, true);
+
+  const rendered = mergeStaticPageRenderOutput(draft, {
+    id: 'render-2',
+    status: 'rendered',
+    image_job_id: 'image-2',
+    html_preview_url: '/generated-artifacts/final/index.html',
+  });
+
+  assert.equal(rendered.status, 'rendered');
+  assert.equal(rendered.finalPage.imageJobId, 'image-2');
+  assert.equal(rendered.finalPage.htmlPreviewUrl, '/generated-artifacts/final/index.html');
+});
+
+test('image job helpers preserve preview and queue semantics', () => {
+  const draft = buildInitialStaticPageDraft({
+    conversationSummary: '生成移动端经营报表',
+  });
+
+  assert.equal(isBackendStaticPageImageJobId('job-1'), true);
+  assert.equal(isBackendStaticPageImageJobId('mock-image-job-1'), false);
+  assert.deepEqual(
+    staticPageImageJobQueueOperation(
+      { id: 'job-1', queue_position: 3 },
+      {},
+      { queueMessage: '排队中' },
+    ),
+    {
+      type: 'queue_image_job',
+      jobId: 'job-1',
+      queuePosition: 3,
+      queueMessage: '排队中',
+    },
+  );
+
+  const queued = mergeStaticPageImageJob(
+    draft,
+    { id: 'job-queued', status: 'running', queue_position: 2 },
+    { queueMessage: '排队中' },
+  );
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.imageJob.queueMessage, '排队中');
+  assert.equal(queued.imageJob.queuePosition, 2);
+
+  const previewReady = mergeStaticPageImageJob(draft, {
+    id: 'job-preview',
+    status: 'preview_ready',
+    preview_asset_key: 'static-page-previews/job-preview.json',
+  });
+  assert.equal(previewReady.status, 'preview_ready');
+  assert.equal(previewReady.imageJob.queueMessage, '可视化已生成，将自动继续制作页面。');
+  assert.equal(previewReady.previewImage.kind, 'static-page-effect-preview');
+  assert.equal(previewReady.previewContract.status, 'preview_ready');
+
+  const confirmedPreview = buildConfirmedStaticPagePreview(draft, {
+    id: 'job-confirmed',
+    preview_asset_key: 'static-page-previews/job-confirmed.json',
+  });
+  assert.equal(confirmedPreview.assetKey, 'static-page-previews/job-confirmed.json');
+  assert.equal(confirmedPreview.imageJobId, 'job-confirmed');
+});
+
+test('prompt-only queue operation carries prompt aliases and payload flags', () => {
+  const draft = buildInitialStaticPageDraft({
+    conversationSummary: '按客户模板生成经营看板',
+  });
+  const operation = buildPromptOnlyStaticPageQueueOperation(
+    draft,
+    {
+      prompt_text: '暗色移动端经营预警卡片',
+      oneClick: true,
+    },
+    { queueMessage: '排队中' },
+  );
+
+  assert.equal(staticPageOperationIsPromptOnly(operation), true);
+  assert.equal(operation.type, 'queue_image_job');
+  assert.equal(operation.prompt, '暗色移动端经营预警卡片');
+  assert.equal(operation.promptText, '暗色移动端经营预警卡片');
+  assert.equal(operation.prompt_text, '暗色移动端经营预警卡片');
+  assert.equal(operation.promptOnly, true);
+  assert.equal(operation.prompt_only, true);
+  assert.equal(operation.queueMessage, '排队中');
+  assert.equal(operation.imagePromptPayload.promptOnly, true);
+  assert.equal(operation.imagePromptPayload.prompt_only, true);
+  assert.equal(operation.imagePromptPayload.prompt, '暗色移动端经营预警卡片');
 });
 
 test('image prompt text can be confirmed and carried as prompt-only payload', () => {

@@ -3458,6 +3458,27 @@ Data-ingestion external fixed-task smoke:
   - only `aiv3-web.service` was restarted for the frontend code change; `platform-api` and workers were not restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Static Page Backend Draft Helper Extraction
+
+- Purpose:
+  - continue P5 engineering governance with a behavior-preserving static-page frontend slice;
+  - move backend draft merge, render output merge, image-job merge, and prompt-only queue-operation logic out of `HomePageClient.js`;
+  - add focused tests for the extracted static-page object helpers.
+- Code changes:
+  - added static-page backend helper exports to `apps/web/app/lib/static-page-draft.js`;
+  - replaced the matching inline helper implementations in `apps/web/app/HomePageClient.js`;
+  - kept component state mutation wrappers, API calls, polling, draft syncing, public URLs, and static-page generation flow unchanged;
+  - passed the existing `STATIC_PAGE_QUEUE_MESSAGE` into extracted helpers at call sites so the visible queue message remains unchanged.
+- Local verification:
+  - `node --test apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/static-page-draft-workspace.test.mjs apps/web/app/lib/html-artifact-utils.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 79/79 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next/Turbopack warnings about deprecated `middleware` naming and `next.config.js` NFT tracing.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Assistant Stream Content Helper Extraction
 
 - Purpose:
