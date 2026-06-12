@@ -31,3 +31,23 @@ export function writeLocalActivityEvents(events, options = {}) {
     // Activity cache is only a local briefing hint; ignore write failures.
   }
 }
+
+export function buildLocalUserStatementMemoryPayload(options = {}) {
+  const message = options.message || null;
+  const summary = String(message?.content || '').trim();
+  if (!summary) {
+    return null;
+  }
+  return {
+    local_thread_id: String(options.localThreadId || ''),
+    role: 'user',
+    item_kind: 'user_statement',
+    summary,
+    source_message_refs: [message.id].filter(Boolean),
+    artifact_refs: [],
+    metadata: {
+      source: 'browser_local_chat',
+      assistant_run_id: options.assistantRunId || null,
+    },
+  };
+}

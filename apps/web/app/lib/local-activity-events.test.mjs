@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildLocalUserStatementMemoryPayload,
   LOCAL_ACTIVITY_EVENTS_STORAGE_KEY,
   readLocalActivityEvents,
   writeLocalActivityEvents,
@@ -89,4 +90,41 @@ test('writeLocalActivityEvents stores only first events and tolerates storage fa
   }, () => {
     assert.doesNotThrow(() => writeLocalActivityEvents([{ id: 'activity-1' }]));
   });
+});
+
+test('buildLocalUserStatementMemoryPayload preserves local user statement memory shape', () => {
+  const payload = buildLocalUserStatementMemoryPayload({
+    message: { id: 'message-1', content: '  低活跃品牌报表  ' },
+    localThreadId: 'local-thread-1',
+    assistantRunId: 'run-1',
+  });
+  assert.deepEqual(payload, {
+    local_thread_id: 'local-thread-1',
+    role: 'user',
+    item_kind: 'user_statement',
+    summary: '低活跃品牌报表',
+    source_message_refs: ['message-1'],
+    artifact_refs: [],
+    metadata: {
+      source: 'browser_local_chat',
+      assistant_run_id: 'run-1',
+    },
+  });
+});
+
+test('buildLocalUserStatementMemoryPayload skips empty summaries and keeps fallback fields stable', () => {
+  assert.equal(
+    buildLocalUserStatementMemoryPayload({
+      message: { id: 'message-empty', content: '   ' },
+      localThreadId: 'local-thread-1',
+    }),
+    null,
+  );
+
+  const payload = buildLocalUserStatementMemoryPayload({
+    message: { content: '普通问答' },
+  });
+  assert.equal(payload.local_thread_id, '');
+  assert.deepEqual(payload.source_message_refs, []);
+  assert.equal(payload.metadata.assistant_run_id, null);
 });

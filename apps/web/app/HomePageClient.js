@@ -81,7 +81,11 @@ import {
   writeLocalAccountEmail,
   writeLocalSecretState,
 } from './lib/local-account-state';
-import { readLocalActivityEvents, writeLocalActivityEvents } from './lib/local-activity-events';
+import {
+  buildLocalUserStatementMemoryPayload,
+  readLocalActivityEvents,
+  writeLocalActivityEvents,
+} from './lib/local-activity-events';
 import {
   createLocalThreadId,
   readLocalAssistantRunId,
@@ -1678,24 +1682,17 @@ export default function HomePageClient() {
   }
 
   function rememberLocalUserStatement(message, assistantRunId = '') {
-    const summary = String(message?.content || '').trim();
-    if (!summary) {
+    const payload = buildLocalUserStatementMemoryPayload({
+      message,
+      localThreadId: readLocalThreadId(),
+      assistantRunId,
+    });
+    if (!payload) {
       return;
     }
     fetchJson('/api/v3/conversation-memory-items', {
       method: 'POST',
-      body: {
-        local_thread_id: readLocalThreadId(),
-        role: 'user',
-        item_kind: 'user_statement',
-        summary,
-        source_message_refs: [message.id].filter(Boolean),
-        artifact_refs: [],
-        metadata: {
-          source: 'browser_local_chat',
-          assistant_run_id: assistantRunId || null,
-        },
-      },
+      body: payload,
     }).catch(() => {
       // Conversation memory is best-effort; chat must not wait on background supply indexing.
     });
