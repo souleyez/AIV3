@@ -3584,6 +3584,19 @@ Data-ingestion external fixed-task smoke:
   - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
   - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
   - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`.
+- 8-server post-sync verification:
+  - local commit `7bad85f` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `1ce8aa03b` to `7bad85f56`;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `aiv3-web.service` was restarted after the web build;
+  - `node --test /srv/aiv3/repo/apps/web/app/lib/dataset-record-scope.test.mjs /srv/aiv3/repo/apps/web/app/lib/local-activity-events.test.mjs /srv/aiv3/repo/apps/web/app/lib/local-chat-sessions.test.mjs /srv/aiv3/repo/apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 57/57 tests;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
