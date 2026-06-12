@@ -27,6 +27,7 @@ import {
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import { formatRelativeTime } from './lib/formatters';
+import { fetchJson } from './lib/home-api-client';
 import {
   isTerminalCodexCustomerTaskStatus,
   mergeCodexCustomerArtifactBundles,
@@ -99,77 +100,9 @@ const STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS = 4000;
 const STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS = 4000;
 const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_INTERVAL_MS = 2500;
 const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
-const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-async function fetchJson(url, options = {}) {
-  const {
-    timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
-    signal,
-    ...fetchOptions
-  } = options;
-  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
-  const secretBindingIds = readLocalSecretBindingIdsHeader();
-  const controller = !signal && timeoutMs > 0 && typeof AbortController !== 'undefined'
-    ? new AbortController()
-    : null;
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), timeoutMs)
-    : null;
-
-  let response;
-  try {
-    response = await fetch(url, {
-      cache: 'no-store',
-      credentials: 'include',
-      ...fetchOptions,
-      signal: signal || controller?.signal,
-      headers: {
-        Accept: 'application/json',
-        ...(fetchOptions.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
-        ...(secretBindingIds ? { 'X-AI-Data-Platform-Secret-Binding-Ids': secretBindingIds } : {}),
-        'X-AI-Data-Platform-Local-Thread-Id': readLocalThreadId(),
-        ...(fetchOptions.headers || {}),
-      },
-      body: fetchOptions.body && !isFormData && typeof fetchOptions.body !== 'string'
-        ? JSON.stringify(fetchOptions.body)
-        : fetchOptions.body,
-    });
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-      throw buildApiError(
-        {
-          error: 'request_timeout',
-          message: `请求超时（${seconds} 秒）：${url}`,
-        },
-        `请求超时（${seconds} 秒）：${url}。请确认本地 API/数据库已启动，或稍后重试。`,
-        408,
-      );
-    }
-    throw error;
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  const payload = contentType.includes('application/json')
-    ? await response.json()
-    : await response.text();
-
-  if (!response.ok) {
-    const message = typeof payload === 'string'
-      ? payload
-      : payload?.message || payload?.payload?.message || payload?.error || `Request failed: ${response.status}`;
-    throw buildApiError(payload, message, response.status);
-  }
-
-  return payload;
-}
 
 function wait(ms) {
   return new Promise((resolve) => {

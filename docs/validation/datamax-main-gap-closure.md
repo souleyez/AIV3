@@ -3481,6 +3481,37 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Home API Client FetchJson Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving JSON API client slice;
+  - keep the change limited to the `fetchJson` helper used by `HomePageClient.js`.
+- Plan hygiene:
+  - found untracked `docs/plans/2026-06-12-v3-system-performance-optimization.md`;
+  - the file contained a separate stale V3 performance plan with an outdated 8-server baseline, so it was moved to `docs/archive/plans/2026-06-12-v3-system-performance-optimization.md`;
+  - `docs/plans/` again contains only `docs/plans/datamax-active-execution-plan.md`.
+- Code changes:
+  - added `apps/web/app/lib/home-api-client.js`;
+  - added `apps/web/app/lib/home-api-client.test.mjs`;
+  - updated `apps/web/app/HomePageClient.js` to import `fetchJson` from the new module.
+- Test-first check:
+  - first run before adding the helper module failed as expected with `ERR_MODULE_NOT_FOUND` for `home-api-client.js`;
+  - an initial timeout assertion expected `error.code=request_timeout`, but the existing `buildApiError` behavior leaves `code` empty and stores `request_timeout` under `payload.error`; the test was corrected to preserve existing behavior;
+  - after implementation, `node --test apps/web/app/lib/home-api-client.test.mjs` passed 4/4.
+- Local verification:
+  - `node --test apps/web/app/lib/home-api-client.test.mjs`: passed 4/4;
+  - `node --test apps/web/app/lib/local-secret-fingerprint.test.mjs apps/web/app/lib/dataset-identity.test.mjs apps/web/app/lib/local-account-state.test.mjs apps/web/app/lib/account-auth.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/assistant-run-progress.test.mjs`: passed 51/51;
+  - `npm --prefix apps/web run build`: passed.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Local Secret Fingerprint Helper Extraction
 
 - Purpose:
