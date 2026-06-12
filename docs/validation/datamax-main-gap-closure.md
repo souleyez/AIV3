@@ -3457,6 +3457,26 @@ Data-ingestion external fixed-task smoke:
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
 
+## 2026-06-12 P5 HTML Artifact Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - isolate static-page published HTML artifact creation, report-render summary artifact creation, safe preview path allowlisting, artifact id normalization, artifact merge/dedupe, and report-render replacement behind tested pure functions;
+  - keep customer-visible generated-page cards, preview links, and report render summary replacement stable.
+- Code changes:
+  - added `apps/web/app/lib/html-artifact-utils.js`;
+  - added `apps/web/app/lib/html-artifact-utils.test.mjs`;
+  - replaced the inline HTML artifact helper blocks in `apps/web/app/HomePageClient.js` with imports while preserving existing call sites;
+  - left static-page planning handoff artifact construction in `HomePageClient.js` because it still depends on local compact-structure helper functions.
+- Local verification:
+  - `node --test apps/web/app/lib/html-artifact-utils.test.mjs`: passed, 6 tests;
+  - `node --test apps/web/app/lib/static-page-report-shelf.test.mjs apps/web/app/lib/report-template-utils.test.mjs`: passed, 12 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P5 Static Page Report Shelf Helper Extraction
 
 - Purpose:
