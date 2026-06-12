@@ -116,7 +116,9 @@ import {
   buildAssistantRunSelectedScope,
   buildStaticPageContextFieldCandidates,
   buildStaticPageConversationSummary,
+  buildStaticPageDraftSourceRefs,
   buildStaticPageDraftSelectedScope,
+  staticPagePreviewProgressContent,
 } from './lib/static-page-conversation-context';
 import {
   applyStaticPageOperation,
@@ -458,22 +460,6 @@ export default function HomePageClient() {
     setSelectedDocumentDetail(null);
   }
 
-  function buildStaticPageDraftSourceRefs(draft) {
-    return {
-      local_thread_id: readLocalThreadId(),
-      local_draft_id: draft?.localDraftId || draft?.id || '',
-      dataset_id: draft?.datasetId || null,
-      chat_session_id: draft?.sessionId || null,
-      source: 'local_chat_static_page_image2_pipeline',
-      client_source: draft?.source || {},
-      auto_publish_generated_artifact: true,
-      effect_image_confirmation_required: false,
-      continue_to_publish_after_effect_image: true,
-      fixed_task_template_id: 'static_page_image2_data_publish',
-      customer_preview_delivery: 'stream_event_or_status_card',
-    };
-  }
-
   function appendStaticPageProgressMessage(key, content, options = {}) {
     const stableKey = `static-page:${key}`;
     setLocalMessages((current) => {
@@ -494,19 +480,6 @@ export default function HomePageClient() {
         },
       ].slice(-40);
     });
-  }
-
-  function staticPagePreviewProgressContent(draft, snapshot = {}) {
-    const previewUrl = String(
-      snapshot.previewAssetKey
-        || draft?.previewImage?.assetKey
-        || draft?.previewContract?.assetKey
-        || '',
-    ).trim();
-    const link = /^(https?:\/\/|\/)/i.test(previewUrl)
-      ? `：[打开设计图](${previewUrl})`
-      : '';
-    return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
   }
 
   function appendCodexCustomerChatUpdates(bundles = [], tasks = []) {
@@ -620,7 +593,7 @@ export default function HomePageClient() {
         prompt,
         template_reference_id: templateReferenceId,
         selected_scope: localDraft?.datasetId ? buildStaticPageDraftSelectedScope(localDraft) : null,
-        source_refs: buildStaticPageDraftSourceRefs(localDraft),
+        source_refs: buildStaticPageDraftSourceRefs(localDraft, { localThreadId: readLocalThreadId() }),
         draft_payload: {
           ...localDraft,
           assistantRunId,

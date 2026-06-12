@@ -4,7 +4,9 @@ import {
   buildAssistantRunSelectedScope,
   buildStaticPageContextFieldCandidates,
   buildStaticPageConversationSummary,
+  buildStaticPageDraftSourceRefs,
   buildStaticPageDraftSelectedScope,
+  staticPagePreviewProgressContent,
 } from './static-page-conversation-context.js';
 
 test('buildStaticPageConversationSummary composes selected datasets, documents, session, and recent messages', () => {
@@ -128,4 +130,70 @@ test('static page selected scope helpers preserve existing payload shape', () =>
     intent: 'ordinary_chat',
     supply_policy: { intent: 'ordinary_chat', retrievalPolicy: 'not_requested' },
   });
+});
+
+test('buildStaticPageDraftSourceRefs preserves backend source-ref payload shape', () => {
+  const refs = buildStaticPageDraftSourceRefs({
+    id: 'draft-1',
+    localDraftId: 'local-draft-1',
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+    source: {
+      oneClick: true,
+      templateReferences: [{ templateId: 'data-report' }],
+    },
+  }, {
+    localThreadId: 'local-thread-1',
+  });
+
+  assert.deepEqual(refs, {
+    local_thread_id: 'local-thread-1',
+    local_draft_id: 'local-draft-1',
+    dataset_id: 'dataset-1',
+    chat_session_id: 'session-1',
+    source: 'local_chat_static_page_image2_pipeline',
+    client_source: {
+      oneClick: true,
+      templateReferences: [{ templateId: 'data-report' }],
+    },
+    auto_publish_generated_artifact: true,
+    effect_image_confirmation_required: false,
+    continue_to_publish_after_effect_image: true,
+    fixed_task_template_id: 'static_page_image2_data_publish',
+    customer_preview_delivery: 'stream_event_or_status_card',
+  });
+
+  assert.deepEqual(buildStaticPageDraftSourceRefs({ id: 'draft-2' }), {
+    local_thread_id: '',
+    local_draft_id: 'draft-2',
+    dataset_id: null,
+    chat_session_id: null,
+    source: 'local_chat_static_page_image2_pipeline',
+    client_source: {},
+    auto_publish_generated_artifact: true,
+    effect_image_confirmation_required: false,
+    continue_to_publish_after_effect_image: true,
+    fixed_task_template_id: 'static_page_image2_data_publish',
+    customer_preview_delivery: 'stream_event_or_status_card',
+  });
+});
+
+test('staticPagePreviewProgressContent links only safe preview URLs', () => {
+  assert.equal(
+    staticPagePreviewProgressContent({
+      previewImage: { assetKey: '/generated-artifacts/previews/effect.json' },
+    }),
+    '设计图已生成：[打开设计图](/generated-artifacts/previews/effect.json)。DataMax 正在继续读取视觉稿并制作最终页面。',
+  );
+  assert.equal(
+    staticPagePreviewProgressContent(
+      { previewImage: { assetKey: '/generated-artifacts/previews/older.json' } },
+      { previewAssetKey: 'https://v3.elepcloud.com/generated-artifacts/previews/newer.json' },
+    ),
+    '设计图已生成：[打开设计图](https://v3.elepcloud.com/generated-artifacts/previews/newer.json)。DataMax 正在继续读取视觉稿并制作最终页面。',
+  );
+  assert.equal(
+    staticPagePreviewProgressContent({ previewContract: { assetKey: 'static-page-previews/local.json' } }),
+    '设计图已生成。DataMax 正在继续读取视觉稿并制作最终页面。',
+  );
 });

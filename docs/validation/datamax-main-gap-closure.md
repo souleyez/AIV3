@@ -3514,6 +3514,27 @@ Data-ingestion external fixed-task smoke:
   - only `aiv3-web.service` was restarted for the frontend code change; `platform-api` and workers were not restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Static Page Source Ref Helper Extraction
+
+- Purpose:
+  - continue P5 engineering governance with a small static-page frontend slice;
+  - move source-ref payload construction and preview progress text out of `HomePageClient.js`;
+  - add direct tests for source-ref shape and preview-link behavior.
+- Code changes:
+  - extended `apps/web/app/lib/static-page-conversation-context.js`;
+  - updated `apps/web/app/HomePageClient.js` to pass the current local thread id explicitly into `buildStaticPageDraftSourceRefs`;
+  - extended `apps/web/app/lib/static-page-conversation-context.test.mjs`;
+  - kept static-page draft create API body shape and visible preview progress text unchanged.
+- Local verification:
+  - `node --test apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 72/72 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next/Turbopack warnings about deprecated `middleware` naming and `next.config.js` NFT tracing.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Assistant Stream Content Helper Extraction
 
 - Purpose:

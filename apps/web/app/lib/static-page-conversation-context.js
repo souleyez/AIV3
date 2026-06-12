@@ -129,3 +129,32 @@ export function buildAssistantRunSelectedScope(datasetIds, scopePlan) {
     supply_policy: supplyPolicy,
   };
 }
+
+export function buildStaticPageDraftSourceRefs(draft, options = {}) {
+  return {
+    local_thread_id: options.localThreadId || '',
+    local_draft_id: draft?.localDraftId || draft?.id || '',
+    dataset_id: draft?.datasetId || null,
+    chat_session_id: draft?.sessionId || null,
+    source: 'local_chat_static_page_image2_pipeline',
+    client_source: draft?.source || {},
+    auto_publish_generated_artifact: true,
+    effect_image_confirmation_required: false,
+    continue_to_publish_after_effect_image: true,
+    fixed_task_template_id: 'static_page_image2_data_publish',
+    customer_preview_delivery: 'stream_event_or_status_card',
+  };
+}
+
+export function staticPagePreviewProgressContent(draft, snapshot = {}) {
+  const previewUrl = String(
+    snapshot.previewAssetKey
+      || draft?.previewImage?.assetKey
+      || draft?.previewContract?.assetKey
+      || '',
+  ).trim();
+  const link = /^(https?:\/\/|\/)/i.test(previewUrl)
+    ? `：[打开设计图](${previewUrl})`
+    : '';
+  return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
+}
