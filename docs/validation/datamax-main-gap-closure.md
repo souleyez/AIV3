@@ -3430,6 +3430,27 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Codex Customer Chat Content Helper Extraction
+
+- Purpose:
+  - continue P5 engineering governance with a small behavior-preserving frontend slice;
+  - reduce `apps/web/app/HomePageClient.js` inline formatting logic for Codex customer artifacts/tasks;
+  - add focused tests around user-visible artifact/task chat text.
+- Code changes:
+  - moved Codex customer bundle chat content formatting into `apps/web/app/lib/codex-customer-artifacts.js`;
+  - moved Codex customer terminal task chat content formatting into `apps/web/app/lib/codex-customer-artifacts.js`;
+  - exposed `markdownCustomerCodexLabel` for direct label escaping/truncation coverage;
+  - kept `HomePageClient.js` state updates, de-duplication keys, polling, API calls, and render flow unchanged.
+- Local verification:
+  - `node --test apps/web/app/lib/codex-customer-artifacts.test.mjs apps/web/app/lib/home-chat-intents.test.mjs apps/web/app/lib/assistant-stream-content.test.mjs apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 64/64 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next/Turbopack warnings about deprecated `middleware` naming and `next.config.js` NFT tracing.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Assistant Stream Content Helper Extraction
 
 - Purpose:

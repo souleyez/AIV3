@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  codexCustomerBundleChatContent,
+  codexCustomerTaskChatContent,
   isTerminalCodexCustomerTaskStatus,
+  markdownCustomerCodexLabel,
   mergeCodexCustomerArtifactBundles,
   mergeCodexCustomerTasks,
   normalizeCodexCustomerArtifactBundlesFromAssistantRunResponse,
@@ -555,6 +558,89 @@ test('terminal customer Codex task statuses include blocked', () => {
   assert.equal(isTerminalCodexCustomerTaskStatus('blocked'), true);
   assert.equal(isTerminalCodexCustomerTaskStatus('running'), false);
   assert.equal(isTerminalCodexCustomerTaskStatus('needs_operator_review'), false);
+});
+
+test('formats Codex customer bundle chat content with one primary link', () => {
+  const primaryUrl = 'https://v3.elepcloud.com/generated-artifacts/customer-codex/run/index.html';
+  const notesUrl = 'https://v3.elepcloud.com/generated-artifacts/customer-codex/run/report.md';
+  const content = codexCustomerBundleChatContent({
+    title: '新世界百货经营管理月报表',
+    summary: '已按客户关注的取高机会生成报表。',
+    primaryUrl,
+    published: true,
+    files: [
+      { title: '首页', path: 'index.html', publicUrl: primaryUrl },
+      { title: '文本下载', path: 'report.md', publicUrl: notesUrl },
+      { title: 'table]data', path: 'table-data.csv' },
+    ],
+  });
+
+  assert.match(content, /^Codex 产物：新世界百货经营管理月报表/);
+  assert.equal((content.match(new RegExp(primaryUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.match(content, new RegExp(`\\[文本下载\\]\\(${notesUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+  assert.match(content, /- table\\]data：table-data\.csv/);
+});
+
+test('formats pending Codex customer bundle chat content with validation notice', () => {
+  const content = codexCustomerBundleChatContent({
+    title: '',
+    summary: '',
+    published: false,
+    requiresPublishValidation: true,
+    files: [{ path: 'reports/index.html', title: '页面' }],
+  });
+
+  assert.equal(content, [
+    'Codex 产物：客户产物',
+    '文件：',
+    '- 页面：reports/index.html',
+    '产物已进入 DataMax 发布校验，公开链接生成后会继续回传。',
+  ].join('\n'));
+});
+
+test('formats terminal Codex customer task chat content', () => {
+  const content = codexCustomerTaskChatContent({
+    title: 'Codex 页面发布',
+    status: 'completed',
+    statusLabel: '已完成',
+    summary: '任务已完成。',
+    resultSummary: {
+      title: '报表发布完成',
+      summary: '页面和导出文件已经生成。',
+      findings: ['链接只回传一次。', '导出字段可访问。', '第六条不展示。', '第七条不展示。', '第八条不展示。', '第九条不展示。'],
+      recommendedNextActions: ['继续观察第三方回调。', '保留模板命中记录。', '验证移动端。', '验证桌面端。', '第五条不展示。'],
+      warnings: ['无生产写入。', '未触碰 120。', '未记录密钥。', '第四条不展示。'],
+    },
+  });
+
+  assert.match(content, /^Codex 回复：报表发布完成/);
+  assert.match(content, /页面和导出文件已经生成。/);
+  assert.match(content, /- 链接只回传一次。/);
+  assert.doesNotMatch(content, /第九条不展示/);
+  assert.match(content, /- 验证桌面端。/);
+  assert.doesNotMatch(content, /第五条不展示/);
+  assert.match(content, /- 未记录密钥。/);
+  assert.doesNotMatch(content, /第四条不展示/);
+});
+
+test('formats non-result terminal Codex task chat content conservatively', () => {
+  assert.equal(codexCustomerTaskChatContent({ status: 'completed', title: 'Codex 执行' }), '');
+  assert.equal(
+    codexCustomerTaskChatContent({
+      status: 'failed',
+      statusLabel: '失败',
+      title: 'Codex 执行',
+      summary: '',
+    }),
+    'Codex 执行（失败）：任务已结束。',
+  );
+  assert.equal(codexCustomerTaskChatContent({ status: 'running', title: 'Codex 执行' }), '');
+});
+
+test('escapes and truncates Codex customer markdown labels', () => {
+  assert.equal(markdownCustomerCodexLabel('table]\n数据', '文件'), 'table\\] 数据');
+  assert.equal(markdownCustomerCodexLabel('', '文件'), '文件');
+  assert.equal(markdownCustomerCodexLabel('x'.repeat(120), '文件').length, 80);
 });
 
 test('strips unsafe customer Codex task display fields', () => {

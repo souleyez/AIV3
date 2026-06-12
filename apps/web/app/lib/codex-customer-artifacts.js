@@ -221,6 +221,70 @@ export function isTerminalCodexCustomerTaskStatus(status) {
   return TERMINAL_CUSTOMER_CODEX_TASK_STATUSES.has(safeString(status, 40).toLowerCase());
 }
 
+export function markdownCustomerCodexLabel(value, fallback = '产物') {
+  return String(value || fallback)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\]/g, '\\]')
+    .trim()
+    .slice(0, 80) || fallback;
+}
+
+export function codexCustomerBundleChatContent(bundle) {
+  if (!bundle) return '';
+  const lines = [
+    `Codex 产物：${bundle.title || '客户产物'}`,
+  ];
+  if (bundle.summary) {
+    lines.push(bundle.summary);
+  }
+  const seenUrls = new Set();
+  if (bundle.primaryUrl) {
+    seenUrls.add(bundle.primaryUrl);
+    lines.push(`[打开产物](${bundle.primaryUrl})`);
+  }
+  const fileLines = (Array.isArray(bundle.files) ? bundle.files : [])
+    .slice(0, 6)
+    .map((file) => {
+      const title = markdownCustomerCodexLabel(file?.title || file?.path, '文件');
+      if (file?.publicUrl && !seenUrls.has(file.publicUrl)) {
+        seenUrls.add(file.publicUrl);
+        return `- [${title}](${file.publicUrl})`;
+      }
+      const path = file?.path && file.path !== file?.title ? `：${file.path}` : '';
+      return `- ${title}${path}`;
+    });
+  if (fileLines.length) {
+    lines.push('文件：', ...fileLines);
+  }
+  if (!bundle.published && bundle.requiresPublishValidation) {
+    lines.push('产物已进入 DataMax 发布校验，公开链接生成后会继续回传。');
+  }
+  return lines.filter(Boolean).join('\n');
+}
+
+export function codexCustomerTaskChatContent(task) {
+  if (!task || !isTerminalCodexCustomerTaskStatus(task.status)) return '';
+  const result = task.resultSummary;
+  if (result) {
+    const lines = [
+      `Codex 回复：${result.title || task.title || '执行结果'}`,
+      result.summary || task.summary || '',
+    ];
+    if (Array.isArray(result.findings) && result.findings.length) {
+      lines.push('要点：', ...result.findings.slice(0, 5).map((item) => `- ${item}`));
+    }
+    if (Array.isArray(result.recommendedNextActions) && result.recommendedNextActions.length) {
+      lines.push('下一步：', ...result.recommendedNextActions.slice(0, 4).map((item) => `- ${item}`));
+    }
+    if (Array.isArray(result.warnings) && result.warnings.length) {
+      lines.push('注意：', ...result.warnings.slice(0, 3).map((item) => `- ${item}`));
+    }
+    return lines.filter(Boolean).join('\n');
+  }
+  if (task.status === 'completed') return '';
+  return `${task.title || 'Codex 执行'}${task.statusLabel ? `（${task.statusLabel}）` : ''}：${task.summary || '任务已结束。'}`;
+}
+
 function safeWorkflowExecutionId(value) {
   const text = safeString(value, 80);
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)

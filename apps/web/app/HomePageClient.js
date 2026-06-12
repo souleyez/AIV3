@@ -47,6 +47,8 @@ import {
   staticPageRenderedUrlFromDraft,
 } from './lib/html-artifact-utils';
 import {
+  codexCustomerBundleChatContent,
+  codexCustomerTaskChatContent,
   isTerminalCodexCustomerTaskStatus,
   mergeCodexCustomerArtifactBundles,
   mergeCodexCustomerTasks,
@@ -615,70 +617,6 @@ export default function HomePageClient() {
       ? `：[打开设计图](${previewUrl})`
       : '';
     return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
-  }
-
-  function markdownLabel(value, fallback = '产物') {
-    return String(value || fallback)
-      .replace(/[\r\n]+/g, ' ')
-      .replace(/\]/g, '\\]')
-      .trim()
-      .slice(0, 80) || fallback;
-  }
-
-  function codexCustomerBundleChatContent(bundle) {
-    if (!bundle) return '';
-    const lines = [
-      `Codex 产物：${bundle.title || '客户产物'}`,
-    ];
-    if (bundle.summary) {
-      lines.push(bundle.summary);
-    }
-    const seenUrls = new Set();
-    if (bundle.primaryUrl) {
-      seenUrls.add(bundle.primaryUrl);
-      lines.push(`[打开产物](${bundle.primaryUrl})`);
-    }
-    const fileLines = (Array.isArray(bundle.files) ? bundle.files : [])
-      .slice(0, 6)
-      .map((file) => {
-        const title = markdownLabel(file?.title || file?.path, '文件');
-        if (file?.publicUrl && !seenUrls.has(file.publicUrl)) {
-          seenUrls.add(file.publicUrl);
-          return `- [${title}](${file.publicUrl})`;
-        }
-        const path = file?.path && file.path !== file?.title ? `：${file.path}` : '';
-        return `- ${title}${path}`;
-      });
-    if (fileLines.length) {
-      lines.push('文件：', ...fileLines);
-    }
-    if (!bundle.published && bundle.requiresPublishValidation) {
-      lines.push('产物已进入 DataMax 发布校验，公开链接生成后会继续回传。');
-    }
-    return lines.filter(Boolean).join('\n');
-  }
-
-  function codexCustomerTaskChatContent(task) {
-    if (!task || !isTerminalCodexCustomerTaskStatus(task.status)) return '';
-    const result = task.resultSummary;
-    if (result) {
-      const lines = [
-        `Codex 回复：${result.title || task.title || '执行结果'}`,
-        result.summary || task.summary || '',
-      ];
-      if (Array.isArray(result.findings) && result.findings.length) {
-        lines.push('要点：', ...result.findings.slice(0, 5).map((item) => `- ${item}`));
-      }
-      if (Array.isArray(result.recommendedNextActions) && result.recommendedNextActions.length) {
-        lines.push('下一步：', ...result.recommendedNextActions.slice(0, 4).map((item) => `- ${item}`));
-      }
-      if (Array.isArray(result.warnings) && result.warnings.length) {
-        lines.push('注意：', ...result.warnings.slice(0, 3).map((item) => `- ${item}`));
-      }
-      return lines.filter(Boolean).join('\n');
-    }
-    if (task.status === 'completed') return '';
-    return `${task.title || 'Codex 执行'}${task.statusLabel ? `（${task.statusLabel}）` : ''}：${task.summary || '任务已结束。'}`;
   }
 
   function appendCodexCustomerChatUpdates(bundles = [], tasks = []) {
