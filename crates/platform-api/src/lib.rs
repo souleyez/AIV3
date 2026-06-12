@@ -174,6 +174,7 @@ use zip::ZipArchive;
 
 pub mod auth_email;
 mod auth_session_support;
+mod document_model_facing_support;
 mod external_channel_support;
 pub mod external_feishu;
 mod external_integration_summary;
@@ -195,6 +196,7 @@ mod report_render_output_asset;
 mod workflow_runtime_summary;
 
 use auth_session_support::*;
+use document_model_facing_support::*;
 use external_channel_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
@@ -2812,27 +2814,6 @@ fn collect_compare_documents_model_facing_signals(
                 .sum::<usize>()
         ),
     ]
-}
-
-fn retrieval_evidence_has_failed_state(evidence: &RetrievalEvidenceView) -> bool {
-    evidence
-        .evidence_manifest_view
-        .as_ref()
-        .map(|manifest| {
-            manifest.embedding.status == contracts::RetrievalEmbeddingStatusView::Failed
-                || manifest.recall.status == contracts::RetrievalRecallStatusView::Failed
-        })
-        .unwrap_or(false)
-}
-
-fn format_document_lifecycle_view(value: contracts::DocumentLifecycleView) -> &'static str {
-    match value {
-        contracts::DocumentLifecycleView::Received => "received",
-        contracts::DocumentLifecycleView::Extracted => "extracted",
-        contracts::DocumentLifecycleView::Indexed => "indexed",
-        contracts::DocumentLifecycleView::Failed => "failed",
-        contracts::DocumentLifecycleView::Archived => "archived",
-    }
 }
 
 fn derive_report_plan_model_facing_summary(
