@@ -4757,8 +4757,6 @@ fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> St
     external_channel_sse_completion_with_done(response, true)
 }
 
-const EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: &str = "_stream_dedupe_key";
-
 fn external_channel_public_stream_payload(mut payload: Value) -> Value {
     if let Some(object) = payload.as_object_mut() {
         object.remove(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY);
@@ -5011,44 +5009,6 @@ fn external_channel_public_stream_events(events: &[AssistantRunEvent]) -> Vec<(S
         .collect()
 }
 
-fn parse_external_channel_stream_sequence_value(value: &Value) -> Option<i32> {
-    value
-        .as_i64()
-        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
-        .and_then(|sequence| i32::try_from(sequence.max(0)).ok())
-}
-
-fn parse_external_channel_stream_sequence_text(value: &str) -> Option<i32> {
-    let candidate = value.trim().rsplit(':').next().unwrap_or_default().trim();
-    candidate
-        .parse::<i64>()
-        .ok()
-        .and_then(|sequence| i32::try_from(sequence.max(0)).ok())
-}
-
-fn parse_external_channel_stream_resume_sequence(
-    headers: &HeaderMap,
-    query: &HashMap<String, String>,
-    payload: &Value,
-) -> Option<i32> {
-    headers
-        .get("last-event-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_external_channel_stream_sequence_text)
-        .or_else(|| {
-            query
-                .get("since_sequence")
-                .or_else(|| query.get("sinceSequence"))
-                .and_then(|value| parse_external_channel_stream_sequence_text(value))
-        })
-        .or_else(|| {
-            payload
-                .get("stream_since_sequence")
-                .or_else(|| payload.get("streamSinceSequence"))
-                .and_then(parse_external_channel_stream_sequence_value)
-        })
-}
-
 fn external_channel_public_stream_replay_body(
     events: &[AssistantRunEvent],
     since_sequence: Option<i32>,
@@ -5070,25 +5030,6 @@ fn external_channel_public_stream_replay_body(
         ));
     }
     encoded
-}
-
-fn external_channel_public_stream_has_event(
-    events: &[AssistantRunEvent],
-    event_name: &str,
-) -> bool {
-    events.iter().any(|event| {
-        event.event_name == event_name
-            && event.payload.get("schema").and_then(Value::as_str)
-                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
-    })
-}
-
-fn external_channel_public_stream_dedupe_hash(value: &Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    format!("{digest:x}")
 }
 
 fn external_channel_completed_stream_data(

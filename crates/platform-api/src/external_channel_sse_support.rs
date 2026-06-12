@@ -1,7 +1,11 @@
-use domain_model::AssistantRunId;
+use axum::http::HeaderMap;
+use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 pub(crate) const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
+pub(crate) const EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: &str = "_stream_dedupe_key";
 
 pub(crate) fn external_channel_sse_envelope(
     run_id: Option<AssistantRunId>,
@@ -213,9 +217,68 @@ pub(crate) fn external_channel_static_page_cancelled_should_continue(
         && external_channel_static_page_has_background_continuation(card)
 }
 
+fn parse_external_channel_stream_sequence_value(value: &Value) -> Option<i32> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
+        .and_then(|sequence| i32::try_from(sequence.max(0)).ok())
+}
+
+fn parse_external_channel_stream_sequence_text(value: &str) -> Option<i32> {
+    let candidate = value.trim().rsplit(':').next().unwrap_or_default().trim();
+    candidate
+        .parse::<i64>()
+        .ok()
+        .and_then(|sequence| i32::try_from(sequence.max(0)).ok())
+}
+
+pub(crate) fn parse_external_channel_stream_resume_sequence(
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+    payload: &Value,
+) -> Option<i32> {
+    headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_external_channel_stream_sequence_text)
+        .or_else(|| {
+            query
+                .get("since_sequence")
+                .or_else(|| query.get("sinceSequence"))
+                .and_then(|value| parse_external_channel_stream_sequence_text(value))
+        })
+        .or_else(|| {
+            payload
+                .get("stream_since_sequence")
+                .or_else(|| payload.get("streamSinceSequence"))
+                .and_then(parse_external_channel_stream_sequence_value)
+        })
+}
+
+pub(crate) fn external_channel_public_stream_has_event(
+    events: &[AssistantRunEvent],
+    event_name: &str,
+) -> bool {
+    events.iter().any(|event| {
+        event.event_name == event_name
+            && event.payload.get("schema").and_then(Value::as_str)
+                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+    })
+}
+
+pub(crate) fn external_channel_public_stream_dedupe_hash(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    format!("{digest:x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain_model::{AssistantRunEventId, TenantId};
+    use uuid::Uuid;
 
     #[test]
     fn external_channel_sse_public_payload_preserves_envelope_fields_over_data() {
@@ -302,5 +365,87 @@ mod tests {
             "static_page_publish_failed",
             Some(&retryable_card)
         ));
+    }
+
+    #[test]
+    fn stream_resume_sequence_prefers_header_then_query_then_payload() {
+        let mut headers = HeaderMap::new();
+        headers.insert("last-event-id", "run-1:000042".parse().unwrap());
+        let mut query = HashMap::new();
+        query.insert("sinceSequence".to_string(), "7".to_string());
+        let payload = json!({"stream_since_sequence": 3});
+
+        assert_eq!(
+            parse_external_channel_stream_resume_sequence(&headers, &query, &payload),
+            Some(42)
+        );
+
+        let headers = HeaderMap::new();
+        assert_eq!(
+            parse_external_channel_stream_resume_sequence(&headers, &query, &payload),
+            Some(7)
+        );
+
+        let query = HashMap::new();
+        assert_eq!(
+            parse_external_channel_stream_resume_sequence(&headers, &query, &payload),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn stream_resume_sequence_clamps_negative_and_accepts_camel_payload() {
+        let headers = HeaderMap::new();
+        let query = HashMap::new();
+        let payload = json!({"streamSinceSequence": "-5"});
+
+        assert_eq!(
+            parse_external_channel_stream_resume_sequence(&headers, &query, &payload),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn public_stream_has_event_requires_public_schema() {
+        let run_id = AssistantRunId::new();
+        let visible_event = AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId(Uuid::new_v4()),
+            run_id,
+            sequence_no: 1,
+            event_name: "external_channel.completed".to_string(),
+            payload: json!({"schema": EXTERNAL_CHANNEL_SSE_SCHEMA_V1}),
+            created_at: chrono::Utc::now(),
+        };
+        let internal_event = AssistantRunEvent {
+            event_name: "external_channel.completed".to_string(),
+            payload: json!({"schema": "internal"}),
+            ..visible_event.clone()
+        };
+
+        assert!(external_channel_public_stream_has_event(
+            &[visible_event, internal_event],
+            "external_channel.completed"
+        ));
+        assert!(!external_channel_public_stream_has_event(
+            &[],
+            "external_channel.completed"
+        ));
+    }
+
+    #[test]
+    fn public_stream_dedupe_hash_is_stable_for_same_payload() {
+        let payload = json!({"status": "completed", "sequence": 3});
+
+        assert_eq!(
+            external_channel_public_stream_dedupe_hash(&payload),
+            external_channel_public_stream_dedupe_hash(&payload)
+        );
+        assert_ne!(
+            external_channel_public_stream_dedupe_hash(&payload),
+            external_channel_public_stream_dedupe_hash(
+                &json!({"status": "completed", "sequence": 4})
+            )
+        );
     }
 }
