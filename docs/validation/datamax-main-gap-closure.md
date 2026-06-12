@@ -9123,3 +9123,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no service was restarted during local verification;
   - 120 server was not touched.
+
+## 2026-06-13 P5 External Channel Public Artifact Local Verification
+
+- Purpose:
+  - continue the P5 `platform-api` behavior-preserving reduction;
+  - move third-party public artifact URL/link helpers out of `crates/platform-api/src/lib.rs`;
+  - keep public artifact URL extraction, reply card fallback, customer-visible report-link appending, and artifact link de-duplication behavior unchanged.
+- Code change:
+  - added `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - moved `external_channel_public_artifact_url_from_links_value`, `external_channel_public_artifact_url_from_value`, `external_channel_public_artifact_url_from_reply`, `external_channel_text_with_public_artifact_link`, and `dedupe_external_channel_public_artifact_links` into the support module;
+  - kept existing call names available through `use external_channel_public_artifact::*`;
+  - added module tests for direct public URL preference, nested public URL extraction, first allowed link de-duplication, and report-link append idempotency.
+- Local verification:
+  - `cargo fmt`: applied formatting;
+  - `cargo test -p platform-api external_channel_public_artifact --lib`: passed, 4/4 tests;
+  - `cargo check -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_public --lib`: passed, 16/16 tests;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, concurrency `5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed fallback concurrency `2`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.

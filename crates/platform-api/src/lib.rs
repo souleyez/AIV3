@@ -186,6 +186,7 @@ mod document_compare_model_facing;
 mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
+mod external_channel_public_artifact;
 mod external_channel_public_text;
 mod external_channel_support;
 pub mod external_feishu;
@@ -233,6 +234,7 @@ use document_detail_model_facing::*;
 use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
+use external_channel_public_artifact::*;
 use external_channel_public_text::*;
 use external_channel_support::*;
 #[cfg(test)]
@@ -5145,17 +5147,6 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
     }
 }
 
-fn external_channel_public_artifact_url_from_links_value(value: Option<&Value>) -> Option<String> {
-    value.and_then(Value::as_array).and_then(|links| {
-        links.iter().find_map(|link| {
-            link.as_str()
-                .map(str::trim)
-                .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-                .map(ToOwned::to_owned)
-        })
-    })
-}
-
 fn external_channel_public_stream_card_summary(
     card: &Value,
     include_artifact_link: bool,
@@ -5876,70 +5867,6 @@ fn external_channel_reply_is_static_page_like(reply: &ExternalBotReplyView) -> b
             .unwrap_or(false)
 }
 
-fn external_channel_public_artifact_url_from_value(value: &Value) -> Option<String> {
-    let direct = [
-        "public_url",
-        "generated_artifact_url",
-        "artifact_public_url",
-        "html_download_url",
-        "download_url",
-    ];
-    for key in direct {
-        if let Some(url) = value
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-        {
-            return Some(url.to_string());
-        }
-    }
-    for pointer in [
-        "/finalPage/public_url",
-        "/finalPage/generated_artifact_url",
-        "/final_page/public_url",
-        "/final_page/generated_artifact_url",
-        "/artifact/public_url",
-        "/output/artifact_public_url",
-    ] {
-        if let Some(url) = value
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-        {
-            return Some(url.to_string());
-        }
-    }
-    value
-        .get("artifact_links")
-        .and_then(Value::as_array)
-        .and_then(|links| {
-            links.iter().find_map(|link| {
-                link.as_str()
-                    .map(str::trim)
-                    .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-                    .map(ToOwned::to_owned)
-            })
-        })
-}
-
-fn external_channel_public_artifact_url_from_reply(reply: &ExternalBotReplyView) -> Option<String> {
-    reply
-        .artifact_links
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .find(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            reply
-                .card
-                .as_ref()
-                .and_then(external_channel_public_artifact_url_from_value)
-        })
-}
-
 fn external_channel_static_page_provisional_existing_artifact(card: Option<&Value>) -> bool {
     card.and_then(|card| card.get("provisional_existing_artifact"))
         .and_then(Value::as_bool)
@@ -5980,24 +5907,6 @@ fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>)
     accepted_reason
         && accepted_marker
         && external_channel_static_page_baseline_public_url(card).is_some()
-}
-
-fn external_channel_text_with_public_artifact_link(
-    text: impl Into<String>,
-    public_url: &str,
-) -> String {
-    let mut text = text.into();
-    let public_url = public_url.trim();
-    if public_url.is_empty() || text.contains(public_url) {
-        return text;
-    }
-    if !text.trim().is_empty() {
-        text.push_str("\n\n");
-    }
-    text.push_str("页面链接：[点击查看报表](");
-    text.push_str(public_url);
-    text.push(')');
-    text
 }
 
 fn external_channel_static_page_customer_ready_text() -> &'static str {
@@ -6326,24 +6235,6 @@ fn external_channel_reply_public_status(reply: &ExternalBotReplyView) -> Option<
     external_channel_reply_static_page_card_status(reply)
         .or(reply.task_status.as_deref())
         .map(|status| external_channel_public_reply_task_status(status, reply.card.as_ref()))
-}
-
-fn dedupe_external_channel_public_artifact_links(links: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut output = Vec::new();
-    for link in links {
-        let trimmed = link.trim();
-        if trimmed.is_empty() || !codex_host_fixed_task_public_artifact_url_allowed(trimmed) {
-            continue;
-        }
-        if seen.insert(trimmed.to_string()) {
-            output.push(trimmed.to_string());
-        }
-        if output.len() >= 1 {
-            break;
-        }
-    }
-    output
 }
 
 fn prune_external_channel_public_card_links(
