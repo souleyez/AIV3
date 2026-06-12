@@ -204,6 +204,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod request_scope_headers;
 mod resource_access;
 mod text_normalization;
 mod workflow_runtime_model_facing;
@@ -267,6 +268,7 @@ use react_agent_tools::{
 use report_plan_model_facing::*;
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use request_scope_headers::*;
 use resource_access::*;
 use text_normalization::*;
 use workflow_runtime_model_facing::*;
@@ -2094,43 +2096,6 @@ async fn record_auth_audit_event(
     }
 }
 
-fn active_secret_binding_ids_from_headers(
-    headers: &HeaderMap,
-) -> std::result::Result<Vec<SecretBindingId>, ApiError> {
-    let Some(value) = headers.get(ACTIVE_SECRET_BINDING_IDS_HEADER) else {
-        return Ok(Vec::new());
-    };
-    let raw = value.to_str().map_err(|_| {
-        ApiError::bad_request(
-            "invalid_secret_binding_ids_header",
-            format!("{ACTIVE_SECRET_BINDING_IDS_HEADER} must be valid utf-8"),
-        )
-    })?;
-    raw.split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            Uuid::parse_str(entry)
-                .map(SecretBindingId)
-                .map_err(|error| {
-                    ApiError::bad_request(
-                        "invalid_secret_binding_id",
-                        format!("invalid secret binding id {entry}: {error}"),
-                    )
-                })
-        })
-        .collect()
-}
-
-fn local_thread_id_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(LOCAL_THREAD_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
 fn email_otp_service() -> std::result::Result<EmailOtpService, ApiError> {
     EmailOtpService::new(auth_env(
         "AUTH_EMAIL_OTP_PEPPER",
@@ -3000,19 +2965,6 @@ async fn run_model_gateway_profile_probe(
             "model gateway profile probe failed".to_string(),
         )
     })
-}
-
-fn merge_secret_binding_ids(
-    left: &[SecretBindingId],
-    right: &[SecretBindingId],
-) -> Vec<SecretBindingId> {
-    let mut merged = Vec::with_capacity(left.len() + right.len());
-    for id in left.iter().chain(right.iter()) {
-        if !merged.iter().any(|existing| existing == id) {
-            merged.push(*id);
-        }
-    }
-    merged
 }
 
 fn dataset_is_visible(
