@@ -8,6 +8,7 @@ import {
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
+  localChatSessionMenuOptions,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
   normalizeLocalChatSessions,
@@ -58,6 +59,49 @@ test('local chat option ids round-trip safely', () => {
   assert.equal(isLocalChatSessionOptionId(optionId), true);
   assert.equal(localThreadIdFromSessionOptionId(optionId), 'thread-1');
   assert.equal(localThreadIdFromSessionOptionId('backend-session-1'), '');
+});
+
+test('local chat session menu options hide the current local thread unless a backend session is selected', () => {
+  const sessions = [
+    { id: 'thread-current', title: 'Current local', updatedAt: '2026-06-12T08:00:00.000Z' },
+    { id: 'thread-other', title: '', updatedAt: '' },
+  ];
+  const formatRelativeTime = (value) => `relative(${value})`;
+
+  assert.deepEqual(localChatSessionMenuOptions(sessions, {
+    localThreadId: 'thread-current',
+    selectedSessionId: '',
+    formatRelativeTime,
+  }), [
+    {
+      id: 'local-chat:thread-other',
+      title: '本地对话',
+      updated_at: '',
+      meta: '本地对话',
+      localOnly: true,
+    },
+  ]);
+
+  assert.deepEqual(localChatSessionMenuOptions(sessions, {
+    localThreadId: 'thread-current',
+    selectedSessionId: 'backend-session-1',
+    formatRelativeTime,
+  }), [
+    {
+      id: 'local-chat:thread-current',
+      title: 'Current local',
+      updated_at: '2026-06-12T08:00:00.000Z',
+      meta: '本地 · relative(2026-06-12T08:00:00.000Z)',
+      localOnly: true,
+    },
+    {
+      id: 'local-chat:thread-other',
+      title: '本地对话',
+      updated_at: '',
+      meta: '本地对话',
+      localOnly: true,
+    },
+  ]);
 });
 
 test('createLocalMessage keeps the local chat message shape', () => {

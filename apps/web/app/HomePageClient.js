@@ -172,7 +172,7 @@ import {
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
-  localChatSessionOptionId,
+  localChatSessionMenuOptions,
   localThreadIdFromSessionOptionId,
   readLocalChatMessages,
   readLocalChatSessions,
@@ -391,15 +391,11 @@ export default function HomePageClient() {
     return buildDefaultConversationTitle(input || firstUserMessage || '新对话', draftSessionStartedAt);
   }, [draftSessionStartedAt, draftSessionTitle, input, selectedSession, visibleMessages]);
   const conversationMenuSessions = useMemo(() => {
-    const localSessionOptions = localChatSessions
-      .filter((session) => selectedSessionId || session.id !== localThreadId)
-      .map((session) => ({
-        id: localChatSessionOptionId(session.id),
-        title: session.title || '本地对话',
-        updated_at: session.updatedAt,
-        meta: session.updatedAt ? `本地 · ${formatRelativeTime(session.updatedAt)}` : '本地对话',
-        localOnly: true,
-      }));
+    const localSessionOptions = localChatSessionMenuOptions(localChatSessions, {
+      localThreadId,
+      selectedSessionId,
+      formatRelativeTime,
+    });
     return [
       ...localSessionOptions,
       ...sessions,

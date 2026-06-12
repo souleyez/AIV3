@@ -31,6 +31,23 @@ export function localThreadIdFromSessionOptionId(value) {
   return String(value).slice(LOCAL_CHAT_SESSION_OPTION_PREFIX.length).trim();
 }
 
+export function localChatSessionMenuOptions(sessions, options = {}) {
+  const selectedSessionId = String(options.selectedSessionId || '');
+  const localThreadId = String(options.localThreadId || '');
+  const formatRelativeTime = typeof options.formatRelativeTime === 'function'
+    ? options.formatRelativeTime
+    : (value) => String(value || '');
+  return (Array.isArray(sessions) ? sessions : [])
+    .filter((session) => selectedSessionId || session?.id !== localThreadId)
+    .map((session) => ({
+      id: localChatSessionOptionId(session?.id),
+      title: session?.title || '本地对话',
+      updated_at: session?.updatedAt,
+      meta: session?.updatedAt ? `本地 · ${formatRelativeTime(session.updatedAt)}` : '本地对话',
+      localOnly: true,
+    }));
+}
+
 export function normalizeLocalChatMessage(message) {
   if (!message || typeof message !== 'object') {
     return null;
