@@ -3457,6 +3457,25 @@ Data-ingestion external fixed-task smoke:
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
 
+## 2026-06-12 P5 Dataset Record Scope Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - isolate dataset id normalization, document/report/static-page draft ownership extraction, dataset-scope filtering, and date/title sorting behind tested pure functions;
+  - keep existing dataset scope semantics stable for range authorization, report template matching, static page draft filtering, and selected-dataset persistence.
+- Code changes:
+  - added `apps/web/app/lib/dataset-record-scope.js`;
+  - added `apps/web/app/lib/dataset-record-scope.test.mjs`;
+  - replaced the inline helper block in `apps/web/app/HomePageClient.js` with imports while preserving existing call sites.
+- Local verification:
+  - `node --test apps/web/app/lib/dataset-record-scope.test.mjs`: passed, 5 tests;
+  - `node --test apps/web/app/lib/assistant-stream-content.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P2 Document Object Repair Plan Smoke
 
 - Purpose:

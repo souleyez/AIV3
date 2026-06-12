@@ -293,6 +293,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` JSON API 请求 helper 已拆到 `apps/web/app/lib/home-api-client.js`，并补充 Node 单测；JSON body 序列化、FormData 透传、DataMax browser-scope headers、timeout ApiError、JSON/text 错误解析和现有调用语义保持不变。
 - 2026-06-12: `HomePageClient.js` SSE 流式请求和事件块解析 helper 已并入 `apps/web/app/lib/home-api-client.js`，并补充 Node 单测；SSE headers、JSON body 序列化、delta/completed/error 事件处理、plain text fallback 和无 stream body 错误提示保持不变。
 - 2026-06-12: `HomePageClient.js` assistant_run 流式展示文案、生成产物链接提取、内部 JSON 截断和重复链接清洗 helper 已拆到 `apps/web/app/lib/assistant-stream-content.js`，并补充 Node 单测；流式进度展示、最终报表链接只补一次、内部 payload 不进入用户可见消息的语义保持不变。
+- 2026-06-12: `HomePageClient.js` 数据集 ID normalize、文档/报表/静态页草稿归属提取、数据集范围筛选和排序 helper 已拆到 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；数据集范围授权、报表模板命中和静态页筛选的现有顺序/去重语义保持不变。
 
 **Regression commands:**
 
