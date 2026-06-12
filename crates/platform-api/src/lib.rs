@@ -4025,10 +4025,6 @@ async fn load_report_plan_with_visible_dataset_for_user(
     Ok(plan)
 }
 
-fn report_owner_is_visible(owner_user_id: Option<UserId>, current_user_id: Option<UserId>) -> bool {
-    owner_user_id_is_visible(owner_user_id, current_user_id)
-}
-
 async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result<(), ApiError> {
     let existing = state
         .storage
@@ -92661,13 +92657,6 @@ async fn load_visible_static_page_draft(
         return Ok(draft);
     }
     Err(static_page_draft_not_found_error(draft_id))
-}
-
-fn static_page_owner_is_visible(
-    owner_user_id: Option<UserId>,
-    current_user_id: Option<UserId>,
-) -> bool {
-    owner_user_id_is_visible(owner_user_id, current_user_id)
 }
 
 fn static_page_public_template_default_is_manageable(draft: &StaticPageDraft) -> bool {

@@ -9,6 +9,20 @@ pub(crate) fn owner_user_id_is_visible(
     owner_user_id.is_none() || owner_user_id == current_user_id
 }
 
+pub(crate) fn report_owner_is_visible(
+    owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id_is_visible(owner_user_id, current_user_id)
+}
+
+pub(crate) fn static_page_owner_is_visible(
+    owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id_is_visible(owner_user_id, current_user_id)
+}
+
 pub(crate) fn ensure_owner_managed_resource(
     resource_kind: &'static str,
     resource_id: String,
@@ -179,6 +193,31 @@ mod tests {
             Some(owner_user_id),
             Some(UserId::new())
         ));
+    }
+
+    #[test]
+    fn report_and_static_page_owner_visibility_preserve_owner_semantics() {
+        let owner_user_id = UserId::new();
+
+        for visible in [
+            report_owner_is_visible(None, None),
+            report_owner_is_visible(None, Some(UserId::new())),
+            report_owner_is_visible(Some(owner_user_id), Some(owner_user_id)),
+            static_page_owner_is_visible(None, None),
+            static_page_owner_is_visible(None, Some(UserId::new())),
+            static_page_owner_is_visible(Some(owner_user_id), Some(owner_user_id)),
+        ] {
+            assert!(visible);
+        }
+
+        for hidden in [
+            report_owner_is_visible(Some(owner_user_id), None),
+            report_owner_is_visible(Some(owner_user_id), Some(UserId::new())),
+            static_page_owner_is_visible(Some(owner_user_id), None),
+            static_page_owner_is_visible(Some(owner_user_id), Some(UserId::new())),
+        ] {
+            assert!(!hidden);
+        }
     }
 
     #[test]
