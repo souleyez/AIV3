@@ -1,5 +1,5 @@
 use contracts::{
-    DocumentLifecycleView, RetrievalEmbeddingStatusView, RetrievalEvidenceView,
+    DocumentDetailView, DocumentLifecycleView, RetrievalEmbeddingStatusView, RetrievalEvidenceView,
     RetrievalRecallStatusView,
 };
 
@@ -12,6 +12,16 @@ pub(crate) fn retrieval_evidence_has_failed_state(evidence: &RetrievalEvidenceVi
                 || manifest.recall.status == RetrievalRecallStatusView::Failed
         })
         .unwrap_or(false)
+}
+
+pub(crate) fn document_detail_failed_retrieval_evidence_count(
+    detail: &DocumentDetailView,
+) -> usize {
+    detail
+        .retrieval_evidences
+        .iter()
+        .filter(|evidence| retrieval_evidence_has_failed_state(evidence))
+        .count()
 }
 
 pub(crate) fn format_document_lifecycle_view(value: DocumentLifecycleView) -> &'static str {
@@ -29,8 +39,9 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use contracts::{
-        RetrievalEmbeddingManifestView, RetrievalEvidenceLocatorManifestView,
-        RetrievalEvidenceManifestView, RetrievalRecallManifestView,
+        DocumentParseStatusView, DocumentSummary, RetrievalEmbeddingManifestView,
+        RetrievalEvidenceLocatorManifestView, RetrievalEvidenceManifestView,
+        RetrievalRecallManifestView,
     };
     use domain_model::{
         DatasetId, DocumentChunkId, DocumentId, RetrievalEvidenceId, WorkflowExecutionId,
@@ -131,5 +142,50 @@ mod tests {
             format_document_lifecycle_view(DocumentLifecycleView::Archived),
             "archived",
         );
+    }
+
+    #[test]
+    fn document_detail_failed_retrieval_evidence_count_counts_manifest_failures_only() {
+        let now = Utc::now();
+        let mut missing_manifest = retrieval_evidence(
+            RetrievalEmbeddingStatusView::Indexed,
+            RetrievalRecallStatusView::Ready,
+        );
+        missing_manifest.evidence_manifest_view = None;
+        let detail = DocumentDetailView {
+            document: DocumentSummary {
+                id: DocumentId::new(),
+                dataset_id: DatasetId::new(),
+                dataset_ids: Vec::new(),
+                dataset_ids_camel: Vec::new(),
+                title: "Synthetic document".to_string(),
+                object_key: "synthetic/document.md".to_string(),
+                content_type: "text/markdown".to_string(),
+                lifecycle: DocumentLifecycleView::Indexed,
+                parse_status: "indexed".to_string(),
+                parse_status_camel: "indexed".to_string(),
+                parse_quality_status: None,
+                parse_quality_status_camel: None,
+                secret_binding_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            },
+            chunks: Vec::new(),
+            retrieval_evidences: vec![
+                retrieval_evidence(
+                    RetrievalEmbeddingStatusView::Indexed,
+                    RetrievalRecallStatusView::Ready,
+                ),
+                retrieval_evidence(
+                    RetrievalEmbeddingStatusView::Failed,
+                    RetrievalRecallStatusView::Ready,
+                ),
+                missing_manifest,
+            ],
+            parse_state: DocumentParseStatusView::default(),
+            model_facing: None,
+        };
+
+        assert_eq!(document_detail_failed_retrieval_evidence_count(&detail), 1);
     }
 }

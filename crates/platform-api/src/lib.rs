@@ -174,6 +174,7 @@ use zip::ZipArchive;
 
 pub mod auth_email;
 mod auth_session_support;
+mod document_compare_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod external_channel_support;
@@ -197,6 +198,7 @@ mod report_render_output_asset;
 mod workflow_runtime_summary;
 
 use auth_session_support::*;
+use document_compare_model_facing::*;
 use document_media_model_facing::*;
 use document_model_facing_support::*;
 use external_channel_support::*;
@@ -2599,14 +2601,6 @@ fn collect_document_detail_model_facing_signals(detail: &DocumentDetailView) -> 
     signals
 }
 
-fn document_detail_failed_retrieval_evidence_count(detail: &DocumentDetailView) -> usize {
-    detail
-        .retrieval_evidences
-        .iter()
-        .filter(|evidence| retrieval_evidence_has_failed_state(evidence))
-        .count()
-}
-
 fn collect_document_detail_section_title_hints(detail: &DocumentDetailView) -> Vec<String> {
     let mut hints = Vec::new();
     for chunk in &detail.chunks {
@@ -2633,131 +2627,6 @@ fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String
     }
     terms.truncate(40);
     terms
-}
-
-fn derive_compare_documents_model_facing_summary(
-    comparison: &CompareDocumentsView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let capability_class =
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis;
-    let signals = collect_compare_documents_model_facing_signals(comparison);
-    let evidence_state = infer_compare_documents_model_facing_evidence_state(comparison);
-
-    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return degraded_model_facing_summary(capability_class, signals);
-    }
-
-    let mut allowed_next_actions = vec![contracts::ModelFacingNextActionView::AnswerDirectly];
-    if !comparison.documents.is_empty() {
-        allowed_next_actions.insert(0, contracts::ModelFacingNextActionView::ReadDocumentDetail);
-    }
-
-    build_model_facing_summary(
-        capability_class,
-        evidence_state,
-        allowed_next_actions,
-        signals,
-    )
-}
-
-fn infer_compare_documents_model_facing_evidence_state(
-    comparison: &CompareDocumentsView,
-) -> contracts::ModelFacingEvidenceStateView {
-    let failed_document_count = comparison
-        .documents
-        .iter()
-        .filter(|detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Failed)
-        .count();
-    let failed_retrieval_evidence_count = comparison
-        .documents
-        .iter()
-        .map(document_detail_failed_retrieval_evidence_count)
-        .sum::<usize>();
-    let total_chunk_count = comparison
-        .documents
-        .iter()
-        .map(|detail| detail.chunks.len())
-        .sum::<usize>();
-    let total_retrieval_evidence_count = comparison
-        .documents
-        .iter()
-        .map(|detail| detail.retrieval_evidences.len())
-        .sum::<usize>();
-
-    if failed_document_count > 0 || failed_retrieval_evidence_count > 0 {
-        return contracts::ModelFacingEvidenceStateView::Degraded;
-    }
-    if comparison.documents.len() >= 2
-        && (total_chunk_count > 0 || total_retrieval_evidence_count > 0)
-    {
-        return contracts::ModelFacingEvidenceStateView::Mixed;
-    }
-    if total_retrieval_evidence_count > 0 {
-        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
-    }
-    if total_chunk_count > 0 {
-        return contracts::ModelFacingEvidenceStateView::CatalogMemory;
-    }
-
-    contracts::ModelFacingEvidenceStateView::CatalogMemory
-}
-
-fn collect_compare_documents_model_facing_signals(
-    comparison: &CompareDocumentsView,
-) -> Vec<String> {
-    let document_focus = infer_model_facing_document_focus(comparison.documents.len(), 0);
-    vec![
-        "workflow_kind=document_compare".to_string(),
-        format!(
-            "document_focus={}",
-            format_model_facing_document_focus(document_focus)
-        ),
-        format!("distinct_document_count={}", comparison.documents.len()),
-        format!(
-            "indexed_document_count={}",
-            comparison
-                .documents
-                .iter()
-                .filter(
-                    |detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Indexed
-                )
-                .count()
-        ),
-        format!(
-            "chunk_count={}",
-            comparison
-                .documents
-                .iter()
-                .map(|detail| detail.chunks.len())
-                .sum::<usize>()
-        ),
-        format!(
-            "retrieval_evidence_count={}",
-            comparison
-                .documents
-                .iter()
-                .map(|detail| detail.retrieval_evidences.len())
-                .sum::<usize>()
-        ),
-        format!(
-            "failed_document_count={}",
-            comparison
-                .documents
-                .iter()
-                .filter(
-                    |detail| detail.document.lifecycle == contracts::DocumentLifecycleView::Failed
-                )
-                .count()
-        ),
-        format!(
-            "failed_retrieval_evidence_count={}",
-            comparison
-                .documents
-                .iter()
-                .map(document_detail_failed_retrieval_evidence_count)
-                .sum::<usize>()
-        ),
-    ]
 }
 
 fn derive_report_plan_model_facing_summary(
