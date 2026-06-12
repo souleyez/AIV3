@@ -25,6 +25,22 @@ export function toggleSelectedDatasetIds(currentDatasetIds, datasetId) {
     : [...currentIds, datasetId];
 }
 
+function asDatasetIdArray(ids) {
+  return Array.isArray(ids) ? ids : [ids];
+}
+
+export function selectedDatasetIdsWithout(currentDatasetIds, datasetId) {
+  return normalizeDatasetIds(currentDatasetIds).filter((item) => item !== datasetId);
+}
+
+export function selectedDatasetIdsWithPrepended(currentDatasetIds, datasetId) {
+  return normalizeDatasetIds([datasetId, ...asDatasetIdArray(currentDatasetIds)]);
+}
+
+export function selectedDatasetIdsWithAppended(currentDatasetIds, datasetIds) {
+  return normalizeDatasetIds([...asDatasetIdArray(currentDatasetIds), ...asDatasetIdArray(datasetIds)]);
+}
+
 export function datasetSelectionStateAfterToggle(currentDatasetIds, datasetId) {
   const selectedDatasetIds = toggleSelectedDatasetIds(currentDatasetIds, datasetId);
   return {

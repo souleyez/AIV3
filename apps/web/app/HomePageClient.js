@@ -74,6 +74,9 @@ import {
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   sameDatasetIds,
+  selectedDatasetIdsWithAppended,
+  selectedDatasetIdsWithPrepended,
+  selectedDatasetIdsWithout,
   selectedDatasetIdAfterCatalogRefresh,
   sortByDateDesc,
   sortDatasets,
@@ -1342,7 +1345,7 @@ export default function HomePageClient() {
         : '数据集已更新。');
       if (payload.lifecycle === 'archived') {
         setSelectedDatasetId(null);
-        setSelectedDatasetIds((current) => normalizeDatasetIds(current).filter((item) => item !== datasetId));
+        setSelectedDatasetIds((current) => selectedDatasetIdsWithout(current, datasetId));
       }
       await refreshCatalog({
         preferredDatasetId: payload.lifecycle === 'archived' ? null : datasetId,
@@ -1579,7 +1582,7 @@ export default function HomePageClient() {
           : `已创建本机公开数据集 ${dataset.title}，仅当前浏览器默认可见。`,
       );
       if (dataset.id) {
-        setSelectedDatasetIds((current) => normalizeDatasetIds([dataset.id, ...current]));
+        setSelectedDatasetIds((current) => selectedDatasetIdsWithPrepended(current, dataset.id));
         setSelectedDatasetId(dataset.id);
       }
       await refreshCatalog({ preferredDatasetId: dataset.id, silent: true });
@@ -1990,7 +1993,7 @@ export default function HomePageClient() {
       });
       if (uniqueTargets.length) {
         const uploadedDatasetIds = uniqueTargets.map((dataset) => dataset.id);
-        setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...uploadedDatasetIds]));
+        setSelectedDatasetIds((current) => selectedDatasetIdsWithAppended(current, uploadedDatasetIds));
         setSelectedDatasetId((current) => current || uploadedDatasetIds[0] || null);
       }
       setBanner(
@@ -2197,7 +2200,7 @@ export default function HomePageClient() {
             ...backendCandidateDatasetIds,
           ]);
           if (!codexForwardRequested && backendDatasetIds.length) {
-            setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...backendDatasetIds]));
+            setSelectedDatasetIds((current) => selectedDatasetIdsWithAppended(current, backendDatasetIds));
             setSelectedDatasetId((current) => current || backendDatasetIds[0]);
             await refreshCatalog({ preferredDatasetId: backendDatasetIds[0], silent: true });
           }

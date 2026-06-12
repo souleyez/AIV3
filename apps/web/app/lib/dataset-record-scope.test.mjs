@@ -14,6 +14,9 @@ import {
   normalizeDatasetIds,
   reportRecordDatasetIds,
   sameDatasetIds,
+  selectedDatasetIdsWithAppended,
+  selectedDatasetIdsWithPrepended,
+  selectedDatasetIdsWithout,
   selectedDatasetIdAfterCatalogRefresh,
   sortByDateDesc,
   sortDatasets,
@@ -62,6 +65,21 @@ describe('dataset record scope helpers', () => {
         selectedDatasetId: null,
         selectedDatasetIds: [],
       },
+    );
+  });
+
+  it('mutates selected dataset id lists while preserving existing order semantics', () => {
+    assert.deepEqual(
+      selectedDatasetIdsWithout([' ds-a ', 'ds-b', 'ds-a'], 'ds-a'),
+      ['ds-b'],
+    );
+    assert.deepEqual(
+      selectedDatasetIdsWithPrepended(['ds-b', 'ds-a'], ' ds-a '),
+      ['ds-a', 'ds-b'],
+    );
+    assert.deepEqual(
+      selectedDatasetIdsWithAppended(['ds-a', 'ds-b'], [' ds-b ', 'ds-c', null]),
+      ['ds-a', 'ds-b', 'ds-c'],
     );
   });
 
