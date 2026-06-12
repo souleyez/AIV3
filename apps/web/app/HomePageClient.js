@@ -67,8 +67,8 @@ import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   documentDatasetIds,
   documentDatasetSelectionUpdate,
-  documentMembershipCurrentDatasetIds,
   documentMembershipResponseDatasetIds,
+  documentMembershipToggleIntent,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   sameDatasetIds,
@@ -3706,15 +3706,14 @@ export default function HomePageClient() {
     if (!selectedDocumentId || !datasetId) {
       return false;
     }
-    const currentIds = documentMembershipCurrentDatasetIds(selectedDocument, selectedDatasetIds);
-    const active = currentIds.includes(datasetId);
+    const toggleIntent = documentMembershipToggleIntent(selectedDocument, selectedDatasetIds, datasetId);
     setBanner('');
     setError('');
     setDocumentActionBusy(selectedDocumentId);
     try {
       const response = await fetchJson(
         `/api/v3/documents/${selectedDocumentId}/dataset-memberships/${datasetId}`,
-        { method: active ? 'DELETE' : 'PUT' },
+        { method: toggleIntent.method },
       );
       const nextIds = documentMembershipResponseDatasetIds(response);
       if (nextIds.length) {
@@ -3731,7 +3730,7 @@ export default function HomePageClient() {
             : current
         ));
       }
-      setBanner(active ? '已将文档移出该数据集。' : '已将文档加入该数据集。');
+      setBanner(toggleIntent.banner);
       await refreshDocuments({ silent: true });
       await refreshDocumentDetail(selectedDocumentId);
       return true;

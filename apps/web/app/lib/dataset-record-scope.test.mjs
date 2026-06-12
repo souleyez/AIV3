@@ -6,6 +6,7 @@ import {
   documentDatasetSelectionUpdate,
   documentMembershipCurrentDatasetIds,
   documentMembershipResponseDatasetIds,
+  documentMembershipToggleIntent,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   reportRecordDatasetIds,
@@ -113,6 +114,35 @@ describe('dataset record scope helpers', () => {
       ['fallback-a', 'fallback-b'],
     );
     assert.deepEqual(documentMembershipCurrentDatasetIds(null, []), []);
+  });
+
+  it('builds document membership toggle intent from current scope', () => {
+    assert.deepEqual(
+      documentMembershipToggleIntent(
+        { dataset_ids: ['doc-a', 'doc-b'] },
+        ['fallback-a'],
+        'doc-b',
+      ),
+      {
+        active: true,
+        method: 'DELETE',
+        banner: '已将文档移出该数据集。',
+        currentDatasetIds: ['doc-a', 'doc-b'],
+      },
+    );
+    assert.deepEqual(
+      documentMembershipToggleIntent(
+        { id: 'orphan-doc' },
+        ['fallback-a'],
+        'doc-b',
+      ),
+      {
+        active: false,
+        method: 'PUT',
+        banner: '已将文档加入该数据集。',
+        currentDatasetIds: ['fallback-a'],
+      },
+    );
   });
 
   it('extracts document membership response dataset ids with existing fallback priority', () => {

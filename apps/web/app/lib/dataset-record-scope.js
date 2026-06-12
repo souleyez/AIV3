@@ -39,6 +39,17 @@ export function documentMembershipCurrentDatasetIds(document, fallbackDatasetIds
   return documentIds.length ? documentIds : normalizeDatasetIds(fallbackDatasetIds);
 }
 
+export function documentMembershipToggleIntent(document, fallbackDatasetIds, datasetId) {
+  const currentDatasetIds = documentMembershipCurrentDatasetIds(document, fallbackDatasetIds);
+  const active = currentDatasetIds.includes(datasetId);
+  return {
+    active,
+    method: active ? 'DELETE' : 'PUT',
+    banner: active ? '已将文档移出该数据集。' : '已将文档加入该数据集。',
+    currentDatasetIds,
+  };
+}
+
 export function documentDatasetSelectionUpdate(document) {
   const datasetIds = documentDatasetIds(document);
   if (!datasetIds.length) {
