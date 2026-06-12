@@ -3500,6 +3500,18 @@ Data-ingestion external fixed-task smoke:
 - Known warnings:
   - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
   - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- 8-server post-sync verification:
+  - local commit `c7d6ad1` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded to `c7d6ad16431fe7797b06c60fc3c38c3965d0b984`;
+  - `node --test apps/web/app/lib/local-secret-fingerprint.test.mjs`: passed 3/3 on 8 server;
+  - `node --test apps/web/app/lib/dataset-identity.test.mjs apps/web/app/lib/local-account-state.test.mjs`: passed 7/7 on 8 server;
+  - `npm --prefix apps/web run build`: passed on 8 server with the same existing Next warnings;
+  - `aiv3-web.service` was restarted for the web bundle update;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active` after restart.
+- GitHub Actions:
+  - DataMax CI run `27390953720` for head `c7d6ad16431fe7797b06c60fc3c38c3965d0b984` completed as `failure`;
+  - both jobs, `No-Credential Smoke` and `Rust Minimal`, ended with `steps=[]`;
+  - `gh run view 27390953720 --log-failed` returned `log not found`, matching the existing GitHub Actions account/runner startup failure mode rather than a project test failure.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
