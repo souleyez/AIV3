@@ -190,15 +190,20 @@ mod react_agent_tools;
 
 use auth_session_support::*;
 use external_channel_support::*;
+#[cfg(test)]
+use external_integration_summary::source_drift_summary as external_source_drift_summary;
 use external_integration_summary::{
     action_lifecycle_summary as external_action_lifecycle_summary,
     action_response_summary as external_action_response_summary,
     action_result_payload_summary as external_action_result_payload_summary,
     action_run_audit_summary as external_action_run_audit_summary,
     artifact_summary as external_artifact_summary,
+    channel_drift_summary as external_channel_drift_summary,
+    database_dataset_readiness_summary as external_database_dataset_readiness_summary,
     has_redacted_value as external_integration_has_redacted_value,
     redacted_summary as external_integration_redacted_summary,
     search_evidence_summary as external_search_evidence_summary,
+    source_drift_summary_with_database_readiness as external_source_drift_summary_with_database_readiness,
 };
 use external_observability::{
     access_allowed as external_observability_access_allowed,
@@ -15789,127 +15794,6 @@ fn external_database_source_config_summary(config: &Value) -> Value {
             "error": error.to_string(),
         }),
     }
-}
-
-fn external_channel_drift_summary(
-    unmapped_principal_count: i64,
-    disabled_principal_count: i64,
-    latest_principal_updated_at: Option<DateTime<Utc>>,
-) -> Value {
-    let signal = if disabled_principal_count > 0 {
-        "disabled_principals"
-    } else if unmapped_principal_count > 0 {
-        "identity_mapping_gap"
-    } else {
-        "ok"
-    };
-    json!({
-        "signal": signal,
-        "unmapped_principal_count": unmapped_principal_count.max(0),
-        "disabled_principal_count": disabled_principal_count.max(0),
-        "latest_principal_updated_at": latest_principal_updated_at,
-    })
-}
-
-#[cfg(test)]
-fn external_source_drift_summary(
-    acl_snapshot_count: i64,
-    stale_acl_snapshot_count: i64,
-    failed_sync_count: i64,
-    latest_sync_status: Option<String>,
-    latest_acl_captured_at: Option<DateTime<Utc>>,
-) -> Value {
-    external_source_drift_summary_with_database_readiness(
-        acl_snapshot_count,
-        stale_acl_snapshot_count,
-        failed_sync_count,
-        latest_sync_status,
-        latest_acl_captured_at,
-        Value::Null,
-    )
-}
-
-fn external_source_drift_summary_with_database_readiness(
-    acl_snapshot_count: i64,
-    stale_acl_snapshot_count: i64,
-    failed_sync_count: i64,
-    latest_sync_status: Option<String>,
-    latest_acl_captured_at: Option<DateTime<Utc>>,
-    database_dataset_readiness: Value,
-) -> Value {
-    let latest_sync_status_lower = latest_sync_status.as_deref().map(str::to_ascii_lowercase);
-    let signal = if acl_snapshot_count <= 0 {
-        "acl_missing"
-    } else if latest_sync_status_lower
-        .as_deref()
-        .is_some_and(|status| matches!(status, "failed" | "dead_lettered"))
-        || failed_sync_count > 0
-    {
-        "sync_failed"
-    } else if stale_acl_snapshot_count > 0 {
-        "acl_stale"
-    } else if latest_sync_status_lower
-        .as_deref()
-        .is_some_and(|status| matches!(status, "queued" | "running"))
-    {
-        "sync_recovering"
-    } else {
-        "ok"
-    };
-    let mut summary = json!({
-        "signal": signal,
-        "acl_snapshot_count": acl_snapshot_count.max(0),
-        "stale_acl_snapshot_count": stale_acl_snapshot_count.max(0),
-        "failed_sync_count": failed_sync_count.max(0),
-        "latest_sync_status": latest_sync_status,
-        "latest_acl_captured_at": latest_acl_captured_at,
-    });
-    if !database_dataset_readiness.is_null() {
-        summary["database_dataset_readiness"] = database_dataset_readiness;
-    }
-    summary
-}
-
-fn external_database_dataset_readiness_summary(
-    default_dataset_id: Option<String>,
-    document_count: i64,
-    indexed_document_count: i64,
-    failed_document_count: i64,
-    processing_document_count: i64,
-    chunk_count: i64,
-    indexed_chunk_count: i64,
-    latest_document_updated_at: Option<DateTime<Utc>>,
-) -> Value {
-    let document_count = document_count.max(0);
-    let indexed_document_count = indexed_document_count.max(0);
-    let failed_document_count = failed_document_count.max(0);
-    let processing_document_count = processing_document_count.max(0);
-    let chunk_count = chunk_count.max(0);
-    let indexed_chunk_count = indexed_chunk_count.max(0);
-    let signal = if document_count == 0 {
-        "no_documents"
-    } else if indexed_document_count > 0 && indexed_chunk_count > 0 {
-        if failed_document_count > 0 || processing_document_count > 0 {
-            "partial_ready"
-        } else {
-            "ready"
-        }
-    } else if failed_document_count > 0 && processing_document_count == 0 {
-        "failed"
-    } else {
-        "processing"
-    };
-    json!({
-        "signal": signal,
-        "default_dataset_id": default_dataset_id,
-        "document_count": document_count,
-        "indexed_document_count": indexed_document_count,
-        "failed_document_count": failed_document_count,
-        "processing_document_count": processing_document_count,
-        "chunk_count": chunk_count,
-        "indexed_chunk_count": indexed_chunk_count,
-        "latest_document_updated_at": latest_document_updated_at,
-    })
 }
 
 async fn create_external_source_sync(
