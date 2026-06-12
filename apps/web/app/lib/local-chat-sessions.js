@@ -59,6 +59,29 @@ export function createLocalMessage(role, content, options = {}) {
   };
 }
 
+export function limitLocalChatMessages(messages, options = {}) {
+  const maxMessages = Number(options.maxMessages) || DEFAULT_MAX_LOCAL_MESSAGES;
+  return Array.isArray(messages) ? messages.slice(-maxMessages) : [];
+}
+
+export function appendLocalChatMessages(current, messages, options = {}) {
+  const base = Array.isArray(current) ? current : [];
+  const appended = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
+  if (!appended.length) {
+    return Array.isArray(current) ? current : [];
+  }
+  return limitLocalChatMessages([...base, ...appended], options);
+}
+
+export function replaceLocalChatMessageContent(messages, messageId, content, options = {}) {
+  const updated = (Array.isArray(messages) ? messages : []).map((message) =>
+    message?.id === messageId
+      ? { ...message, content }
+      : message,
+  );
+  return options.limit === false ? updated : limitLocalChatMessages(updated, options);
+}
+
 export function normalizeLocalChatSession(session, options = {}) {
   if (!session || typeof session !== 'object') {
     return null;
@@ -161,11 +184,10 @@ export function readLocalChatMessages(options = {}) {
   if (typeof window === 'undefined') {
     return [];
   }
-  const maxMessages = Number(options.maxMessages) || DEFAULT_MAX_LOCAL_MESSAGES;
   try {
     const raw = window.localStorage.getItem(LOCAL_CHAT_MESSAGES_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(-maxMessages) : [];
+    return limitLocalChatMessages(parsed, options);
   } catch {
     return [];
   }
@@ -175,12 +197,11 @@ export function writeLocalChatMessages(messages, options = {}) {
   if (typeof window === 'undefined') {
     return;
   }
-  const maxMessages = Number(options.maxMessages) || DEFAULT_MAX_LOCAL_MESSAGES;
   try {
     const normalizedMessages = Array.isArray(messages) ? messages : [];
     window.localStorage.setItem(
       LOCAL_CHAT_MESSAGES_STORAGE_KEY,
-      JSON.stringify(normalizedMessages.slice(-maxMessages)),
+      JSON.stringify(limitLocalChatMessages(normalizedMessages, options)),
     );
   } catch {
     // Ignore cache write failures; chat can still continue in memory.

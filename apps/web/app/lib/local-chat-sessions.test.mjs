@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import {
   LOCAL_CHAT_MESSAGES_STORAGE_KEY,
   LOCAL_CHAT_SESSIONS_STORAGE_KEY,
+  appendLocalChatMessages,
   createLocalMessage,
   isLocalChatSessionOptionId,
+  limitLocalChatMessages,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
   normalizeLocalChatSessions,
   readLocalChatMessages,
   readLocalChatSessions,
+  replaceLocalChatMessageContent,
   shouldPersistLocalChatSession,
   upsertLocalChatSession,
   writeLocalChatMessages,
@@ -69,6 +72,39 @@ test('createLocalMessage keeps the local chat message shape', () => {
     content: '正在生成回复...',
     created_at: '2026-06-12T08:00:00.000Z',
   });
+});
+
+test('local chat message list helpers append, replace, and preserve the 40 message cap', () => {
+  const messages = Array.from({ length: 41 }, (_, index) => ({
+    id: `m-${index}`,
+    role: 'user',
+    content: `message ${index}`,
+    metadata: { index },
+  }));
+
+  const limited = limitLocalChatMessages(messages);
+  assert.equal(limited.length, 40);
+  assert.equal(limited[0].id, 'm-1');
+
+  const current = messages.slice(0, 39);
+  const appended = appendLocalChatMessages(current, [
+    { id: 'm-39', role: 'assistant', content: 'message 39' },
+    { id: 'm-40', role: 'assistant', content: 'message 40', metadata: { source: 'stream' } },
+  ]);
+  assert.equal(appended.length, 40);
+  assert.equal(appended[0].id, 'm-1');
+  assert.equal(appended.at(-1).id, 'm-40');
+
+  const noAppend = appendLocalChatMessages(current, []);
+  assert.equal(noAppend, current);
+
+  const replaced = replaceLocalChatMessageContent(appended, 'm-40', 'updated');
+  assert.equal(replaced.at(-1).content, 'updated');
+  assert.deepEqual(replaced.at(-1).metadata, { source: 'stream' });
+
+  const unboundedReplace = replaceLocalChatMessageContent(messages, 'm-40', 'streaming', { limit: false });
+  assert.equal(unboundedReplace.length, 41);
+  assert.equal(unboundedReplace.at(-1).content, 'streaming');
 });
 
 test('local chat sessions normalize, dedupe, and sort by update time', () => {

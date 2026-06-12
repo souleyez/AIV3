@@ -167,12 +167,15 @@ import {
   buildUiNoticeLocalMessage,
 } from './lib/ui-notice-message';
 import {
+  appendLocalChatMessages,
   createLocalMessage,
   isLocalChatSessionOptionId,
+  limitLocalChatMessages,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
   readLocalChatMessages,
   readLocalChatSessions,
+  replaceLocalChatMessageContent,
   shouldPersistLocalChatSession,
   upsertLocalChatSession,
   writeLocalChatMessages,
@@ -479,10 +482,7 @@ export default function HomePageClient() {
       if (!message) {
         return current;
       }
-      return [
-        ...current,
-        message,
-      ].slice(-40);
+      return appendLocalChatMessages(current, message);
     });
   }
 
@@ -505,7 +505,7 @@ export default function HomePageClient() {
           appended.push(localMessage);
         }
       });
-      return appended.length ? [...current, ...appended].slice(-40) : current;
+      return appended.length ? appendLocalChatMessages(current, appended) : current;
     });
   }
 
@@ -524,10 +524,7 @@ export default function HomePageClient() {
       if (!message) {
         return current;
       }
-      return [
-        ...current,
-        message,
-      ].slice(-40);
+      return appendLocalChatMessages(current, message);
     });
   }
 
@@ -2052,10 +2049,10 @@ export default function HomePageClient() {
     if (wasSelectedSessionId) {
       setSelectedSessionId(null);
     }
-    setLocalMessages((current) => [
-      ...(wasSelectedSessionId ? baseMessages : current),
+    setLocalMessages((current) => appendLocalChatMessages(
+      wasSelectedSessionId ? baseMessages : current,
       userMessage,
-    ].slice(-40));
+    ));
     setInput('');
     setComposingNewSession(false);
     setSubmitting(false);
@@ -2154,16 +2151,14 @@ export default function HomePageClient() {
             streamStatusText,
             streamArtifactLink,
           });
-          setLocalMessages((current) => current.map((message) =>
-            message.id === assistantMessage.id
-              ? { ...message, content: nextContent }
-              : message,
+          setLocalMessages((current) => replaceLocalChatMessageContent(
+            current,
+            assistantMessage.id,
+            nextContent,
+            { limit: false },
           ));
         };
-        setLocalMessages((current) => [
-          ...current,
-          assistantMessage,
-        ].slice(-40));
+        setLocalMessages((current) => appendLocalChatMessages(current, assistantMessage));
         try {
           const assistantRun = await requestOrdinaryAssistantRun({
             prompt,
@@ -2246,14 +2241,11 @@ export default function HomePageClient() {
           streamStatusText,
           streamArtifactLink,
         });
-        setLocalMessages((current) => current.map((message) =>
-          message.id === assistantMessage.id
-            ? {
-                ...message,
-                content: finalAssistantContent,
-              }
-            : message,
-        ).slice(-40));
+        setLocalMessages((current) => replaceLocalChatMessageContent(
+          current,
+          assistantMessage.id,
+          finalAssistantContent,
+        ));
         rememberLocalUserStatement(userMessage, assistantRunId);
         let completionBanner = '';
         if (!usedBackendAssistantRun) {
@@ -2366,7 +2358,7 @@ export default function HomePageClient() {
     setComposingNewSession(false);
     setSelectedSessionId(null);
     setMessages([]);
-    setLocalMessages((localSession.messages || []).slice(-40));
+    setLocalMessages(limitLocalChatMessages(localSession.messages));
     setLastAssistantRunId(localSession.assistantRunId || '');
     setAssistantRunProgress(null);
     setCodexCustomerTasks([]);
@@ -2562,10 +2554,10 @@ export default function HomePageClient() {
       if (last?.metadata?.source === 'report_shelf_selection' && last?.content === content) {
         return current;
       }
-      return [
-        ...current,
+      return appendLocalChatMessages(
+        current,
         buildReportShelfSelectionLocalMessage(title, metadata),
-      ].slice(-40);
+      );
     });
   }
 
@@ -3270,7 +3262,7 @@ export default function HomePageClient() {
       setLocalChatSessions(storedLocalSessions);
       const currentLocalSession = storedLocalSessions.find((session) => session.id === threadId);
       if (currentLocalSession) {
-        setLocalMessages((currentLocalSession.messages || []).slice(-40));
+        setLocalMessages(limitLocalChatMessages(currentLocalSession.messages));
         setDraftSessionStartedAt(currentLocalSession.startedAt || new Date().toISOString());
         setDraftSessionTitle(currentLocalSession.title || '');
         if (currentLocalSession.assistantRunId) {
