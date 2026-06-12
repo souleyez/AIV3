@@ -3471,6 +3471,13 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/static-page-report-shelf.test.mjs`: passed, 7 tests;
   - `node --test apps/web/app/lib/dataset-record-scope.test.mjs apps/web/app/lib/report-template-utils.test.mjs`: passed, 10 tests;
   - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- 8-server post-sync verification:
+  - local commit `6ada700` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `101834c9a` to `6ada700ce`;
+  - `npm --prefix apps/web run build`: passed on 8 server with the same existing Next/Turbopack warnings;
+  - `aiv3-web.service` was restarted and returned `active`;
+  - `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` remained `active`;
+  - `node --test apps/web/app/lib/static-page-report-shelf.test.mjs`: passed on 8 server, 7 tests.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
