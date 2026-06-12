@@ -402,6 +402,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `external_channel_public_artifact` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 第三方静态页焦点和客户可见提示 helper 已拆到 `external_channel_static_page_focus` 模块并补模块单测；URL focus 优先、template adaptation 焦点模块、user intent 焦点推断、默认模块文案和客户侧提示语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `external_channel_static_page_focus` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` 第三方公开 card 状态/裁剪/清洗 helper 已拆到 `external_channel_public_card` 模块并补模块单测；公开状态映射、artifact/preview 链接保留规则、内部字段剥离、静态页类型脱敏和 accepted template baseline 链接允许语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
