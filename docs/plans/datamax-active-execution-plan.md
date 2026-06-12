@@ -361,6 +361,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `crates/platform-api/src/lib.rs` dataset/document lifecycle update parser 已拆到 `lifecycle_updates` 模块并补模块单测；trim、小写归一、unsupported lifecycle 的 `validation_error` 语义保持不变。
 - 2026-06-12: `lifecycle_updates` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-12: `crates/platform-api/src/lib.rs` 404/not_found error 构造 helper 已拆到 `not_found_errors` 模块并补模块单测；dataset/document/output/chat/assistant/workflow/report/static-page draft/image job 的 error code、status 和 message 语义保持不变。
+- 2026-06-12: `not_found_errors` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
