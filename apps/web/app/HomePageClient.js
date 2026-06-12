@@ -65,8 +65,10 @@ import {
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
+  combinedDatasetIds,
   datasetSelectionStateAfterToggle,
   datasetIdsAfterCatalogRefresh,
+  datasetRecordIds,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
   documentMembershipResponseSelectionUpdate,
@@ -78,6 +80,7 @@ import {
   selectedDatasetIdsWithPrepended,
   selectedDatasetIdsWithout,
   selectedDatasetIdAfterCatalogRefresh,
+  selectedOrFallbackDatasetIds,
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
@@ -319,15 +322,15 @@ export default function HomePageClient() {
     [sessions, selectedSessionId],
   );
   const reportShelfDatasetIds = useMemo(
-    () => normalizeDatasetIds(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []),
+    () => selectedOrFallbackDatasetIds(selectedDatasetIds, selectedDatasetId),
     [selectedDatasetId, selectedDatasetIds],
   );
   const reportShelfVisibleDatasetIds = useMemo(
-    () => normalizeDatasetIds(datasets.map((dataset) => dataset.id)),
+    () => datasetRecordIds(datasets),
     [datasets],
   );
   const reportShelfFetchDatasetIds = useMemo(
-    () => normalizeDatasetIds([...reportShelfVisibleDatasetIds, ...reportShelfDatasetIds]),
+    () => combinedDatasetIds(reportShelfVisibleDatasetIds, reportShelfDatasetIds),
     [reportShelfVisibleDatasetIds, reportShelfDatasetIds],
   );
   const datasetPublishedReports = useMemo(

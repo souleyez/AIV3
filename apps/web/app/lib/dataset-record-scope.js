@@ -41,6 +41,19 @@ export function selectedDatasetIdsWithAppended(currentDatasetIds, datasetIds) {
   return normalizeDatasetIds([...asDatasetIdArray(currentDatasetIds), ...asDatasetIdArray(datasetIds)]);
 }
 
+export function selectedOrFallbackDatasetIds(selectedDatasetIds, selectedDatasetId = null) {
+  const currentIds = Array.isArray(selectedDatasetIds) ? selectedDatasetIds : [];
+  return normalizeDatasetIds(currentIds.length ? currentIds : selectedDatasetId ? [selectedDatasetId] : []);
+}
+
+export function datasetRecordIds(datasets) {
+  return normalizeDatasetIds((Array.isArray(datasets) ? datasets : []).map((dataset) => dataset?.id));
+}
+
+export function combinedDatasetIds(primaryDatasetIds, secondaryDatasetIds) {
+  return normalizeDatasetIds([...asDatasetIdArray(primaryDatasetIds), ...asDatasetIdArray(secondaryDatasetIds)]);
+}
+
 export function datasetSelectionStateAfterToggle(currentDatasetIds, datasetId) {
   const selectedDatasetIds = toggleSelectedDatasetIds(currentDatasetIds, datasetId);
   return {

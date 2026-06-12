@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  combinedDatasetIds,
   datasetIdsAfterCatalogRefresh,
+  datasetRecordIds,
   datasetSelectionStateAfterToggle,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
@@ -18,6 +20,7 @@ import {
   selectedDatasetIdsWithPrepended,
   selectedDatasetIdsWithout,
   selectedDatasetIdAfterCatalogRefresh,
+  selectedOrFallbackDatasetIds,
   sortByDateDesc,
   sortDatasets,
   staticPageDraftDatasetIds,
@@ -80,6 +83,23 @@ describe('dataset record scope helpers', () => {
     assert.deepEqual(
       selectedDatasetIdsWithAppended(['ds-a', 'ds-b'], [' ds-b ', 'ds-c', null]),
       ['ds-a', 'ds-b', 'ds-c'],
+    );
+  });
+
+  it('builds report shelf dataset id scopes from selection and visible datasets', () => {
+    assert.deepEqual(
+      selectedOrFallbackDatasetIds([' ds-a ', 'ds-b'], 'fallback'),
+      ['ds-a', 'ds-b'],
+    );
+    assert.deepEqual(selectedOrFallbackDatasetIds([], 'fallback'), ['fallback']);
+    assert.deepEqual(selectedOrFallbackDatasetIds([], null), []);
+    assert.deepEqual(
+      datasetRecordIds([{ id: 'visible-a' }, { id: '' }, {}, { id: 'visible-b' }, { id: 'visible-a' }]),
+      ['visible-a', 'visible-b'],
+    );
+    assert.deepEqual(
+      combinedDatasetIds(['visible-a', 'selected-a'], ['selected-a', 'selected-b']),
+      ['visible-a', 'selected-a', 'selected-b'],
     );
   });
 
