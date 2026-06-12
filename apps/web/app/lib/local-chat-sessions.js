@@ -118,6 +118,21 @@ export function buildLocalChatSessionSnapshot(options = {}) {
   };
 }
 
+export function buildNewLocalConversationDraft(options = {}) {
+  const threadIdFactory = typeof options.threadIdFactory === 'function'
+    ? options.threadIdFactory
+    : () => '';
+  const now = typeof options.now === 'function' ? options.now : () => new Date().toISOString();
+  const selectedDatasetIds = Array.isArray(options.selectedDatasetIds) ? options.selectedDatasetIds : [];
+  return {
+    threadId: threadIdFactory(),
+    startedAt: now(),
+    banner: selectedDatasetIds.length
+      ? '已新建对话；已选数据集仍作为优先供料范围，不会切换成别的会话。'
+      : '已新建普通对话；未选数据集时按普通模型聊天处理。',
+  };
+}
+
 export function normalizeLocalChatSession(session, options = {}) {
   if (!session || typeof session !== 'object') {
     return null;

@@ -169,6 +169,7 @@ import {
 import {
   appendLocalChatMessages,
   buildLocalChatSessionSnapshot,
+  buildNewLocalConversationDraft,
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
@@ -2361,17 +2362,15 @@ export default function HomePageClient() {
 
   function handleStartNewConversation() {
     persistCurrentLocalConversation();
-    const nextThreadId = createLocalThreadId();
-    const startedAt = new Date().toISOString();
-    writeLocalThreadId(nextThreadId);
-    setLocalThreadId(nextThreadId);
-    setDraftSessionStartedAt(startedAt);
+    const draft = buildNewLocalConversationDraft({
+      selectedDatasetIds,
+      threadIdFactory: createLocalThreadId,
+    });
+    writeLocalThreadId(draft.threadId);
+    setLocalThreadId(draft.threadId);
+    setDraftSessionStartedAt(draft.startedAt);
     setDraftSessionTitle('');
-    setBanner(
-      selectedDatasetIds.length
-        ? '已新建对话；已选数据集仍作为优先供料范围，不会切换成别的会话。'
-        : '已新建普通对话；未选数据集时按普通模型聊天处理。',
-    );
+    setBanner(draft.banner);
     setError('');
     setComposingNewSession(true);
     setSelectedSessionId(null);

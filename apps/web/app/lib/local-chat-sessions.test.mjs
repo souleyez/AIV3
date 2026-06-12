@@ -5,6 +5,7 @@ import {
   LOCAL_CHAT_SESSIONS_STORAGE_KEY,
   appendLocalChatMessages,
   buildLocalChatSessionSnapshot,
+  buildNewLocalConversationDraft,
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
@@ -195,6 +196,37 @@ test('buildLocalChatSessionSnapshot preserves local conversation snapshot semant
   });
   assert.equal(generatedTimeSnapshot.startedAt, '2026-06-12T08:11:00+08:00');
   assert.equal(generatedTimeSnapshot.updatedAt, '2026-06-12T08:11:00+08:00');
+});
+
+test('buildNewLocalConversationDraft returns thread, start time, and dataset-aware banner', () => {
+  const calls = [];
+  const draftWithDataset = buildNewLocalConversationDraft({
+    selectedDatasetIds: ['dataset-1'],
+    threadIdFactory: () => {
+      calls.push('thread');
+      return 'thread-next';
+    },
+    now: () => {
+      calls.push('now');
+      return '2026-06-12T08:12:00.000Z';
+    },
+  });
+
+  assert.deepEqual(calls, ['thread', 'now']);
+  assert.deepEqual(draftWithDataset, {
+    threadId: 'thread-next',
+    startedAt: '2026-06-12T08:12:00.000Z',
+    banner: '已新建对话；已选数据集仍作为优先供料范围，不会切换成别的会话。',
+  });
+
+  assert.equal(
+    buildNewLocalConversationDraft({
+      selectedDatasetIds: [],
+      threadIdFactory: () => 'thread-plain',
+      now: () => '2026-06-12T08:13:00.000Z',
+    }).banner,
+    '已新建普通对话；未选数据集时按普通模型聊天处理。',
+  );
 });
 
 test('local chat sessions normalize, dedupe, and sort by update time', () => {
