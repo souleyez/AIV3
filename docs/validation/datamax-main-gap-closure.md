@@ -3638,11 +3638,27 @@ Data-ingestion external fixed-task smoke:
   - `npm run smoke:static-page-5way -- --self-test`: passed, `runId=20260612053951-self-test`, `concurrency=5`;
   - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `maxAllowed=2`, `codexConcurrency=2`;
   - `node --test apps\web\app\lib\assistant-run-progress.test.mjs apps\web\app\lib\local-chat-sessions.test.mjs apps\web\app\lib\report-template-utils.test.mjs`: passed, `45/45`.
+- Commit and 8-server deployment:
+  - local/GitHub commit: `b3c1925 Extract report shelf selection message helpers`;
+  - `/srv/aiv3/repo` fast-forwarded from `f9d68c82e` to `b3c192542`;
+  - `npm --prefix apps/web run build`: passed, with existing Next `middleware` deprecation and NFT tracing warnings;
+  - restarted `aiv3-web.service` only;
+  - `aiv3-web.service`, `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- 8-server focused verification:
+  - `node --test /srv/aiv3/repo/apps/web/app/lib/report-template-utils.test.mjs /srv/aiv3/repo/apps/web/app/lib/local-chat-sessions.test.mjs /srv/aiv3/repo/apps/web/app/lib/home-chat-intents.test.mjs`: passed, `26/26`.
+- 8-server P0 fixed self-test:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, report `/srv/aiv3/repo/target/external-report-focus-smoke/external-report-focus-self-test-20260612054148.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `runId=20260612054148`, `okCount=2`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `runId=20260612054149-self-test`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `runId=20260612054149`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `runId=20260612054149-self-test`, `concurrency=5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `maxAllowed=2`, `codexConcurrency=2`;
+  - `node --test /srv/aiv3/repo/apps/web/app/lib/assistant-run-progress.test.mjs /srv/aiv3/repo/apps/web/app/lib/local-chat-sessions.test.mjs /srv/aiv3/repo/apps/web/app/lib/report-template-utils.test.mjs`: passed, `45/45`.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no platform-api binary was rebuilt or restarted;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
-  - no service was restarted during local verification;
   - 120 server was not touched.
 
 ## 2026-06-12 P5 Codex Customer Chat Message Helper
