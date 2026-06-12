@@ -3501,6 +3501,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Assistant Stream Message Helper Local Verification
+
+- Purpose:
+  - continue the P5 `HomePageClient.js` behavior-preserving reduction;
+  - move assistant-run stream placeholder/final message content construction into `apps/web/app/lib/assistant-stream-content.js`;
+  - keep customer-visible streaming text, status fallback, empty-final fallback, and generated artifact link de-duplication unchanged.
+- Code change:
+  - added `ASSISTANT_STREAM_PLACEHOLDER_TEXT` and `ASSISTANT_STREAM_EMPTY_FINAL_TEXT`;
+  - added `assistantRunStreamMessageContent`, `assistantRunFinalMessageContent`, and `buildAssistantStreamPlaceholderMessage`;
+  - replaced inline `HomePageClient.js` message construction with these helpers.
+- Local verification:
+  - `node --test apps\web\app\lib\assistant-stream-content.test.mjs apps\web\app\lib\assistant-run-progress.test.mjs apps\web\app\lib\local-chat-sessions.test.mjs`: passed, 46/46 tests;
+  - `git diff --check -- apps/web/app/HomePageClient.js apps/web/app/lib/assistant-stream-content.js apps/web/app/lib/assistant-stream-content.test.mjs`: passed with Windows LF/CRLF warnings only;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0 Self-Test After Static Page Draft Map Reducer Deployment
 
 - Purpose:

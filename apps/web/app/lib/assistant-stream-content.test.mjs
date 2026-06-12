@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  ASSISTANT_STREAM_EMPTY_FINAL_TEXT,
+  ASSISTANT_STREAM_PLACEHOLDER_TEXT,
   appendArtifactLinkText,
+  assistantRunFinalMessageContent,
+  assistantRunStreamMessageContent,
   assistantRunStreamArtifactLink,
   assistantRunStreamDisplayText,
+  buildAssistantStreamPlaceholderMessage,
   cleanAssistantVisibleContent,
   firstGeneratedArtifactUrlFromPayload,
 } from './assistant-stream-content.js';
@@ -88,5 +93,69 @@ describe('assistant stream content helpers', () => {
       appendArtifactLinkText('', url),
       `页面已生成。\n\n[打开生成页面](${url})`,
     );
+  });
+
+  it('builds assistant stream message content from streamed text, status text, and artifact link', () => {
+    const url = '/generated-artifacts/report/index.html';
+    assert.equal(
+      assistantRunStreamMessageContent({
+        streamedAssistantContent: '报表已生成。',
+        streamStatusText: '正在生成报表',
+        streamArtifactLink: url,
+      }),
+      `报表已生成。\n\n[打开生成页面](${url})`,
+    );
+    assert.equal(
+      assistantRunStreamMessageContent({
+        streamStatusText: '正在检索资料',
+      }),
+      '正在检索资料',
+    );
+    assert.equal(
+      assistantRunStreamMessageContent({}),
+      ASSISTANT_STREAM_PLACEHOLDER_TEXT,
+    );
+  });
+
+  it('builds final assistant message content with existing fallback order', () => {
+    const url = '/generated-artifacts/report/index.html';
+    assert.equal(
+      assistantRunFinalMessageContent({
+        assistantContent: '最终回答。',
+        streamedAssistantContent: '流式回答。',
+        streamStatusText: '处理中',
+        streamArtifactLink: url,
+      }),
+      `最终回答。\n\n[打开生成页面](${url})`,
+    );
+    assert.equal(
+      assistantRunFinalMessageContent({
+        streamedAssistantContent: '流式回答。',
+        streamStatusText: '处理中',
+      }),
+      '流式回答。',
+    );
+    assert.equal(
+      assistantRunFinalMessageContent({}),
+      ASSISTANT_STREAM_EMPTY_FINAL_TEXT,
+    );
+  });
+
+  it('builds assistant stream placeholder messages with existing local message shape', () => {
+    const message = buildAssistantStreamPlaceholderMessage({
+      messageFactory: (role, content) => ({
+        id: 'message-1',
+        role,
+        content,
+        created_at: '2026-06-12T00:00:00.000Z',
+      }),
+    });
+
+    assert.deepEqual(message, {
+      id: 'message-1',
+      role: 'assistant',
+      content: ASSISTANT_STREAM_PLACEHOLDER_TEXT,
+      created_at: '2026-06-12T00:00:00.000Z',
+    });
   });
 });

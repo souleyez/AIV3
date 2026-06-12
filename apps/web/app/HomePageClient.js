@@ -26,9 +26,12 @@ import {
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import {
-  appendArtifactLinkText,
+  ASSISTANT_STREAM_PLACEHOLDER_TEXT,
+  assistantRunFinalMessageContent,
+  assistantRunStreamMessageContent,
   assistantRunStreamArtifactLink,
   assistantRunStreamDisplayText,
+  buildAssistantStreamPlaceholderMessage,
 } from './lib/assistant-stream-content';
 import { formatRelativeTime } from './lib/formatters';
 import {
@@ -2139,15 +2142,18 @@ export default function HomePageClient() {
         });
         let assistantContent = '';
         let streamedAssistantContent = '';
-        let streamStatusText = '正在生成回复...';
+        let streamStatusText = ASSISTANT_STREAM_PLACEHOLDER_TEXT;
         let streamArtifactLink = '';
         let usedBackendAssistantRun = false;
         let assistantRunId = '';
         let usedAssistantRunContinue = false;
-        const assistantMessage = createLocalMessage('assistant', '正在生成回复...');
+        const assistantMessage = buildAssistantStreamPlaceholderMessage();
         const updateAssistantStreamMessage = () => {
-          const baseContent = streamedAssistantContent || streamStatusText || '正在生成回复...';
-          const nextContent = appendArtifactLinkText(baseContent, streamArtifactLink);
+          const nextContent = assistantRunStreamMessageContent({
+            streamedAssistantContent,
+            streamStatusText,
+            streamArtifactLink,
+          });
           setLocalMessages((current) => current.map((message) =>
             message.id === assistantMessage.id
               ? { ...message, content: nextContent }
@@ -2234,10 +2240,12 @@ export default function HomePageClient() {
           assistantContent = assistantRunFailureMessage(assistantRunError);
         }
 
-        const finalAssistantContent = appendArtifactLinkText(
-          assistantContent || streamedAssistantContent || streamStatusText || '已完成，但本轮没有返回文本。',
+        const finalAssistantContent = assistantRunFinalMessageContent({
+          assistantContent,
+          streamedAssistantContent,
+          streamStatusText,
           streamArtifactLink,
-        );
+        });
         setLocalMessages((current) => current.map((message) =>
           message.id === assistantMessage.id
             ? {

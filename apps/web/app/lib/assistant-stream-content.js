@@ -1,3 +1,8 @@
+import { createLocalMessage } from './local-chat-sessions.js';
+
+export const ASSISTANT_STREAM_PLACEHOLDER_TEXT = '正在生成回复...';
+export const ASSISTANT_STREAM_EMPTY_FINAL_TEXT = '已完成，但本轮没有返回文本。';
+
 function ssePayloadObject(payload) {
   return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
 }
@@ -138,4 +143,26 @@ export function appendArtifactLinkText(content, artifactUrl) {
   const cleanContent = cleanAssistantVisibleContent(content);
   if (!url || cleanContent.includes(url)) return cleanContent || '';
   return `${cleanContent || '页面已生成。'}\n\n[打开生成页面](${url})`;
+}
+
+export function assistantRunStreamMessageContent(options = {}) {
+  const baseContent = options.streamedAssistantContent
+    || options.streamStatusText
+    || ASSISTANT_STREAM_PLACEHOLDER_TEXT;
+  return appendArtifactLinkText(baseContent, options.streamArtifactLink);
+}
+
+export function assistantRunFinalMessageContent(options = {}) {
+  const baseContent = options.assistantContent
+    || options.streamedAssistantContent
+    || options.streamStatusText
+    || ASSISTANT_STREAM_EMPTY_FINAL_TEXT;
+  return appendArtifactLinkText(baseContent, options.streamArtifactLink);
+}
+
+export function buildAssistantStreamPlaceholderMessage(options = {}) {
+  const messageFactory = typeof options.messageFactory === 'function'
+    ? options.messageFactory
+    : createLocalMessage;
+  return messageFactory('assistant', ASSISTANT_STREAM_PLACEHOLDER_TEXT);
 }
