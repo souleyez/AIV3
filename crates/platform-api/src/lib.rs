@@ -174,6 +174,7 @@ use zip::ZipArchive;
 
 pub mod auth_email;
 mod auth_session_support;
+mod document_media_model_facing;
 mod document_model_facing_support;
 mod external_channel_support;
 pub mod external_feishu;
@@ -196,6 +197,7 @@ mod report_render_output_asset;
 mod workflow_runtime_summary;
 
 use auth_session_support::*;
+use document_media_model_facing::*;
 use document_model_facing_support::*;
 use external_channel_support::*;
 #[cfg(test)]
@@ -2631,64 +2633,6 @@ fn collect_document_detail_noun_terms(detail: &DocumentDetailView) -> Vec<String
     }
     terms.truncate(40);
     terms
-}
-
-fn derive_document_media_detail_model_facing_summary(
-    detail: &DocumentMediaDetailView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    let evidence_state = if detail.parse_status == "failed" {
-        contracts::ModelFacingEvidenceStateView::Degraded
-    } else if !detail.transcript_segments.is_empty()
-        || !detail.scenes.is_empty()
-        || !detail.keyframe_ocr_snippets.is_empty()
-    {
-        contracts::ModelFacingEvidenceStateView::LiveDetail
-    } else if detail.parse_status == "partial" || detail.parse_status == "unknown" {
-        contracts::ModelFacingEvidenceStateView::CatalogMemory
-    } else {
-        contracts::ModelFacingEvidenceStateView::SupplyOnly
-    };
-    let signals = collect_document_media_detail_model_facing_signals(detail);
-    if evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return degraded_model_facing_summary(
-            contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis,
-            signals,
-        );
-    }
-    build_model_facing_summary(
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis,
-        evidence_state,
-        vec![contracts::ModelFacingNextActionView::AnswerDirectly],
-        signals,
-    )
-}
-
-fn collect_document_media_detail_model_facing_signals(
-    detail: &DocumentMediaDetailView,
-) -> Vec<String> {
-    vec![
-        "workflow_kind=document_media_detail".to_string(),
-        "document_focus=single_document".to_string(),
-        format!("media_kind={}", detail.media_kind),
-        format!("parse_status={}", detail.parse_status),
-        format!(
-            "transcript_segment_count={}",
-            detail.transcript_segments.len()
-        ),
-        format!("scene_count={}", detail.scenes.len()),
-        format!(
-            "keyframe_ocr_snippet_count={}",
-            detail.keyframe_ocr_snippets.len()
-        ),
-        format!(
-            "supported_provider_capability_count={}",
-            detail
-                .provider_evidence
-                .iter()
-                .filter(|evidence| evidence.supported)
-                .count()
-        ),
-    ]
 }
 
 fn derive_compare_documents_model_facing_summary(
