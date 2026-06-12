@@ -142,6 +142,24 @@ pub(crate) fn continue_assistant_run_sse_completion_with_delta(
     encoded
 }
 
+fn assistant_run_env_flag_value_is_enabled(value: Option<String>, default_value: bool) -> bool {
+    value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default_value)
+}
+
+pub(crate) fn assistant_run_live_answer_stream_enabled() -> bool {
+    assistant_run_env_flag_value_is_enabled(
+        std::env::var("ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED").ok(),
+        false,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +194,23 @@ mod tests {
             payload.get("entrypoint").and_then(Value::as_str),
             Some("create_assistant_run")
         );
+    }
+
+    #[test]
+    fn assistant_run_live_answer_stream_flag_parser_matches_env_flag_semantics() {
+        assert!(assistant_run_env_flag_value_is_enabled(
+            Some(" true ".to_string()),
+            false
+        ));
+        assert!(assistant_run_env_flag_value_is_enabled(
+            Some("ON".to_string()),
+            false
+        ));
+        assert!(!assistant_run_env_flag_value_is_enabled(
+            Some("0".to_string()),
+            true
+        ));
+        assert!(!assistant_run_env_flag_value_is_enabled(None, false));
+        assert!(assistant_run_env_flag_value_is_enabled(None, true));
     }
 }

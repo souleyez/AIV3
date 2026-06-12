@@ -6334,10 +6334,6 @@ impl AssistantRunLiveDeltaSink {
     }
 }
 
-fn assistant_run_live_answer_stream_enabled() -> bool {
-    env_flag("ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED", false)
-}
-
 async fn create_assistant_run_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
