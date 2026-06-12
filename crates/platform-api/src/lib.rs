@@ -202,6 +202,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod resource_access;
 mod text_normalization;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
@@ -262,6 +263,7 @@ use react_agent_tools::{
 use report_plan_model_facing::*;
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use resource_access::*;
 use text_normalization::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
@@ -3468,28 +3470,6 @@ fn assistant_scope_count_summary(counts: &BTreeMap<String, usize>) -> String {
         .map(|(key, count)| format!("{key}:{count}"))
         .collect::<Vec<_>>()
         .join("，")
-}
-
-fn owner_user_id_is_visible(
-    owner_user_id: Option<UserId>,
-    current_user_id: Option<UserId>,
-) -> bool {
-    owner_user_id.is_none() || owner_user_id == current_user_id
-}
-
-fn ensure_owner_managed_resource(
-    resource_kind: &'static str,
-    resource_id: String,
-    owner_user_id: Option<UserId>,
-    current_user_id: Option<UserId>,
-) -> std::result::Result<(), ApiError> {
-    if owner_user_id.is_some() && owner_user_id != current_user_id {
-        return Err(ApiError::not_found(
-            &format!("{resource_kind}_not_found"),
-            format!("{resource_kind} {resource_id} was not found"),
-        ));
-    }
-    Ok(())
 }
 
 fn parse_dataset_lifecycle_update(

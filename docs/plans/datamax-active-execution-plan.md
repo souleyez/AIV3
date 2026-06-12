@@ -356,6 +356,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 选中数据集列表增删 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；归档移除、创建数据集前置、上传/后端范围回填尾部追加的顺序和去重语义保持不变。
 - 2026-06-12: `HomePageClient.js` 报表 shelf 数据集范围 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；显式多选优先、单选 fallback、可见数据集 ID 提取和 fetch 范围合并去重语义保持不变。
 - 2026-06-12: `HomePageClient.js` 静态页草稿 shelf 数据集查询范围 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；优先数据集、目标数据集和查询顺序语义保持不变。
+- 2026-06-12: `crates/platform-api/src/lib.rs` resource owner 可见性和 owner-managed resource 404 masking helper 已拆到 `resource_access` 模块并补模块单测；public 资源可见、owner 匹配可见、非 owner 仍用 404 mask 的语义保持不变。
 
 **Regression commands:**
 
