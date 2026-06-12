@@ -181,6 +181,7 @@ mod external_message_summary;
 mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
+mod model_facing_format;
 mod model_gateway_admin;
 mod model_gateway_runtime;
 mod model_gateway_status;
@@ -217,6 +218,7 @@ use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
+use model_facing_format::*;
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
@@ -1657,168 +1659,6 @@ pub fn render_report_render_output_runtime_summary(
     }
 
     Some(lines.join("\n"))
-}
-
-fn format_model_facing_capability_class(
-    value: &contracts::ModelFacingCapabilityClassView,
-) -> &'static str {
-    match value {
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness => {
-            "dataset_directory_awareness"
-        }
-        contracts::ModelFacingCapabilityClassView::EvidenceRetrieval => "evidence_retrieval",
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis => {
-            "material_explanation_and_synthesis"
-        }
-        contracts::ModelFacingCapabilityClassView::ReportPlanning => "report_planning",
-        contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            "report_generation_and_editing"
-        }
-        contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            "controlled_platform_action"
-        }
-    }
-}
-
-fn format_model_facing_evidence_state(
-    value: &contracts::ModelFacingEvidenceStateView,
-) -> &'static str {
-    match value {
-        contracts::ModelFacingEvidenceStateView::CatalogMemory => "catalog_memory",
-        contracts::ModelFacingEvidenceStateView::SupplyOnly => "supply_only",
-        contracts::ModelFacingEvidenceStateView::LiveDetail => "live_detail",
-        contracts::ModelFacingEvidenceStateView::Mixed => "mixed",
-        contracts::ModelFacingEvidenceStateView::Degraded => "degraded",
-    }
-}
-
-fn format_model_facing_service_lane(value: &contracts::ModelFacingServiceLaneView) -> &'static str {
-    match value {
-        contracts::ModelFacingServiceLaneView::MaterialService => "material_service",
-        contracts::ModelFacingServiceLaneView::ReportService => "report_service",
-        contracts::ModelFacingServiceLaneView::ControlledPlatformAction => {
-            "controlled_platform_action"
-        }
-    }
-}
-
-fn format_model_facing_report_entry_state(
-    value: &contracts::ModelFacingReportEntryStateView,
-) -> &'static str {
-    match value {
-        contracts::ModelFacingReportEntryStateView::NotApplicable => "not_applicable",
-        contracts::ModelFacingReportEntryStateView::ConfirmationRequired => "confirmation_required",
-        contracts::ModelFacingReportEntryStateView::Confirmed => "confirmed",
-    }
-}
-
-fn format_chat_session_report_entry_resolution(
-    value: &contracts::ChatSessionReportEntryResolutionView,
-) -> &'static str {
-    match value {
-        contracts::ChatSessionReportEntryResolutionView::StayMaterialService => {
-            "stay_material_service"
-        }
-        contracts::ChatSessionReportEntryResolutionView::EnterReportService => {
-            "enter_report_service"
-        }
-    }
-}
-
-fn format_manifest_service_handoff_source(
-    value: &contracts::ManifestServiceHandoffSourceView,
-) -> &'static str {
-    match value {
-        contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry => {
-            "chat_session_report_entry"
-        }
-    }
-}
-
-fn format_model_facing_next_action(value: &contracts::ModelFacingNextActionView) -> &'static str {
-    match value {
-        contracts::ModelFacingNextActionView::AnswerDirectly => "answer_directly",
-        contracts::ModelFacingNextActionView::ReadDocumentDetail => "read_document_detail",
-        contracts::ModelFacingNextActionView::CompareDocuments => "compare_documents",
-        contracts::ModelFacingNextActionView::RequestReportEntryConfirmation => {
-            "request_report_entry_confirmation"
-        }
-        contracts::ModelFacingNextActionView::WaitForToolLoop => "wait_for_tool_loop",
-        contracts::ModelFacingNextActionView::FinalizeArtifactCommit => "finalize_artifact_commit",
-        contracts::ModelFacingNextActionView::RetryExecution => "retry_execution",
-        contracts::ModelFacingNextActionView::RefreshDirectory => "refresh_directory",
-        contracts::ModelFacingNextActionView::ContinueReportPlanning => "continue_report_planning",
-        contracts::ModelFacingNextActionView::GenerateReportOutput => "generate_report_output",
-        contracts::ModelFacingNextActionView::PublishReport => "publish_report",
-    }
-}
-
-fn default_tool_key_for_model_facing_next_action(
-    value: &contracts::ModelFacingNextActionView,
-) -> Option<&'static str> {
-    match value {
-        contracts::ModelFacingNextActionView::RequestReportEntryConfirmation => {
-            Some("chat_session.report_entry")
-        }
-        contracts::ModelFacingNextActionView::ReadDocumentDetail => Some("document.read_detail"),
-        contracts::ModelFacingNextActionView::CompareDocuments => Some("document.compare"),
-        contracts::ModelFacingNextActionView::RetryExecution => Some("workflow.retry"),
-        contracts::ModelFacingNextActionView::RefreshDirectory => Some("memory_directory.refresh"),
-        contracts::ModelFacingNextActionView::ContinueReportPlanning => Some("report.plan"),
-        contracts::ModelFacingNextActionView::GenerateReportOutput => Some("report.render"),
-        contracts::ModelFacingNextActionView::PublishReport => Some("report.publish"),
-        _ => None,
-    }
-}
-
-fn default_tool_keys_for_model_facing_next_actions(
-    actions: &[contracts::ModelFacingNextActionView],
-) -> Vec<String> {
-    let mut tool_keys = Vec::new();
-    for action in actions {
-        let Some(tool_key) = default_tool_key_for_model_facing_next_action(action) else {
-            continue;
-        };
-        if !tool_keys.iter().any(|existing| existing == tool_key) {
-            tool_keys.push(tool_key.to_string());
-        }
-    }
-    tool_keys
-}
-
-fn format_model_facing_continuation_state(
-    value: &contracts::ModelFacingContinuationStateView,
-) -> &'static str {
-    match value {
-        contracts::ModelFacingContinuationStateView::ReadyToAnswer => "ready_to_answer",
-        contracts::ModelFacingContinuationStateView::NeedsPlatformContinuation => {
-            "needs_platform_continuation"
-        }
-        contracts::ModelFacingContinuationStateView::NeedsUserConfirmation => {
-            "needs_user_confirmation"
-        }
-        contracts::ModelFacingContinuationStateView::WaitingForRuntime => "waiting_for_runtime",
-        contracts::ModelFacingContinuationStateView::RetryRequired => "retry_required",
-    }
-}
-
-fn format_chat_turn_status(value: &contracts::ChatTurnStatusView) -> &'static str {
-    match value {
-        contracts::ChatTurnStatusView::Pending => "pending",
-        contracts::ChatTurnStatusView::Completed => "completed",
-        contracts::ChatTurnStatusView::Failed => "failed",
-    }
-}
-
-fn format_chat_turn_artifact_commit_status(
-    value: &contracts::ChatTurnArtifactCommitStatusView,
-) -> &'static str {
-    match value {
-        contracts::ChatTurnArtifactCommitStatusView::NotReady => "not_ready",
-        contracts::ChatTurnArtifactCommitStatusView::Pending => "pending",
-        contracts::ChatTurnArtifactCommitStatusView::Failed => "failed",
-        contracts::ChatTurnArtifactCommitStatusView::Completed => "completed",
-    }
 }
 
 fn build_model_facing_summary(
