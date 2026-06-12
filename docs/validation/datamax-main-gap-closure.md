@@ -3469,6 +3469,35 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Local Activity Event Storage Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving local activity event cache slice;
+  - keep the change inside existing local briefing/audit activity cache behavior.
+- Code changes:
+  - added `apps/web/app/lib/local-activity-events.js`;
+  - added `apps/web/app/lib/local-activity-events.test.mjs`;
+  - updated `apps/web/app/HomePageClient.js` to use `readLocalActivityEvents` and `writeLocalActivityEvents`.
+- Test-first check:
+  - first run before adding the helper module failed as expected with `ERR_MODULE_NOT_FOUND` for `local-activity-events.js`;
+  - after implementation, `node --test apps/web/app/lib/local-activity-events.test.mjs` passed 3/3.
+- Local verification:
+  - `node --test apps/web/app/lib/local-activity-events.test.mjs`: passed 3/3;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed 11/11;
+  - `node --test apps/web/app/lib/assistant-startup-briefing.test.mjs`: passed 9/9;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed 26/26;
+  - `npm --prefix apps/web run build`: passed;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Local Chat Message Storage Extraction
 
 - Purpose:

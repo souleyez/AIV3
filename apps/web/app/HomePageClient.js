@@ -37,6 +37,7 @@ import {
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
 import { buildDefaultConversationTitle } from './lib/conversation-title';
+import { readLocalActivityEvents, writeLocalActivityEvents } from './lib/local-activity-events';
 import {
   createLocalThreadId,
   readLocalAssistantRunId,
@@ -91,7 +92,6 @@ const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
 const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
-const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
 const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
@@ -5142,26 +5142,14 @@ export default function HomePageClient() {
     if (typeof window === 'undefined') {
       return;
     }
-    try {
-      const raw = window.localStorage.getItem(LOCAL_ACTIVITY_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) {
-        setActivityEvents(parsed.slice(0, 20));
-      }
-    } catch {
-      setActivityEvents([]);
-    }
+    setActivityEvents(readLocalActivityEvents());
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
-    try {
-      window.localStorage.setItem(LOCAL_ACTIVITY_STORAGE_KEY, JSON.stringify(activityEvents.slice(0, 20)));
-    } catch {
-      // Activity cache is only a local briefing hint; ignore write failures.
-    }
+    writeLocalActivityEvents(activityEvents);
   }, [activityEvents]);
 
   useEffect(() => {
