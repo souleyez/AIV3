@@ -182,6 +182,45 @@ export function selectPlannerDatasetIds(plan) {
   );
 }
 
+export function datasetIdsFromScope(scope) {
+  const datasets = Array.isArray(scope?.datasets)
+    ? scope.datasets
+    : Array.isArray(scope?.selected)
+      ? scope.selected
+      : [];
+  return normalizeDatasetIds(
+    datasets.map((item) => {
+      if (typeof item === 'string') {
+        return item;
+      }
+      return item?.id || item?.dataset_id || item?.datasetId || '';
+    }),
+  );
+}
+
+export function uiDatasetIdsFromBackendScope(scope) {
+  const policy = scope?.dataset_scope_policy
+    || scope?.datasetScopePolicy
+    || scope?.supply_policy?.candidatePolicy
+    || scope?.supplyPolicy?.candidatePolicy;
+  if (policy === 'all_visible_datasets_with_preselection_priority') {
+    return normalizeDatasetIds(scope?.preferred_dataset_ids || scope?.preferredDatasetIds || []);
+  }
+  return datasetIdsFromScope(scope);
+}
+
+export function firstDatasetIdFromScope(scope) {
+  return datasetIdsFromScope(scope)[0] || '';
+}
+
+export function scopeHintFromCandidates(candidates) {
+  const labels = (Array.isArray(candidates) ? candidates : [])
+    .map((candidate) => candidate?.label)
+    .filter(Boolean)
+    .slice(0, 3);
+  return labels.length ? `已选中：${labels.join('、')}` : '';
+}
+
 function normalizeDatasetIds(ids) {
   return [...new Set((Array.isArray(ids) ? ids : [ids])
     .map((id) => String(id || '').trim())

@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { planAssistantScope, selectPlannerDatasetId } from './scope-planner.js';
+import {
+  datasetIdsFromScope,
+  firstDatasetIdFromScope,
+  planAssistantScope,
+  scopeHintFromCandidates,
+  selectPlannerDatasetId,
+  uiDatasetIdsFromBackendScope,
+} from './scope-planner.js';
 
 const videoPptTriggerCases = loadVideoPptTriggerCases();
 
@@ -48,6 +55,57 @@ test('scope planner keeps user selected dataset as highest priority', () => {
   assert.equal(plan.candidates[0].id, 'dataset-orders');
   assert.equal(plan.candidates[0].source, 'user_selected');
   assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
+});
+
+test('scope planner normalizes backend selected dataset scope for UI reuse', () => {
+  assert.deepEqual(datasetIdsFromScope({
+    datasets: [
+      ' dataset-a ',
+      { dataset_id: 'dataset-b' },
+      { datasetId: 'dataset-c' },
+      { id: 'dataset-a' },
+      { id: '' },
+    ],
+  }), ['dataset-a', 'dataset-b', 'dataset-c']);
+
+  assert.deepEqual(datasetIdsFromScope({
+    selected: [
+      { id: 'dataset-x' },
+      'dataset-y',
+    ],
+  }), ['dataset-x', 'dataset-y']);
+  assert.equal(firstDatasetIdFromScope({ selected: [' dataset-first ', 'dataset-second'] }), 'dataset-first');
+  assert.equal(firstDatasetIdFromScope({ selected: [] }), '');
+});
+
+test('scope planner prefers backend preselection ids only for all-visible policy', () => {
+  assert.deepEqual(uiDatasetIdsFromBackendScope({
+    dataset_scope_policy: 'all_visible_datasets_with_preselection_priority',
+    preferred_dataset_ids: [' dataset-b ', 'dataset-a', 'dataset-b'],
+    datasets: ['dataset-visible'],
+  }), ['dataset-b', 'dataset-a']);
+
+  assert.deepEqual(uiDatasetIdsFromBackendScope({
+    supplyPolicy: { candidatePolicy: 'all_visible_datasets_with_preselection_priority' },
+    preferredDatasetIds: ['dataset-c'],
+    selected: ['dataset-fallback'],
+  }), ['dataset-c']);
+
+  assert.deepEqual(uiDatasetIdsFromBackendScope({
+    supply_policy: { candidatePolicy: 'selected_only' },
+    selected: [{ id: 'dataset-selected' }],
+  }), ['dataset-selected']);
+});
+
+test('scope planner builds compact UI scope hints from first three labeled candidates', () => {
+  assert.equal(scopeHintFromCandidates([
+    { label: '订单' },
+    { label: '' },
+    { label: '客服' },
+    { label: '门店' },
+    { label: '忽略' },
+  ]), '已选中：订单、客服、门店');
+  assert.equal(scopeHintFromCandidates(null), '');
 });
 
 test('scope planner auto-selects matching visible dataset when none is selected', () => {

@@ -76,7 +76,12 @@ import {
   writeLocalThreadId,
 } from './lib/local-browser-state';
 import { fingerprintLocalSecret } from './lib/local-secret-fingerprint';
-import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
+import {
+  planAssistantScope,
+  scopeHintFromCandidates,
+  selectPlannerDatasetIds,
+  uiDatasetIdsFromBackendScope,
+} from './lib/scope-planner';
 import {
   publishedReportForPlan,
   reportTemplateCandidateId,
@@ -150,45 +155,6 @@ function wait(ms) {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
-}
-
-function datasetIdsFromScope(scope) {
-  const datasets = Array.isArray(scope?.datasets)
-    ? scope.datasets
-    : Array.isArray(scope?.selected)
-      ? scope.selected
-      : [];
-  return normalizeDatasetIds(
-    datasets.map((item) => {
-      if (typeof item === 'string') {
-        return item;
-      }
-      return item?.id || item?.dataset_id || item?.datasetId || '';
-    }),
-  );
-}
-
-function uiDatasetIdsFromBackendScope(scope) {
-  const policy = scope?.dataset_scope_policy
-    || scope?.datasetScopePolicy
-    || scope?.supply_policy?.candidatePolicy
-    || scope?.supplyPolicy?.candidatePolicy;
-  if (policy === 'all_visible_datasets_with_preselection_priority') {
-    return normalizeDatasetIds(scope?.preferred_dataset_ids || scope?.preferredDatasetIds || []);
-  }
-  return datasetIdsFromScope(scope);
-}
-
-function firstDatasetIdFromScope(scope) {
-  return datasetIdsFromScope(scope)[0] || '';
-}
-
-function scopeHintFromCandidates(candidates) {
-  const labels = (Array.isArray(candidates) ? candidates : [])
-    .map((candidate) => candidate?.label)
-    .filter(Boolean)
-    .slice(0, 3);
-  return labels.length ? `已选中：${labels.join('、')}` : '';
 }
 
 function createLocalMessage(role, content) {

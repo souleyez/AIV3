@@ -3457,6 +3457,24 @@ Data-ingestion external fixed-task smoke:
   - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
 
+## 2026-06-12 P5 Scope UI Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - move backend selected scope parsing, all-visible dataset preselection handling, first dataset id lookup, and compact scope hint formatting into the existing scope planner helper module;
+  - keep UI dataset selection recovery and assistant-run selected-scope hints stable.
+- Code changes:
+  - extended `apps/web/app/lib/scope-planner.js` with exported scope UI helpers;
+  - extended `apps/web/app/lib/scope-planner.test.mjs` with selected-scope, preselection-policy, and hint-format coverage;
+  - replaced the inline scope helper block in `apps/web/app/HomePageClient.js` with imports while preserving existing call sites.
+- Local verification:
+  - `node --test apps/web/app/lib/scope-planner.test.mjs apps/web/app/lib/dataset-record-scope.test.mjs apps/web/app/lib/home-api-client.test.mjs`: passed, 33 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P5 Static Page Planning Handoff Helper Extraction
 
 - Purpose:
