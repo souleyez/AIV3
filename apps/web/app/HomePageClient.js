@@ -36,6 +36,7 @@ import {
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
 import { buildDefaultConversationTitle } from './lib/conversation-title';
+import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   clearLocalSecretState,
   readLocalAccountEmail,
@@ -101,22 +102,6 @@ const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-function buildAutoDatasetIdentity(existingCount = 0) {
-  const now = new Date();
-  const safeStamp = Number.isFinite(now.getTime()) ? now.getTime().toString(36) : String(Date.now());
-  const randomPart = Math.random().toString(36).slice(2, 7);
-  const titleTime = now.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  return {
-    key: `dataset-${safeStamp}-${randomPart}`,
-    title: `新数据集 ${existingCount + 1} · ${titleTime}`,
-  };
-}
 
 async function fingerprintLocalSecret(secretValue) {
   const normalized = String(secretValue || '').trim();

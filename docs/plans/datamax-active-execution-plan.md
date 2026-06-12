@@ -284,6 +284,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 本地消息缓存读写已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；local chat messages storage key、只保留最后 40 条、消息对象 shape 不额外 normalize、无 window/坏 JSON/存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` activity events 缓存读写已拆到 `apps/web/app/lib/local-activity-events.js`，并补充 Node 单测；activity storage key、只保留前 20 条、事件对象 shape 不额外 normalize、无 window/坏 JSON/存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` 本地 secret/account 缓存 helper 已拆到 `apps/web/app/lib/local-account-state.js`，并补充 Node 单测；secret binding ids、local key value、account email storage key、邮箱 normalize、读 fallback 和现有写入/清理语义保持不变。
+- 2026-06-12: `HomePageClient.js` 自动数据集 key/title 生成 helper 已拆到 `apps/web/app/lib/dataset-identity.js`，并补充 Node 单测；默认时间、随机后缀、`zh-CN` 标题时间格式和现有调用语义保持不变。
 
 **Regression commands:**
 
