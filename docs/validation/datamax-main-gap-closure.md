@@ -3475,6 +3475,45 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 External Channel Static Page Preview Public URL 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `aebf477` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `0b3b6d8e5` to `aebf47759`;
+  - remote `git rev-parse --short HEAD` returned `aebf47759` and `git status --porcelain` returned no rows;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_sse_support --lib`: passed, 25/25 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_sse --lib`: passed, 27/27 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_public_stream --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_public --lib`: passed, 19/19 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_sse_support --lib`: passed, 2/2 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and all returned `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok`/`ready` after restart;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- GitHub Actions:
+  - `DataMax CI` run `27448831001` for `aebf47759690ea1eb870692690bd80cc697580eb` failed during job startup;
+  - `Rust Minimal` and `No-Credential Smoke` both reported `steps=[]`;
+  - `gh run view --log-failed` returned `log not found: 81139669497`, matching the known account/runner startup failure pattern rather than a repo test failure.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Live Stream Flag 8-Server Verification
 
 - 8-server post-sync verification:
