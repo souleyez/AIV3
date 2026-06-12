@@ -1,6 +1,8 @@
-use super::external_config_string;
 use crate::ApiError;
+use contracts::{ExternalChannelPlatformView, ExternalMessageTypeView};
 use serde_json::Value;
+
+use super::external_config_string;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExternalActionDispatchAuth {
@@ -97,4 +99,45 @@ pub(crate) fn external_channel_auth_failed() -> ApiError {
         "external_channel_auth_failed",
         "external channel bearer token is missing or invalid".to_string(),
     )
+}
+
+pub(crate) fn external_channel_platform_wire_value(
+    platform: &ExternalChannelPlatformView,
+) -> &'static str {
+    match platform {
+        ExternalChannelPlatformView::Feishu => "feishu",
+        ExternalChannelPlatformView::Lark => "lark",
+        ExternalChannelPlatformView::WeCom => "we_com",
+        ExternalChannelPlatformView::GenericChat => "generic_chat",
+        ExternalChannelPlatformView::ThirdParty => "third_party",
+    }
+}
+
+pub(crate) fn external_channel_platform_from_wire_value(
+    value: &str,
+) -> Option<ExternalChannelPlatformView> {
+    match value {
+        "feishu" => Some(ExternalChannelPlatformView::Feishu),
+        "lark" => Some(ExternalChannelPlatformView::Lark),
+        "we_com" => Some(ExternalChannelPlatformView::WeCom),
+        "generic_chat" => Some(ExternalChannelPlatformView::GenericChat),
+        "aigolf" => Some(ExternalChannelPlatformView::GenericChat),
+        "third_party" => Some(ExternalChannelPlatformView::ThirdParty),
+        _ => None,
+    }
+}
+
+pub(crate) fn external_message_type_wire_value(
+    message_type: &ExternalMessageTypeView,
+) -> &'static str {
+    match message_type {
+        ExternalMessageTypeView::Text => "text",
+        ExternalMessageTypeView::Image => "image",
+        ExternalMessageTypeView::File => "file",
+        ExternalMessageTypeView::Audio => "audio",
+        ExternalMessageTypeView::Video => "video",
+        ExternalMessageTypeView::Card => "card",
+        ExternalMessageTypeView::Event => "event",
+        ExternalMessageTypeView::Unknown => "unknown",
+    }
 }

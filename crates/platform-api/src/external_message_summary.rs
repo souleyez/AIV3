@@ -2,8 +2,11 @@ use contracts::{ExternalArtifactTemplateView, ExternalBotMessageView, ExternalRe
 use serde_json::{json, Value};
 
 use crate::{
-    external_bot_message_requested_dataset_external_ids, external_channel_platform_wire_value,
-    external_message_type_wire_value, external_requested_skill_mode, sha256_hex,
+    external_bot_message_requested_dataset_external_ids,
+    external_channel_support::{
+        external_channel_platform_wire_value, external_message_type_wire_value,
+    },
+    external_requested_skill_mode, sha256_hex,
 };
 
 pub(crate) fn requested_skills_summary(skills: &[ExternalRequestedSkillView]) -> Vec<Value> {

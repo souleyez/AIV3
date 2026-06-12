@@ -3464,6 +3464,31 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Channel Wire Value Refactor
+
+- Purpose:
+  - continue reducing `crates/platform-api/src/lib.rs` complexity through one behavior-preserving slice;
+  - move external channel platform and message-type wire value helpers into `external_channel_support`;
+  - keep third-party API contracts, payload field values, auth, URLs, and response shapes unchanged.
+- Code changes:
+  - moved `external_channel_platform_wire_value`, `external_channel_platform_from_wire_value`, and `external_message_type_wire_value` from `lib.rs` into `crates/platform-api/src/external_channel_support.rs`;
+  - updated `crates/platform-api/src/external_message_summary.rs` to depend directly on `external_channel_support` for these mappings.
+- Local verification:
+  - `cargo test -p platform-api external_channel_platform_wire_values_match_storage_values --lib`: passed, 1/1;
+  - `cargo test -p platform-api external_bot_message_summary_redacts_body_and_attachment_url --lib`: passed, 1/1;
+  - `cargo fmt --check`: passed after mechanical formatting;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `npm --prefix apps/web run build`: passed with existing Next.js warnings about deprecated `middleware` convention and NFT tracing from `apps/web/next.config.js`;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 External Integration Management Access Wrapper Split
 
 - Purpose:

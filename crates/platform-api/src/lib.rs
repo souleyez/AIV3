@@ -44710,41 +44710,6 @@ fn validate_external_bot_message(
     Ok(())
 }
 
-fn external_channel_platform_wire_value(platform: &ExternalChannelPlatformView) -> &'static str {
-    match platform {
-        ExternalChannelPlatformView::Feishu => "feishu",
-        ExternalChannelPlatformView::Lark => "lark",
-        ExternalChannelPlatformView::WeCom => "we_com",
-        ExternalChannelPlatformView::GenericChat => "generic_chat",
-        ExternalChannelPlatformView::ThirdParty => "third_party",
-    }
-}
-
-fn external_channel_platform_from_wire_value(value: &str) -> Option<ExternalChannelPlatformView> {
-    match value {
-        "feishu" => Some(ExternalChannelPlatformView::Feishu),
-        "lark" => Some(ExternalChannelPlatformView::Lark),
-        "we_com" => Some(ExternalChannelPlatformView::WeCom),
-        "generic_chat" => Some(ExternalChannelPlatformView::GenericChat),
-        "aigolf" => Some(ExternalChannelPlatformView::GenericChat),
-        "third_party" => Some(ExternalChannelPlatformView::ThirdParty),
-        _ => None,
-    }
-}
-
-fn external_message_type_wire_value(message_type: &ExternalMessageTypeView) -> &'static str {
-    match message_type {
-        ExternalMessageTypeView::Text => "text",
-        ExternalMessageTypeView::Image => "image",
-        ExternalMessageTypeView::File => "file",
-        ExternalMessageTypeView::Audio => "audio",
-        ExternalMessageTypeView::Video => "video",
-        ExternalMessageTypeView::Card => "card",
-        ExternalMessageTypeView::Event => "event",
-        ExternalMessageTypeView::Unknown => "unknown",
-    }
-}
-
 async fn get_assistant_run(
     State(state): State<AppState>,
     headers: HeaderMap,
