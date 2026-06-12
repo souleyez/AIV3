@@ -1,3 +1,5 @@
+import { createLocalMessage } from './local-chat-sessions.js';
+
 const CODEX_CUSTOMER_ARTIFACT_TYPE = 'codex_customer_artifact_bundle';
 const CODEX_CUSTOMER_ARTIFACT_MANIFEST_TYPE = 'codex_customer_artifacts';
 const CODEX_CUSTOMER_RESULT_SUMMARY_SCHEMA = 'v3.customer_codex_result_summary';
@@ -283,6 +285,42 @@ export function codexCustomerTaskChatContent(task) {
   }
   if (task.status === 'completed') return '';
   return `${task.title || 'Codex 执行'}${task.statusLabel ? `（${task.statusLabel}）` : ''}：${task.summary || '任务已结束。'}`;
+}
+
+export function codexCustomerChatMessageDescriptors(bundles = [], tasks = []) {
+  const descriptors = [];
+  (Array.isArray(bundles) ? bundles : []).forEach((bundle) => {
+    const content = codexCustomerBundleChatContent(bundle);
+    const stableKey = `codex-artifact:${bundle?.id || content}`;
+    if (content && stableKey) {
+      descriptors.push({ stableKey, content, source: 'codex_customer_artifact' });
+    }
+  });
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const content = codexCustomerTaskChatContent(task);
+    const stableKey = `codex-task:${task?.id || task?.workflowExecutionId || content}:${task?.status || 'terminal'}`;
+    if (content && stableKey) {
+      descriptors.push({ stableKey, content, source: 'codex_customer_task' });
+    }
+  });
+  return descriptors;
+}
+
+export function buildCodexCustomerLocalMessage(descriptor, options = {}) {
+  if (!descriptor || typeof descriptor !== 'object') {
+    return null;
+  }
+  const messageFactory = typeof options.messageFactory === 'function'
+    ? options.messageFactory
+    : createLocalMessage;
+  const message = messageFactory('assistant', descriptor.content);
+  return {
+    ...message,
+    metadata: {
+      source: descriptor.source,
+      key: descriptor.stableKey,
+    },
+  };
 }
 
 function safeWorkflowExecutionId(value) {

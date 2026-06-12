@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildCodexCustomerLocalMessage,
+  codexCustomerChatMessageDescriptors,
   codexCustomerBundleChatContent,
   codexCustomerTaskChatContent,
   isTerminalCodexCustomerTaskStatus,
@@ -635,6 +637,68 @@ test('formats non-result terminal Codex task chat content conservatively', () =>
     'Codex 执行（失败）：任务已结束。',
   );
   assert.equal(codexCustomerTaskChatContent({ status: 'running', title: 'Codex 执行' }), '');
+});
+
+test('builds Codex customer chat message descriptors with stable keys and sources', () => {
+  const descriptors = codexCustomerChatMessageDescriptors(
+    [{
+      id: 'bundle-1',
+      title: '客户页面',
+      summary: '已生成页面。',
+      published: true,
+      files: [{ path: 'reports/index.html', title: '首页' }],
+    }],
+    [
+      {
+        id: 'task-1',
+        title: 'Codex 页面发布',
+        status: 'failed',
+        statusLabel: '失败',
+        summary: '任务已结束。',
+      },
+      {
+        id: 'task-running',
+        title: 'Codex 页面发布',
+        status: 'running',
+        summary: '不应展示。',
+      },
+    ],
+  );
+
+  assert.equal(descriptors.length, 2);
+  assert.equal(descriptors[0].stableKey, 'codex-artifact:bundle-1');
+  assert.equal(descriptors[0].source, 'codex_customer_artifact');
+  assert.match(descriptors[0].content, /^Codex 产物：客户页面/);
+  assert.equal(descriptors[1].stableKey, 'codex-task:task-1:failed');
+  assert.equal(descriptors[1].source, 'codex_customer_task');
+  assert.equal(descriptors[1].content, 'Codex 页面发布（失败）：任务已结束。');
+});
+
+test('buildCodexCustomerLocalMessage preserves assistant message metadata shape', () => {
+  const message = buildCodexCustomerLocalMessage({
+    stableKey: 'codex-task:task-1:failed',
+    content: 'Codex 页面发布（失败）：任务已结束。',
+    source: 'codex_customer_task',
+  }, {
+    messageFactory: (role, content) => ({
+      id: 'message-1',
+      role,
+      content,
+      created_at: '2026-06-12T00:00:00.000Z',
+    }),
+  });
+
+  assert.deepEqual(message, {
+    id: 'message-1',
+    role: 'assistant',
+    content: 'Codex 页面发布（失败）：任务已结束。',
+    created_at: '2026-06-12T00:00:00.000Z',
+    metadata: {
+      source: 'codex_customer_task',
+      key: 'codex-task:task-1:failed',
+    },
+  });
+  assert.equal(buildCodexCustomerLocalMessage(null), null);
 });
 
 test('escapes and truncates Codex customer markdown labels', () => {

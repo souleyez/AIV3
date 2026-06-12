@@ -50,8 +50,8 @@ import {
   staticPageRenderedUrlFromDraft,
 } from './lib/html-artifact-utils';
 import {
-  codexCustomerBundleChatContent,
-  codexCustomerTaskChatContent,
+  buildCodexCustomerLocalMessage,
+  codexCustomerChatMessageDescriptors,
   isTerminalCodexCustomerTaskStatus,
   mergeCodexCustomerArtifactBundles,
   mergeCodexCustomerTasks,
@@ -482,26 +482,12 @@ export default function HomePageClient() {
   }
 
   function appendCodexCustomerChatUpdates(bundles = [], tasks = []) {
-    const nextMessages = [];
-    bundles.forEach((bundle) => {
-      const content = codexCustomerBundleChatContent(bundle);
-      const key = `codex-artifact:${bundle?.id || content}`;
-      if (content && key) {
-        nextMessages.push({ key, content, source: 'codex_customer_artifact' });
-      }
-    });
-    tasks.forEach((task) => {
-      const content = codexCustomerTaskChatContent(task);
-      const key = `codex-task:${task?.id || task?.workflowExecutionId || content}:${task?.status || 'terminal'}`;
-      if (content && key) {
-        nextMessages.push({ key, content, source: 'codex_customer_task' });
-      }
-    });
+    const nextMessages = codexCustomerChatMessageDescriptors(bundles, tasks);
     if (!nextMessages.length) return;
     setLocalMessages((current) => {
       const appended = [];
       nextMessages.forEach((message) => {
-        const stableKey = message.key;
+        const stableKey = message.stableKey;
         if (
           codexCustomerChatMessageKeysRef.current.has(stableKey)
           || current.some((item) => item?.metadata?.key === stableKey)
@@ -509,13 +495,10 @@ export default function HomePageClient() {
           return;
         }
         codexCustomerChatMessageKeysRef.current.add(stableKey);
-        appended.push({
-          ...createLocalMessage('assistant', message.content),
-          metadata: {
-            source: message.source,
-            key: stableKey,
-          },
-        });
+        const localMessage = buildCodexCustomerLocalMessage(message);
+        if (localMessage) {
+          appended.push(localMessage);
+        }
       });
       return appended.length ? [...current, ...appended].slice(-40) : current;
     });

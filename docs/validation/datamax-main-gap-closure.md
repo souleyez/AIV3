@@ -3618,6 +3618,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Codex Customer Chat Message Helper
+
+- Purpose:
+  - continue behavior-preserving `HomePageClient.js` split work under P5;
+  - move Codex customer artifact/task chat message descriptor and local message assembly into `apps/web/app/lib/codex-customer-artifacts.js`;
+  - keep dedupe refs, current-message key checks, and `slice(-40)` retention inside `HomePageClient.js`.
+- Code changes:
+  - added `codexCustomerChatMessageDescriptors`;
+  - added `buildCodexCustomerLocalMessage`;
+  - updated `appendCodexCustomerChatUpdates` to use those helpers without changing artifact key, task key, content, source, metadata, dedupe, or local message retention semantics.
+- Local verification:
+  - `node --test apps\web\app\lib\codex-customer-artifacts.test.mjs apps\web\app\lib\local-chat-sessions.test.mjs apps\web\app\lib\home-chat-intents.test.mjs`: passed, `47/47`;
+  - `npm --prefix apps/web run build`: passed, with existing Next `middleware` deprecation and NFT tracing warnings;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, report `target/external-report-focus-smoke/external-report-focus-self-test-20260612053236.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `runId=20260612053236`, `okCount=2`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `runId=20260612053236-self-test`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `runId=20260612053246`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `runId=20260612053246-self-test`, `concurrency=5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `maxAllowed=2`, `codexConcurrency=2`;
+  - `node --test apps\web\app\lib\assistant-run-progress.test.mjs apps\web\app\lib\local-chat-sessions.test.mjs apps\web\app\lib\codex-customer-artifacts.test.mjs`: passed, `66/66`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Static Page Progress Message Helper
 
 - Purpose:
