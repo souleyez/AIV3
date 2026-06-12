@@ -3453,6 +3453,28 @@ Data-ingestion external fixed-task smoke:
   - local verification did not restart services; 8-server deployment restarted only `aiv3-web.service`;
   - 120 server was not touched.
 
+## 2026-06-12 P5 UI Notice Message Helper Extraction
+
+- Purpose:
+  - continue reducing `apps/web/app/HomePageClient.js` local-message complexity with one behavior-preserving UI notice slice;
+  - make UI notice suppression, stable-key generation, and local message metadata directly testable.
+- Code changes:
+  - added `apps/web/app/lib/ui-notice-message.js`;
+  - moved UI notice descriptor generation into `buildUiNoticeDescriptor`;
+  - moved UI notice local message formatting into `buildUiNoticeLocalMessage`;
+  - updated `HomePageClient.js` to keep existing ref/state de-duplication while using the shared helper;
+  - added deterministic coverage in `apps/web/app/lib/ui-notice-message.test.mjs`.
+- Local verification:
+  - `node --test apps/web/app/lib/ui-notice-message.test.mjs apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 24/24;
+  - `npm --prefix apps/web run build`: passed;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0 Self-Test After Static Page Draft Map Reducer Deployment
 
 - Purpose:

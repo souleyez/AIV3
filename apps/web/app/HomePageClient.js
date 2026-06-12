@@ -156,6 +156,10 @@ import {
   summarizeUploadClassification,
 } from './lib/upload-classifier';
 import {
+  buildUiNoticeDescriptor,
+  buildUiNoticeLocalMessage,
+} from './lib/ui-notice-message';
+import {
   createLocalMessage,
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
@@ -519,31 +523,23 @@ export default function HomePageClient() {
   }
 
   function appendUiNoticeMessage(kind, content) {
-    const text = String(content || '').trim();
-    if (!text) return;
-    if (text === '已发送，助手正在后台处理；你可以继续输入。') {
-      return;
-    }
-    const displayContent = kind === 'error' ? `提示：${text}` : text;
-    const stableKey = `ui-notice:${kind}:${displayContent.replace(/\s+/g, ' ')}`;
+    const descriptor = buildUiNoticeDescriptor(kind, content);
+    if (!descriptor) return;
     setLocalMessages((current) => {
       if (
-        uiNoticeMessageKeysRef.current.has(stableKey)
-        || current.some((message) => message?.metadata?.key === stableKey)
+        uiNoticeMessageKeysRef.current.has(descriptor.stableKey)
+        || current.some((message) => message?.metadata?.key === descriptor.stableKey)
       ) {
         return current;
       }
-      uiNoticeMessageKeysRef.current.add(stableKey);
+      uiNoticeMessageKeysRef.current.add(descriptor.stableKey);
+      const message = buildUiNoticeLocalMessage(descriptor);
+      if (!message) {
+        return current;
+      }
       return [
         ...current,
-        {
-          ...createLocalMessage('assistant', displayContent),
-          metadata: {
-            source: 'ui_notice',
-            tone: kind,
-            key: stableKey,
-          },
-        },
+        message,
       ].slice(-40);
     });
   }
