@@ -1,4 +1,5 @@
 use axum::http::HeaderMap;
+use contracts::ExternalChannelEventResponse;
 use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -16,7 +17,9 @@ use crate::{
         external_channel_public_status_allows_preview_link,
         prune_external_channel_public_card_links,
     },
-    external_channel_public_text::external_channel_public_stream_text,
+    external_channel_public_text::{
+        external_channel_public_status, external_channel_public_stream_text,
+    },
     external_channel_static_page_enrich_report_card,
     sse_support::sse_json_event,
 };
@@ -568,9 +571,44 @@ pub(crate) fn external_channel_public_stream_replay_body(
     encoded
 }
 
+pub(crate) fn external_channel_completed_stream_data(
+    response: &ExternalChannelEventResponse,
+    assistant_run_id: Option<AssistantRunId>,
+    idempotency_key: &str,
+    text: &str,
+) -> Value {
+    let status = response
+        .reply
+        .task_status
+        .as_deref()
+        .or_else(|| {
+            response
+                .reply
+                .card
+                .as_ref()
+                .and_then(|card| card.get("status"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("completed");
+    json!({
+        "assistant_run_id": assistant_run_id,
+        "idempotency_key": idempotency_key,
+        "status": external_channel_public_status(status),
+        "reply_type": response.reply.reply_type.clone(),
+        "text": if text.trim().is_empty() {
+            "本轮处理已返回当前结果。".to_string()
+        } else {
+            external_channel_public_stream_text(text)
+        },
+        "card": response.reply.card.clone(),
+        "artifact_links": response.reply.artifact_links.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use contracts::{ExternalBotReplyTypeView, ExternalBotReplyView};
     use domain_model::{AssistantRunEventId, TenantId};
     use uuid::Uuid;
 
@@ -855,5 +893,71 @@ mod tests {
         assert!(!replay.contains("external_channel.internal"));
         assert!(replay.contains("event: external_channel.completed"));
         assert!(replay.contains("new event"));
+    }
+
+    #[test]
+    fn completed_stream_data_prefers_task_status_and_sanitizes_text() {
+        let run_id = AssistantRunId::new();
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(run_id),
+            idempotency_key: "idem-1".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card: Some(json!({"status": "static_page_published"})),
+                artifact_links: vec![
+                    "https://v3.elepcloud.com/generated-artifacts/demo/index.html".to_string(),
+                ],
+                task_status: Some("static_page_effect_image_ready".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let data = external_channel_completed_stream_data(
+            &response,
+            Some(run_id),
+            "idem-1",
+            "Cloudflare Codex 已完成",
+        );
+
+        assert_eq!(data["assistant_run_id"], json!(run_id));
+        assert_eq!(data["idempotency_key"], json!("idem-1"));
+        assert_eq!(data["status"], json!("static_page_preview_ready"));
+        assert_eq!(data["text"], json!("DataMax 后台 已完成"));
+        assert_eq!(
+            data["artifact_links"],
+            json!(["https://v3.elepcloud.com/generated-artifacts/demo/index.html"])
+        );
+    }
+
+    #[test]
+    fn completed_stream_data_falls_back_to_card_status_and_default_text() {
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-2".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::ArtifactLink,
+                text: None,
+                card: Some(json!({"status": "static_page_stable_artifact_reused"})),
+                artifact_links: Vec::new(),
+                task_status: None,
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let data = external_channel_completed_stream_data(&response, None, "idem-2", "  ");
+
+        assert_eq!(data["assistant_run_id"], Value::Null);
+        assert_eq!(data["status"], json!("static_page_stable_artifact_reused"));
+        assert_eq!(data["text"], json!("本轮处理已返回当前结果。"));
+        assert_eq!(data["reply_type"], json!("artifact_link"));
     }
 }

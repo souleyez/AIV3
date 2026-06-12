@@ -4757,40 +4757,6 @@ fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> St
     external_channel_sse_completion_with_done(response, true)
 }
 
-fn external_channel_completed_stream_data(
-    response: &ExternalChannelEventResponse,
-    assistant_run_id: Option<AssistantRunId>,
-    idempotency_key: &str,
-    text: &str,
-) -> Value {
-    let status = response
-        .reply
-        .task_status
-        .as_deref()
-        .or_else(|| {
-            response
-                .reply
-                .card
-                .as_ref()
-                .and_then(|card| card.get("status"))
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("completed");
-    json!({
-        "assistant_run_id": assistant_run_id,
-        "idempotency_key": idempotency_key,
-        "status": external_channel_public_status(status),
-        "reply_type": response.reply.reply_type.clone(),
-        "text": if text.trim().is_empty() {
-            "本轮处理已返回当前结果。".to_string()
-        } else {
-            external_channel_public_stream_text(text)
-        },
-        "card": response.reply.card.clone(),
-        "artifact_links": response.reply.artifact_links.clone(),
-    })
-}
-
 async fn append_external_channel_public_stream_event(
     state: &AppState,
     run_id: AssistantRunId,
