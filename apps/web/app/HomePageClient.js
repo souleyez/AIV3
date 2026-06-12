@@ -71,9 +71,11 @@ import {
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
+  readLocalChatMessages,
   readLocalChatSessions,
   shouldPersistLocalChatSession,
   upsertLocalChatSession,
+  writeLocalChatMessages,
   writeLocalChatSessions,
 } from './lib/local-chat-sessions';
 
@@ -89,7 +91,6 @@ const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
 const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
-const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
@@ -5092,11 +5093,7 @@ export default function HomePageClient() {
           setLastAssistantRunId(currentLocalSession.assistantRunId);
         }
       } else {
-        const raw = window.localStorage.getItem(LOCAL_CHAT_STORAGE_KEY);
-        const parsed = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(parsed)) {
-          setLocalMessages(parsed.slice(-40));
-        }
+        setLocalMessages(readLocalChatMessages());
       }
     } catch {
       setLocalMessages([]);
@@ -5116,11 +5113,7 @@ export default function HomePageClient() {
     if (!localChatStorageReady) {
       return;
     }
-    try {
-      window.localStorage.setItem(LOCAL_CHAT_STORAGE_KEY, JSON.stringify(localMessages.slice(-40)));
-    } catch {
-      // Ignore cache write failures; chat can still continue in memory.
-    }
+    writeLocalChatMessages(localMessages);
     if (!selectedSessionId) {
       const snapshot = buildCurrentLocalChatSessionSnapshot({ threadId: localThreadId || readLocalThreadId() });
       if (shouldPersistLocalChatSession({

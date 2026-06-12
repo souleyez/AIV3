@@ -1,4 +1,5 @@
 export const LOCAL_CHAT_SESSION_OPTION_PREFIX = 'local-chat:';
+export const LOCAL_CHAT_MESSAGES_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 export const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
 
 const DEFAULT_MAX_LOCAL_SESSIONS = 20;
@@ -141,5 +142,35 @@ export function writeLocalChatSessions(sessions) {
     );
   } catch {
     // The local conversation index is a convenience cache; the active chat still works in memory.
+  }
+}
+
+export function readLocalChatMessages(options = {}) {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  const maxMessages = Number(options.maxMessages) || DEFAULT_MAX_LOCAL_MESSAGES;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_CHAT_MESSAGES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(-maxMessages) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeLocalChatMessages(messages, options = {}) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const maxMessages = Number(options.maxMessages) || DEFAULT_MAX_LOCAL_MESSAGES;
+  try {
+    const normalizedMessages = Array.isArray(messages) ? messages : [];
+    window.localStorage.setItem(
+      LOCAL_CHAT_MESSAGES_STORAGE_KEY,
+      JSON.stringify(normalizedMessages.slice(-maxMessages)),
+    );
+  } catch {
+    // Ignore cache write failures; chat can still continue in memory.
   }
 }

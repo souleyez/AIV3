@@ -3469,6 +3469,35 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Local Chat Message Storage Extraction
+
+- Purpose:
+  - continue the P5 frontend complexity reduction with one behavior-preserving local chat message cache slice;
+  - keep the change inside existing local browser message cache behavior.
+- Code changes:
+  - moved local chat message cache read/write from `apps/web/app/HomePageClient.js` into `apps/web/app/lib/local-chat-sessions.js`;
+  - exported `LOCAL_CHAT_MESSAGES_STORAGE_KEY`, `readLocalChatMessages`, and `writeLocalChatMessages`;
+  - extended `apps/web/app/lib/local-chat-sessions.test.mjs` with message-cache read/write coverage.
+- Test-first check:
+  - first run before adding the exports failed as expected because `local-chat-sessions.js` did not export `LOCAL_CHAT_MESSAGES_STORAGE_KEY`;
+  - after implementation, `node --test apps/web/app/lib/local-chat-sessions.test.mjs` passed 11/11.
+- Local verification:
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed 11/11;
+  - `node --test apps/web/app/lib/local-browser-state.test.mjs`: passed 7/7;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed 26/26;
+  - `node --test apps/web/app/lib/conversation-title.test.mjs`: passed 5/5;
+  - `npm --prefix apps/web run build`: passed;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Known warnings:
+  - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
+  - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 Local Chat Session Storage Extraction
 
 - Purpose:

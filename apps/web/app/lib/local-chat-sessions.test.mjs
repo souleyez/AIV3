@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  LOCAL_CHAT_MESSAGES_STORAGE_KEY,
   LOCAL_CHAT_SESSIONS_STORAGE_KEY,
   isLocalChatSessionOptionId,
   localChatSessionOptionId,
   localThreadIdFromSessionOptionId,
   normalizeLocalChatSessions,
+  readLocalChatMessages,
   readLocalChatSessions,
   shouldPersistLocalChatSession,
   upsertLocalChatSession,
+  writeLocalChatMessages,
   writeLocalChatSessions,
 } from './local-chat-sessions.js';
 
@@ -170,5 +173,57 @@ test('writeLocalChatSessions stores normalized sessions and tolerates storage fa
     },
   }, () => {
     assert.doesNotThrow(() => writeLocalChatSessions([{ id: 'thread-1', messages: [{ role: 'user', content: 'x' }] }]));
+  });
+});
+
+test('readLocalChatMessages returns the latest cached messages without changing shape', () => {
+  const messages = Array.from({ length: 42 }, (_, index) => ({
+    id: `m-${index}`,
+    role: index % 2 ? 'assistant' : 'user',
+    content: `message ${index}`,
+    metadata: { index },
+  }));
+  withWindow(createStorage({ [LOCAL_CHAT_MESSAGES_STORAGE_KEY]: JSON.stringify(messages) }), () => {
+    const cached = readLocalChatMessages();
+    assert.equal(cached.length, 40);
+    assert.equal(cached[0].id, 'm-2');
+    assert.deepEqual(cached.at(-1).metadata, { index: 41 });
+  });
+});
+
+test('readLocalChatMessages returns empty list for missing or invalid storage', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  if (previous) {
+    delete globalThis.window;
+  }
+  try {
+    assert.deepEqual(readLocalChatMessages(), []);
+  } finally {
+    if (previous) {
+      Object.defineProperty(globalThis, 'window', previous);
+    }
+  }
+
+  withWindow(createStorage({ [LOCAL_CHAT_MESSAGES_STORAGE_KEY]: '{bad-json' }), () => {
+    assert.deepEqual(readLocalChatMessages(), []);
+  });
+});
+
+test('writeLocalChatMessages stores only latest messages and tolerates storage failures', () => {
+  const messages = Array.from({ length: 43 }, (_, index) => ({ id: `m-${index}`, role: 'user', content: `message ${index}` }));
+  withWindow(createStorage(), (storage) => {
+    writeLocalChatMessages(messages);
+    const stored = JSON.parse(storage.snapshot()[LOCAL_CHAT_MESSAGES_STORAGE_KEY]);
+    assert.equal(stored.length, 40);
+    assert.equal(stored[0].id, 'm-3');
+    assert.equal(stored.at(-1).id, 'm-42');
+  });
+
+  withWindow({
+    setItem() {
+      throw new Error('blocked');
+    },
+  }, () => {
+    assert.doesNotThrow(() => writeLocalChatMessages([{ id: 'm-1', role: 'user', content: 'x' }]));
   });
 });
