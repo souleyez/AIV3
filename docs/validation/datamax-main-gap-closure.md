@@ -3383,11 +3383,18 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs apps/web/app/lib/codex-customer-artifacts.test.mjs`: passed, 110/110;
   - `npm --prefix apps/web run build`: passed;
   - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- 8-server verification:
+  - `/srv/aiv3/repo` fast-forwarded from `6db773877` to `edb289e52`;
+  - `npm --prefix apps/web run build`: passed;
+  - restarted `aiv3-web.service`;
+  - `aiv3-web.service`, `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`: all `active`;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs apps/web/app/lib/static-page-conversation-context.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/home-chat-intents.test.mjs apps/web/app/lib/codex-customer-artifacts.test.mjs`: passed, 110/110;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
-  - no service was restarted;
+  - local verification did not restart services; 8-server deployment restarted only `aiv3-web.service`;
   - 120 server was not touched.
 
 ## 2026-06-12 P0-2 Report Trigger And Export Self-Test Refresh
