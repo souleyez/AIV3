@@ -14,7 +14,6 @@ import {
   buildRotateLocalKeyPayload,
   buildStartEmailAuthPayload,
   buildVerifyEmailAuthPayload,
-  normalizeAccountEmail,
   normalizeVerificationCode,
   summarizeAccountState,
   validateAccountEmail,
@@ -37,6 +36,15 @@ import {
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
 import { buildDefaultConversationTitle } from './lib/conversation-title';
+import {
+  clearLocalSecretState,
+  readLocalAccountEmail,
+  readLocalSecretBindingIds,
+  readLocalSecretBindingIdsHeader,
+  readLocalSecretValue,
+  writeLocalAccountEmail,
+  writeLocalSecretState,
+} from './lib/local-account-state';
 import { readLocalActivityEvents, writeLocalActivityEvents } from './lib/local-activity-events';
 import {
   createLocalThreadId,
@@ -92,9 +100,6 @@ const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
 const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
-const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
-const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
-const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
 
 function buildAutoDatasetIdentity(existingCount = 0) {
@@ -111,86 +116,6 @@ function buildAutoDatasetIdentity(existingCount = 0) {
     key: `dataset-${safeStamp}-${randomPart}`,
     title: `新数据集 ${existingCount + 1} · ${titleTime}`,
   };
-}
-
-function readLocalSecretBindingIdsHeader() {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  try {
-    const raw = window.localStorage.getItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY) || '';
-    return raw
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .join(',');
-  } catch {
-    return '';
-  }
-}
-
-function readLocalSecretBindingIds() {
-  return readLocalSecretBindingIdsHeader()
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function writeLocalSecretState(secretValue, secretBindingIds) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  const normalizedBindingIds = [...new Set((secretBindingIds || []).filter(Boolean))];
-  window.localStorage.setItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY, normalizedBindingIds.join(','));
-  if (secretValue) {
-    window.localStorage.setItem(LOCAL_SECRET_VALUE_STORAGE_KEY, secretValue);
-  }
-}
-
-function clearLocalSecretState() {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  window.localStorage.removeItem(LOCAL_SECRET_BINDING_IDS_STORAGE_KEY);
-  window.localStorage.removeItem(LOCAL_SECRET_VALUE_STORAGE_KEY);
-}
-
-function readLocalSecretValue() {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  try {
-    return window.localStorage.getItem(LOCAL_SECRET_VALUE_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function readLocalAccountEmail() {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  try {
-    return window.localStorage.getItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function writeLocalAccountEmail(email) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    const normalized = normalizeAccountEmail(email);
-    if (normalized) {
-      window.localStorage.setItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY, normalized);
-    } else {
-      window.localStorage.removeItem(LOCAL_ACCOUNT_EMAIL_STORAGE_KEY);
-    }
-  } catch {
-    // Account email is a convenience cache; auth is still cookie based.
-  }
 }
 
 async function fingerprintLocalSecret(secretValue) {
