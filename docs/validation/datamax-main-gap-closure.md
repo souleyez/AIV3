@@ -4708,6 +4708,41 @@ Data-ingestion external fixed-task smoke:
   - no secrets, raw customer rows, raw provider payloads, object keys, document titles, content hashes, or full documents were recorded;
   - no service restart and no 120-server action was taken.
 
+## 2026-06-12 P5 Not Found Error Helper Local Verification
+
+- Purpose:
+  - continue the P5 `platform-api` behavior-preserving reduction;
+  - move shared 404/not-found error constructors out of `crates/platform-api/src/lib.rs`.
+- Code changes:
+  - added `crates/platform-api/src/not_found_errors.rs`;
+  - moved dataset, document, dataset output, chat session, assistant run, workflow execution, report plan, static page draft, and static page image job not-found helper construction into the new internal module;
+  - replaced repeated inline document/static-page-image-job 404 construction with the same helper messages and codes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api not_found_errors --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api report_plan_routes_hide_owned_public_dataset_plan_from_other_users --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 178/178 matching tests;
+  - `cargo test -p platform-api create_dataset --lib`: passed, 3/3 matching tests;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `concurrency=5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `maxAllowed=2`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests.
+- Safety:
+  - no public API URL, auth behavior, request field, response field, third-party contract, or data mapping changed;
+  - no database writes, source writes, backfill, static-page generation, object cleanup, or production mutation was performed;
+  - no secrets, raw customer rows, raw provider payloads, object keys, document titles, content hashes, or full documents were recorded;
+  - no service restart and no 120-server action was taken.
+
 ## 2026-06-12 P5 Assistant Stream Message Helper Local Verification
 
 - Purpose:

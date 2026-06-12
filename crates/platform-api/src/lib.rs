@@ -197,6 +197,7 @@ mod model_facing_policy;
 mod model_gateway_admin;
 mod model_gateway_runtime;
 mod model_gateway_status;
+mod not_found_errors;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
@@ -252,6 +253,7 @@ use model_facing_policy::build_model_facing_summary;
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
+use not_found_errors::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
@@ -3474,16 +3476,6 @@ fn assistant_scope_count_summary(counts: &BTreeMap<String, usize>) -> String {
         .join("，")
 }
 
-fn dataset_not_found_error(dataset_id: DatasetId) -> ApiError {
-    ApiError::not_found(
-        "dataset_not_found",
-        format!(
-            "dataset {} was not found for tenant or current access scope",
-            dataset_id
-        ),
-    )
-}
-
 async fn load_visible_dataset(
     state: &AppState,
     dataset_id: DatasetId,
@@ -3614,12 +3606,7 @@ async fn load_visible_document_for_assistant_scope(
                 .get_by_id(state.tenant_id, document_id)
                 .await
                 .map_err(ApiError::from_storage)?
-                .ok_or_else(|| {
-                    ApiError::not_found(
-                        "document_not_found",
-                        format!("document {} was not found", document_id),
-                    )
-                })?;
+                .ok_or_else(|| document_not_found_error(document_id))?;
             if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
                 return Err(error);
             }
@@ -3654,17 +3641,9 @@ async fn load_visible_document_for_user_with_local_scope(
         .get_by_id(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "document_not_found",
-                format!("document {} was not found", document_id),
-            )
-        })?;
+        .ok_or_else(|| document_not_found_error(document_id))?;
     if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
-        return Err(ApiError::not_found(
-            "document_not_found",
-            format!("document {} was not found", document_id),
-        ));
+        return Err(document_not_found_error(document_id));
     }
     if document_has_visible_dataset_scope(
         state,
@@ -3677,10 +3656,7 @@ async fn load_visible_document_for_user_with_local_scope(
     {
         return Ok(document);
     }
-    Err(ApiError::not_found(
-        "document_not_found",
-        format!("document {} was not found", document_id),
-    ))
+    Err(document_not_found_error(document_id))
 }
 
 async fn document_has_visible_dataset_scope(
@@ -3982,13 +3958,6 @@ async fn latest_visible_memory_directory_for_user(
     )
 }
 
-fn dataset_output_not_found_error(output_id: DatasetOutputId) -> ApiError {
-    ApiError::not_found(
-        "dataset_output_not_found",
-        format!("dataset output {} was not found", output_id),
-    )
-}
-
 async fn load_visible_dataset_output_for_user(
     state: &AppState,
     output_id: DatasetOutputId,
@@ -4015,13 +3984,6 @@ async fn load_visible_dataset_output_for_user(
     Ok(output)
 }
 
-fn chat_session_not_found_error(session_id: ChatSessionId) -> ApiError {
-    ApiError::not_found(
-        "chat_session_not_found",
-        format!("chat session {} was not found", session_id),
-    )
-}
-
 async fn load_visible_chat_session_for_user(
     state: &AppState,
     session_id: ChatSessionId,
@@ -4046,13 +4008,6 @@ async fn load_visible_chat_session_for_user(
         return Err(chat_session_not_found_error(session_id));
     }
     Ok(session)
-}
-
-fn assistant_run_not_found_error(run_id: AssistantRunId) -> ApiError {
-    ApiError::not_found(
-        "assistant_run_not_found",
-        format!("assistant run {} was not found", run_id),
-    )
 }
 
 async fn load_visible_assistant_run_for_user(
@@ -4097,13 +4052,6 @@ async fn load_external_channel_assistant_run_for_owner_or_operator(
         return Err(assistant_run_not_found_error(run_id));
     }
     Ok((run, Some(user.id), true))
-}
-
-fn workflow_execution_not_found_error(execution_id: WorkflowExecutionId) -> ApiError {
-    ApiError::not_found(
-        "workflow_execution_not_found",
-        format!("workflow execution {} was not found", execution_id),
-    )
 }
 
 fn workflow_context_uuid(context: &Value, key: &str) -> Option<Uuid> {
@@ -4275,13 +4223,6 @@ async fn load_report_plan_with_visible_dataset_for_user(
 
 fn report_owner_is_visible(owner_user_id: Option<UserId>, current_user_id: Option<UserId>) -> bool {
     owner_user_id_is_visible(owner_user_id, current_user_id)
-}
-
-fn report_plan_not_found_error(plan_id: ReportPlanId) -> ApiError {
-    ApiError::not_found(
-        "report_plan_not_found",
-        format!("report plan {} was not found", plan_id),
-    )
 }
 
 async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result<(), ApiError> {
@@ -93530,13 +93471,6 @@ fn static_page_public_template_update_is_safe(request: &UpdateStaticPageDraftReq
     archives || retires_template
 }
 
-fn static_page_draft_not_found_error(draft_id: StaticPageDraftId) -> ApiError {
-    ApiError::not_found(
-        "static_page_draft_not_found",
-        format!("static page draft {} was not found", draft_id),
-    )
-}
-
 async fn load_static_page_image_job_or_404(
     state: &AppState,
     job_id: StaticPageImageJobId,
@@ -93547,12 +93481,7 @@ async fn load_static_page_image_job_or_404(
         .get_by_id(state.tenant_id, job_id)
         .await
         .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "static_page_image_job_not_found",
-                format!("static page image job {} was not found", job_id),
-            )
-        })
+        .ok_or_else(|| static_page_image_job_not_found_error(job_id))
 }
 
 async fn load_visible_static_page_image_job(
