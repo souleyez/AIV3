@@ -67,6 +67,7 @@ import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   documentDatasetIds,
   documentDatasetSelectionUpdate,
+  documentMembershipResponseDatasetIds,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   sameDatasetIds,
@@ -3717,7 +3718,7 @@ export default function HomePageClient() {
         `/api/v3/documents/${selectedDocumentId}/dataset-memberships/${datasetId}`,
         { method: active ? 'DELETE' : 'PUT' },
       );
-      const nextIds = normalizeDatasetIds(response?.dataset_ids || response?.datasetIds || response?.document?.dataset_ids || response?.document?.datasetIds || []);
+      const nextIds = documentMembershipResponseDatasetIds(response);
       if (nextIds.length) {
         setSelectedDatasetIds(nextIds);
         setSelectedDatasetId(nextIds[0]);

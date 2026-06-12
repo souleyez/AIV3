@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   documentDatasetIds,
   documentDatasetSelectionUpdate,
+  documentMembershipResponseDatasetIds,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   reportRecordDatasetIds,
@@ -93,6 +94,43 @@ describe('dataset record scope helpers', () => {
     );
     assert.equal(documentDatasetSelectionUpdate({ id: 'orphan-doc' }), null);
     assert.equal(documentDatasetSelectionUpdate(null), null);
+  });
+
+  it('extracts document membership response dataset ids with existing fallback priority', () => {
+    assert.deepEqual(
+      documentMembershipResponseDatasetIds({
+        dataset_ids: ['top-a', ' top-b ', 'top-a'],
+        datasetIds: ['camel-skip'],
+        document: { dataset_ids: ['doc-skip'] },
+      }),
+      ['top-a', 'top-b'],
+    );
+    assert.deepEqual(
+      documentMembershipResponseDatasetIds({
+        datasetIds: ['camel-a'],
+        document: { dataset_ids: ['doc-skip'] },
+      }),
+      ['camel-a'],
+    );
+    assert.deepEqual(
+      documentMembershipResponseDatasetIds({
+        document: { dataset_ids: ['doc-a'], datasetIds: ['doc-skip'] },
+      }),
+      ['doc-a'],
+    );
+    assert.deepEqual(
+      documentMembershipResponseDatasetIds({
+        document: { datasetIds: ['doc-camel-a'] },
+      }),
+      ['doc-camel-a'],
+    );
+    assert.deepEqual(
+      documentMembershipResponseDatasetIds({
+        dataset_ids: [],
+        datasetIds: ['camel-skip'],
+      }),
+      [],
+    );
   });
 
   it('filters records by selected dataset ids with default and custom owner resolvers', () => {

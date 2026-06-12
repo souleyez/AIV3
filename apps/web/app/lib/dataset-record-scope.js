@@ -45,6 +45,16 @@ export function documentDatasetSelectionUpdate(document) {
   };
 }
 
+export function documentMembershipResponseDatasetIds(response) {
+  return normalizeDatasetIds(
+    response?.dataset_ids
+      || response?.datasetIds
+      || response?.document?.dataset_ids
+      || response?.document?.datasetIds
+      || [],
+  );
+}
+
 export function reportRecordDatasetIds(record) {
   return normalizeDatasetIds([
     record?.dataset_id,
