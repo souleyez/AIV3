@@ -94,6 +94,8 @@ import {
   uiDatasetIdsFromBackendScope,
 } from './lib/scope-planner';
 import {
+  buildReportShelfSelectionLocalMessage,
+  reportShelfSelectionContent,
   publishedReportForPlan,
   reportTemplateCandidateId,
   reportTemplateTitle,
@@ -2546,9 +2548,7 @@ export default function HomePageClient() {
   }
 
   function appendReportShelfSelectionMessage(title, metadata = {}) {
-    const cleanTitle = String(title || '当前').replace(/^静态页[：:]\s*/, '').trim() || '当前';
-    const reportName = /报表|报告|看板|页面/.test(cleanTitle) ? cleanTitle : `${cleanTitle}报表`;
-    const content = `已选中「${reportName}」，你可以继续修改。`;
+    const content = reportShelfSelectionContent(title);
     setLocalMessages((current) => {
       const last = current[current.length - 1];
       if (last?.metadata?.source === 'report_shelf_selection' && last?.content === content) {
@@ -2556,13 +2556,7 @@ export default function HomePageClient() {
       }
       return [
         ...current,
-        {
-          ...createLocalMessage('assistant', content),
-          metadata: {
-            source: 'report_shelf_selection',
-            ...metadata,
-          },
-        },
+        buildReportShelfSelectionLocalMessage(title, metadata),
       ].slice(-40);
     });
   }

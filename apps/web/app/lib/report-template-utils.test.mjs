@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildReportShelfSelectionLocalMessage,
   firstArtifactUrlFromObject,
   publishedReportForPlan,
   reportPlanIdFromPublished,
+  reportShelfSelectionContent,
   reportTemplateCandidateId,
   reportTemplateTitle,
   reportTemplateUrl,
@@ -111,5 +113,46 @@ describe('report template helpers', () => {
       }),
       '/generated-artifacts/draft/index.html',
     );
+  });
+
+  it('builds report shelf selection content with existing title normalization', () => {
+    assert.equal(
+      reportShelfSelectionContent('静态页：新世界百货经营管理月报表'),
+      '已选中「新世界百货经营管理月报表」，你可以继续修改。',
+    );
+    assert.equal(
+      reportShelfSelectionContent('取高机会'),
+      '已选中「取高机会报表」，你可以继续修改。',
+    );
+    assert.equal(
+      reportShelfSelectionContent('移动端经营看板'),
+      '已选中「移动端经营看板」，你可以继续修改。',
+    );
+    assert.equal(
+      reportShelfSelectionContent(''),
+      '已选中「当前报表」，你可以继续修改。',
+    );
+  });
+
+  it('builds report shelf selection local message with existing metadata shape', () => {
+    const message = buildReportShelfSelectionLocalMessage('取高机会', { reportPlanId: 'plan-1' }, {
+      messageFactory: (role, content) => ({
+        id: 'message-1',
+        role,
+        content,
+        created_at: '2026-06-12T00:00:00.000Z',
+      }),
+    });
+
+    assert.deepEqual(message, {
+      id: 'message-1',
+      role: 'assistant',
+      content: '已选中「取高机会报表」，你可以继续修改。',
+      created_at: '2026-06-12T00:00:00.000Z',
+      metadata: {
+        source: 'report_shelf_selection',
+        reportPlanId: 'plan-1',
+      },
+    });
   });
 });

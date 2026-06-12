@@ -1,3 +1,5 @@
+import { createLocalMessage } from './local-chat-sessions.js';
+
 export function reportPlanIdFromPublished(report) {
   return String(
     report?.report_plan_id
@@ -143,4 +145,24 @@ export function reportTemplateUrl(candidate) {
     || firstArtifactUrlFromObject(candidate?.plan)
     || firstArtifactUrlFromObject(candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft)
     || '';
+}
+
+export function reportShelfSelectionContent(title) {
+  const cleanTitle = String(title || '当前').replace(/^静态页[：:]\s*/, '').trim() || '当前';
+  const reportName = /报表|报告|看板|页面/.test(cleanTitle) ? cleanTitle : `${cleanTitle}报表`;
+  return `已选中「${reportName}」，你可以继续修改。`;
+}
+
+export function buildReportShelfSelectionLocalMessage(title, metadata = {}, options = {}) {
+  const messageFactory = typeof options.messageFactory === 'function'
+    ? options.messageFactory
+    : createLocalMessage;
+  const content = reportShelfSelectionContent(title);
+  return {
+    ...messageFactory('assistant', content),
+    metadata: {
+      source: 'report_shelf_selection',
+      ...metadata,
+    },
+  };
 }
