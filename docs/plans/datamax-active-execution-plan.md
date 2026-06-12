@@ -393,6 +393,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run React completed event payload 和 html artifact 汇总 helper 已拆到 `assistant_run_react_support` 模块并补模块单测；entrypoint/html_artifacts 可选字段、artifact id 去重、默认标题/模板/source 字段语义保持不变。
 - 2026-06-13: `assistant_run_react_support` assistant-run React helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 通用 SSE JSON/error/delta 编码 helper 已拆到 `sse_support` 模块并补模块单测；event/data 格式、error+done 终态、24 字符 delta 分块和单 delta 语义保持不变。
+- 2026-06-13: `sse_support` SSE helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
