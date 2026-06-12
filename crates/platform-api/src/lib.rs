@@ -193,6 +193,7 @@ mod external_system_user;
 pub mod external_wecom;
 pub mod fact_index;
 mod lifecycle_updates;
+mod memory_directory_scope;
 mod model_facing_document_focus;
 mod model_facing_format;
 mod model_facing_handoff;
@@ -254,6 +255,7 @@ use external_observability::{
 };
 use external_system_user::*;
 use lifecycle_updates::*;
+use memory_directory_scope::*;
 use model_facing_format::*;
 #[cfg(test)]
 use model_facing_policy::build_model_facing_summary;
@@ -3449,68 +3451,6 @@ async fn filter_retrieval_evidences_for_assistant_evidence_scope(
         .into_iter()
         .filter(|evidence| visible_document_ids.contains(&evidence.document_id))
         .collect())
-}
-
-fn memory_directory_source_document_ids(directory: &MemoryDirectory) -> Vec<DocumentId> {
-    if !directory.source_document_ids.is_empty() {
-        return directory.source_document_ids.clone();
-    }
-
-    let mut ids = Vec::new();
-    collect_memory_manifest_document_ids(&directory.directory_manifest, &mut ids);
-    ids
-}
-
-fn collect_memory_manifest_document_ids(value: &Value, ids: &mut Vec<DocumentId>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(document_id) = object
-                .get("document_id")
-                .and_then(Value::as_str)
-                .and_then(|value| Uuid::parse_str(value).ok())
-                .map(DocumentId)
-            {
-                push_unique_document_id(ids, document_id);
-            }
-            if let Some(source_ids) = object.get("source_document_ids").and_then(Value::as_array) {
-                for source_id in source_ids {
-                    if let Some(document_id) = source_id
-                        .as_str()
-                        .and_then(|value| Uuid::parse_str(value).ok())
-                        .map(DocumentId)
-                    {
-                        push_unique_document_id(ids, document_id);
-                    }
-                }
-            }
-            for child in object.values() {
-                collect_memory_manifest_document_ids(child, ids);
-            }
-        }
-        Value::Array(entries) => {
-            for entry in entries {
-                collect_memory_manifest_document_ids(entry, ids);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_unique_document_id(ids: &mut Vec<DocumentId>, document_id: DocumentId) {
-    if !ids.iter().any(|existing| *existing == document_id) {
-        ids.push(document_id);
-    }
-}
-
-fn memory_directory_matches_visible_scope(
-    directory: &MemoryDirectory,
-    visible_document_ids: &HashSet<DocumentId>,
-    current_user_id: Option<UserId>,
-) -> bool {
-    owner_user_id_is_visible(directory.owner_user_id, current_user_id)
-        && memory_directory_source_document_ids(directory)
-            .into_iter()
-            .all(|document_id| visible_document_ids.contains(&document_id))
 }
 
 async fn filter_visible_memory_directories_for_user(
