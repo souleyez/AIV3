@@ -183,6 +183,7 @@ pub mod external_wecom;
 pub mod fact_index;
 mod model_facing_document_focus;
 mod model_facing_format;
+mod model_facing_handoff;
 mod model_facing_policy;
 mod model_gateway_admin;
 mod model_gateway_runtime;
@@ -224,6 +225,7 @@ use model_facing_document_focus::{
     format_model_facing_document_focus, infer_model_facing_document_focus, ModelFacingDocumentFocus,
 };
 use model_facing_format::*;
+use model_facing_handoff::*;
 use model_facing_policy::*;
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
@@ -2238,41 +2240,6 @@ fn chat_message_service_handoff(
         .and_then(|manifest| manifest.service_handoff.as_ref())
 }
 
-fn collect_service_handoff_signals(handoff: &contracts::ManifestServiceHandoffView) -> Vec<String> {
-    let mut signals = vec![
-        format!(
-            "service_handoff_source={}",
-            format_manifest_service_handoff_source(&handoff.source)
-        ),
-        format!(
-            "service_handoff_lane={}",
-            format_model_facing_service_lane(&handoff.service_lane)
-        ),
-        format!(
-            "report_entry_state={}",
-            format_model_facing_report_entry_state(&handoff.report_entry_state)
-        ),
-        format!(
-            "service_handoff_suggested_title_present={}",
-            handoff.suggested_title.is_some()
-        ),
-        format!(
-            "service_handoff_suggested_objective_present={}",
-            handoff.suggested_objective.is_some()
-        ),
-    ];
-    if let Some(resolved_action) = handoff.resolved_action.as_ref() {
-        signals.push(format!(
-            "report_entry_resolved_action={}",
-            format_chat_session_report_entry_resolution(resolved_action)
-        ));
-    }
-    if let Some(report_plan_id) = handoff.confirmed_report_plan_id {
-        signals.push(format!("confirmed_report_plan_id={report_plan_id}"));
-    }
-    signals
-}
-
 fn derive_chat_message_model_facing_summary(
     message: &ChatMessageView,
 ) -> Option<contracts::WorkflowModelFacingSummaryView> {
@@ -2331,48 +2298,6 @@ fn derive_chat_message_model_facing_summary(
         allowed_next_actions,
         signals,
     ))
-}
-
-fn infer_service_handoff_capability_class(
-    handoff: &contracts::ManifestServiceHandoffView,
-    fallback: &contracts::ModelFacingCapabilityClassView,
-) -> contracts::ModelFacingCapabilityClassView {
-    match handoff.service_lane {
-        contracts::ModelFacingServiceLaneView::ReportService => {
-            contracts::ModelFacingCapabilityClassView::ReportPlanning
-        }
-        contracts::ModelFacingServiceLaneView::ControlledPlatformAction => {
-            contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
-        }
-        contracts::ModelFacingServiceLaneView::MaterialService => fallback.clone(),
-    }
-}
-
-fn infer_service_handoff_next_actions(
-    handoff: &contracts::ManifestServiceHandoffView,
-    fallback: &contracts::ModelFacingCapabilityClassView,
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-) -> Vec<contracts::ModelFacingNextActionView> {
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        return vec![contracts::ModelFacingNextActionView::RetryExecution];
-    }
-
-    match infer_service_handoff_capability_class(handoff, fallback) {
-        contracts::ModelFacingCapabilityClassView::ReportPlanning => {
-            vec![contracts::ModelFacingNextActionView::ContinueReportPlanning]
-        }
-        contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            vec![contracts::ModelFacingNextActionView::GenerateReportOutput]
-        }
-        contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            vec![contracts::ModelFacingNextActionView::RetryExecution]
-        }
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness
-        | contracts::ModelFacingCapabilityClassView::EvidenceRetrieval
-        | contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis => {
-            vec![contracts::ModelFacingNextActionView::AnswerDirectly]
-        }
-    }
 }
 
 fn infer_chat_message_model_facing_capability_class(
