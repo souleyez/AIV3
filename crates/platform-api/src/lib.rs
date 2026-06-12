@@ -2389,41 +2389,6 @@ async fn require_model_gateway_operator_session(
     Ok(user)
 }
 
-fn ensure_model_gateway_operator(user: &User) -> std::result::Result<(), ApiError> {
-    if model_gateway_operator_allowed(user) {
-        return Ok(());
-    }
-    Err(ApiError::forbidden(
-        "model_gateway_operator_required",
-        "当前账号没有模型池运维权限".to_string(),
-    ))
-}
-
-fn model_gateway_operator_allowed(user: &User) -> bool {
-    env_flag("MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN", false)
-        || model_gateway_operator_email_allowed(&user.email)
-        || model_gateway_operator_role_allowed(user)
-}
-
-fn model_gateway_operator_email_allowed(email: &str) -> bool {
-    env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAILS", email)
-        || env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAIL_ALLOWLIST", email)
-}
-
-fn model_gateway_operator_role_allowed(user: &User) -> bool {
-    user.roles.iter().any(|role| {
-        model_gateway_builtin_operator_role(role)
-            || env_csv_contains("MODEL_GATEWAY_OPERATOR_ROLES", role)
-    })
-}
-
-fn model_gateway_builtin_operator_role(role: &str) -> bool {
-    matches!(
-        role.trim().to_ascii_lowercase().as_str(),
-        "admin" | "operator" | "model_gateway_operator" | "model-gateway-operator"
-    )
-}
-
 async fn list_model_gateway_presets(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -29805,7 +29770,7 @@ fn external_channel_model_pool_scope_is_active(
         )
 }
 
-fn env_csv_contains(key: &str, expected: &str) -> bool {
+pub(crate) fn env_csv_contains(key: &str, expected: &str) -> bool {
     let expected = expected.trim();
     !expected.is_empty()
         && std::env::var(key)
@@ -60697,7 +60662,7 @@ fn react_static_page_operations_from_arguments(
     validate_static_page_operations(operations)
 }
 
-fn env_flag(key: &str, default_value: bool) -> bool {
+pub(crate) fn env_flag(key: &str, default_value: bool) -> bool {
     std::env::var(key)
         .ok()
         .map(|value| {

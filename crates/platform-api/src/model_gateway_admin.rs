@@ -1,9 +1,10 @@
 use super::MODEL_GATEWAY_DEFAULT_LANE;
-use crate::ApiError;
+use crate::{env_csv_contains, env_flag, ApiError};
 use contracts::{
     ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileUpdateRequest,
     ModelGatewayProfileView,
 };
+use domain_model::User;
 use serde_json::json;
 use storage::{ModelGatewayProfile, ModelGatewayProfileUpdate, NewModelGatewayProfile};
 use uuid::Uuid;
@@ -121,6 +122,41 @@ pub(crate) fn model_gateway_profile_requires_configured_auth_env(
         return false;
     }
     auth_mode == "env_key" || auth_mode.ends_with("_env") || auth_mode.contains("env_key")
+}
+
+pub(crate) fn ensure_model_gateway_operator(user: &User) -> std::result::Result<(), ApiError> {
+    if model_gateway_operator_allowed(user) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(
+        "model_gateway_operator_required",
+        "当前账号没有模型池运维权限".to_string(),
+    ))
+}
+
+pub(crate) fn model_gateway_operator_allowed(user: &User) -> bool {
+    env_flag("MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN", false)
+        || model_gateway_operator_email_allowed(&user.email)
+        || model_gateway_operator_role_allowed(user)
+}
+
+fn model_gateway_operator_email_allowed(email: &str) -> bool {
+    env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAILS", email)
+        || env_csv_contains("MODEL_GATEWAY_OPERATOR_EMAIL_ALLOWLIST", email)
+}
+
+fn model_gateway_operator_role_allowed(user: &User) -> bool {
+    user.roles.iter().any(|role| {
+        model_gateway_builtin_operator_role(role)
+            || env_csv_contains("MODEL_GATEWAY_OPERATOR_ROLES", role)
+    })
+}
+
+fn model_gateway_builtin_operator_role(role: &str) -> bool {
+    matches!(
+        role.trim().to_ascii_lowercase().as_str(),
+        "admin" | "operator" | "model_gateway_operator" | "model-gateway-operator"
+    )
 }
 
 pub(crate) fn model_gateway_new_profile_from_request(
