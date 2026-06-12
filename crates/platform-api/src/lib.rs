@@ -11753,43 +11753,6 @@ fn external_channel_create_connection_id(
     Ok(connection_id)
 }
 
-fn validate_external_channel_connection_id(value: &str) -> std::result::Result<(), ApiError> {
-    let trimmed = value.trim();
-    if trimmed.len() < 3 || trimmed.len() > 96 {
-        return Err(ApiError::bad_request(
-            "external_channel_connection_id_invalid",
-            "connection_id must be 3-96 characters".to_string(),
-        ));
-    }
-    if !trimmed
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
-    {
-        return Err(ApiError::bad_request(
-            "external_channel_connection_id_invalid",
-            "connection_id may only contain ASCII letters, numbers, dot, dash, or underscore"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_external_channel_platform(value: &str) -> std::result::Result<(), ApiError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty()
-        || trimmed.len() > 64
-        || !trimmed
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-    {
-        return Err(ApiError::bad_request(
-            "external_channel_platform_invalid",
-            "platform must be ASCII text within 64 characters".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn validate_external_channel_allowed_database_source_ids(
     values: &[String],
 ) -> std::result::Result<Vec<String>, ApiError> {

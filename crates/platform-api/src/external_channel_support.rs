@@ -112,6 +112,45 @@ pub(crate) fn external_control_config_patch(
     })
 }
 
+pub(crate) fn validate_external_channel_connection_id(
+    value: &str,
+) -> std::result::Result<(), ApiError> {
+    let trimmed = value.trim();
+    if trimmed.len() < 3 || trimmed.len() > 96 {
+        return Err(ApiError::bad_request(
+            "external_channel_connection_id_invalid",
+            "connection_id must be 3-96 characters".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return Err(ApiError::bad_request(
+            "external_channel_connection_id_invalid",
+            "connection_id may only contain ASCII letters, numbers, dot, dash, or underscore"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_external_channel_platform(value: &str) -> std::result::Result<(), ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 64
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(ApiError::bad_request(
+            "external_channel_platform_invalid",
+            "platform must be ASCII text within 64 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn external_channel_inbound_bearer_token_from_config(config: &Value) -> Option<String> {
     external_config_string(
         config,
@@ -295,5 +334,49 @@ mod tests {
         assert_eq!(external_control_integration_kind(0, 1), "source");
         assert_eq!(external_control_integration_kind(1, 1), "mixed");
         assert_eq!(external_control_integration_kind(0, 0), "unknown");
+    }
+
+    #[test]
+    fn external_channel_connection_id_validation_preserves_length_and_charset_rules() {
+        assert!(validate_external_channel_connection_id(" generic-chat.main_01 ").is_ok());
+
+        let too_short = validate_external_channel_connection_id("ab")
+            .expect_err("short ids should be rejected");
+        assert_eq!(
+            too_short.payload.code,
+            "external_channel_connection_id_invalid"
+        );
+        assert!(too_short.payload.message.contains("3-96 characters"));
+
+        let invalid_charset = validate_external_channel_connection_id("generic/chat")
+            .expect_err("slashes should be rejected");
+        assert_eq!(
+            invalid_charset.payload.code,
+            "external_channel_connection_id_invalid"
+        );
+        assert!(invalid_charset
+            .payload
+            .message
+            .contains("ASCII letters, numbers, dot, dash, or underscore"));
+    }
+
+    #[test]
+    fn external_channel_platform_validation_preserves_ascii_rules() {
+        assert!(validate_external_channel_platform(" generic_chat-1 ").is_ok());
+
+        let empty =
+            validate_external_channel_platform("   ").expect_err("empty platform is invalid");
+        assert_eq!(empty.payload.code, "external_channel_platform_invalid");
+
+        let invalid_charset = validate_external_channel_platform("generic.chat")
+            .expect_err("dot is not allowed for platform");
+        assert_eq!(
+            invalid_charset.payload.code,
+            "external_channel_platform_invalid"
+        );
+        assert!(invalid_charset
+            .payload
+            .message
+            .contains("within 64 characters"));
     }
 }
