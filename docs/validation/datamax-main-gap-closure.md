@@ -7390,6 +7390,28 @@ Data-ingestion external fixed-task smoke:
   - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed fallback concurrency `2`;
   - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
   - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- 8-server post-sync verification:
+  - local commit `5be284d` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `8f2a10a30` to `5be284d56`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service` was restarted after the successful release build;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok`/`ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, receipt `/srv/aiv3/repo/target/external-report-focus-smoke/external-report-focus-self-test-20260612131007.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`, receipt `/srv/aiv3/repo/target/external-report-export-smoke/20260612131007-self-test.json`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, concurrency `5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed fallback concurrency `2`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
