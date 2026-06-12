@@ -3426,6 +3426,26 @@ Data-ingestion external fixed-task smoke:
   - local verification did not restart services; 8-server deployment restarted only `aiv3-web.service`;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Static Page Draft Map Reducer Extraction
+
+- Purpose:
+  - continue reducing `apps/web/app/HomePageClient.js` static-page state complexity with one behavior-preserving reducer slice;
+  - make static-page draft map replacement testable before further workspace state refactors.
+- Code changes:
+  - added `replaceStaticPageDraftInMap` to `apps/web/app/lib/static-page-draft-workspace.js`;
+  - updated `HomePageClient.js` `replaceDraftWithOperation` and `replaceStaticPageDraft` to use the shared reducer;
+  - added deterministic coverage in `apps/web/app/lib/static-page-draft-workspace.test.mjs` for old-id deletion, local-only upsert, invalid draft fallback, and immutability.
+- Local verification:
+  - `node --test apps/web/app/lib/static-page-draft-workspace.test.mjs apps/web/app/lib/static-page-draft.test.mjs apps/web/app/lib/html-artifact-utils.test.mjs apps/web/app/lib/home-chat-intents.test.mjs`: passed, 84/84;
+  - `npm --prefix apps/web run build`: passed;
+  - build emitted only the known Next middleware deprecation and Turbopack NFT trace warning.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production data mutation, or live task mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0 Self-Test After Static Page Artifact Lookup Deployment
 
 - Purpose:

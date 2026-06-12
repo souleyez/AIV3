@@ -109,6 +109,7 @@ import {
   findReusableReportTemplate,
   isReusableStaticPageReportDraft,
   isVisibleReportShelfStaticPageDraft,
+  replaceStaticPageDraftInMap,
   shouldAnnounceStaticPageRendered,
   sortStaticPageDrafts,
   staticPageDraftAsyncSnapshot,
@@ -553,23 +554,13 @@ export default function HomePageClient() {
 
   function replaceDraftWithOperation(baseDraft, operation) {
     const draft = applyStaticPageOperation(baseDraft, operation);
-    setStaticPageDrafts((current) => ({
-      ...current,
-      [draft.id]: draft,
-    }));
+    setStaticPageDrafts((current) => replaceStaticPageDraftInMap(current, null, draft));
     setActiveStaticPageDraftId(draft.id);
     return draft;
   }
 
   function replaceStaticPageDraft(previousId, draft) {
-    setStaticPageDrafts((current) => {
-      const next = { ...current };
-      if (previousId && previousId !== draft.id) {
-        delete next[previousId];
-      }
-      next[draft.id] = draft;
-      return next;
-    });
+    setStaticPageDrafts((current) => replaceStaticPageDraftInMap(current, previousId, draft));
     setActiveStaticPageDraftId(draft.id);
   }
 

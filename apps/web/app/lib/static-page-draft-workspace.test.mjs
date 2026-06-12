@@ -5,6 +5,7 @@ import {
   findReusableReportTemplate,
   isReusableStaticPageReportDraft,
   isVisibleReportShelfStaticPageDraft,
+  replaceStaticPageDraftInMap,
   shouldAnnounceStaticPageRendered,
   sortStaticPageDrafts,
   staticPageDraftAsyncSnapshot,
@@ -134,5 +135,39 @@ describe('static page draft workspace helpers', () => {
     assert.equal(staticPageDraftDiscoveryId({ source: { local_draft_id: ' local-1 ' }, id: 'fallback' }), 'local-1');
     assert.equal(staticPageDraftDiscoveryId({ source_refs: { local_draft_id: 'source-ref-1' } }), 'source-ref-1');
     assert.equal(staticPageDraftDiscoveryId({ id: 'id-1', backendDraftId: 'backend-1' }), 'id-1');
+  });
+
+  it('replaces static page drafts in a map without mutating the previous state', () => {
+    const previousDraft = { id: 'local-old', title: 'Old' };
+    const retainedDraft = { id: 'retained', title: 'Keep' };
+    const current = {
+      'local-old': previousDraft,
+      retained: retainedDraft,
+    };
+    const replacement = { id: 'backend-new', backendDraftId: 'backend-new', title: 'New' };
+
+    const next = replaceStaticPageDraftInMap(current, 'local-old', replacement);
+
+    assert.deepEqual(Object.keys(next).sort(), ['backend-new', 'retained']);
+    assert.equal(next['backend-new'], replacement);
+    assert.equal(next.retained, retainedDraft);
+    assert.deepEqual(Object.keys(current).sort(), ['local-old', 'retained']);
+  });
+
+  it('upserts a static page draft without deleting old ids when no previous id is supplied', () => {
+    const current = { 'local-old': { id: 'local-old' } };
+    const replacement = { id: 'backend-new' };
+    const next = replaceStaticPageDraftInMap(current, null, replacement);
+
+    assert.deepEqual(Object.keys(next).sort(), ['backend-new', 'local-old']);
+    assert.equal(next['backend-new'], replacement);
+  });
+
+  it('keeps a copied draft map when the replacement draft is invalid', () => {
+    const current = { existing: { id: 'existing' } };
+    const next = replaceStaticPageDraftInMap(current, 'existing', null);
+
+    assert.deepEqual(next, current);
+    assert.notEqual(next, current);
   });
 });

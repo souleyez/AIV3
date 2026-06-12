@@ -101,6 +101,18 @@ export function sortStaticPageDrafts(items) {
   });
 }
 
+export function replaceStaticPageDraftInMap(currentDrafts = {}, previousId, draft) {
+  if (!draft?.id) {
+    return { ...(currentDrafts || {}) };
+  }
+  const next = { ...(currentDrafts || {}) };
+  if (previousId && previousId !== draft.id) {
+    delete next[previousId];
+  }
+  next[draft.id] = draft;
+  return next;
+}
+
 export function staticPageDraftDiscoveryId(draft) {
   return String(
     draft?.localDraftId
