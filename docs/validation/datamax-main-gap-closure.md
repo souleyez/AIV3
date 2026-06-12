@@ -3533,6 +3533,10 @@ Data-ingestion external fixed-task smoke:
   - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
   - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
   - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`.
+- GitHub Actions status:
+  - DataMax CI run `27397419766` for commit `6c8e3b9063db3874ce557ae3233778ead0e8400f` failed before test execution;
+  - jobs `No-Credential Smoke` and `Rust Minimal` both returned `steps=[]`;
+  - `gh run view 27397419766 --repo souleyez/AIV3 --log-failed` returned `log not found`, matching the current external GitHub Actions startup/account issue pattern.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
