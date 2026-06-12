@@ -3488,6 +3488,17 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed 26/26;
   - `npm --prefix apps/web run build`: passed;
   - `git diff --check`: passed with Windows line-ending warnings only.
+- 8-server source sync:
+  - local commit `526b0b7` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `2c37cb99d` to `526b0b7fe`;
+  - `node --test apps/web/app/lib/local-browser-state.test.mjs`: passed 7/7 on 8 server;
+  - `npm --prefix apps/web run build`: passed on 8 server;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this source-sync verification.
+- GitHub Actions:
+  - DataMax CI run `27389651967` for `526b0b7fe` completed with failure before job steps started;
+  - jobs `Rust Minimal` and `No-Credential Smoke` both reported `steps=[]`;
+  - `gh run view 27389651967 --log-failed` returned `log not found`, matching the existing account/runner startup failure pattern rather than a code-level test failure.
 - Known warnings:
   - Node test runs still emit the existing `MODULE_TYPELESS_PACKAGE_JSON` warning for ESM-style app lib files;
   - Next build still emits the existing deprecated `middleware` convention warning and the existing NFT tracing warning from `apps/web/next.config.js`.
