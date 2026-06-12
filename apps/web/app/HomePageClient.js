@@ -70,6 +70,12 @@ import {
 import { fingerprintLocalSecret } from './lib/local-secret-fingerprint';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
+  publishedReportForPlan,
+  reportTemplateCandidateId,
+  reportTemplateTitle,
+  reportTemplateUrl,
+} from './lib/report-template-utils';
+import {
   applyStaticPageOperation,
   applyStaticPageOperations,
   buildInitialStaticPageDraft,
@@ -120,153 +126,6 @@ function wait(ms) {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
-}
-
-function reportPlanIdFromPublished(report) {
-  return String(
-    report?.report_plan_id
-      || report?.reportPlanId
-      || report?.plan_id
-      || report?.planId
-      || '',
-  ).trim();
-}
-
-function publishedReportForPlan(plan, publishedReports = []) {
-  if (!plan?.id) return null;
-  return (Array.isArray(publishedReports) ? publishedReports : []).find((report) =>
-    reportPlanIdFromPublished(report) === plan.id,
-  ) || null;
-}
-
-function addArtifactUrlContainers(containers, seen, value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || seen.has(value)) {
-    return;
-  }
-  seen.add(value);
-  containers.push(value);
-}
-
-function firstArtifactUrlFromObject(value) {
-  const containers = [];
-  const seen = new Set();
-  addArtifactUrlContainers(containers, seen, value);
-  for (let index = 0; index < containers.length; index += 1) {
-    const container = containers[index];
-    [
-      container.asset_manifest,
-      container.assetManifest,
-      container.current_version,
-      container.currentVersion,
-      container.version,
-      container.report,
-      container.artifact,
-      container.output,
-      container.finalPage,
-      container.final_page,
-      container.publish_result,
-      container.publishResult,
-      container.template_reference,
-      container.templateReference,
-      container.relaxed_template_match,
-      container.relaxedTemplateMatch,
-    ].forEach((candidate) => addArtifactUrlContainers(containers, seen, candidate));
-  }
-
-  const urlKeys = [
-    'public_url',
-    'publicUrl',
-    'primary_url',
-    'primaryUrl',
-    'generated_artifact_url',
-    'generatedArtifactUrl',
-    'artifact_public_url',
-    'artifactPublicUrl',
-    'html_preview_url',
-    'htmlPreviewUrl',
-    'html_download_url',
-    'htmlDownloadUrl',
-    'download_url',
-    'downloadUrl',
-    'baseline_public_url',
-    'baselinePublicUrl',
-    'template_url',
-    'templateUrl',
-    'url',
-    'href',
-  ];
-  for (const container of containers) {
-    for (const key of urlKeys) {
-      const text = String(container?.[key] || '').trim();
-      if (/^(https?:\/\/|\/)/i.test(text)) {
-        return text;
-      }
-    }
-    const artifactLinks = container?.artifact_links || container?.artifactLinks;
-    if (Array.isArray(artifactLinks)) {
-      const link = artifactLinks.map((item) => String(item || '').trim()).find((item) => /^(https?:\/\/|\/)/i.test(item));
-      if (link) return link;
-    }
-    const links = container?.links;
-    if (Array.isArray(links)) {
-      const link = links
-        .map((item) => String(item?.url || item?.href || item || '').trim())
-        .find((item) => /^(https?:\/\/|\/)/i.test(item));
-      if (link) return link;
-    }
-  }
-  return '';
-}
-
-function reportTemplateTitle(candidate, fallback = '当前数据集报表模板') {
-  const plan = candidate?.plan;
-  const published = candidate?.published;
-  const detail = candidate?.detail;
-  const draft = candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft;
-  const finalPage = draft?.finalPage || {};
-  const manifest = finalPage.assetManifest || finalPage.asset_manifest || {};
-  return detail?.current_version?.asset_manifest?.report_title
-    || detail?.current_version?.asset_manifest?.reportTitle
-    || detail?.currentVersion?.assetManifest?.reportTitle
-    || published?.title
-    || published?.report_title
-    || published?.reportTitle
-    || plan?.title
-    || plan?.objective
-    || manifest.reportTitle
-    || manifest.report_title
-    || manifest.displayTitle
-    || manifest.display_title
-    || manifest.title
-    || finalPage.reportTitle
-    || finalPage.report_title
-    || finalPage.displayTitle
-    || finalPage.display_title
-    || draft?.title
-    || draft?.objective
-    || fallback;
-}
-
-function reportTemplateCandidateId(candidate) {
-  const draft = candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft;
-  return String(
-    candidate?.plan?.id
-      || candidate?.published?.id
-      || candidate?.published?.report_id
-      || candidate?.published?.reportId
-      || draft?.backendDraftId
-      || draft?.backendId
-      || draft?.id
-      || reportTemplateTitle(candidate),
-  ).trim();
-}
-
-function reportTemplateUrl(candidate) {
-  return firstArtifactUrlFromObject(candidate?.detail)
-    || firstArtifactUrlFromObject(candidate?.published)
-    || firstArtifactUrlFromObject(candidate?.plan)
-    || firstArtifactUrlFromObject(candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft)
-    || '';
 }
 
 function staticPageDraftArtifactKey(draft) {
