@@ -5443,80 +5443,6 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
     reply
 }
 
-fn external_channel_static_page_sse_progress_payload(
-    response: ExternalChannelEventResponse,
-) -> (&'static str, Value, String, String, Option<AssistantRunId>) {
-    let status = external_channel_static_page_sse_status(&response);
-    let progress_key = external_channel_static_page_sse_progress_key(&response);
-    let text = external_channel_static_page_sse_progress_text(&response);
-    let event_name = external_channel_static_page_sse_event_name(&status);
-    let mut public_response = external_channel_public_response(response);
-    let public_status = external_channel_public_status(&status);
-    let conversation_external_id = public_response
-        .reply
-        .target_conversation_external_id
-        .clone();
-    if public_status == "static_page_published" {
-        if let Some(public_url) =
-            external_channel_public_artifact_url_from_reply(&public_response.reply)
-        {
-            let payload = public_response.reply.card.clone().unwrap_or_else(|| {
-                json!({
-                    "public_url": public_url.clone(),
-                    "artifact_links": [public_url.clone()],
-                })
-            });
-            let published_reply = external_channel_static_page_published_reply(
-                &conversation_external_id,
-                &public_url,
-                &payload,
-            );
-            public_response.reply.card = published_reply.card;
-            public_response.reply.artifact_links = published_reply.artifact_links;
-        }
-    }
-    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
-    let poll_after_seconds =
-        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
-    let data = json!({
-        "assistant_run_id": public_response.assistant_run_id,
-        "idempotency_key": public_response.idempotency_key.clone(),
-        "status": public_status.clone(),
-        "card": public_response.reply.card.clone(),
-        "artifact_links": public_response.reply.artifact_links.clone(),
-        "text": text.clone(),
-    });
-    let payload = external_channel_sse_public_payload(
-        public_response.assistant_run_id,
-        &public_response.idempotency_key,
-        &conversation_external_id,
-        external_channel_static_page_sse_sequence(&status),
-        "static_page",
-        &public_status,
-        &text,
-        status_url,
-        poll_after_seconds,
-        data,
-    );
-    let dedupe_key = format!("{event_name}:{public_status}:{progress_key}");
-    (
-        event_name,
-        payload,
-        text,
-        dedupe_key,
-        public_response.assistant_run_id,
-    )
-}
-
-#[cfg(test)]
-fn external_channel_static_page_sse_progress_events(
-    response: ExternalChannelEventResponse,
-) -> String {
-    let (event_name, payload, text, _, _) =
-        external_channel_static_page_sse_progress_payload(response);
-    external_channel_sse_event_with_delta(event_name, payload, &text)
-}
-
 async fn external_channel_static_page_sse_progress_events_persisted(
     state: &AppState,
     response: ExternalChannelEventResponse,
@@ -53986,7 +53912,7 @@ fn external_channel_static_page_card_with_template_payload(
     card
 }
 
-fn external_channel_static_page_published_reply(
+pub(crate) fn external_channel_static_page_published_reply(
     conversation_external_id: &str,
     public_url: &str,
     payload: &Value,

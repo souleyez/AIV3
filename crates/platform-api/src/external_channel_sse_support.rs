@@ -30,6 +30,7 @@ use crate::{
         external_channel_static_page_customer_ready_text,
         external_channel_static_page_customer_ready_text_for_payload,
     },
+    external_channel_static_page_published_reply,
     sse_support::{sse_json_event, sse_text_delta_events},
     truncate_assistant_supply_text,
 };
@@ -852,6 +853,80 @@ pub(crate) fn external_channel_static_page_preview_public_url(asset_ref: &str) -
     Some(truncate_assistant_supply_text(trimmed, 500))
 }
 
+pub(crate) fn external_channel_static_page_sse_progress_payload(
+    response: ExternalChannelEventResponse,
+) -> (&'static str, Value, String, String, Option<AssistantRunId>) {
+    let status = external_channel_static_page_sse_status(&response);
+    let progress_key = external_channel_static_page_sse_progress_key(&response);
+    let text = external_channel_static_page_sse_progress_text(&response);
+    let event_name = external_channel_static_page_sse_event_name(&status);
+    let mut public_response = external_channel_public_response(response);
+    let public_status = external_channel_public_status(&status);
+    let conversation_external_id = public_response
+        .reply
+        .target_conversation_external_id
+        .clone();
+    if public_status == "static_page_published" {
+        if let Some(public_url) =
+            external_channel_public_artifact_url_from_reply(&public_response.reply)
+        {
+            let payload = public_response.reply.card.clone().unwrap_or_else(|| {
+                json!({
+                    "public_url": public_url.clone(),
+                    "artifact_links": [public_url.clone()],
+                })
+            });
+            let published_reply = external_channel_static_page_published_reply(
+                &conversation_external_id,
+                &public_url,
+                &payload,
+            );
+            public_response.reply.card = published_reply.card;
+            public_response.reply.artifact_links = published_reply.artifact_links;
+        }
+    }
+    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
+    let poll_after_seconds =
+        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
+    let data = json!({
+        "assistant_run_id": public_response.assistant_run_id,
+        "idempotency_key": public_response.idempotency_key.clone(),
+        "status": public_status.clone(),
+        "card": public_response.reply.card.clone(),
+        "artifact_links": public_response.reply.artifact_links.clone(),
+        "text": text.clone(),
+    });
+    let payload = external_channel_sse_public_payload(
+        public_response.assistant_run_id,
+        &public_response.idempotency_key,
+        &conversation_external_id,
+        external_channel_static_page_sse_sequence(&status),
+        "static_page",
+        &public_status,
+        &text,
+        status_url,
+        poll_after_seconds,
+        data,
+    );
+    let dedupe_key = format!("{event_name}:{public_status}:{progress_key}");
+    (
+        event_name,
+        payload,
+        text,
+        dedupe_key,
+        public_response.assistant_run_id,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn external_channel_static_page_sse_progress_events(
+    response: ExternalChannelEventResponse,
+) -> String {
+    let (event_name, payload, text, _, _) =
+        external_channel_static_page_sse_progress_payload(response);
+    external_channel_sse_event_with_delta(event_name, payload, &text)
+}
+
 pub(crate) fn external_channel_static_page_sse_continue_polling_payload(
     response: ExternalChannelEventResponse,
 ) -> (Value, String, String, Option<AssistantRunId>) {
@@ -1638,6 +1713,36 @@ mod tests {
             external_channel_static_page_sse_progress_text(&response),
             "静态页发布遇到临时波动，DataMax 会继续重试或切换可用发布链路。"
         );
+    }
+
+    #[test]
+    fn static_page_progress_payload_promotes_public_artifact_url() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
+        let mut response = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_running",
+                "public_url": public_url,
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+        response.assistant_run_id = Some(AssistantRunId::new());
+        response.idempotency_key = "generic:tenant:static-page-progress".to_string();
+
+        let (event_name, payload, text, dedupe_key, run_id) =
+            external_channel_static_page_sse_progress_payload(response);
+
+        assert_eq!(event_name, "external_channel.static_page_published");
+        assert_eq!(payload["sequence"], json!(90));
+        assert_eq!(payload["status"], json!("static_page_published"));
+        assert_eq!(payload["data"]["status"], json!("static_page_published"));
+        assert_eq!(payload["data"]["artifact_links"][0], json!(public_url));
+        assert!(text.contains("已依据客户需求生成可访问的报表页面"));
+        assert!(text.contains(public_url));
+        assert!(dedupe_key.starts_with("external_channel.static_page_published:"));
+        assert!(run_id.is_some());
     }
 
     #[test]

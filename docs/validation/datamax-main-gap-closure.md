@@ -3514,6 +3514,43 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-13 P5 External Channel Static Page Progress SSE Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move the third-party static-page progress SSE payload/test event helper out of `lib.rs` into `external_channel_sse_support` beside the related status, progress text, preview, and continue-polling helpers.
+- Code change:
+  - `external_channel_static_page_sse_progress_payload` and the test-only `external_channel_static_page_sse_progress_events` now live in `crates/platform-api/src/external_channel_sse_support.rs`;
+  - the persisted wrapper remains in `lib.rs` and still persists the same event name, dedupe key, payload, and text;
+  - `external_channel_static_page_published_reply` is now crate-visible so the support helper can reuse the existing published-card enrichment path instead of duplicating it.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_sse_support --lib`: passed, 27/27 tests;
+  - `cargo test -p platform-api external_channel_sse --lib`: passed, 29/29 tests;
+  - `cargo test -p platform-api external_channel_public_stream --lib`: passed;
+  - `cargo test -p platform-api external_channel_public --lib`: passed;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed;
+  - `cargo test -p platform-api assistant_run_sse_support --lib`: passed;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 External Channel Static Page Preview Public URL 8-Server Verification
 
 - 8-server post-sync verification:
