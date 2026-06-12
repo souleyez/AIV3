@@ -3430,6 +3430,25 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 Assistant Stream Content Helper Extraction
+
+- Purpose:
+  - continue reducing `HomePageClient.js` complexity with a behavior-preserving frontend helper extraction;
+  - isolate assistant_run stream display text, generated artifact URL extraction, assistant-visible content cleanup, and artifact-link append behavior behind tested pure functions;
+  - keep recent user-facing requirements stable: normal stream progress stays visible, internal JSON payloads are removed from visible messages, and generated report/page links are not duplicated.
+- Code changes:
+  - added `apps/web/app/lib/assistant-stream-content.js`;
+  - added `apps/web/app/lib/assistant-stream-content.test.mjs`;
+  - replaced the inline helper block in `apps/web/app/HomePageClient.js` with imports while preserving existing call sites.
+- Local verification:
+  - `node --test apps/web/app/lib/assistant-stream-content.test.mjs`: passed, 5 tests;
+  - `node --test apps/web/app/lib/home-sse-client.test.mjs apps/web/app/lib/home-api-client.test.mjs`: passed, 9 tests;
+  - `npm --prefix apps/web run build`: passed; existing Next/Turbopack warnings remained about deprecated `middleware` convention and broad NFT tracing from `apps/web/next.config.js` / `local-document-uploads` route.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no backend service, database schema, data ingestion path, document parser, quality gate, model provider, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded.
+
 ## 2026-06-12 P2 Document Object Repair Plan Smoke
 
 - Purpose:
