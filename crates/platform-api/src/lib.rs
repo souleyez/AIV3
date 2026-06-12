@@ -201,6 +201,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 
 use auth_session_support::*;
@@ -240,7 +241,8 @@ use external_observability::{
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
 use model_facing_format::*;
-use model_facing_policy::*;
+#[cfg(test)]
+use model_facing_policy::build_model_facing_summary;
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
@@ -257,6 +259,7 @@ use react_agent_tools::{
 use report_plan_model_facing::*;
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use workflow_runtime_model_facing::*;
 use workflow_runtime_summary::{
     begin_summary_block, format_tool_status_summary, push_optional_summary_line, push_summary_line,
     summarize_tool_execution_status_counts,
@@ -1686,70 +1689,6 @@ pub fn render_report_render_output_runtime_summary(
     Some(lines.join("\n"))
 }
 
-fn derive_model_facing_summary(
-    inspect: &WorkflowRuntimeInspectView,
-) -> contracts::WorkflowModelFacingSummaryView {
-    if let Some(session) = inspect.chat_session.as_ref() {
-        let summary = session
-            .model_facing
-            .clone()
-            .unwrap_or_else(|| derive_chat_session_model_facing_summary(session));
-        if inspect.execution.status == WorkflowStatus::Failed
-            || inspect.execution.status == WorkflowStatus::DeadLettered
-        {
-            return degraded_model_facing_summary(summary.capability_class, summary.signals);
-        }
-        return summary;
-    }
-    if let Some(output) = inspect.dataset_output.as_ref() {
-        let summary = output
-            .model_facing
-            .clone()
-            .unwrap_or_else(|| derive_dataset_output_model_facing_summary(output));
-        if inspect.execution.status == WorkflowStatus::Failed
-            || inspect.execution.status == WorkflowStatus::DeadLettered
-        {
-            return degraded_model_facing_summary(summary.capability_class, summary.signals);
-        }
-        return summary;
-    }
-    if let Some(output) = inspect.report_render_output.as_ref() {
-        let summary = output
-            .model_facing
-            .clone()
-            .unwrap_or_else(|| derive_report_render_output_model_facing_summary(output));
-        if inspect.execution.status == WorkflowStatus::Failed
-            || inspect.execution.status == WorkflowStatus::DeadLettered
-        {
-            return degraded_model_facing_summary(summary.capability_class, summary.signals);
-        }
-        return summary;
-    }
-    if let Some(plan) = inspect.report_plan.as_ref() {
-        let summary = plan
-            .model_facing
-            .clone()
-            .unwrap_or_else(|| derive_report_plan_model_facing_summary(plan));
-        if inspect.execution.status == WorkflowStatus::Failed
-            || inspect.execution.status == WorkflowStatus::DeadLettered
-        {
-            return degraded_model_facing_summary(summary.capability_class, summary.signals);
-        }
-        return summary;
-    }
-
-    let capability_class = infer_model_facing_capability_class(inspect);
-    let evidence_state = infer_model_facing_evidence_state(inspect);
-    let allowed_next_actions =
-        infer_model_facing_next_actions(inspect, &capability_class, &evidence_state);
-    build_model_facing_summary(
-        capability_class,
-        evidence_state,
-        allowed_next_actions,
-        collect_model_facing_signals(inspect),
-    )
-}
-
 async fn load_report_plan_service_handoff(
     state: &AppState,
     report_plan_id: ReportPlanId,
@@ -1777,204 +1716,6 @@ fn workflow_execution_context_service_handoff(
         .as_object()
         .and_then(|context| context.get("service_handoff"))
         .and_then(parse_manifest_service_handoff)
-}
-
-fn infer_model_facing_capability_class(
-    inspect: &WorkflowRuntimeInspectView,
-) -> contracts::ModelFacingCapabilityClassView {
-    match inspect.execution.kind {
-        WorkflowKind::MemoryDirectory => {
-            contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness
-        }
-        WorkflowKind::DatasetOutput | WorkflowKind::ChatSession => {
-            contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis
-        }
-        WorkflowKind::ReportPlan => contracts::ModelFacingCapabilityClassView::ReportPlanning,
-        WorkflowKind::ReportRender
-        | WorkflowKind::StaticPageImageGeneration
-        | WorkflowKind::StaticPageRender => {
-            contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing
-        }
-        WorkflowKind::UploadIngest
-        | WorkflowKind::AssistantRunModelCompletion
-        | WorkflowKind::CodexHostTask
-        | WorkflowKind::VideoExtraction
-        | WorkflowKind::ExternalSourceSync
-        | WorkflowKind::ExternalActionDispatch => {
-            contracts::ModelFacingCapabilityClassView::ControlledPlatformAction
-        }
-    }
-}
-
-fn infer_model_facing_evidence_state(
-    inspect: &WorkflowRuntimeInspectView,
-) -> contracts::ModelFacingEvidenceStateView {
-    if inspect.execution.status == WorkflowStatus::Failed
-        || inspect.execution.status == WorkflowStatus::DeadLettered
-    {
-        return contracts::ModelFacingEvidenceStateView::Degraded;
-    }
-
-    if latest_assistant_turn(inspect)
-        .map(|turn| {
-            turn.status == contracts::ChatTurnStatusView::Failed
-                || turn.artifact_commit_status
-                    == contracts::ChatTurnArtifactCommitStatusView::Failed
-                || turn.stream_status == contracts::ChatTurnStreamStatusView::Failed
-                || turn.tool_loop_status == contracts::ChatTurnToolLoopStatusView::Failed
-                || turn.provider_status == contracts::ChatTurnProviderStatusView::Failed
-        })
-        .unwrap_or(false)
-    {
-        return contracts::ModelFacingEvidenceStateView::Degraded;
-    }
-
-    let has_memory_directory = inspect
-        .chat_session
-        .as_ref()
-        .and_then(|session| session.latest_memory_directory_id)
-        .is_some()
-        || inspect
-            .dataset_output
-            .as_ref()
-            .and_then(|output| output.memory_directory_id)
-            .is_some();
-    let retrieval_evidence_count = count_model_facing_retrieval_evidences(inspect);
-
-    if has_memory_directory && retrieval_evidence_count > 0 {
-        return contracts::ModelFacingEvidenceStateView::Mixed;
-    }
-    if retrieval_evidence_count > 0 {
-        return contracts::ModelFacingEvidenceStateView::SupplyOnly;
-    }
-    if has_memory_directory {
-        return contracts::ModelFacingEvidenceStateView::CatalogMemory;
-    }
-
-    contracts::ModelFacingEvidenceStateView::CatalogMemory
-}
-
-fn infer_model_facing_next_actions(
-    inspect: &WorkflowRuntimeInspectView,
-    capability_class: &contracts::ModelFacingCapabilityClassView,
-    evidence_state: &contracts::ModelFacingEvidenceStateView,
-) -> Vec<contracts::ModelFacingNextActionView> {
-    let mut actions = Vec::new();
-
-    if *evidence_state == contracts::ModelFacingEvidenceStateView::Degraded {
-        actions.push(contracts::ModelFacingNextActionView::RetryExecution);
-        return actions;
-    }
-
-    if let Some(turn) = latest_assistant_turn(inspect) {
-        if turn.tool_loop_status == contracts::ChatTurnToolLoopStatusView::Pending {
-            actions.push(contracts::ModelFacingNextActionView::WaitForToolLoop);
-        }
-        if turn.artifact_commit_status == contracts::ChatTurnArtifactCommitStatusView::Pending {
-            actions.push(contracts::ModelFacingNextActionView::FinalizeArtifactCommit);
-        }
-    }
-
-    match capability_class {
-        contracts::ModelFacingCapabilityClassView::DatasetDirectoryAwareness => {
-            actions.push(contracts::ModelFacingNextActionView::RefreshDirectory);
-            actions.push(contracts::ModelFacingNextActionView::AnswerDirectly);
-        }
-        contracts::ModelFacingCapabilityClassView::EvidenceRetrieval => {
-            actions.push(contracts::ModelFacingNextActionView::ReadDocumentDetail);
-        }
-        contracts::ModelFacingCapabilityClassView::MaterialExplanationAndSynthesis => {
-            let retrieval_evidence_count = count_model_facing_retrieval_evidences(inspect);
-            if retrieval_evidence_count > 1 {
-                actions.push(contracts::ModelFacingNextActionView::CompareDocuments);
-            }
-            if retrieval_evidence_count > 0 {
-                actions.push(contracts::ModelFacingNextActionView::ReadDocumentDetail);
-            }
-            actions.push(contracts::ModelFacingNextActionView::AnswerDirectly);
-        }
-        contracts::ModelFacingCapabilityClassView::ReportPlanning => {
-            actions.push(contracts::ModelFacingNextActionView::ContinueReportPlanning);
-        }
-        contracts::ModelFacingCapabilityClassView::ReportGenerationAndEditing => {
-            actions.push(contracts::ModelFacingNextActionView::GenerateReportOutput);
-        }
-        contracts::ModelFacingCapabilityClassView::ControlledPlatformAction => {
-            actions.push(contracts::ModelFacingNextActionView::RetryExecution);
-        }
-    }
-
-    actions
-}
-
-fn collect_model_facing_signals(inspect: &WorkflowRuntimeInspectView) -> Vec<String> {
-    let mut signals = vec![format!("workflow_kind={}", inspect.execution.kind.as_str())];
-    let retrieval_evidence_count = count_model_facing_retrieval_evidences(inspect);
-    signals.push(format!(
-        "retrieval_evidence_count={retrieval_evidence_count}"
-    ));
-    signals.push(format!(
-        "has_memory_directory={}",
-        inspect
-            .chat_session
-            .as_ref()
-            .and_then(|session| session.latest_memory_directory_id)
-            .is_some()
-            || inspect
-                .dataset_output
-                .as_ref()
-                .and_then(|output| output.memory_directory_id)
-                .is_some()
-    ));
-    if let Some(turn) = latest_assistant_turn(inspect) {
-        signals.push(format!(
-            "chat_turn_status={}",
-            format_chat_turn_status(&turn.status)
-        ));
-        signals.push(format!(
-            "artifact_commit_status={}",
-            format_chat_turn_artifact_commit_status(&turn.artifact_commit_status)
-        ));
-    }
-    signals
-}
-
-fn count_model_facing_retrieval_evidences(inspect: &WorkflowRuntimeInspectView) -> usize {
-    let dataset_output_count = inspect
-        .dataset_output
-        .as_ref()
-        .map(|output| output.retrieval_evidence_ids.len())
-        .unwrap_or(0);
-    let assistant_message_count = inspect
-        .chat_session
-        .as_ref()
-        .and_then(|session| session.latest_assistant_message.as_ref())
-        .and_then(|message| message.message_manifest_view.as_ref())
-        .and_then(|manifest| manifest.output.as_ref())
-        .map(|output| {
-            output
-                .sections
-                .iter()
-                .map(|section| section.retrieval_evidence_ids.len())
-                .sum::<usize>()
-        })
-        .unwrap_or(0);
-
-    dataset_output_count.max(assistant_message_count)
-}
-
-fn latest_assistant_turn(
-    inspect: &WorkflowRuntimeInspectView,
-) -> Option<&contracts::ChatTurnRuntimeView> {
-    inspect
-        .chat_session
-        .as_ref()?
-        .latest_assistant_message
-        .as_ref()?
-        .message_manifest_view
-        .as_ref()?
-        .turn
-        .as_ref()
 }
 
 async fn healthz() -> Json<HealthResponse> {
