@@ -3430,6 +3430,46 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Document Object Repair Plan Smoke
+
+- Purpose:
+  - add a fixed read-only P2-2 repair readiness entrypoint for active documents that are missing content fingerprints;
+  - classify missing-object and missing-fingerprint work into aggregate repair readiness buckets before any real hash, write, source fetch, or object cleanup;
+  - keep the output operator-reviewable without exposing object locators, filesystem paths, hashes, document titles, source rows, credentials, or raw document text.
+- Code changes:
+  - added `scripts/smoke/document-object-repair-plan.mjs`;
+  - added `npm run smoke:document-object-repair-plan`;
+  - documented the entrypoint in `scripts/README.md`;
+  - added syntax check and deterministic self-test to `.github/workflows/datamax-ci.yml`;
+  - updated `docs/plans/datamax-active-execution-plan.md` P2-2 with the fixed entrypoint and current live aggregate result.
+- Contract:
+  - live mode loads a deployment env file and reads `PLATFORM_DATABASE_URL` without printing it;
+  - live mode executes one fixed aggregate SELECT through `psql`;
+  - local object candidates stay in memory only and are checked with `stat()` only;
+  - report fields are aggregate counts only: local file found, local file missing, local locator review, remote locator review, missing locator review, canonical missing-fingerprint blocker, and not-sampled local candidate counts;
+  - report explicitly records `file_content_read=false`, `hash_computed=false`, `database_writes_enabled=false`, `object_deletes_enabled=false`, `real_repair_allowed_by_this_report=false`, and `operator_confirmation_required_for_real_repair=true`.
+- Local verification:
+  - `node --check scripts/smoke/document-object-repair-plan.mjs`: passed;
+  - `npm run smoke:document-object-repair-plan -- --self-test --pretty`: passed, `runId=20260612031308994-2fsvvouq8-self-test`, checks `redactionContract=true`, `statOnly=true`, `noPathValues=true`, `noHashComputation=true`, `repairDisabled=true`, `operatorConfirmationRequired=true`;
+  - `npm run smoke:document-object-filesystem-preflight -- --self-test --pretty`: passed, `runId=20260612031309470-2e43qtwng-self-test`;
+  - P2-2 companion self-tests passed for `document-fingerprint-inventory`, `document-object-cleanup-plan`, and `document-object-repair-plan`.
+- 8-server live verification before commit:
+  - `/srv/aiv3/repo` was at `9e3193f37`; `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - executed the new script over SSH stdin against `/srv/aiv3/repo` with `--env-file /etc/aiv3/aiv3.env --probe-limit 200`;
+  - result: `runId=20260612031458450-f2yoqlsiv7`, `ok=true`;
+  - input summary: `document_count=2637`, `already_fingerprinted_document_count=32`, `canonical_document_count=32`, `canonical_missing_fingerprint_count=0`, `local_missing_fingerprint_count=2602`, `remote_missing_fingerprint_count=3`, `missing_locator_fingerprint_count=0`, `probed_count=200`, `not_sampled_local_candidate_count=2402`;
+  - sample status counts: `file_found=57`, `file_missing=143`;
+  - repair readiness counts: `repair_ready_local_file_found=57`, `review_required_local_file_missing=143`, `not_sampled_local_candidate=2402`, `review_required_remote_locator=3`;
+  - found-file aggregate size summary: `file_found_count=57`, `total_bytes=69424609`, `max_bytes=33717070`;
+  - receipt: `/srv/aiv3/repo/target/document-object-repair-plan-smoke-p2-20260612/20260612031458450-f2yoqlsiv7/report.json`;
+  - redaction scan over the receipt found zero matches for database URL, bearer, provider key pattern, raw URL, 64-character hash value, Windows path, or env file path.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object content hash, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P5 HomePage Conversation Title Extraction
 
 - Purpose:

@@ -45,6 +45,7 @@ jobs:
           node --check scripts/smoke/document-fingerprint-inventory.mjs
           node --check scripts/smoke/document-object-cleanup-plan.mjs
           node --check scripts/smoke/document-object-filesystem-preflight.mjs
+          node --check scripts/smoke/document-object-repair-plan.mjs
 
       - name: Run deterministic smoke self-tests
         run: |
@@ -61,6 +62,7 @@ jobs:
           npm run smoke:document-fingerprint-inventory -- --self-test
           npm run smoke:document-object-cleanup-plan -- --self-test
           npm run smoke:document-object-filesystem-preflight -- --self-test
+          npm run smoke:document-object-repair-plan -- --self-test
           npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout
 
       - name: Check generated public integration guide

@@ -16,6 +16,7 @@
     "smoke:document-fingerprint-inventory": "node scripts/smoke/document-fingerprint-inventory.mjs",
     "smoke:document-object-cleanup-plan": "node scripts/smoke/document-object-cleanup-plan.mjs",
     "smoke:document-object-filesystem-preflight": "node scripts/smoke/document-object-filesystem-preflight.mjs",
+    "smoke:document-object-repair-plan": "node scripts/smoke/document-object-repair-plan.mjs",
     "smoke:newbai-customer-answer": "node scripts/smoke/newbai-customer-answer.mjs",
     "smoke:newbai-customer-answer-live-capture": "node scripts/smoke/newbai-customer-answer-live-capture.mjs",
     "smoke:p2-summary-only-dry-run": "node scripts/smoke/p2-summary-only-dry-run.mjs",

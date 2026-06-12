@@ -198,12 +198,16 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
 npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
 npm run smoke:document-object-filesystem-preflight -- --env-file /etc/aiv3/aiv3.env --probe-limit 200
+npm run smoke:document-object-repair-plan -- --env-file /etc/aiv3/aiv3.env --probe-limit 200
 ```
 
 **Done when:**
 - 只输出聚合计数和原因分布。
 - 不输出对象路径、对象 key、hash、文档标题或正文。
-- 真实对象清理前有 operator-reviewed manifest 和回滚说明。
+- missing object / missing fingerprint 修复只输出 readiness 分类；真实 hash、backfill、对象清理或源同步前必须有 operator-reviewed manifest、回滚说明和单独确认。
+
+**Current status:**
+- 2026-06-12: 已补 `smoke:document-object-repair-plan`。8 服务器只读 live 抽样 200 个 local missing fingerprint：`repair_ready_local_file_found=57`、`review_required_local_file_missing=143`、`not_sampled_local_candidate=2402`、`review_required_remote_locator=3`；未计算 hash、未读文件内容、未写库、未清理对象。
 
 ## 7. P3 报表模板与第三方触发
 
