@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   documentDatasetIds,
+  documentDatasetSelectionUpdate,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   reportRecordDatasetIds,
@@ -63,6 +64,22 @@ describe('dataset record scope helpers', () => {
       }),
       ['draft-a', 'draft-b', 'draft-c', 'draft-d', 'draft-e', 'draft-f', 'draft-g', 'draft-h', 'draft-i', 'draft-j', 'draft-k', 'draft-l'],
     );
+  });
+
+  it('builds document selection updates only when ownership exists', () => {
+    assert.deepEqual(
+      documentDatasetSelectionUpdate({
+        dataset_id: 'doc-a',
+        datasetId: 'doc-b',
+        dataset_ids: ['doc-c', 'doc-a'],
+      }),
+      {
+        selectedDatasetId: 'doc-a',
+        selectedDatasetIds: ['doc-a', 'doc-b', 'doc-c'],
+      },
+    );
+    assert.equal(documentDatasetSelectionUpdate({ id: 'orphan-doc' }), null);
+    assert.equal(documentDatasetSelectionUpdate(null), null);
   });
 
   it('filters records by selected dataset ids with default and custom owner resolvers', () => {

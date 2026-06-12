@@ -27,6 +27,17 @@ export function documentDatasetIds(document) {
   ]);
 }
 
+export function documentDatasetSelectionUpdate(document) {
+  const datasetIds = documentDatasetIds(document);
+  if (!datasetIds.length) {
+    return null;
+  }
+  return {
+    selectedDatasetId: datasetIds[0],
+    selectedDatasetIds: datasetIds,
+  };
+}
+
 export function reportRecordDatasetIds(record) {
   return normalizeDatasetIds([
     record?.dataset_id,

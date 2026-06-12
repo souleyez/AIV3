@@ -319,6 +319,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 当前对话标题计算 helper 已并入 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；已选后端会话标题、空标题 fallback、草稿标题 trim、输入优先、首条用户消息 fallback 和默认新对话标题语义保持不变。
 - 2026-06-12: `HomePageClient.js` 新建本地对话 draft helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；thread id 生成、开始时间生成、已选数据集提示和普通新对话提示语义保持不变。
 - 2026-06-12: `HomePageClient.js` 本地用户语句记忆 payload helper 已并入 `apps/web/app/lib/local-activity-events.js`，并补充 Node 单测；后台 conversation-memory 写入路径、字段 shape、空内容跳过和 best-effort 语义保持不变。
+- 2026-06-12: `HomePageClient.js` 文档选择时的数据集范围恢复 helper 已并入 `apps/web/app/lib/dataset-record-scope.js`，并补充 Node 单测；有归属文档更新选中数据集、无归属文档不清空现有范围的语义保持不变。
 
 **Regression commands:**
 

@@ -66,6 +66,7 @@ import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
   documentDatasetIds,
+  documentDatasetSelectionUpdate,
   filterRecordsByDatasetIds,
   normalizeDatasetIds,
   sameDatasetIds,
@@ -440,10 +441,10 @@ export default function HomePageClient() {
       return;
     }
     const document = documents.find((item) => item.id === documentId);
-    const datasetIds = documentDatasetIds(document);
-    if (datasetIds.length) {
-      setSelectedDatasetId(datasetIds[0]);
-      setSelectedDatasetIds(datasetIds);
+    const selectionUpdate = documentDatasetSelectionUpdate(document);
+    if (selectionUpdate) {
+      setSelectedDatasetId(selectionUpdate.selectedDatasetId);
+      setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
     }
     setSelectedDocumentId(documentId);
     setActivePage('document-detail');
@@ -456,10 +457,10 @@ export default function HomePageClient() {
       return;
     }
     const document = documents.find((item) => item.id === documentId);
-    const datasetIds = documentDatasetIds(document);
-    if (datasetIds.length) {
-      setSelectedDatasetId(datasetIds[0]);
-      setSelectedDatasetIds(datasetIds);
+    const selectionUpdate = documentDatasetSelectionUpdate(document);
+    if (selectionUpdate) {
+      setSelectedDatasetId(selectionUpdate.selectedDatasetId);
+      setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
     }
     setSelectedDocumentId(documentId);
   }
