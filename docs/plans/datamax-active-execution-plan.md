@@ -301,6 +301,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `document_detail_model_facing` 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 均通过。
 - 2026-06-12: `crates/platform-api/src/lib.rs` workflow runtime inspect 的 model-facing summary/signal helper 已拆到 `workflow_runtime_model_facing` 模块；sub-view summary 优先级、failed/dead-letter 降级、memory/retrieval mixed 判断、runtime wait action 和 workflow kind signal 语义保持不变。
 - 2026-06-12: `workflow_runtime_model_facing` 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 均通过。
+- 2026-06-12: `crates/platform-api/src/lib.rs` workflow runtime pretty summary 渲染 helper 已拆到 `workflow_runtime_summary` 模块并保留 crate root `pub use`；summary 顺序、model-facing/execution-scope/dataset-output/report-plan/report-render/latest-assistant-turn 文本形状、可选字段输出和工具状态计数语义保持不变。
 - 2026-06-12: `HomePageClient.js` 对话标题生成逻辑已拆到 `apps/web/app/lib/conversation-title.js`，并补充 Node 单测；对话标题时间格式、空标题 fallback 和长 prompt 截断行为保持不变。
 - 2026-06-12: `HomePageClient.js` 本地浏览器状态读写 helper 已拆到 `apps/web/app/lib/local-browser-state.js`，并补充 Node 单测；local thread id 和 AssistantRun id 的 localStorage key、SSR fallback、浏览器存储失败 fallback 保持不变。
 - 2026-06-12: `HomePageClient.js` 本地对话列表缓存读写已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；local chat sessions storage key、normalize 后写入、无 window/坏 JSON/存储失败 fallback 保持不变。
