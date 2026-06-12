@@ -187,6 +187,7 @@ pub mod external_feishu;
 mod external_integration_summary;
 mod external_message_summary;
 mod external_observability;
+mod external_system_user;
 pub mod external_wecom;
 pub mod fact_index;
 mod lifecycle_updates;
@@ -247,6 +248,7 @@ use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
+use external_system_user::*;
 use lifecycle_updates::*;
 use model_facing_format::*;
 #[cfg(test)]
@@ -305,8 +307,6 @@ const ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT: usize = 4;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
-const EXTERNAL_SYSTEM_USER_EMAIL_DOMAIN: &str = "aidp.local";
-const EXTERNAL_SYSTEM_USER_SLUG_LIMIT: usize = 24;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
@@ -2313,40 +2313,6 @@ async fn ensure_external_channel_system_user(
     connection_id: &str,
 ) -> std::result::Result<User, ApiError> {
     ensure_external_system_user(state, "channel", connection_id, connection_id).await
-}
-
-fn external_system_user_email(scope_kind: &str, scope_id: &str) -> String {
-    let scope_kind = external_document_parse_dataset_key_component(scope_kind);
-    let scope_id = scope_id.trim();
-    let mut slug = external_document_parse_dataset_key_component(scope_id);
-    if slug.len() > EXTERNAL_SYSTEM_USER_SLUG_LIMIT {
-        slug.truncate(EXTERNAL_SYSTEM_USER_SLUG_LIMIT);
-        while slug.ends_with('-') {
-            slug.pop();
-        }
-    }
-    let hash = sha256_hex([scope_kind.as_bytes(), b":", scope_id.as_bytes()]);
-    format!(
-        "third-party-{}-{}-{}@{}",
-        scope_kind,
-        slug,
-        &hash[..12],
-        EXTERNAL_SYSTEM_USER_EMAIL_DOMAIN
-    )
-}
-
-fn external_system_user_display_name(display_label: &str, fallback: &str) -> String {
-    let label = display_label.trim();
-    let label = if label.is_empty() {
-        fallback.trim()
-    } else {
-        label
-    };
-    if label.is_empty() {
-        "第三方系统账户".to_string()
-    } else {
-        format!("第三方系统账户 - {label}")
-    }
 }
 
 async fn require_model_gateway_operator_session(
