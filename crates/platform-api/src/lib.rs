@@ -5758,47 +5758,6 @@ impl ExternalChannelAnswerDeltaSink {
     }
 }
 
-fn external_channel_answer_retrying_text(reason: &str) -> &'static str {
-    match reason {
-        "gateway_limit" => "模型通道繁忙，DataMax 正在切换可用通道继续回答。",
-        "provider_timeout" => "本次模型回答较慢，DataMax 正在重试或切换通道。",
-        "answer_rejected" => "模型回复未达到可展示要求，DataMax 正在重新生成回答。",
-        "provider_retry" | "provider_error" => "模型通道暂时不可用，DataMax 正在重试或切换通道。",
-        "runtime_unavailable" => "当前模型通道暂不可用，DataMax 正在寻找可用通道继续回答。",
-        _ => "DataMax 正在重试或切换可用通道继续回答。",
-    }
-}
-
-fn external_channel_static_page_sse_poll_interval() -> StdDuration {
-    StdDuration::from_millis(
-        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_POLL_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(5_000),
-    )
-}
-
-fn external_channel_static_page_sse_timeout() -> StdDuration {
-    StdDuration::from_millis(
-        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_TIMEOUT_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(120_000),
-    )
-}
-
-fn external_channel_live_answer_stream_enabled() -> bool {
-    std::env::var("EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 async fn external_channel_event_sse_next(
     state: ExternalChannelEventSseState,
 ) -> Option<(

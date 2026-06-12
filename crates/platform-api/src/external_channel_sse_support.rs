@@ -3,7 +3,7 @@ use contracts::ExternalChannelEventResponse;
 use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration as StdDuration};
 
 use crate::{
     codex_host_fixed_task_public_artifact_url_allowed,
@@ -759,6 +759,59 @@ pub(crate) fn external_channel_sse_event_with_delta(
     encoded
 }
 
+pub(crate) fn external_channel_answer_retrying_text(reason: &str) -> &'static str {
+    match reason {
+        "gateway_limit" => "模型通道繁忙，DataMax 正在切换可用通道继续回答。",
+        "provider_timeout" => "本次模型回答较慢，DataMax 正在重试或切换通道。",
+        "answer_rejected" => "模型回复未达到可展示要求，DataMax 正在重新生成回答。",
+        "provider_retry" | "provider_error" => "模型通道暂时不可用，DataMax 正在重试或切换通道。",
+        "runtime_unavailable" => "当前模型通道暂不可用，DataMax 正在寻找可用通道继续回答。",
+        _ => "DataMax 正在重试或切换可用通道继续回答。",
+    }
+}
+
+fn external_channel_duration_from_millis_env_value(
+    value: Option<String>,
+    default_millis: u64,
+) -> StdDuration {
+    StdDuration::from_millis(
+        value
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(default_millis),
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_poll_interval() -> StdDuration {
+    external_channel_duration_from_millis_env_value(
+        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_POLL_MS").ok(),
+        5_000,
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_timeout() -> StdDuration {
+    external_channel_duration_from_millis_env_value(
+        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_TIMEOUT_MS").ok(),
+        120_000,
+    )
+}
+
+fn external_channel_env_flag_is_enabled(value: Option<String>) -> bool {
+    value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn external_channel_live_answer_stream_enabled() -> bool {
+    external_channel_env_flag_is_enabled(
+        std::env::var("EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED").ok(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1365,5 +1418,49 @@ mod tests {
         assert!(body.contains("event: external_channel.static_page_progress"));
         assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
         assert!(!body.contains("_stream_dedupe_key"));
+    }
+
+    #[test]
+    fn answer_retrying_text_maps_known_reasons_and_default() {
+        assert_eq!(
+            external_channel_answer_retrying_text("gateway_limit"),
+            "模型通道繁忙，DataMax 正在切换可用通道继续回答。"
+        );
+        assert_eq!(
+            external_channel_answer_retrying_text("provider_error"),
+            "模型通道暂时不可用，DataMax 正在重试或切换通道。"
+        );
+        assert_eq!(
+            external_channel_answer_retrying_text("unknown"),
+            "DataMax 正在重试或切换可用通道继续回答。"
+        );
+    }
+
+    #[test]
+    fn duration_env_value_parser_trims_and_defaults() {
+        assert_eq!(
+            external_channel_duration_from_millis_env_value(Some(" 2500 ".to_string()), 5_000),
+            StdDuration::from_millis(2_500)
+        );
+        assert_eq!(
+            external_channel_duration_from_millis_env_value(Some("bad".to_string()), 5_000),
+            StdDuration::from_millis(5_000)
+        );
+        assert_eq!(
+            external_channel_duration_from_millis_env_value(None, 120_000),
+            StdDuration::from_millis(120_000)
+        );
+    }
+
+    #[test]
+    fn env_flag_parser_accepts_enabled_values_only() {
+        assert!(external_channel_env_flag_is_enabled(Some(
+            " true ".to_string()
+        )));
+        assert!(external_channel_env_flag_is_enabled(Some("ON".to_string())));
+        assert!(!external_channel_env_flag_is_enabled(Some(
+            "false".to_string()
+        )));
+        assert!(!external_channel_env_flag_is_enabled(None));
     }
 }
