@@ -191,6 +191,7 @@ mod model_gateway_status;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
+mod report_render_output_asset;
 mod workflow_runtime_summary;
 
 use auth_session_support::*;
@@ -240,6 +241,7 @@ use react_agent_tools::{
     execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
+use report_render_output_asset::*;
 use workflow_runtime_summary::{
     begin_summary_block, format_tool_status_summary, push_optional_summary_line, push_summary_line,
     summarize_tool_execution_status_counts,
@@ -2978,30 +2980,6 @@ fn collect_report_render_output_model_facing_signals(
         signals.push(format!("asset_kind={kind}"));
     }
     signals
-}
-
-fn report_render_output_has_asset_path(output: &ReportRenderOutputView) -> bool {
-    report_render_output_asset_path(output).is_some()
-}
-
-fn report_render_output_asset_path(output: &ReportRenderOutputView) -> Option<String> {
-    output
-        .asset_manifest
-        .as_object()
-        .and_then(|manifest| manifest.get("path"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn report_render_output_asset_kind(output: &ReportRenderOutputView) -> Option<String> {
-    output
-        .asset_manifest
-        .as_object()
-        .and_then(|manifest| manifest.get("kind"))
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
 }
 
 fn count_chat_message_model_facing_retrieval_evidences(message: &ChatMessageView) -> usize {
