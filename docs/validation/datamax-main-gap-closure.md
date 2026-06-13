@@ -10763,6 +10763,40 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, upload ingestion execution, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-13 P5 ID Parse Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public API contracts;
+  - move common UUID path-parameter parsing helpers out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/id_parse_support.rs`;
+  - moved `parse_execution_id`, `parse_dataset_id`, `parse_chat_session_id`, `parse_assistant_run_id`, `parse_static_page_draft_id`, `parse_static_page_image_job_id`, `parse_static_page_render_output_id`, `parse_published_report_id`, `parse_dataset_output_id`, `parse_plan_id`, and `parse_document_id` into that module;
+  - kept existing call names available through `use id_parse_support::*`;
+  - added module coverage for valid UUID wrapper construction and the existing invalid UUID error codes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api id_parse_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api parse_dataset_id_rejects_invalid_uuid --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api parse_dataset_output_id_rejects_invalid_uuid --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api parse_published_report_id_rejects_invalid_uuid --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api parse_ --lib`: passed, 30/30 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, route, UUID shape, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, upload ingestion execution, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 External Database Source Config Support 8-Server Verification
 
 - 8-server post-sync verification:

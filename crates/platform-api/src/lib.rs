@@ -201,6 +201,7 @@ mod external_observability;
 mod external_system_user;
 pub mod external_wecom;
 pub mod fact_index;
+mod id_parse_support;
 mod lifecycle_updates;
 mod memory_directory_scope;
 mod model_facing_document_focus;
@@ -279,6 +280,7 @@ use external_observability::{
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
 use external_system_user::*;
+use id_parse_support::*;
 use lifecycle_updates::*;
 use memory_directory_scope::*;
 use model_facing_format::*;
@@ -73169,27 +73171,6 @@ fn build_initial_render_execution_event(
     }
 }
 
-fn parse_execution_id(raw: &str) -> std::result::Result<WorkflowExecutionId, ApiError> {
-    Uuid::parse_str(raw).map(WorkflowExecutionId).map_err(|_| {
-        ApiError::bad_request("invalid_execution_id", format!("{raw} is not a valid UUID"))
-    })
-}
-
-fn parse_dataset_id(raw: &str) -> std::result::Result<DatasetId, ApiError> {
-    Uuid::parse_str(raw).map(DatasetId).map_err(|_| {
-        ApiError::bad_request("invalid_dataset_id", format!("{raw} is not a valid UUID"))
-    })
-}
-
-fn parse_chat_session_id(raw: &str) -> std::result::Result<ChatSessionId, ApiError> {
-    Uuid::parse_str(raw).map(ChatSessionId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_chat_session_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
 fn selected_dataset_id_from_scope(scope: &Value) -> Option<DatasetId> {
     selected_dataset_ids_from_scope(scope).into_iter().next()
 }
@@ -74203,83 +74184,6 @@ fn document_id_from_scope_item(item: &Value) -> Option<DocumentId> {
             .and_then(Value::as_str)
     })?;
     Uuid::parse_str(raw).ok().map(DocumentId)
-}
-
-fn parse_assistant_run_id(raw: &str) -> std::result::Result<AssistantRunId, ApiError> {
-    Uuid::parse_str(raw).map(AssistantRunId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_assistant_run_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn parse_static_page_draft_id(raw: &str) -> std::result::Result<StaticPageDraftId, ApiError> {
-    Uuid::parse_str(raw).map(StaticPageDraftId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_static_page_draft_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn parse_static_page_image_job_id(
-    raw: &str,
-) -> std::result::Result<StaticPageImageJobId, ApiError> {
-    Uuid::parse_str(raw).map(StaticPageImageJobId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_static_page_image_job_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn parse_static_page_render_output_id(
-    raw: &str,
-) -> std::result::Result<domain_model::StaticPageRenderOutputId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(domain_model::StaticPageRenderOutputId)
-        .map_err(|_| {
-            ApiError::bad_request(
-                "invalid_static_page_render_output_id",
-                format!("{raw} is not a valid UUID"),
-            )
-        })
-}
-
-fn parse_published_report_id(raw: &str) -> std::result::Result<PublishedReportId, ApiError> {
-    Uuid::parse_str(raw).map(PublishedReportId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_published_report_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn parse_dataset_output_id(raw: &str) -> std::result::Result<DatasetOutputId, ApiError> {
-    Uuid::parse_str(raw).map(DatasetOutputId).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_dataset_output_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn parse_plan_id(raw: &str) -> std::result::Result<domain_model::ReportPlanId, ApiError> {
-    Uuid::parse_str(raw)
-        .map(domain_model::ReportPlanId)
-        .map_err(|_| {
-            ApiError::bad_request(
-                "invalid_report_plan_id",
-                format!("{raw} is not a valid UUID"),
-            )
-        })
-}
-
-fn parse_document_id(raw: &str) -> std::result::Result<DocumentId, ApiError> {
-    Uuid::parse_str(raw).map(DocumentId).map_err(|_| {
-        ApiError::bad_request("invalid_document_id", format!("{raw} is not a valid UUID"))
-    })
 }
 
 fn build_workflow_signal(
