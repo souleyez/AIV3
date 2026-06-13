@@ -249,6 +249,7 @@ mod resource_access;
 mod retrieval_evidence_ranking_support;
 mod retrieval_evidence_view_support;
 mod retrieval_query_support;
+mod runtime_manifest_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_payload_support;
@@ -369,6 +370,7 @@ use resource_access::*;
 use retrieval_evidence_ranking_support::*;
 use retrieval_evidence_view_support::*;
 use retrieval_query_support::*;
+use runtime_manifest_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_payload_support::*;
@@ -74195,72 +74197,6 @@ fn parse_chat_message_manifest(value: &Value) -> Option<contracts::ChatMessageMa
     })
 }
 
-fn manifest_finish_reason_from_invocation(
-    reason: &contracts::LlmInvocationFinishReasonView,
-) -> contracts::ManifestFinishReasonView {
-    match reason {
-        contracts::LlmInvocationFinishReasonView::Stop => contracts::ManifestFinishReasonView::Stop,
-        contracts::LlmInvocationFinishReasonView::ToolCalls => {
-            contracts::ManifestFinishReasonView::ToolCalls
-        }
-        contracts::LlmInvocationFinishReasonView::Length => {
-            contracts::ManifestFinishReasonView::Length
-        }
-        contracts::LlmInvocationFinishReasonView::ContentFilter => {
-            contracts::ManifestFinishReasonView::ContentFilter
-        }
-        contracts::LlmInvocationFinishReasonView::Error => {
-            contracts::ManifestFinishReasonView::Error
-        }
-        contracts::LlmInvocationFinishReasonView::Other(value) => {
-            contracts::ManifestFinishReasonView::Other(value.clone())
-        }
-    }
-}
-
-fn latest_llm_invocation(llm_invocations: &[LlmInvocationView]) -> Option<&LlmInvocationView> {
-    llm_invocations
-        .iter()
-        .max_by_key(|invocation| invocation.sequence_no)
-}
-
-fn manifest_runtime_from_latest_llm_invocation(
-    llm_invocations: &[LlmInvocationView],
-) -> Option<contracts::ManifestRuntimeView> {
-    let latest = latest_llm_invocation(llm_invocations)?;
-
-    Some(contracts::ManifestRuntimeView {
-        mode: match latest.mode {
-            contracts::LlmInvocationModeView::Placeholder => {
-                contracts::ManifestRuntimeModeView::Placeholder
-            }
-            contracts::LlmInvocationModeView::Provider => {
-                contracts::ManifestRuntimeModeView::Provider
-            }
-        },
-        provider: latest.provider.clone(),
-        model: latest.model.clone(),
-        request_id: latest.request_id.clone(),
-        finish_reason: latest
-            .finish_reason
-            .as_ref()
-            .map(manifest_finish_reason_from_invocation),
-        provider_failure: None,
-        latency_ms: latest.latency_ms,
-        usage: latest
-            .usage
-            .as_ref()
-            .map(|usage| contracts::ManifestTokenUsageView {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                total_tokens: usage.total_tokens,
-            }),
-        system_prompt_key: latest.system_prompt_key.clone(),
-        system_prompt_version: latest.system_prompt_version.clone(),
-        tool_trace_count: latest.tool_trace_count,
-    })
-}
-
 fn hydrate_chat_turn_from_latest_llm_invocation(
     turn: &mut contracts::ChatTurnRuntimeView,
     llm_invocations: &[LlmInvocationView],
@@ -74325,50 +74261,6 @@ fn hydrate_chat_turn_from_latest_llm_invocation(
         turn.tool_loop_settled_at = turn.completed_at.or(turn.provider_responded_at);
     }
     turn.events = build_chat_turn_events(turn);
-}
-
-fn manifest_tool_trace_from_tool_executions(
-    tool_executions: &[ToolExecutionView],
-) -> Vec<contracts::ManifestToolCallView> {
-    let mut trace = tool_executions.to_vec();
-    trace.sort_by_key(|execution| (execution.sequence_no, execution.created_at));
-    trace
-        .into_iter()
-        .map(|execution| contracts::ManifestToolCallView {
-            call_id: execution.call_id,
-            tool_name: execution.tool_name,
-            tool: execution.tool,
-            status: execution.status,
-            arguments: execution.arguments,
-            result: execution.result,
-        })
-        .collect()
-}
-
-fn summarize_tool_execution_statuses(
-    tool_executions: &[ToolExecutionView],
-) -> Option<contracts::ChatTurnToolStatusSummaryView> {
-    if tool_executions.is_empty() {
-        return None;
-    }
-
-    let mut requested_count = 0usize;
-    let mut completed_count = 0usize;
-    let mut failed_count = 0usize;
-
-    for execution in tool_executions {
-        match execution.status {
-            contracts::ManifestToolCallStatusView::Requested => requested_count += 1,
-            contracts::ManifestToolCallStatusView::Completed => completed_count += 1,
-            contracts::ManifestToolCallStatusView::Failed => failed_count += 1,
-        }
-    }
-
-    Some(contracts::ChatTurnToolStatusSummaryView {
-        requested_count,
-        completed_count,
-        failed_count,
-    })
 }
 
 fn infer_chat_turn_tool_loop_status(
@@ -76999,60 +76891,6 @@ fn to_static_page_render_output_view(
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
     }
-}
-
-fn summarize_execution_scope_runtime(
-    llm_invocations: &[LlmInvocationView],
-    tool_executions: &[ToolExecutionView],
-) -> Option<contracts::WorkflowExecutionRuntimeSummaryView> {
-    let execution_scope_invocations = llm_invocations
-        .iter()
-        .filter(|invocation| {
-            invocation.source_kind == contracts::LlmInvocationSourceKindView::WorkflowExecution
-        })
-        .collect::<Vec<_>>();
-    let execution_scope_tool_executions = tool_executions
-        .iter()
-        .filter(|execution| {
-            execution.source_kind == contracts::ToolExecutionSourceKindView::WorkflowExecution
-        })
-        .collect::<Vec<_>>();
-
-    if execution_scope_invocations.is_empty() && execution_scope_tool_executions.is_empty() {
-        return None;
-    }
-
-    let latest_invocation = execution_scope_invocations.last().cloned().cloned();
-    let failed_tool_execution_count = execution_scope_tool_executions
-        .iter()
-        .filter(|execution| execution.status == contracts::ManifestToolCallStatusView::Failed)
-        .count();
-    let latest_provider = latest_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.provider.clone());
-    let latest_model = latest_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.model.clone());
-    let latest_request_id = latest_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.request_id.clone());
-    let latest_finish_reason = latest_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.finish_reason.clone());
-    let latest_tool_trace_count = latest_invocation
-        .as_ref()
-        .and_then(|invocation| invocation.tool_trace_count);
-
-    Some(contracts::WorkflowExecutionRuntimeSummaryView {
-        llm_invocation_count: execution_scope_invocations.len(),
-        tool_execution_count: execution_scope_tool_executions.len(),
-        failed_tool_execution_count,
-        latest_provider,
-        latest_model,
-        latest_request_id,
-        latest_finish_reason,
-        latest_tool_trace_count,
-    })
 }
 
 fn validate_required(field: &'static str, value: &str) -> std::result::Result<(), ApiError> {
