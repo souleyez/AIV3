@@ -441,6 +441,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 静态页 structure signals、heading candidate 和 docs-page heading binding helper 已拆到 `static_page_structure_signals` 模块并补模块单测；`structure_signals` schema、source structure policy、field/bound module 摘要、sectionTitleHints 去重截断和 docs-page 结构模块绑定语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `static_page_structure_signals` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 外部对话观测 timeline event view、payload 摘要、phase/status/display fallback 和 artifact link 提取 helper 已拆到 `external_conversation_timeline` 模块并补模块单测；SSE payload 脱敏、内部字段裁剪、状态推断、链接去重过滤和 debug payload 语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `external_conversation_timeline` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
