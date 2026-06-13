@@ -179,6 +179,7 @@ mod assistant_run_model_context_support;
 mod assistant_run_model_supply_budget_support;
 mod assistant_run_model_supply_item_support;
 mod assistant_run_react_support;
+mod assistant_run_resume_profile_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
 mod assistant_run_sse_support;
@@ -258,6 +259,7 @@ use assistant_run_model_context_support::*;
 use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
 use assistant_run_react_support::*;
+use assistant_run_resume_profile_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
 use assistant_run_sse_support::*;
@@ -42948,41 +42950,6 @@ fn resume_profile_row_match_summary(
     }
 }
 
-fn assistant_run_resume_profile_table<F>(
-    rows: &[Value],
-    title: &str,
-    headers: &[&str],
-    row_values: F,
-) -> String
-where
-    F: Fn(&Value) -> Vec<String>,
-{
-    let mut lines = vec![
-        format!("{title}（共 {} 份可见简历）：", rows.len()),
-        String::new(),
-    ];
-    lines.push(format!("| {} |", headers.join(" | ")));
-    lines.push(format!(
-        "| {} |",
-        headers
-            .iter()
-            .map(|_| "---")
-            .collect::<Vec<_>>()
-            .join(" | ")
-    ));
-    for row in rows {
-        lines.push(format!(
-            "| {} |",
-            row_values(row)
-                .into_iter()
-                .map(|value| escape_markdown_table_cell(&value))
-                .collect::<Vec<_>>()
-                .join(" | ")
-        ));
-    }
-    lines.join("\n")
-}
-
 fn assistant_run_resume_project_delivery_direct_answer(
     scans: &[Value],
     profile_rows: &[Value],
@@ -43317,166 +43284,6 @@ fn assistant_run_resume_project_delivery_data_refs(
             label: format!("数据集 {dataset_id}"),
         })
         .collect()
-}
-
-fn resume_profile_candidate_name(row: &Value) -> String {
-    value_string(row, "candidate_name")
-}
-
-fn resume_profile_array_values(row: &Value, key: &str) -> Vec<String> {
-    row.get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(normalize_document_entity_value)
-                .filter(|value| !value.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-fn resume_profile_array_string(row: &Value, key: &str, limit: usize) -> String {
-    let values = resume_profile_array_values(row, key);
-    if values.is_empty() {
-        "-".to_string()
-    } else {
-        values
-            .into_iter()
-            .take(limit)
-            .collect::<Vec<_>>()
-            .join("；")
-    }
-}
-
-fn value_string(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("-")
-        .to_string()
-}
-
-fn value_u64_string(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_u64)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn value_i64_string(row: &Value, key: &str) -> String {
-    row.get(key)
-        .and_then(Value::as_i64)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn compare_resume_profile_u64_field(
-    left: &Value,
-    right: &Value,
-    key: &str,
-    ascending: bool,
-) -> std::cmp::Ordering {
-    compare_resume_profile_u64_options(
-        left.get(key).and_then(Value::as_u64),
-        right.get(key).and_then(Value::as_u64),
-        ascending,
-    )
-}
-
-fn compare_resume_profile_i64_field(
-    left: &Value,
-    right: &Value,
-    key: &str,
-    ascending: bool,
-) -> std::cmp::Ordering {
-    compare_resume_profile_i64_options(
-        left.get(key).and_then(Value::as_i64),
-        right.get(key).and_then(Value::as_i64),
-        ascending,
-    )
-}
-
-fn compare_resume_profile_u64_options(
-    left: Option<u64>,
-    right: Option<u64>,
-    ascending: bool,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => {
-            if ascending {
-                left.cmp(&right)
-            } else {
-                right.cmp(&left)
-            }
-        }
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-}
-
-fn compare_resume_profile_i64_options(
-    left: Option<i64>,
-    right: Option<i64>,
-    ascending: bool,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => {
-            if ascending {
-                left.cmp(&right)
-            } else {
-                right.cmp(&left)
-            }
-        }
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-}
-
-fn resume_profile_gender_sort_rank(row: &Value) -> usize {
-    match row.get("gender").and_then(Value::as_str).map(str::trim) {
-        Some("男") => 0,
-        Some("女") => 1,
-        Some(value) if !value.is_empty() => 2,
-        _ => 3,
-    }
-}
-
-fn resume_profile_gender_counts(rows: &[Value]) -> (usize, usize, usize) {
-    let mut male_count = 0;
-    let mut female_count = 0;
-    let mut unknown_count = 0;
-    for row in rows {
-        match row.get("gender").and_then(Value::as_str).map(str::trim) {
-            Some("男") => male_count += 1,
-            Some("女") => female_count += 1,
-            _ => unknown_count += 1,
-        }
-    }
-    (male_count, female_count, unknown_count)
-}
-
-fn resume_profile_year_span(row: &Value) -> Option<i64> {
-    let earliest_year = row.get("earliest_year").and_then(Value::as_i64)?;
-    let latest_year = row.get("latest_year").and_then(Value::as_i64)?;
-    (latest_year >= earliest_year).then_some(latest_year - earliest_year + 1)
-}
-
-fn resume_profile_year_span_string(row: &Value) -> String {
-    resume_profile_year_span(row)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn resume_profile_degree_rank(row: &Value) -> Option<i64> {
-    resume_profile_array_values(row, "degree_names")
-        .into_iter()
-        .filter_map(|degree| degree_rank(&degree))
-        .max()
 }
 
 fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
