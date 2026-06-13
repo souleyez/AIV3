@@ -15085,3 +15085,21 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Chat Message View Assembly Final Docs Sync and CI State
+
+- Docs-only sync:
+  - docs-only commit `4be003a1` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `efd33ee0c` to `4be003a1c`;
+  - no service restart was performed for the docs-only sync;
+  - after sync, `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` all returned `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned `{"service":"platform-api","status":"ok","version":"0.1.0"}`;
+  - `GET http://127.0.0.1:3000/readyz` returned `{"service":"platform-api","status":"ready","version":"0.1.0"}`.
+- GitHub Actions status:
+  - run `27479077811` for `4be003a1` failed before executing steps; `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - run `27478896321` for `efd33ee0` failed before executing steps; `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this is treated as the existing CI runner/account issue, not as a code-level test failure; local and 8-server verification above remain the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no service was restarted during docs-only sync;
+  - 120 server was not touched.
