@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 static-page render output view helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启和 8 服务器 P0 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P3/P4 条件时切换优先级。 | `cargo test -p platform-api static_page_render_output_view_support --lib`、HTML download/preview/retryable reason 行为回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
-| 2 | 是否同步 8 服务器 | 等待本地验证和用户发布口径。 | 如果用户要求发布，拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke；如果只是 docs-only，则只 `git pull --ff-only` 且不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P5 basic view mapping helper 拆分 | 已完成本地验证；待提交、GitHub 同步和 8 服务器发布判断。 | 提交 `basic_view_support` 切片，发布时拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke。 | `cargo test -p platform-api basic_view_support --lib`、conversation memory item/workflow event view mapping 单测、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
+| 2 | 是否同步 8 服务器 | 等待本切片提交后执行 code deploy。 | 拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke；若后续只是 docs-only，则只 `git pull --ff-only` 且不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -315,6 +315,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 4. integration HTML 若只是行尾/stat 噪声，不纳入提交。
 
 **Current progress:**
+- 2026-06-14: `crates/platform-api/src/lib.rs` conversation memory item 和 workflow event view mapping helper 已拆到 `basic_view_support` 模块；本地 `cargo fmt --check`、`cargo test -p platform-api basic_view_support --lib`、`cargo check -p platform-api`、第三方静态页触发单测、Web build 和 P0 smoke 均通过，待提交和发布判断。
 - 2026-06-12: `external_observability` helper 已从 `crates/platform-api/src/lib.rs` 拆到独立模块；header 名称、环境变量、默认放行逻辑和哈希比较逻辑保持不变。
 - 2026-06-12: external integration management access wrapper 已并入 `external_observability` 模块；错误码、提示文本和授权判断保持不变。
 - 2026-06-12: external integration JSON 脱敏 helper 已拆到 `external_integration_summary` 模块；敏感字段规则、递归脱敏和 redacted 标准化保持不变。
@@ -601,8 +602,8 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
-2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
+1. 先关闭当前 P5 `basic_view_support` 切片：提交、同步 GitHub、按 P0 code deploy 边界发布 8 服务器并回写 validation。
+2. 当前切片关闭后，默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
 5. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。

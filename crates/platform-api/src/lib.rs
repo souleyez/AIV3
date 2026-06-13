@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+mod basic_view_support;
+
 use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope,
     CodexConversationExecutorOutput, ScopePlannerInput,
@@ -20,6 +22,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use basic_view_support::*;
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
 #[cfg(test)]
 use contracts::HtmlArtifactTemplateIdView;
@@ -95,6 +98,8 @@ use contracts::{
     WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
     WorkflowSignalRequest, WorkflowTaskView,
 };
+#[cfg(test)]
+use domain_model::StaticPageRenderOutputId;
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
     AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
@@ -106,10 +111,9 @@ use domain_model::{
     ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
     SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
     StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
-    StaticPageRenderOutputId, StaticPageRenderOutputStatus, TenantId, ToolExecution,
-    ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
-    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
-    WorkflowTask,
+    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
+    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -77324,31 +77328,6 @@ fn to_static_page_render_output_view(
         retryable_error_reason_camel: retryable_error_reason,
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
-    }
-}
-
-fn to_conversation_memory_item_view(item: ConversationMemoryItem) -> ConversationMemoryItemView {
-    ConversationMemoryItemView {
-        id: item.id,
-        local_thread_id: item.local_thread_id,
-        role: item.role,
-        item_kind: item.item_kind,
-        summary: item.summary,
-        source_message_refs: item.source_message_refs,
-        artifact_refs: item.artifact_refs,
-        metadata: item.metadata,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-    }
-}
-
-fn to_workflow_event_view(event: WorkflowEventRecord) -> WorkflowEventView {
-    WorkflowEventView {
-        id: event.id,
-        sequence_no: event.sequence_no,
-        event_name: event.event_name,
-        payload: event.payload,
-        created_at: event.created_at,
     }
 }
 
