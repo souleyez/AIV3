@@ -1,9 +1,120 @@
-use domain_model::{AssistantRunId, ChatMessageRole, ConversationMemoryItem};
+use domain_model::{AssistantRunId, ChatMessageRole, ConversationMemoryItem, TenantId, UserId};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
+pub(crate) const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD: &str = "local-thread";
+pub(crate) const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS: &str = "current_thread";
+const CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX: &str = "local-thread:";
+const CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX: &str = "user-context:";
+const CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX: &str = "external-user:";
+
+pub(crate) fn selected_scope_conversation_memory_ids(scope: &Value) -> Vec<String> {
+    scope
+        .as_object()
+        .and_then(|object| object.get("conversation_memory"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            dedupe_conversation_memory_strings(
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
+    !selected_scope_conversation_memory_ids(scope).is_empty()
+}
+
+pub(crate) fn set_selected_scope_conversation_memory(scope: &mut Value, memory_ids: Vec<String>) {
+    let memory_ids = dedupe_conversation_memory_strings(
+        memory_ids
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+    );
+    if !scope.is_object() {
+        *scope = json!({});
+    }
+    if let Some(object) = scope.as_object_mut() {
+        object.insert(
+            "conversation_memory".to_string(),
+            Value::Array(memory_ids.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+fn conversation_memory_scope_id_to_local_thread_id(
+    scope_id: &str,
+    current_local_thread_id: Option<&str>,
+) -> Option<String> {
+    let scope_id = scope_id.trim();
+    if scope_id.is_empty() {
+        return None;
+    }
+    if matches!(
+        scope_id,
+        CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD | CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS
+    ) {
+        return current_local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+    }
+    if let Some(local_thread_id) =
+        scope_id.strip_prefix(CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX)
+    {
+        return Some(local_thread_id.trim().to_string()).filter(|value| !value.is_empty());
+    }
+    if scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX)
+        || scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX)
+    {
+        return Some(scope_id.to_string());
+    }
+    None
+}
+
+pub(crate) fn selected_scope_conversation_memory_local_thread_ids(
+    scope: &Value,
+    current_local_thread_id: Option<&str>,
+) -> Vec<String> {
+    dedupe_conversation_memory_strings(
+        selected_scope_conversation_memory_ids(scope)
+            .into_iter()
+            .filter_map(|scope_id| {
+                conversation_memory_scope_id_to_local_thread_id(&scope_id, current_local_thread_id)
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn conversation_memory_scope_candidate_value(
+    id: &str,
+    label: &str,
+    reason: &str,
+    source: &str,
+) -> Value {
+    json!({
+        "type": "conversation_memory",
+        "id": id,
+        "label": label,
+        "confidence": "medium",
+        "reason": reason,
+        "source": source,
+    })
+}
+
+pub(crate) fn global_user_context_memory_key(tenant_id: TenantId, user_id: UserId) -> String {
+    format!("user-context:user:{tenant_id}:{user_id}")
+}
 
 pub(crate) fn conversation_memory_item_external_conversation_id(
     item: &ConversationMemoryItem,
@@ -95,6 +206,16 @@ pub(crate) fn assistant_run_memory_item_is_supply_eligible(item: &ConversationMe
         )
 }
 
+fn dedupe_conversation_memory_strings(values: Vec<String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    for value in values {
+        if !deduped.contains(&value) {
+            deduped.push(value);
+        }
+    }
+    deduped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +238,99 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn scope_memory_ids_trim_dedupe_and_ignore_invalid_values() {
+        let ids = selected_scope_conversation_memory_ids(&json!({
+            "conversation_memory": [
+                " local-thread ",
+                "local-thread",
+                "",
+                1,
+                "local-thread:abc"
+            ]
+        }));
+
+        assert_eq!(ids, vec!["local-thread", "local-thread:abc"]);
+        assert!(selected_scope_requests_conversation_memory(&json!({
+            "conversation_memory": ["current_thread"]
+        })));
+        assert!(!selected_scope_requests_conversation_memory(&json!({
+            "conversation_memory": []
+        })));
+    }
+
+    #[test]
+    fn set_scope_conversation_memory_normalizes_scope_and_ids() {
+        let mut scope = json!("not-object");
+
+        set_selected_scope_conversation_memory(
+            &mut scope,
+            vec![
+                " local-thread ".to_string(),
+                "local-thread".to_string(),
+                "".to_string(),
+                "user-context:user:t:u".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            scope["conversation_memory"],
+            json!(["local-thread", "user-context:user:t:u"])
+        );
+    }
+
+    #[test]
+    fn scope_memory_local_thread_ids_resolve_supported_scope_ids() {
+        let scope = json!({
+            "conversation_memory": [
+                "local-thread",
+                "current_thread",
+                "local-thread: explicit-thread ",
+                "user-context:user:t:u",
+                "external-user:tenant:bot:user",
+                "unsupported",
+                "local-thread:"
+            ]
+        });
+
+        assert_eq!(
+            selected_scope_conversation_memory_local_thread_ids(
+                &scope,
+                Some(" current-thread-id ")
+            ),
+            vec![
+                "current-thread-id",
+                "explicit-thread",
+                "user-context:user:t:u",
+                "external-user:tenant:bot:user"
+            ]
+        );
+    }
+
+    #[test]
+    fn scope_candidate_and_global_user_key_keep_public_shape() {
+        let candidate = conversation_memory_scope_candidate_value(
+            "local-thread",
+            "当前对话记忆",
+            "用户要求继续刚才内容",
+            "current_thread",
+        );
+
+        assert_eq!(candidate["type"], json!("conversation_memory"));
+        assert_eq!(candidate["id"], json!("local-thread"));
+        assert_eq!(candidate["confidence"], json!("medium"));
+        assert_eq!(candidate["label"], json!("当前对话记忆"));
+        assert_eq!(candidate["reason"], json!("用户要求继续刚才内容"));
+        assert_eq!(candidate["source"], json!("current_thread"));
+
+        let tenant_id = TenantId::new();
+        let user_id = UserId::new();
+        assert_eq!(
+            global_user_context_memory_key(tenant_id, user_id),
+            format!("user-context:user:{tenant_id}:{user_id}")
+        );
     }
 
     #[test]

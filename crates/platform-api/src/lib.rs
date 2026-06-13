@@ -404,11 +404,6 @@ const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
 const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
-const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD: &str = "local-thread";
-const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS: &str = "current_thread";
-const CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX: &str = "local-thread:";
-const CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX: &str = "user-context:";
-const CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX: &str = "external-user:";
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
@@ -72590,29 +72585,6 @@ fn selected_document_ids_for_evidence_from_scope(scope: &Value) -> Vec<DocumentI
     document_ids
 }
 
-fn selected_scope_conversation_memory_ids(scope: &Value) -> Vec<String> {
-    scope
-        .as_object()
-        .and_then(|object| object.get("conversation_memory"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            dedupe_strings(
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect(),
-            )
-        })
-        .unwrap_or_default()
-}
-
-fn selected_scope_requests_conversation_memory(scope: &Value) -> bool {
-    !selected_scope_conversation_memory_ids(scope).is_empty()
-}
-
 fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
     scope
         .get("temporary_dataset")
@@ -72620,89 +72592,6 @@ fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
         .and_then(Value::as_str)
         .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
         .map(DatasetId)
-}
-
-fn set_selected_scope_conversation_memory(scope: &mut Value, memory_ids: Vec<String>) {
-    let memory_ids = dedupe_strings(
-        memory_ids
-            .into_iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect(),
-    );
-    if !scope.is_object() {
-        *scope = json!({});
-    }
-    if let Some(object) = scope.as_object_mut() {
-        object.insert(
-            "conversation_memory".to_string(),
-            Value::Array(memory_ids.into_iter().map(Value::String).collect()),
-        );
-    }
-}
-
-fn conversation_memory_scope_id_to_local_thread_id(
-    scope_id: &str,
-    current_local_thread_id: Option<&str>,
-) -> Option<String> {
-    let scope_id = scope_id.trim();
-    if scope_id.is_empty() {
-        return None;
-    }
-    if matches!(
-        scope_id,
-        CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD | CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS
-    ) {
-        return current_local_thread_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-    }
-    if let Some(local_thread_id) =
-        scope_id.strip_prefix(CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX)
-    {
-        return Some(local_thread_id.trim().to_string()).filter(|value| !value.is_empty());
-    }
-    if scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_USER_CONTEXT_PREFIX)
-        || scope_id.starts_with(CONVERSATION_MEMORY_SCOPE_EXTERNAL_USER_PREFIX)
-    {
-        return Some(scope_id.to_string());
-    }
-    None
-}
-
-fn selected_scope_conversation_memory_local_thread_ids(
-    scope: &Value,
-    current_local_thread_id: Option<&str>,
-) -> Vec<String> {
-    dedupe_strings(
-        selected_scope_conversation_memory_ids(scope)
-            .into_iter()
-            .filter_map(|scope_id| {
-                conversation_memory_scope_id_to_local_thread_id(&scope_id, current_local_thread_id)
-            })
-            .collect(),
-    )
-}
-
-fn conversation_memory_scope_candidate_value(
-    id: &str,
-    label: &str,
-    reason: &str,
-    source: &str,
-) -> Value {
-    json!({
-        "type": "conversation_memory",
-        "id": id,
-        "label": label,
-        "confidence": "medium",
-        "reason": reason,
-        "source": source,
-    })
-}
-
-fn global_user_context_memory_key(tenant_id: TenantId, user_id: UserId) -> String {
-    format!("user-context:user:{tenant_id}:{user_id}")
 }
 
 fn assistant_run_scope_intent(scope: &Value) -> &str {
