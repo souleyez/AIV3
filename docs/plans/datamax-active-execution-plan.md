@@ -439,6 +439,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 静态页 data snapshot version、updated_at、validation summary 和 unit hints helper 已拆到 `static_page_data_snapshot_support` 模块并补模块单测；snapshotVersion 前缀、最新时间戳选择、模块/样本计数、unitHints 去重截断和 validation status 语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `static_page_data_snapshot_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 静态页 structure signals、heading candidate 和 docs-page heading binding helper 已拆到 `static_page_structure_signals` 模块并补模块单测；`structure_signals` schema、source structure policy、field/bound module 摘要、sectionTitleHints 去重截断和 docs-page 结构模块绑定语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `static_page_structure_signals` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
