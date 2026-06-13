@@ -175,6 +175,7 @@ mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_state_support;
 mod assistant_run_react_support;
+mod assistant_run_scope_policy_support;
 mod assistant_run_sse_support;
 mod assistant_scope_summary;
 pub mod auth_email;
@@ -246,6 +247,7 @@ use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_state_support::*;
 use assistant_run_react_support::*;
+use assistant_run_scope_policy_support::*;
 use assistant_run_sse_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
@@ -72594,33 +72596,6 @@ fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
         .map(DatasetId)
 }
 
-fn assistant_run_scope_intent(scope: &Value) -> &str {
-    scope
-        .get("intent")
-        .or_else(|| scope.get("assistant_intent"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("ordinary_chat")
-}
-
-fn assistant_run_scope_supply_policy(scope: &Value) -> Value {
-    scope
-        .get("supply_policy")
-        .or_else(|| scope.get("supplyPolicy"))
-        .cloned()
-        .unwrap_or_else(|| json!({}))
-}
-
-fn assistant_run_scope_suppresses_default_database_supply(scope: &Value) -> bool {
-    let policy = assistant_run_scope_supply_policy(scope);
-    policy
-        .get("suppressDefaultDatabaseSupply")
-        .or_else(|| policy.get("suppress_default_database_supply"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 fn selected_scope_attachment_title_document_ids(scope: &Value) -> Vec<DocumentId> {
     let policy = assistant_run_scope_supply_policy(scope);
     let mut ids = Vec::new();
@@ -72651,21 +72626,6 @@ fn selected_scope_attachment_title_document_ids(scope: &Value) -> Vec<DocumentId
         }
     }
     ids
-}
-
-fn assistant_run_scope_policy_string(
-    scope: &Value,
-    field_names: &[&str],
-    default_value: &str,
-) -> String {
-    let policy = assistant_run_scope_supply_policy(scope);
-    field_names
-        .iter()
-        .find_map(|field_name| policy.get(*field_name).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_value)
-        .to_string()
 }
 
 fn assistant_run_scope_action_policy(scope: &Value) -> String {
@@ -73364,20 +73324,6 @@ fn ascii_prompt_contains_any(lower_prompt: &str, hints: &[&str]) -> bool {
                 .any(|token| token == *hint)
         }
     })
-}
-
-fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
-    let policy = assistant_run_scope_supply_policy(scope);
-    policy
-        .get("preferDetail")
-        .or_else(|| policy.get("prefer_detail"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || policy
-            .get("retrievalPolicy")
-            .or_else(|| policy.get("retrieval_policy"))
-            .and_then(Value::as_str)
-            .is_some_and(|value| value == "detail_first")
 }
 
 fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {

@@ -488,6 +488,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_conversation_memory_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、conversation memory/ReAct recall/external user memory/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` conversation memory scope ids、current-thread alias、local-thread/user-context/external-user scope 映射、候选项和全局用户记忆 key helper 已并入 `assistant_run_conversation_memory_support` 模块并补模块单测；scope 去重、空值过滤、当前线程恢复、候选项 JSON 形状和用户 key 语义保持不变。本地 `cargo check`、conversation memory scope/route/ReAct recall/external user memory/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_conversation_memory_support` scope helper 拆分已提交并同步 8 服务器；远端 `cargo check`、conversation memory scope/route/ReAct recall/external user memory/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run scope intent、supply policy、默认数据库供料抑制、policy string 和 prefer detail helper 已拆到 `assistant_run_scope_policy_support` 模块并补模块单测；intent alias、supply_policy/supplyPolicy、snake/camel policy 字段、detail_first 判定和默认值语义保持不变。本地 `cargo check`、scope policy/static-page scope/resume scan/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
