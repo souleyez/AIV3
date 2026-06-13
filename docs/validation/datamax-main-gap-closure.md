@@ -12111,3 +12111,38 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-13 P5 Assistant Run Conversation Memory Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move assistant-run conversation memory supply helper functions out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_conversation_memory_support.rs`;
+  - moved conversation memory external conversation id extraction, source assistant-run id collection, supply-value JSON construction, memory supply limit parsing, and supply eligibility into the new module;
+  - kept async database visibility, selected-scope permission checks, and route behavior in `lib.rs`;
+  - added module coverage for limit parsing/clamping, user-only supply eligibility, metadata/source refs fallback, assistant-run id dedupe, and supplied item JSON shape.
+- Local verification:
+  - `cargo fmt --check`: passed after running `cargo fmt`;
+  - `cargo test -p platform-api assistant_run_conversation_memory_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api conversation_memory_items_can_be_listed_for_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api react_recall_conversation_memory_supplies_even_when_scope_memory_is_empty --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_codex_package_keeps_v3_context_and_action_contracts --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_user_memory_is_intent_gated_and_supplied --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.

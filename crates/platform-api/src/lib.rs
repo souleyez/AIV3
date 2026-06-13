@@ -171,6 +171,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_state_support;
 mod assistant_run_react_support;
@@ -241,6 +242,7 @@ mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod zip_ingest_support;
 
+use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_state_support::*;
 use assistant_run_react_support::*;
@@ -402,8 +404,6 @@ const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
 const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
-const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
-const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
 const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD: &str = "local-thread";
 const CONVERSATION_MEMORY_SCOPE_CURRENT_THREAD_ALIAS: &str = "current_thread";
 const CONVERSATION_MEMORY_SCOPE_LOCAL_THREAD_PREFIX: &str = "local-thread:";
@@ -68140,89 +68140,6 @@ fn selected_scope_external_user_context_conversation_id(selected_scope: &Value) 
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn conversation_memory_item_external_conversation_id(
-    item: &ConversationMemoryItem,
-) -> Option<&str> {
-    item.metadata
-        .get("conversation_external_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            item.source_message_refs.as_array().and_then(|refs| {
-                refs.iter().find_map(|reference| {
-                    reference
-                        .get("conversation_external_id")
-                        .and_then(Value::as_str)
-                })
-            })
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn conversation_memory_item_source_assistant_run_ids(
-    item: &ConversationMemoryItem,
-) -> Vec<AssistantRunId> {
-    let mut run_ids = Vec::new();
-    for value in item
-        .artifact_refs
-        .as_array()
-        .into_iter()
-        .flat_map(|items| items.iter())
-        .chain(
-            item.source_message_refs
-                .as_array()
-                .into_iter()
-                .flat_map(|items| items.iter()),
-        )
-    {
-        let Some(raw) = value
-            .get("assistant_run_id")
-            .or_else(|| value.get("assistantRunId"))
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        if let Ok(run_id) = Uuid::parse_str(raw.trim()).map(AssistantRunId) {
-            if !run_ids.contains(&run_id) {
-                run_ids.push(run_id);
-            }
-        }
-    }
-    run_ids
-}
-
-fn conversation_memory_item_supply_value(item: ConversationMemoryItem) -> Value {
-    json!({
-        "type": "conversation_memory_item",
-        "conversation_memory_item_id": item.id,
-        "local_thread_id": item.local_thread_id,
-        "role": item.role.as_str(),
-        "item_kind": item.item_kind,
-        "summary": item.summary,
-        "source_message_refs": item.source_message_refs,
-        "artifact_refs": item.artifact_refs,
-        "metadata": item.metadata,
-        "created_at": item.created_at,
-        "updated_at": item.updated_at,
-    })
-}
-
-fn assistant_run_conversation_memory_limit() -> i64 {
-    std::env::var("ASSISTANT_RUN_CONVERSATION_MEMORY_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT)
-        .clamp(1, ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT)
-}
-
-fn assistant_run_memory_item_is_supply_eligible(item: &ConversationMemoryItem) -> bool {
-    item.role == ChatMessageRole::User
-        && !matches!(
-            item.item_kind.as_str(),
-            "assistant_output" | "artifact_output" | "generated_artifact"
-        )
 }
 
 async fn list_chat_messages(

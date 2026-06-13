@@ -484,6 +484,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_evidence_state_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、Codex package/ReAct trace/supply quality Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run placeholder user message 和 evidence trail label helper 已并入 `assistant_run_evidence_state_support` 模块并补模块单测；占位运行时用户提示、普通聊天/空供料/已供料边界文案和证据链标签语义保持不变。本地 `cargo check`、Codex package/ReAct trace/evidence trail Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_evidence_state_support` evidence text helper 拆分已提交并同步 8 服务器；远端 `cargo check`、Codex package/ReAct trace/evidence trail Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` conversation memory 供料值、外部会话 ID、source assistant run ids、limit 和供料资格 helper 已拆到 `assistant_run_conversation_memory_support` 模块并补模块单测；对话记忆供料 JSON 形状、用户态过滤、env limit clamp、assistant_run_id 去重和 metadata/source refs fallback 语义保持不变。本地 `cargo check`、conversation memory/ReAct recall/external user memory/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
