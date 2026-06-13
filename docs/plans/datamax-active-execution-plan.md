@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 memory directory view helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启、health/ready 和私有 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P4 条件或新 P3 客户样例时切换优先级。 | `memory_directory_view_support` 模块单测、旧 memory directory view 回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 2 | 是否同步 8 服务器 | 代码切片已同步并重启；后续验证记录属于 docs-only。 | docs-only fast-forward 到 8 服务器，不 build、不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P5 manifest runtime parser helper 拆分 | 本地已完成行为保持拆分和 P0 验证。 | 提交 GitHub，部署 8 服务器，跑 8 服务器 P0 smoke，再把远端验证写回 validation。 | `manifest_runtime_view_support` 模块单测、旧 runtime manifest view 回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 2 | 是否同步 8 服务器 | 待随本轮代码切片同步。 | code deploy：fast-forward、build、restart、health/ready、P0 smoke；通过后再做 docs-only 回写。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -92,6 +92,7 @@ npm run smoke:external-scoped-document-chat -- --self-test
 npm run smoke:external-video-ppt -- --self-test
 npm run smoke:static-page-5way -- --self-test
 npm run smoke:cloudflare-fallback-2way -- --self-test
+npm run smoke:static-page-prewarm-observability -- --self-test
 node --test apps/web/app/lib/assistant-run-progress.test.mjs
 node --test apps/web/app/lib/local-chat-sessions.test.mjs
 ```
@@ -584,6 +585,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-14: `scripts/smoke/static-page-prewarm-observability.mjs` 已补强低负载预热观测回执，新增 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount` 和 `prewarmCustomerVisibilityOk`；self-test 现在明确验证 waiting-for-low-load 事件保持 `customer_visible=false` 且泄漏计数为 0。生产 prewarm 仍默认关闭，不启用后台生图。已提交并同步 8 服务器，远端 HEAD `1d55360ae`，脚本级 smoke、health/ready 和服务 active 检查均通过，未 build、未重启。
 - 2026-06-14: `crates/platform-api/src/lib.rs` report plan/render/published report view helper 已拆到 `report_view_support` 模块并补模块单测；report plan summary、AST version、render output、published report/version 字段映射、model_facing 派生和导出 artifact manifest 透传语义保持不变。本地 `cargo fmt --check`、report view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `bf62d4cbf`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` memory directory view 和 directory manifest parser helper 已拆到 `memory_directory_view_support` 模块并补模块单测；目录计数、source document ids、原始 manifest 透传、有效 directory tree hydrate、无效 manifest raw fallback、根节点 scope/version 默认值和文档 lifecycle/chunk count 解析语义保持不变。本地 `cargo fmt --check`、memory directory view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `a14c9f8b9`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
+- 2026-06-14: `crates/platform-api/src/lib.rs` manifest runtime/context binding/provider failure parser helper 已拆到 `manifest_runtime_view_support` 模块并补模块单测；context binding、runtime mode、finish reason、自定义 finish reason、provider failure kind/message、token usage、provider/model/request/system prompt/tool trace 字段解析语义保持不变。本地 `cargo fmt --check`、manifest runtime Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交并同步 8 服务器。
 
 **Regression commands:**
 
@@ -596,8 +598,10 @@ npm --prefix apps/web run build
 npm run smoke:external-report-focus -- --self-test
 npm run smoke:external-report-export -- --self-test
 npm run smoke:external-scoped-document-chat -- --self-test
+npm run smoke:external-video-ppt -- --self-test
 npm run smoke:static-page-5way -- --self-test
 npm run smoke:cloudflare-fallback-2way -- --self-test
+npm run smoke:static-page-prewarm-observability -- --self-test
 node --test apps/web/app/lib/assistant-run-progress.test.mjs
 node --test apps/web/app/lib/local-chat-sessions.test.mjs
 ```
