@@ -100,11 +100,11 @@ use domain_model::{
     AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
     DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId, DocumentLifecycle,
-    EmailVerificationChallenge, HtmlArtifact, LlmInvocation, LlmInvocationFinishReason,
-    LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
-    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan,
-    ReportPlanAstVersion, ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId,
-    SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
+    EmailVerificationChallenge, LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode,
+    LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedReport,
+    PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
+    ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
+    SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
     StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
     StaticPageRenderOutputId, StaticPageRenderOutputStatus, TenantId, ToolExecution,
     ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
@@ -202,6 +202,7 @@ mod external_observability;
 mod external_system_user;
 pub mod external_wecom;
 pub mod fact_index;
+mod html_artifact_collection_support;
 mod html_artifact_download_support;
 mod id_parse_support;
 mod lifecycle_updates;
@@ -284,6 +285,7 @@ use external_observability::{
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
 use external_system_user::*;
+use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
 use id_parse_support::*;
 use lifecycle_updates::*;
@@ -75427,93 +75429,6 @@ fn search_retrieval_hits(
             source_locator: ranked.evidence.source_locator.clone(),
         })
         .collect()
-}
-
-fn collect_html_artifacts_from_events(
-    events: &[AssistantRunEvent],
-    artifacts: &mut Vec<HtmlArtifactManifestView>,
-    limit: usize,
-) {
-    for event in events.iter().rev() {
-        collect_html_artifacts_from_value(&event.payload, artifacts, limit);
-        if artifacts.len() >= limit {
-            break;
-        }
-    }
-}
-
-fn collect_html_artifacts_from_records(
-    records: &[HtmlArtifact],
-    artifacts: &mut Vec<HtmlArtifactManifestView>,
-    limit: usize,
-) {
-    for record in records {
-        if artifacts.len() >= limit {
-            break;
-        }
-        if let Ok(manifest) =
-            serde_json::from_value::<HtmlArtifactManifestView>(record.manifest.clone())
-        {
-            artifacts.push(manifest);
-        }
-    }
-}
-
-fn collect_html_artifacts_from_value(
-    value: &Value,
-    artifacts: &mut Vec<HtmlArtifactManifestView>,
-    limit: usize,
-) {
-    if artifacts.len() >= limit {
-        return;
-    }
-
-    match value {
-        Value::Object(object) => {
-            if let Some(entries) = object.get("html_artifacts").and_then(Value::as_array) {
-                for entry in entries {
-                    if artifacts.len() >= limit {
-                        break;
-                    }
-                    if let Ok(manifest) =
-                        serde_json::from_value::<HtmlArtifactManifestView>(entry.clone())
-                    {
-                        artifacts.push(manifest);
-                    }
-                }
-            }
-
-            for (key, child) in object {
-                if key == "html_artifacts" {
-                    continue;
-                }
-                collect_html_artifacts_from_value(child, artifacts, limit);
-                if artifacts.len() >= limit {
-                    break;
-                }
-            }
-        }
-        Value::Array(entries) => {
-            for entry in entries {
-                collect_html_artifacts_from_value(entry, artifacts, limit);
-                if artifacts.len() >= limit {
-                    break;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn sort_and_dedupe_html_artifacts(artifacts: &mut Vec<HtmlArtifactManifestView>) {
-    artifacts.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    let mut seen = HashSet::<String>::new();
-    artifacts.retain(|artifact| seen.insert(artifact.id.clone()));
 }
 
 async fn load_report_render_summary_artifacts_for_plan(
