@@ -4752,11 +4752,6 @@ where
         .expect("SSE response should build")
 }
 
-#[cfg(test)]
-fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> String {
-    external_channel_sse_completion_with_done(response, true)
-}
-
 async fn append_external_channel_public_stream_event(
     state: &AppState,
     run_id: AssistantRunId,
@@ -4885,110 +4880,6 @@ async fn persist_external_channel_public_stream_payload_or_original(
             external_channel_public_stream_payload(payload)
         }
     }
-}
-
-#[cfg(test)]
-fn external_channel_sse_completion_with_done(
-    response: ExternalChannelEventResponse,
-    include_done: bool,
-) -> String {
-    let emit_static_page_queued_event = response
-        .reply
-        .card
-        .as_ref()
-        .and_then(|card| card.get("type"))
-        .and_then(Value::as_str)
-        == Some("v3_static_page_image2_pipeline");
-    let response = external_channel_public_response(response);
-    let text = response.reply.text.clone().unwrap_or_default();
-    let assistant_run_id = response.assistant_run_id;
-    let idempotency_key = response.idempotency_key.clone();
-    let conversation_external_id = response.reply.target_conversation_external_id.clone();
-    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
-    if emit_static_page_queued_event {
-        let card = response.reply.card.clone();
-        let data = json!({
-            "assistant_run_id": assistant_run_id,
-            "idempotency_key": idempotency_key,
-            "card": card,
-        });
-        encoded.push_str(&sse_json_event(
-            "external_channel.static_page_queued",
-            external_channel_public_stream_payload(external_channel_sse_public_payload(
-                assistant_run_id,
-                &idempotency_key,
-                &conversation_external_id,
-                external_channel_static_page_sse_sequence("static_page_generation_queued"),
-                "static_page",
-                "static_page_generation_queued",
-                "静态页/报表页面已进入生成队列。",
-                external_channel_card_status_url(response.reply.card.as_ref()),
-                external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
-                data,
-            )),
-        ));
-    }
-    if external_channel_response_needs_input(&response) {
-        let needs_input_text = external_channel_needs_input_sse_text(&response);
-        let data = json!({
-            "assistant_run_id": assistant_run_id,
-            "idempotency_key": idempotency_key,
-            "status": "needs_input",
-            "card": response.reply.card.clone(),
-            "text": needs_input_text,
-        });
-        encoded.push_str(&sse_json_event(
-            "external_channel.needs_input",
-            external_channel_public_stream_payload(external_channel_sse_public_payload(
-                assistant_run_id,
-                &idempotency_key,
-                &conversation_external_id,
-                external_channel_static_page_sse_sequence("needs_input"),
-                "needs_input",
-                "needs_input",
-                &needs_input_text,
-                external_channel_card_status_url(response.reply.card.as_ref()),
-                external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
-                data,
-            )),
-        ));
-    }
-    let completed_data = external_channel_completed_stream_data(
-        &response,
-        assistant_run_id,
-        &idempotency_key,
-        &text,
-    );
-    let completed_text = completed_data
-        .get("text")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            if text.trim().is_empty() {
-                "本轮处理已返回当前结果。".to_string()
-            } else {
-                text.clone()
-            }
-        });
-    encoded.push_str(&sse_json_event(
-        "external_channel.completed",
-        external_channel_public_stream_payload(external_channel_sse_public_payload(
-            assistant_run_id,
-            &idempotency_key,
-            &conversation_external_id,
-            external_channel_static_page_sse_sequence("completed"),
-            "completed",
-            "completed",
-            &completed_text,
-            None,
-            None,
-            completed_data,
-        )),
-    ));
-    if include_done {
-        encoded.push_str(&sse_json_event("done", json!({"ok": true})));
-    }
-    encoded
 }
 
 async fn external_channel_sse_completion_with_done_persisted(
