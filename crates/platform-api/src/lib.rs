@@ -204,6 +204,7 @@ pub mod external_wecom;
 pub mod fact_index;
 mod html_artifact_collection_support;
 mod html_artifact_download_support;
+mod html_artifact_event_support;
 mod html_artifact_summary_support;
 mod id_parse_support;
 mod lifecycle_updates;
@@ -288,6 +289,7 @@ use external_observability::{
 use external_system_user::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
+use html_artifact_event_support::*;
 use html_artifact_summary_support::*;
 use id_parse_support::*;
 use lifecycle_updates::*;
@@ -76538,44 +76540,6 @@ async fn load_html_artifact_from_run_events(
         })
 }
 
-fn validate_html_artifact_event_request(
-    artifact: &HtmlArtifactManifestView,
-    request: &SubmitHtmlArtifactEventRequest,
-) -> std::result::Result<(), ApiError> {
-    let event_type = request.event_type.trim();
-    match &artifact.interaction_mode {
-        HtmlArtifactInteractionModeView::ReadOnly => {
-            return Err(ApiError::bad_request(
-                "html_artifact_read_only",
-                "read-only HTML artifacts cannot submit events".to_string(),
-            ));
-        }
-        HtmlArtifactInteractionModeView::JsonPatch if event_type != "html_artifact.patch" => {
-            return Err(ApiError::bad_request(
-                "html_artifact_event_type_mismatch",
-                "json_patch artifacts may only submit html_artifact.patch".to_string(),
-            ));
-        }
-        HtmlArtifactInteractionModeView::ActionIntent
-            if event_type != "html_artifact.action_intent" =>
-        {
-            return Err(ApiError::bad_request(
-                "html_artifact_event_type_mismatch",
-                "action_intent artifacts may only submit html_artifact.action_intent".to_string(),
-            ));
-        }
-        _ => {}
-    }
-
-    validate_html_artifact_event_payload_is_safe(&request.payload, "$")?;
-    if event_type == "html_artifact.patch" {
-        validate_html_artifact_patch_payload(&request.payload)?;
-    } else {
-        validate_html_artifact_action_intent_payload(&request.payload)?;
-    }
-    Ok(())
-}
-
 async fn apply_html_artifact_event_to_product(
     state: &AppState,
     current_user_id: Option<UserId>,
@@ -77109,178 +77073,6 @@ fn validate_html_artifact_layout_number(
             format!("layout.{field_name} is outside the supported range"),
         ))
     }
-}
-
-fn validate_html_artifact_action_intent_payload(
-    payload: &Value,
-) -> std::result::Result<(), ApiError> {
-    let action = payload
-        .as_object()
-        .and_then(|object| object.get("action"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "html_artifact_invalid_action_intent",
-                "action_intent payload.action is required".to_string(),
-            )
-        })?;
-    if action.chars().count() > 120 {
-        return Err(ApiError::bad_request(
-            "html_artifact_invalid_action_intent",
-            "action_intent payload.action is too long".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_html_artifact_patch_payload(payload: &Value) -> std::result::Result<(), ApiError> {
-    let Some(object) = payload.as_object() else {
-        return Err(ApiError::bad_request(
-            "html_artifact_invalid_patch",
-            "patch payload must be an object".to_string(),
-        ));
-    };
-    let operations = object
-        .get("operations")
-        .or_else(|| object.get("patch"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "html_artifact_invalid_patch",
-                "patch payload.operations must be an array".to_string(),
-            )
-        })?;
-    if operations.is_empty() || operations.len() > 50 {
-        return Err(ApiError::bad_request(
-            "html_artifact_invalid_patch",
-            "patch operations must contain 1-50 operations".to_string(),
-        ));
-    }
-
-    for operation in operations {
-        let Some(operation_object) = operation.as_object() else {
-            return Err(ApiError::bad_request(
-                "html_artifact_invalid_patch",
-                "each patch operation must be an object".to_string(),
-            ));
-        };
-        let op = operation_object
-            .get("op")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        if !matches!(op, "add" | "replace" | "remove" | "move" | "copy" | "test") {
-            return Err(ApiError::bad_request(
-                "html_artifact_invalid_patch",
-                format!("{op} is not an allowed patch operation"),
-            ));
-        }
-        let path = operation_object
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        if !path.starts_with('/') || path.chars().count() > 240 {
-            return Err(ApiError::bad_request(
-                "html_artifact_invalid_patch",
-                "patch operation path must be a JSON pointer under 240 chars".to_string(),
-            ));
-        }
-        if matches!(op, "move" | "copy") {
-            let from = operation_object
-                .get("from")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
-            if !from.starts_with('/') || from.chars().count() > 240 {
-                return Err(ApiError::bad_request(
-                    "html_artifact_invalid_patch",
-                    "move/copy patch operation requires a valid from JSON pointer".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_html_artifact_event_payload_is_safe(
-    value: &Value,
-    path: &str,
-) -> std::result::Result<(), ApiError> {
-    match value {
-        Value::String(text) => validate_html_artifact_safe_string(text, path),
-        Value::Array(entries) => {
-            if entries.len() > 100 {
-                return Err(ApiError::bad_request(
-                    "html_artifact_payload_too_large",
-                    format!("{path} contains too many entries"),
-                ));
-            }
-            for (index, entry) in entries.iter().enumerate() {
-                validate_html_artifact_event_payload_is_safe(entry, &format!("{path}[{index}]"))?;
-            }
-            Ok(())
-        }
-        Value::Object(object) => {
-            if object.len() > 80 {
-                return Err(ApiError::bad_request(
-                    "html_artifact_payload_too_large",
-                    format!("{path} contains too many fields"),
-                ));
-            }
-            for (key, child) in object {
-                validate_html_artifact_safe_string(key, &format!("{path}.{key}"))?;
-                validate_html_artifact_event_payload_is_safe(child, &format!("{path}.{key}"))?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-fn validate_html_artifact_safe_string(text: &str, path: &str) -> std::result::Result<(), ApiError> {
-    if text.chars().count() > 4000 {
-        return Err(ApiError::bad_request(
-            "html_artifact_payload_too_large",
-            format!("{path} is too long"),
-        ));
-    }
-    let lowered = text.to_ascii_lowercase();
-    let unsafe_patterns = [
-        "<script",
-        "<iframe",
-        "<object",
-        "<embed",
-        "<link",
-        "<meta",
-        "<form",
-        "javascript:",
-        "data:text/html",
-        "srcdoc",
-        "http://",
-        "https://",
-        "api_key",
-        "access_token",
-        "authorization",
-        "bearer ",
-        "cookie",
-        "secret",
-        "onerror=",
-        "onclick=",
-        "onload=",
-    ];
-    if let Some(pattern) = unsafe_patterns
-        .iter()
-        .find(|pattern| lowered.contains(**pattern))
-    {
-        return Err(ApiError::bad_request(
-            "html_artifact_unsafe_payload",
-            format!("{path} contains unsafe content: {pattern}"),
-        ));
-    }
-    Ok(())
 }
 
 fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {

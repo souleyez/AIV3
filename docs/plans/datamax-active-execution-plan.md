@@ -460,6 +460,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `html_artifact_collection_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、HTML artifact 事件收集 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` HTML artifact 文本摘要、variant 序列化、action intent prompt 和 patch operations helper 已拆到 `html_artifact_summary_support` 模块并补模块单测；不安全文本拦截、字符截断、enum 字符串序列化、action prompt 字段优先级和 patch/operations alias 语义保持不变。本地 `cargo check`、HTML artifact event/patch Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `html_artifact_summary_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、HTML artifact summary/event/patch Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` HTML artifact event request、action intent payload、patch payload 和 payload safety 校验 helper 已拆到 `html_artifact_event_support` 模块并补模块单测；interaction mode 限制、event type 匹配、payload 大小限制、不安全内容拦截、patch op/path/from 校验和错误码/文案保持不变。本地 `cargo check`、HTML artifact event/patch Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
