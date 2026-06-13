@@ -146,7 +146,6 @@ use std::{
     fs::{self, File},
     hash::{Hash, Hasher},
     io::{Read, Write},
-    net::IpAddr,
     path::{Path as StdPath, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -193,6 +192,7 @@ mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
 mod external_conversation_timeline;
+mod external_document_object_support;
 pub mod external_feishu;
 mod external_integration_summary;
 mod external_message_summary;
@@ -248,6 +248,7 @@ use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
 use external_conversation_timeline::*;
+use external_document_object_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
 use external_integration_summary::{
@@ -11979,125 +11980,6 @@ async fn download_external_document_parse_file(
         content_sha256,
         size_bytes: bytes.len() as u64,
     })
-}
-
-fn validate_external_document_content_url(
-    url: &reqwest::Url,
-    allow_http_loopback: bool,
-) -> std::result::Result<(), ApiError> {
-    match url.scheme() {
-        "https" => {}
-        "http" if allow_http_loopback && is_loopback_url_host(url.host_str()) => {}
-        _ => {
-            return Err(ApiError::bad_request(
-                "external_document_content_url_insecure",
-                "content_url must use HTTPS; HTTP is only allowed for loopback smoke tests"
-                    .to_string(),
-            ))
-        }
-    }
-    if let Some(host) = url.host_str() {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            if ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || match ip {
-                    IpAddr::V4(value) => {
-                        value.is_private() || value.is_link_local() || value.is_broadcast()
-                    }
-                    IpAddr::V6(value) => value.is_unique_local() || value.is_unicast_link_local(),
-                }
-            {
-                if !(allow_http_loopback && ip.is_loopback()) {
-                    return Err(ApiError::bad_request(
-                        "external_document_content_url_private_host",
-                        "content_url host must not be a private or local IP".to_string(),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_loopback_url_host(host: Option<&str>) -> bool {
-    matches!(host, Some("127.0.0.1" | "localhost" | "::1"))
-}
-
-fn external_document_object_root() -> std::result::Result<PathBuf, ApiError> {
-    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("ai-data-platform-v3-objects"));
-    fs::create_dir_all(&root).map_err(|error| {
-        ApiError::internal(
-            "external_document_store_failed",
-            format!("failed to create local object root: {error}"),
-        )
-    })?;
-    Ok(root)
-}
-
-fn external_document_file_extension(
-    url: &reqwest::Url,
-    content_type: Option<&str>,
-) -> Option<String> {
-    url.path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
-        .map(|ext| format!(".{}", safe_external_path_segment(ext)))
-        .filter(|ext| ext.len() > 1 && ext.len() <= 12)
-        .or_else(|| content_type.and_then(external_document_extension_from_content_type))
-}
-
-fn external_document_extension_from_content_type(content_type: &str) -> Option<String> {
-    let normalized = content_type
-        .split(';')
-        .next()
-        .unwrap_or(content_type)
-        .trim()
-        .to_ascii_lowercase();
-    let extension = match normalized.as_str() {
-        "text/plain" => ".txt",
-        "text/markdown" => ".md",
-        "text/html" => ".html",
-        "application/pdf" => ".pdf",
-        "application/json" => ".json",
-        "application/zip" | "application/x-zip-compressed" => ".zip",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
-        _ => return None,
-    };
-    Some(extension.to_string())
-}
-
-fn safe_external_path_segment(value: &str) -> String {
-    let mut output = String::new();
-    for ch in value.trim().chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            output.push(ch);
-        } else {
-            output.push('_');
-        }
-    }
-    if output.is_empty() {
-        "unknown".to_string()
-    } else {
-        output.chars().take(120).collect()
-    }
-}
-
-fn external_document_redact_url(url: &reqwest::Url) -> String {
-    format!(
-        "{}://{}{}{}",
-        url.scheme(),
-        url.host_str().unwrap_or("[unknown]"),
-        url.port()
-            .map(|port| format!(":{port}"))
-            .unwrap_or_default(),
-        url.path()
-    )
 }
 
 fn to_external_document_parse_document_view(
