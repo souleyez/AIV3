@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 external document metadata/key helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回本轮远端验证；下一步继续 P5 下一个小切片，或在拿到凭证/确认后切回 P1/P2/P4。 | `external_document_object_support` 模块单测、外部文档数据集 lookup/update 回归、`external_channel_static_page_artifact`、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 2 | 是否同步 8 服务器 | 已完成：代码部署、docs-only 回写同步和服务状态确认均完成。 | 无，本项关闭；下一步按队列处理 P5 小切片，或在拿到凭证/确认后切回 P1/P2/P4。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P5 external answer policy helper 拆分 | 本地行为保持拆分完成，聚焦测试、P0 smoke 和 Web build 已通过。 | 提交 GitHub 后部署到 8 服务器，跑同等远端验证并写回 validation。 | `external_answer_policy_support` 模块单测、原有 answer policy 回归、第三方 payload 别名、`external_channel_static_page_artifact`、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 2 | P5 external document metadata/key helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为本轮之前的已关闭基线。 | `external_document_object_support` 模块单测、外部文档数据集 lookup/update 回归、`external_channel_static_page_artifact`、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |

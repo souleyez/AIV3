@@ -205,6 +205,7 @@ mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod document_view_support;
+mod external_answer_policy_support;
 mod external_bot_message_payload_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
@@ -307,6 +308,7 @@ use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
 use document_view_support::*;
+use external_answer_policy_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
@@ -12672,138 +12674,6 @@ fn validate_and_normalize_external_requested_skills(
     }
 
     Ok(())
-}
-
-fn validate_and_normalize_external_answer_policy(
-    message: &mut ExternalBotMessageView,
-) -> std::result::Result<(), ApiError> {
-    if let Some(default_prompt) = message.default_prompt.take() {
-        let normalized = default_prompt.trim().to_string();
-        if normalized.is_empty() {
-            message.default_prompt = None;
-        } else if normalized.chars().count() > EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT
-            || normalized
-                .chars()
-                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
-        {
-            return Err(external_answer_policy_bad_request(
-                "invalid_default_prompt",
-                format!(
-                    "default_prompt must be printable text within {EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT} characters"
-                ),
-            ));
-        } else if external_answer_policy_text_contains_credential_hint(&normalized) {
-            return Err(external_answer_policy_bad_request(
-                "default_prompt_contains_credential_hint",
-                "default_prompt must not include bearer tokens, cookies, api keys, or secret values",
-            ));
-        } else {
-            message.default_prompt = Some(normalized);
-        }
-    }
-
-    if let Some(output_format) = message.output_format.take() {
-        let normalized = output_format.trim();
-        if normalized.is_empty() {
-            message.output_format = None;
-        } else if let Some(format) = normalize_external_output_format(normalized) {
-            message.output_format = Some(format.to_string());
-        } else {
-            return Err(external_answer_policy_bad_request(
-                "invalid_output_format",
-                "output_format must be one of rich_text, image_text, markdown_table, or json",
-            ));
-        }
-    }
-
-    if let Some(render_mode) = message.render_mode.take() {
-        let normalized = render_mode.trim();
-        if normalized.is_empty() {
-            message.render_mode = None;
-        } else if let Some(mode) = normalize_external_render_mode(normalized) {
-            message.render_mode = Some(mode.to_string());
-        } else {
-            return Err(external_answer_policy_bad_request(
-                "invalid_render_mode",
-                "render_mode must be normal or artifact",
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn external_answer_policy_text_contains_credential_hint(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "authorization:",
-        "bearer ",
-        "cookie:",
-        "set-cookie:",
-        "api_key=",
-        "apikey=",
-        "access_token=",
-        "secret=",
-        "password=",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-fn normalize_external_output_format(value: &str) -> Option<&'static str> {
-    let raw = value.trim();
-    match raw {
-        "富文本" | "普通富文本" | "聊天富文本" => return Some("rich_text"),
-        "图文排版" | "图文" | "图文混排" => return Some("image_text"),
-        "MD表格" | "Markdown表格" | "表格" => return Some("markdown_table"),
-        "JSON" | "Json" | "json" => return Some("json"),
-        _ => {}
-    }
-    let compact = raw
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
-    match compact.as_str() {
-        "richtext" | "chat" | "markdown" | "copyablerichtext" => Some("rich_text"),
-        "imagetext" | "imagetextlayout" | "richmedia" | "html" | "graphiclayout" => {
-            Some("image_text")
-        }
-        "mdtable" | "markdowntable" => Some("markdown_table"),
-        "json" => Some("json"),
-        _ => None,
-    }
-}
-
-fn normalize_external_render_mode(value: &str) -> Option<&'static str> {
-    let compact = value
-        .trim()
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
-    match compact.as_str() {
-        "" => None,
-        "normal" | "chat" | "text" | "plain" => Some("normal"),
-        "artifact" | "html" | "staticpage" | "page" | "download" => Some("artifact"),
-        _ => None,
-    }
-}
-
-fn external_answer_policy_bad_request(reason: &str, message: impl Into<String>) -> ApiError {
-    ApiError::bad_request_with_details(
-        "external_channel_answer_policy_invalid",
-        message.into(),
-        json!({
-            "reason": reason,
-            "schema": {
-                "default_prompt": "optional printable text",
-                "output_format": "rich_text | image_text | markdown_table | json",
-                "render_mode": "normal | artifact"
-            },
-            "accepted_output_format_aliases": ["富文本", "图文排版", "MD表格", "JSON"]
-        }),
-    )
 }
 
 fn external_requested_skills_bad_request(reason: &str, message: impl Into<String>) -> ApiError {
