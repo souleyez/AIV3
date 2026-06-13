@@ -3547,6 +3547,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Assistant Run Scope Selection Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move assistant-run selected dataset/document/template/temporary/attachment id and scope action policy helper functions out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_scope_selection_support.rs`;
+  - moved selected dataset/document ids, template-document exclusion, temporary dataset id, attachment-title document ids, dataset/document scope item parsers, action/context/candidate policy helpers, recommended tool actions, and dataset entity-scan policy detection into the new module;
+  - kept prompt intent classifiers and entity-scan prompt decision in `lib.rs` to keep this slice behavior-preserving and small;
+  - added module coverage for scope id order/deduplication, typed item filtering, template document exclusion from evidence ids, temporary dataset parsing, attachment-title aliases, policy defaults/overrides, recommended action defaults/explicit truncation, and coverage/recommended scan detection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api assistant_run_scope_selection_support --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api assistant_run_static_page_scope_expands_evidence_limit_and_actions --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_resume_company_scan_scope_expands_supply_actions --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_codex_package_keeps_v3_context_and_action_contracts --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Scope Policy Support 8-Server Verification
 
 - 8-server post-sync verification:

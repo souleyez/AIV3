@@ -176,6 +176,7 @@ mod assistant_run_detail_support;
 mod assistant_run_evidence_state_support;
 mod assistant_run_react_support;
 mod assistant_run_scope_policy_support;
+mod assistant_run_scope_selection_support;
 mod assistant_run_sse_support;
 mod assistant_scope_summary;
 pub mod auth_email;
@@ -248,6 +249,7 @@ use assistant_run_detail_support::*;
 use assistant_run_evidence_state_support::*;
 use assistant_run_react_support::*;
 use assistant_run_scope_policy_support::*;
+use assistant_run_scope_selection_support::*;
 use assistant_run_sse_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
@@ -72507,226 +72509,6 @@ fn build_initial_render_execution_event(
     }
 }
 
-fn selected_dataset_id_from_scope(scope: &Value) -> Option<DatasetId> {
-    selected_dataset_ids_from_scope(scope).into_iter().next()
-}
-
-fn selected_dataset_ids_from_scope(scope: &Value) -> Vec<DatasetId> {
-    let Some(object) = scope.as_object() else {
-        return Vec::new();
-    };
-
-    let mut dataset_ids = Vec::new();
-    for key in ["datasets", "selected"] {
-        let Some(items) = object.get(key).and_then(Value::as_array) else {
-            continue;
-        };
-        for item in items {
-            let Some(dataset_id) = dataset_id_from_scope_item(item) else {
-                continue;
-            };
-            if !dataset_ids.contains(&dataset_id) {
-                dataset_ids.push(dataset_id);
-            }
-        }
-    }
-    dataset_ids
-}
-
-fn selected_document_ids_from_scope(scope: &Value) -> Vec<DocumentId> {
-    let Some(object) = scope.as_object() else {
-        return Vec::new();
-    };
-
-    let mut document_ids = Vec::new();
-    for key in ["documents", "selected"] {
-        let Some(items) = object.get(key).and_then(Value::as_array) else {
-            continue;
-        };
-        for item in items {
-            let Some(document_id) = document_id_from_scope_item(item) else {
-                continue;
-            };
-            if !document_ids.contains(&document_id) {
-                document_ids.push(document_id);
-            }
-        }
-    }
-    document_ids
-}
-
-fn selected_scope_document_template_document_ids(scope: &Value) -> Vec<DocumentId> {
-    scope
-        .get("document_template_skills")
-        .and_then(Value::as_array)
-        .map(|items| {
-            let mut document_ids = Vec::new();
-            for item in items {
-                let Some(document_id) = item
-                    .get("template_document")
-                    .and_then(|document| document.get("document_id"))
-                    .and_then(Value::as_str)
-                    .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
-                    .map(DocumentId)
-                else {
-                    continue;
-                };
-                if !document_ids.contains(&document_id) {
-                    document_ids.push(document_id);
-                }
-            }
-            document_ids
-        })
-        .unwrap_or_default()
-}
-
-fn selected_document_ids_for_evidence_from_scope(scope: &Value) -> Vec<DocumentId> {
-    let template_document_ids = selected_scope_document_template_document_ids(scope);
-    let mut document_ids = selected_document_ids_from_scope(scope);
-    document_ids.retain(|document_id| !template_document_ids.contains(document_id));
-    document_ids
-}
-
-fn selected_scope_temporary_dataset_id(scope: &Value) -> Option<DatasetId> {
-    scope
-        .get("temporary_dataset")
-        .and_then(|value| value.get("id"))
-        .and_then(Value::as_str)
-        .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
-        .map(DatasetId)
-}
-
-fn selected_scope_attachment_title_document_ids(scope: &Value) -> Vec<DocumentId> {
-    let policy = assistant_run_scope_supply_policy(scope);
-    let mut ids = Vec::new();
-    for value in [
-        policy.get("attachmentTitleDocumentIds"),
-        policy.get("attachment_title_document_ids"),
-        scope.pointer("/attachment_title_resolution/matched_documents"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Some(items) = value.as_array() {
-            for item in items {
-                let raw = item
-                    .as_str()
-                    .or_else(|| item.get("id").and_then(Value::as_str))
-                    .or_else(|| item.get("document_id").and_then(Value::as_str))
-                    .or_else(|| item.get("documentId").and_then(Value::as_str));
-                if let Some(document_id) = raw
-                    .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
-                    .map(DocumentId)
-                {
-                    if !ids.contains(&document_id) {
-                        ids.push(document_id);
-                    }
-                }
-            }
-        }
-    }
-    ids
-}
-
-fn assistant_run_scope_action_policy(scope: &Value) -> String {
-    assistant_run_scope_policy_string(
-        scope,
-        &["actionPolicy", "action_policy"],
-        "model_may_request_controlled_actions_host_validates",
-    )
-}
-
-fn assistant_run_scope_context_budget_policy(scope: &Value) -> String {
-    let default_value = if assistant_run_scope_prefers_detail(scope)
-        || selected_scope_requests_conversation_memory(scope)
-    {
-        "quality_first_token_tolerant"
-    } else {
-        "compact_until_retrieval_needed"
-    };
-    assistant_run_scope_policy_string(
-        scope,
-        &["contextBudgetPolicy", "context_budget_policy"],
-        default_value,
-    )
-}
-
-fn assistant_run_scope_candidate_policy(scope: &Value) -> String {
-    let default_value = if selected_dataset_ids_from_scope(scope).is_empty() {
-        "ordinary_chat_without_forced_dataset"
-    } else {
-        "selected_or_inferred_visible_datasets_only"
-    };
-    assistant_run_scope_policy_string(
-        scope,
-        &["candidatePolicy", "candidate_policy"],
-        default_value,
-    )
-}
-
-fn assistant_run_scope_recommended_tool_actions(scope: &Value) -> Vec<String> {
-    let policy = assistant_run_scope_supply_policy(scope);
-    for field_name in ["recommendedActions", "recommended_actions"] {
-        if let Some(actions) = policy.get(field_name).and_then(Value::as_array) {
-            let values = actions
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .take(5)
-                .collect::<Vec<_>>();
-            if !values.is_empty() {
-                return values;
-            }
-        }
-    }
-
-    let mut actions = Vec::new();
-    let has_dataset = !selected_dataset_ids_from_scope(scope).is_empty();
-    if has_dataset {
-        actions.push("retrieval.search".to_string());
-    }
-    if assistant_run_scope_prefers_detail(scope) {
-        actions.push("retrieval.read_detail".to_string());
-    }
-    if assistant_run_scope_requests_dataset_entity_scan(scope) {
-        actions.push("retrieval.scan_documents".to_string());
-    }
-    match assistant_run_scope_intent(scope) {
-        "static_page" => actions.push("static_page.plan".to_string()),
-        "report" => actions.push("report.plan".to_string()),
-        _ => {}
-    }
-    if actions.is_empty() {
-        actions.push("ordinary_chat.answer".to_string());
-    }
-    actions.truncate(5);
-    actions
-}
-
-fn assistant_run_scope_requests_dataset_entity_scan(scope: &Value) -> bool {
-    let policy = assistant_run_scope_supply_policy(scope);
-    policy
-        .get("coveragePolicy")
-        .or_else(|| policy.get("coverage_policy"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| value == "document_entity_scan")
-        || policy
-            .get("recommendedActions")
-            .or_else(|| policy.get("recommended_actions"))
-            .and_then(Value::as_array)
-            .map(|actions| {
-                actions.iter().any(|action| {
-                    action
-                        .as_str()
-                        .map(str::trim)
-                        .is_some_and(|value| value == "retrieval.scan_documents")
-                })
-            })
-            .unwrap_or(false)
-}
-
 fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
     if selected_dataset_ids_from_scope(scope).is_empty() {
         return false;
@@ -73324,40 +73106,6 @@ fn ascii_prompt_contains_any(lower_prompt: &str, hints: &[&str]) -> bool {
                 .any(|token| token == *hint)
         }
     })
-}
-
-fn dataset_id_from_scope_item(item: &Value) -> Option<DatasetId> {
-    if item
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|item_type| item_type != "dataset")
-    {
-        return None;
-    }
-    let raw = item.as_str().or_else(|| {
-        item.as_object()
-            .and_then(|object| object.get("id"))
-            .and_then(Value::as_str)
-    })?;
-    Uuid::parse_str(raw).ok().map(DatasetId)
-}
-
-fn document_id_from_scope_item(item: &Value) -> Option<DocumentId> {
-    if item
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|item_type| item_type != "document")
-    {
-        return None;
-    }
-    let raw = item.as_str().or_else(|| {
-        item.as_object()
-            .and_then(|object| object.get("id"))
-            .and_then(Value::as_str)
-    })?;
-    Uuid::parse_str(raw).ok().map(DocumentId)
 }
 
 fn build_workflow_signal(
