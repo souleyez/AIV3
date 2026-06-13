@@ -57,6 +57,17 @@
 | P5 | 工程治理和复杂文件拆分 | `platform-api` 与主站前端已持续小切片拆分；仍是当前可独立推进主线。 | 无 P1 凭证、无 P2/P4 写入确认、无新客户失败样例时，继续 P5 行为保持切片。 | 每个切片有定向测试、`cargo fmt --check`/`cargo check`/Web build/P0 smoke；提交可单独回退；不改变第三方公开契约。 |
 | CI | GitHub Actions | job 启动前失败，`steps=[]`，本地和 8 服务器验证可替代但不能声称 CI 通过。 | 账号额度/runner 恢复后重跑 DataMax CI。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
 
+## 2.2 当前执行队列
+
+| 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
+| --- | --- | --- | --- | --- |
+| 1 | P5 assistant-run provider retry helper 拆分 | 本地行为保持代码、定向 Rust 回归、P0 self-test 和 validation 记录已完成；尚未提交和判断是否发布 8 服务器。 | 只提交本切片相关文件；若用户要求发布，再走 P0 code deploy 边界。 | `cargo test -p platform-api assistant_run_provider_retry_support --lib`、provider retry 回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
+| 2 | 是否同步 8 服务器 | 等待本地验证和用户发布口径。 | 如果用户要求发布，拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke；如果只是 docs-only，则只 `git pull --ff-only` 且不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
+| 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
+| 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
+| 6 | P3 客户失败样例与新百模板焦点 | 常规 smoke 已稳定；真实失败样例按需补 targeted smoke。 | 遇到低活跃、风险、经营健康度、取高、助推、销售缺口等焦点错位时，只改模板/focus 判断，不改公开 API。 | 正确模块前置；解释型问题不误触发；报表链接只出现一次；导出字段可访问。 |
+
 ## 3. P0 发布前固定回归
 
 **目标:** 每次准备发 8 服务器前，先确认主站、第三方、报表、静态页、导出字段和 scoped document 没有回归。
@@ -561,6 +572,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `static_page_payload_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `e32f40ee0`，`cargo fmt --check`、payload/render guard/static-page artifact Rust 回归、`cargo check`、Web build、release build、health/ready、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 新百已发布报表链接直答、runtime manifest 和 output artifacts helper 已拆到 `assistant_run_xinbai_report_link_support` 模块并补模块单测；新百报表链接窄触发、修复/重生成请求不误复用、导出 URL、外部通道 artifact card 和质量补链路语义保持不变。本地 `cargo check`、xinbai report link/public response/SSE exports/static-page artifact Rust 回归、prewarm observability smoke、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_xinbai_report_link_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `fd7b220cc`，`cargo fmt --check`、xinbai report link/public response/SSE exports/static-page artifact Rust 回归、`cargo check`、Web build、release build、health/ready、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run provider retry attempts/backoff/delay/retryable-error helper 已拆到 `assistant_run_provider_retry_support` 模块并补模块单测；retry attempts/backoff env clamp、invalid env fallback、指数退避上限和 transient provider failure retryable 判定语义保持不变。本地 `cargo fmt --check`、provider retry/support/static-page artifact Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交和发布判断。
 
 **Regression commands:**
 
@@ -587,10 +599,10 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 默认继续 P5：选择一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
-2. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
-3. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
-4. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
-5. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
-6. 若准备发布，先跑 P0 固定回归，再按 P0 部署边界同步 8 服务器。
+1. 先关闭当前 P5 `assistant_run_provider_retry_support` 切片：补齐定向 Rust 回归、P0 self-test、validation 记录和单独提交；本切片只允许行为保持，不改公开接口。
+2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
+3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
+4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
+5. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
+6. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
 7. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。

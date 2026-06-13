@@ -3549,6 +3549,39 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Assistant Run Provider Retry Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move assistant-run provider retry attempts/backoff/delay/retryable-error helpers out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_provider_retry_support.rs`;
+  - moved runtime retry default/max constants, env parsing helpers, retry delay calculation, and retryable provider error detection into the new module;
+  - kept existing call names available through `use assistant_run_provider_retry_support::*`;
+  - added module tests for attempts/backoff defaults and clamping, invalid env fallback, and exponential delay capping.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api assistant_run_provider_retry_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api assistant_run_provider_retries_transient_transport_failure --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Static Page Template Prewarm Support Local Verification
 
 - Purpose:
