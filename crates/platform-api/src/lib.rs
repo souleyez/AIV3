@@ -30009,7 +30009,9 @@ fn static_page_generated_template_reference_id(draft_id: StaticPageDraftId) -> S
     format!("generated-static-page:{draft_id}")
 }
 
-fn static_page_generated_template_draft_id(raw_id: Option<&str>) -> Option<StaticPageDraftId> {
+pub(crate) fn static_page_generated_template_draft_id(
+    raw_id: Option<&str>,
+) -> Option<StaticPageDraftId> {
     let raw_id = normalize_static_page_template_reference_id(raw_id)?;
     let draft_id = raw_id
         .strip_prefix("generated-static-page:")
@@ -78681,184 +78683,6 @@ fn static_page_supplemental_metric_candidate_summary(
     })
 }
 
-fn static_page_template_missing_evidence(
-    reference: Option<StaticPageTemplateReferenceSpec>,
-    evidence_state: &Value,
-) -> Value {
-    let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
-    let detail_target_count = assistant_run_detail_target_count(evidence_state);
-    let mut missing = Vec::<Value>::new();
-
-    if supplied_count == 0 {
-        missing.push(json!({
-            "code": "visible_evidence_required",
-            "message": "当前没有可引用供料；静态页只能先生成结构草稿，不能声称已使用真实数据。",
-            "recommended_action": "retrieve_evidence",
-        }));
-    }
-    if let Some(reference) = reference {
-        match reference.id {
-            "data-report" | "dashboard" => {
-                if !static_page_evidence_state_has_chart_sample_rows(evidence_state) {
-                    missing.push(json!({
-                        "code": "chart_sample_rows_required",
-                        "message": "图表模块需要来自可见数据集、检索证据或模型明确标注的样例行。",
-                        "recommended_action": "static_page.update_draft",
-                    }));
-                }
-            }
-            "docs-page" => {
-                if !static_page_evidence_state_has_section_title_hints(evidence_state) {
-                    missing.push(json!({
-                        "code": "document_headings_or_detail_required",
-                        "message": "文档页需要源文档标题、章节线索或细读详情来避免编造接口与验收内容。",
-                        "recommended_action": "read_document_detail",
-                    }));
-                }
-            }
-            _ => {}
-        }
-    }
-    if detail_target_count > 0 {
-        missing.push(json!({
-            "code": "detail_targets_available",
-            "message": "存在建议细读目标；需要原文措辞、表格、OCR 或媒体时间戳时先读取文档详情。",
-            "recommended_action": "read_document_detail",
-            "detail_target_count": detail_target_count,
-        }));
-    }
-
-    json!({
-        "status": if missing.is_empty() { "ready" } else { "needs_evidence" },
-        "items": missing,
-    })
-}
-
-fn static_page_evidence_state_has_chart_sample_rows(evidence_state: &Value) -> bool {
-    evidence_state
-        .get("supplied_items")
-        .or_else(|| evidence_state.get("suppliedItems"))
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| match item.get("type").and_then(Value::as_str) {
-                    Some("database_aggregate" | "spreadsheet_row_analysis") => item
-                        .get("rows")
-                        .or_else(|| item.get("analysis_rows"))
-                        .or_else(|| item.get("sample_rows"))
-                        .and_then(Value::as_array)
-                        .is_some_and(|rows| !rows.is_empty()),
-                    Some("dataset_fact_snapshot") => {
-                        item.get("row_count")
-                            .or_else(|| item.get("rowCount"))
-                            .and_then(Value::as_u64)
-                            .is_some_and(|count| count > 0)
-                            || item
-                                .get("rows")
-                                .and_then(Value::as_array)
-                                .is_some_and(|rows| !rows.is_empty())
-                    }
-                    _ => false,
-                })
-        })
-}
-
-fn static_page_evidence_state_has_section_title_hints(evidence_state: &Value) -> bool {
-    evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| !static_page_evidence_section_title_hints(item).is_empty())
-        })
-}
-
-fn static_page_template_reference_for_intent(
-    draft_payload: &Value,
-    source_refs: &Value,
-) -> std::result::Result<Option<StaticPageTemplateReferenceSpec>, ApiError> {
-    let reference_id = static_page_template_reference_id_from_payload(draft_payload)
-        .or_else(|| static_page_template_reference_id_from_source_refs(source_refs));
-    if static_page_generated_template_draft_id(reference_id).is_some() {
-        return Ok(None);
-    }
-    resolve_static_page_template_reference(reference_id)
-}
-
-fn static_page_template_reference_payload_for_intent(
-    draft_payload: &Value,
-    source_refs: &Value,
-) -> std::result::Result<Value, ApiError> {
-    Ok(
-        static_page_template_reference_for_intent(draft_payload, source_refs)?
-            .map(static_page_template_design_reference)
-            .unwrap_or(Value::Null),
-    )
-}
-
-fn static_page_template_missing_evidence_for_intent(
-    draft_payload: &Value,
-    source_refs: &Value,
-    evidence_state: &Value,
-) -> std::result::Result<Value, ApiError> {
-    let reference = static_page_template_reference_for_intent(draft_payload, source_refs)?;
-    Ok(static_page_template_missing_evidence(
-        reference,
-        evidence_state,
-    ))
-}
-
-fn upsert_static_page_template_reference(target: &mut Value, reference: Value) {
-    if !target.is_array() {
-        *target = Value::Array(Vec::new());
-    }
-    let template_id = reference
-        .get("templateId")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let Some(items) = target.as_array_mut() else {
-        return;
-    };
-    if let Some(template_id) = template_id.as_deref() {
-        items.retain(|item| {
-            item.get("templateId").and_then(Value::as_str) != Some(template_id)
-                && item.get("template_id").and_then(Value::as_str) != Some(template_id)
-        });
-    }
-    items.insert(0, reference);
-    if items.len() > 5 {
-        items.truncate(5);
-    }
-}
-
-fn apply_static_page_template_reference_value_to_source_refs(
-    mut source_refs: Value,
-    reference: &Value,
-) -> Value {
-    ensure_json_object(&mut source_refs);
-    let Some(object) = source_refs.as_object_mut() else {
-        return source_refs;
-    };
-    object.insert(
-        "template_reference_id".to_string(),
-        reference
-            .get("templateId")
-            .or_else(|| reference.get("template_id"))
-            .or_else(|| reference.get("id"))
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    let mut references = object
-        .remove("template_references")
-        .or_else(|| object.remove("templateReferences"))
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    upsert_static_page_template_reference(&mut references, reference.clone());
-    object.insert("template_references".to_string(), references);
-    source_refs
-}
-
 fn static_page_template_data_binding(source_id: &str) -> Value {
     match source_id {
         "session" => json!({
@@ -83580,7 +83404,7 @@ fn static_page_evidence_text(item: &Value) -> String {
     parts.join(" ")
 }
 
-fn static_page_evidence_section_title_hints(item: &Value) -> Vec<String> {
+pub(crate) fn static_page_evidence_section_title_hints(item: &Value) -> Vec<String> {
     let mut hints = Vec::new();
     for pointer in [
         "/evidence_manifest/evidence/section_title_hints",
@@ -84859,7 +84683,7 @@ fn merge_json_value(target: &mut Value, patch: &Value) {
     }
 }
 
-fn ensure_json_object(value: &mut Value) {
+pub(crate) fn ensure_json_object(value: &mut Value) {
     if !value.is_object() {
         *value = Value::Object(Map::new());
     }
