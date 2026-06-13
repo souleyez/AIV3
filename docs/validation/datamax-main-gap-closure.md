@@ -14361,6 +14361,49 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Bot Message Parse Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `3a413c63` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `55d6d4c24` to `3a413c636`;
+  - remote `git status --short --branch` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_bot_message_parse_support --lib`: passed, 2/2 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_bot_message_payload_accepts --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_requested_skills_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_artifact_request_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_answer_policy --lib`: passed, 7/7 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_aigolf_course_map_segmentation --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - the first immediate `GET http://127.0.0.1:3000/healthz` after restart hit a transient connection-refused window; a retry after startup showed `127.0.0.1:3000` listening and health/ready both passed;
+  - `GET http://127.0.0.1:3000/healthz` returned status `ok`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`, `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- GitHub Actions status:
+  - run `27481602997` for `3a413c63` failed before executing steps; `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account issue, not a code-level test failure; local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Bot Message Payload Support 8-Server Verification
 
 - 8-server post-sync verification:

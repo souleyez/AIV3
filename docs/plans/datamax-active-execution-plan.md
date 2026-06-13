@@ -62,7 +62,7 @@
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
 | 1 | P5 external artifact request helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_artifact_request_support` 模块单测、simple artifact template payload 回归、requested skills/AI Golf 回归、`external_channel_static_page_artifact`、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 2 | P5 external bot message parse orchestration 拆分 | 已完成本地行为保持拆分和回归，待提交、部署 8 服务器并写回远端验证。 | 收版时只纳入 `external_bot_message_parse_support` 和计划/validation 记录；不纳入旁路文档改动。 | `external_bot_message_parse_support` 模块单测、第三方 payload alias、artifact request、requested skills、answer policy、AI Golf、静态页触发、`cargo check`、Web build 和 P0 self-test 全通过；不改变第三方公开契约。 |
+| 2 | P5 external bot message parse orchestration 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_bot_message_parse_support` 模块单测、第三方 payload alias、artifact request、requested skills、answer policy、AI Golf、静态页触发、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -621,7 +621,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 - 每个提交可单独回退。
 - 不改第三方公开 API URL、鉴权、必填请求字段或已有响应字段。
 
-- 2026-06-14: `crates/platform-api/src/lib.rs` 的 `parse_external_bot_message_payload` 解析编排已拆到 `external_bot_message_parse_support` 模块并补模块单测；payload alias、artifact request、requested skills、AI Golf schema guard 和 answer policy 的执行顺序保持不变。本地 `cargo fmt --check`、解析模块、第三方 payload alias、artifact/requested-skills/answer-policy/AI Golf/静态页触发 Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、主站/第三方并发、静态页 5 路、Cloudflare fallback、P2 dry-run、production readiness 和 prewarm observability self-test 均通过；`main-assistant-streaming` 与 `external-channel-streaming-10way` 当前无 `--self-test` 参数，真实流式验证仍归入 P1 live/8 服务器窗口。
+- 2026-06-14: `crates/platform-api/src/lib.rs` 的 `parse_external_bot_message_payload` 解析编排已拆到 `external_bot_message_parse_support` 模块并补模块单测；payload alias、artifact request、requested skills、AI Golf schema guard 和 answer policy 的执行顺序保持不变。本地和 8 服务器 `cargo fmt --check`、解析模块、第三方 payload alias、artifact/requested-skills/answer-policy/AI Golf/静态页触发 Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、主站/第三方并发、静态页 5 路、Cloudflare fallback、P2 dry-run、production readiness、prewarm observability self-test 和前端 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `3a413c636`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。`main-assistant-streaming` 与 `external-channel-streaming-10way` 当前无 `--self-test` 参数，真实流式验证仍归入 P1 live/8 服务器窗口。
 
 ## 10. 当前下一步
 
