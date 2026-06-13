@@ -1,8 +1,11 @@
 use chrono::{DateTime, Utc};
-use contracts::{ChatMessageView, LlmInvocationView, ToolExecutionView};
+use contracts::{
+    ChatMessageView, ChatSessionView, DatasetOutputView, LlmInvocationView, MemoryDirectoryView,
+    ToolExecutionView,
+};
 use domain_model::{
-    ChatMessage, ChatMessageId, ChatMessageRole, DatasetId, DatasetOutputId, MemoryDirectoryId,
-    ReportPlanId, RetrievalEvidenceId,
+    ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, DatasetId, DatasetOutputId,
+    MemoryDirectoryId, ReportPlanId, RetrievalEvidenceId,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -1019,6 +1022,43 @@ pub(crate) fn hydrate_chat_message_manifest_view(
     Some(view)
 }
 
+pub(crate) fn hydrate_chat_session_manifest_view(
+    manifest: &Value,
+    latest_assistant_message: Option<&ChatMessageView>,
+) -> Option<contracts::ChatSessionManifestView> {
+    let mut view = parse_chat_session_manifest(manifest)?;
+    if view.status != contracts::ChatSessionManifestStatusView::AssistantReplied {
+        view.runtime = None;
+        return Some(view);
+    }
+
+    let latest_message_manifest = latest_assistant_message.and_then(|message| {
+        let mut manifest_view = message.message_manifest_view.clone().or_else(|| {
+            hydrate_chat_message_manifest_view(
+                &message.message_manifest,
+                &message.llm_invocations,
+                &message.tool_executions,
+            )
+        });
+        hydrate_assistant_turn_from_message_metadata(
+            message.id,
+            message.created_at,
+            &mut manifest_view,
+        );
+        manifest_view
+    });
+
+    if let Some(message_manifest) = latest_message_manifest {
+        view.last_turn = message_manifest.turn;
+    }
+    // Completed sessions should source provider runtime from the assistant message artifact.
+    // Keep the session-level turn summary for polling/read-model continuity, but stop
+    // duplicating runtime metadata once the assistant message has been committed.
+    view.runtime = None;
+
+    Some(view)
+}
+
 pub(crate) fn hydrate_assistant_turn_from_message_record(
     message: &ChatMessage,
     manifest_view: &mut Option<contracts::ChatMessageManifestView>,
@@ -1097,6 +1137,36 @@ pub(crate) fn to_chat_message_view(
     view.model_facing = derive_chat_message_model_facing_summary(&view);
 
     view
+}
+
+pub(crate) fn to_chat_session_view(
+    session: ChatSession,
+    latest_memory_directory: Option<MemoryDirectoryView>,
+    latest_dataset_output: Option<DatasetOutputView>,
+    latest_assistant_message: Option<ChatMessageView>,
+) -> ChatSessionView {
+    let session_manifest_view = hydrate_chat_session_manifest_view(
+        &session.session_manifest,
+        latest_assistant_message.as_ref(),
+    );
+
+    ChatSessionView {
+        id: session.id,
+        dataset_id: session.dataset_id,
+        execution_id: session.execution_id,
+        title: session.title,
+        latest_memory_directory_id: session.latest_memory_directory_id,
+        latest_memory_directory,
+        latest_dataset_output_id: session.latest_dataset_output_id,
+        latest_dataset_output,
+        latest_assistant_message_id: latest_assistant_message.as_ref().map(|message| message.id),
+        latest_assistant_message,
+        session_manifest_view,
+        session_manifest: session.session_manifest,
+        model_facing: None,
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+    }
 }
 
 #[cfg(test)]
@@ -1597,6 +1667,105 @@ mod tests {
             .events
             .iter()
             .any(|event| event.kind == contracts::ChatTurnEventKindView::TurnCompleted));
+    }
+
+    #[test]
+    fn chat_session_view_uses_latest_assistant_message_for_last_turn() {
+        let dataset_id = DatasetId::new();
+        let now = fixed_time();
+        let session_id = ChatSessionId::new();
+        let assistant_message_id = ChatMessageId::new();
+        let assistant_message = to_chat_message_view(
+            ChatMessage {
+                id: assistant_message_id,
+                tenant_id: TenantId::new(),
+                session_id,
+                role: ChatMessageRole::Assistant,
+                turn_index: 2,
+                content: "已完成回答".to_string(),
+                message_manifest: json!({
+                    "generator": "chat-session-worker",
+                    "schema_version": "0.3.0",
+                    "dataset_id": dataset_id,
+                    "prompt": "继续回答",
+                    "indexed_document_count": 2,
+                    "refreshed_chunks": 8,
+                    "prior_message_count": 1,
+                    "context_binding": "creation_time",
+                    "tool_trace": [],
+                    "turn": {
+                        "turn_id": "turn-latest-assistant",
+                        "status": "completed",
+                        "stream_mode": "buffered",
+                        "provider_status": "responded",
+                        "provider_responded_at": "2026-06-14T00:00:05Z",
+                        "tool_trace_count": 0,
+                        "started_at": "2026-06-14T00:00:00Z"
+                    }
+                }),
+                created_at: now,
+            },
+            Vec::new(),
+            Vec::new(),
+        );
+        let session = ChatSession {
+            id: session_id,
+            tenant_id: TenantId::new(),
+            dataset_id,
+            user_id: None,
+            execution_id: WorkflowExecutionId::new(),
+            title: "Demo chat".to_string(),
+            latest_memory_directory_id: None,
+            latest_dataset_output_id: None,
+            session_manifest: json!({
+                "generator": "chat-session-workflow",
+                "schema_version": "0.3.0",
+                "status": "assistant_replied",
+                "initial_prompt": "继续回答",
+                "last_prompt": "继续回答",
+                "last_turn_kind": "placeholder_orchestration",
+                "context_binding": "creation_time",
+                "last_turn": {
+                    "turn_id": "turn-stale-session",
+                    "status": "pending",
+                    "stream_mode": "buffered",
+                    "provider_status": "pending",
+                    "tool_trace_count": 0,
+                    "started_at": "2026-06-14T00:00:00Z"
+                },
+                "runtime": {
+                    "mode": "placeholder",
+                    "provider": "placeholder",
+                    "model": "placeholder-chat-session-v1",
+                    "finish_reason": "stop",
+                    "latency_ms": 0,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let view = to_chat_session_view(session, None, None, Some(assistant_message));
+
+        assert_eq!(view.id, session_id);
+        assert_eq!(view.latest_assistant_message_id, Some(assistant_message_id));
+        let manifest = view
+            .session_manifest_view
+            .as_ref()
+            .expect("session manifest should parse");
+        assert_eq!(manifest.runtime, None);
+        let last_turn = manifest
+            .last_turn
+            .as_ref()
+            .expect("latest assistant turn should be projected into session");
+        assert_eq!(last_turn.turn_id, "turn-latest-assistant");
+        assert_eq!(last_turn.assistant_message_id, Some(assistant_message_id));
+        assert_eq!(last_turn.assistant_message_persisted_at, Some(now));
     }
 
     #[test]
