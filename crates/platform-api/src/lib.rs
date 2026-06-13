@@ -66500,44 +66500,6 @@ fn assistant_run_recommended_supply_actions(
     actions
 }
 
-fn assistant_run_fallback_supply_count(supplied_items: &[Value]) -> usize {
-    supplied_items
-        .iter()
-        .filter(|item| {
-            item.get("source")
-                .and_then(Value::as_str)
-                .is_some_and(|source| source == "document_chunk_fallback")
-        })
-        .count()
-}
-
-fn document_chunk_fallback_source_locator(document: &Document, chunk: &DocumentChunk) -> String {
-    let base = if document.object_key.trim().is_empty() {
-        document.title.trim()
-    } else {
-        document.object_key.trim()
-    };
-    format!("{}#chunk={}", base, chunk.chunk_index)
-}
-
-fn document_chunk_fallback_summary(document: &Document, chunk: &DocumentChunk) -> String {
-    let title = if document.title.trim().is_empty() {
-        document.object_key.trim()
-    } else {
-        document.title.trim()
-    };
-    let section = document_chunk_section_title_hints(chunk)
-        .first()
-        .map(|value| format!(" / {value}"))
-        .unwrap_or_default();
-    let excerpt = truncate_assistant_supply_text(&chunk.content, 180);
-    if excerpt.is_empty() {
-        format!("{title} chunk {}{section}", chunk.chunk_index)
-    } else {
-        format!("{title} chunk {}{section}: {excerpt}", chunk.chunk_index)
-    }
-}
-
 pub(crate) fn collect_string_list(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::String(text) => {

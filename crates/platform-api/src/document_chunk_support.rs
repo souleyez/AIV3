@@ -19,6 +19,50 @@ pub(crate) fn document_chunk_search_text(document: &Document, chunk: &DocumentCh
     .join("\n")
 }
 
+pub(crate) fn assistant_run_fallback_supply_count(supplied_items: &[Value]) -> usize {
+    supplied_items
+        .iter()
+        .filter(|item| {
+            item.get("source")
+                .and_then(Value::as_str)
+                .is_some_and(|source| source == "document_chunk_fallback")
+        })
+        .count()
+}
+
+pub(crate) fn document_chunk_fallback_source_locator(
+    document: &Document,
+    chunk: &DocumentChunk,
+) -> String {
+    let base = if document.object_key.trim().is_empty() {
+        document.title.trim()
+    } else {
+        document.object_key.trim()
+    };
+    format!("{}#chunk={}", base, chunk.chunk_index)
+}
+
+pub(crate) fn document_chunk_fallback_summary(
+    document: &Document,
+    chunk: &DocumentChunk,
+) -> String {
+    let title = if document.title.trim().is_empty() {
+        document.object_key.trim()
+    } else {
+        document.title.trim()
+    };
+    let section = document_chunk_section_title_hints(chunk)
+        .first()
+        .map(|value| format!(" / {value}"))
+        .unwrap_or_default();
+    let excerpt = crate::truncate_assistant_supply_text(&chunk.content, 180);
+    if excerpt.is_empty() {
+        format!("{title} chunk {}{section}", chunk.chunk_index)
+    } else {
+        format!("{title} chunk {}{section}: {excerpt}", chunk.chunk_index)
+    }
+}
+
 pub(crate) fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     let mut hints = Vec::new();
     for key in [
@@ -372,7 +416,10 @@ fn looks_like_standalone_heading(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use domain_model::{DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, TenantId};
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn document_chunk_support_reads_value_section_and_terms() {
@@ -398,6 +445,60 @@ mod tests {
         assert!(noun_terms.iter().any(|term| term == "供应商确认"));
         assert!(noun_terms.iter().any(|term| term == "核心技能 Java 微服务"));
         assert!(noun_terms.iter().any(|term| term == "微服务"));
+    }
+
+    #[test]
+    fn fallback_supply_helpers_keep_existing_source_and_summary_shape() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "护理手册".to_string(),
+            object_key: "documents/care.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut metadata = BTreeMap::new();
+        metadata.insert("section_title_hints".to_string(), json!(["发药核对"]));
+        let chunk = DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 12,
+            content: "发药前需要核对老人姓名、床号、药品名称和剂量。".to_string(),
+            token_count: 18,
+            state: DocumentChunkState::Extracted,
+            metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert_eq!(
+            document_chunk_fallback_source_locator(&document, &chunk),
+            "documents/care.md#chunk=12"
+        );
+        assert_eq!(
+            document_chunk_fallback_summary(&document, &chunk),
+            "护理手册 chunk 12 / 发药核对: 发药前需要核对老人姓名、床号、药品名称和剂量。"
+        );
+        assert_eq!(
+            assistant_run_fallback_supply_count(&[
+                json!({"source": "document_chunk_fallback"}),
+                json!({"source": "retrieval_evidence"}),
+                json!({"source": "document_chunk_fallback"}),
+            ]),
+            2
+        );
     }
 
     #[test]
