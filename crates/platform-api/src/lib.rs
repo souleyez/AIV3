@@ -48771,47 +48771,6 @@ fn external_channel_static_page_data_url(payload: &Value, public_url: &str) -> V
     )
 }
 
-pub(crate) fn external_channel_static_page_download_exports(
-    public_url: &str,
-    data_url: Value,
-    report_title: Option<&str>,
-) -> Value {
-    let title = report_title.unwrap_or("DataMax 经营分析报表");
-    let table_url = static_page_artifact_sibling_url(public_url, "table-data.csv")
-        .map(Value::String)
-        .unwrap_or(Value::Null);
-    let ppt_url = static_page_artifact_sibling_url(public_url, "report.ppt")
-        .map(Value::String)
-        .unwrap_or(Value::Null);
-    let md_url = static_page_artifact_sibling_url(public_url, "report.md")
-        .map(Value::String)
-        .unwrap_or(Value::Null);
-    json!([
-        {
-            "kind": "table_data",
-            "label": "表格数据",
-            "format": "csv",
-            "title": title,
-            "url": table_url,
-            "data_url": data_url,
-        },
-        {
-            "kind": "ppt",
-            "label": "导出PPT",
-            "format": "ppt",
-            "title": title,
-            "url": ppt_url,
-        },
-        {
-            "kind": "markdown",
-            "label": "文本下载（MD）",
-            "format": "md",
-            "title": title,
-            "url": md_url,
-        },
-    ])
-}
-
 fn external_channel_static_page_download_exports_from_payload(
     payload: &Value,
     public_url: &str,

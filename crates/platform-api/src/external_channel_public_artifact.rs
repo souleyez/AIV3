@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use contracts::ExternalBotReplyView;
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use crate::codex_host_fixed_task_public_artifact_url_allowed;
+use crate::{codex_host_fixed_task_public_artifact_url_allowed, static_page_artifact_sibling_url};
 
 pub(crate) fn external_channel_public_artifact_url_from_links_value(
     value: Option<&Value>,
@@ -120,6 +120,47 @@ pub(crate) fn dedupe_external_channel_public_artifact_links(links: Vec<String>) 
     output
 }
 
+pub(crate) fn external_channel_static_page_download_exports(
+    public_url: &str,
+    data_url: Value,
+    report_title: Option<&str>,
+) -> Value {
+    let title = report_title.unwrap_or("DataMax 经营分析报表");
+    let table_url = static_page_artifact_sibling_url(public_url, "table-data.csv")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    let ppt_url = static_page_artifact_sibling_url(public_url, "report.ppt")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    let md_url = static_page_artifact_sibling_url(public_url, "report.md")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    json!([
+        {
+            "kind": "table_data",
+            "label": "表格数据",
+            "format": "csv",
+            "title": title,
+            "url": table_url,
+            "data_url": data_url,
+        },
+        {
+            "kind": "ppt",
+            "label": "导出PPT",
+            "format": "ppt",
+            "title": title,
+            "url": ppt_url,
+        },
+        {
+            "kind": "markdown",
+            "label": "文本下载（MD）",
+            "format": "md",
+            "title": title,
+            "url": md_url,
+        },
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +224,39 @@ mod tests {
 
         assert!(text.contains("页面链接：[点击查看报表]("));
         assert_eq!(repeated, text);
+    }
+
+    #[test]
+    fn static_page_download_exports_builds_standard_report_files() {
+        let public_url = artifact_url("reports/current/index.html");
+        let data_url = json!(artifact_url("reports/current/data.json"));
+
+        let exports = external_channel_static_page_download_exports(
+            &public_url,
+            data_url.clone(),
+            Some("新世界百货经营管理月报表"),
+        );
+
+        assert_eq!(exports[0]["kind"], json!("table_data"));
+        assert_eq!(exports[0]["label"], json!("表格数据"));
+        assert_eq!(exports[0]["format"], json!("csv"));
+        assert_eq!(exports[0]["title"], json!("新世界百货经营管理月报表"));
+        assert_eq!(
+            exports[0]["url"],
+            json!(artifact_url("reports/current/table-data.csv"))
+        );
+        assert_eq!(exports[0]["data_url"], data_url);
+        assert_eq!(exports[1]["kind"], json!("ppt"));
+        assert_eq!(exports[1]["label"], json!("导出PPT"));
+        assert_eq!(
+            exports[1]["url"],
+            json!(artifact_url("reports/current/report.ppt"))
+        );
+        assert_eq!(exports[2]["kind"], json!("markdown"));
+        assert_eq!(exports[2]["label"], json!("文本下载（MD）"));
+        assert_eq!(
+            exports[2]["url"],
+            json!(artifact_url("reports/current/report.md"))
+        );
     }
 }
