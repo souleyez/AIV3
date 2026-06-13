@@ -76742,36 +76742,6 @@ fn static_page_operations_from_html_artifact_patch(
     )?)
 }
 
-fn lexical_text_score(
-    content: &str,
-    query_weights: &BTreeMap<String, f64>,
-    query_norm: f64,
-) -> f64 {
-    if query_weights.is_empty() || query_norm <= 0.0 {
-        return 0.0;
-    }
-
-    let content_weights = lexical_query_term_weights(content);
-    let content_norm = vector_norm(&content_weights);
-    if content_weights.is_empty() || content_norm <= 0.0 {
-        return 0.0;
-    }
-
-    let dot_product = query_weights
-        .iter()
-        .filter_map(|(term, query_weight)| {
-            content_weights
-                .get(term)
-                .map(|content_weight| query_weight * content_weight)
-        })
-        .sum::<f64>();
-    if dot_product <= 0.0 {
-        return 0.0;
-    }
-
-    (dot_product / (query_norm * content_norm) * 10_000.0).round() / 10_000.0
-}
-
 fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
     let medication_dispense_query = query.contains("发药")
         || query.contains("服药")
@@ -76903,20 +76873,6 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
     }
 
     score
-}
-
-fn limited_lexical_term_weights(content: &str, limit: usize) -> BTreeMap<String, f64> {
-    let mut weights = lexical_query_term_weights(content)
-        .into_iter()
-        .collect::<Vec<_>>();
-    weights.sort_by(|left, right| {
-        right
-            .1
-            .partial_cmp(&left.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.0.cmp(&right.0))
-    });
-    weights.into_iter().take(limit).collect()
 }
 
 fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {

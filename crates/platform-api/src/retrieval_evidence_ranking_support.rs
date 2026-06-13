@@ -82,6 +82,50 @@ pub(crate) fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
         .sqrt()
 }
 
+pub(crate) fn lexical_text_score(
+    content: &str,
+    query_weights: &BTreeMap<String, f64>,
+    query_norm: f64,
+) -> f64 {
+    if query_weights.is_empty() || query_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let content_weights = crate::lexical_query_term_weights(content);
+    let content_norm = vector_norm(&content_weights);
+    if content_weights.is_empty() || content_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let dot_product = query_weights
+        .iter()
+        .filter_map(|(term, query_weight)| {
+            content_weights
+                .get(term)
+                .map(|content_weight| query_weight * content_weight)
+        })
+        .sum::<f64>();
+    if dot_product <= 0.0 {
+        return 0.0;
+    }
+
+    (dot_product / (query_norm * content_norm) * 10_000.0).round() / 10_000.0
+}
+
+pub(crate) fn limited_lexical_term_weights(content: &str, limit: usize) -> BTreeMap<String, f64> {
+    let mut weights = crate::lexical_query_term_weights(content)
+        .into_iter()
+        .collect::<Vec<_>>();
+    weights.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    weights.into_iter().take(limit).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +229,24 @@ mod tests {
         assert_eq!(lexical_query_score(&evidence, &query_weights, 5.0), 1.0);
         assert_eq!(lexical_query_score(&evidence, &BTreeMap::new(), 5.0), 0.0);
         assert_eq!(lexical_query_score(&evidence, &query_weights, 0.0), 0.0);
+    }
+
+    #[test]
+    fn lexical_text_score_uses_existing_query_term_weights() {
+        let query_weights = BTreeMap::from([("alpha".to_string(), 1.0)]);
+
+        assert_eq!(lexical_text_score("alpha", &query_weights, 1.0), 1.0);
+        assert_eq!(lexical_text_score("beta", &query_weights, 1.0), 0.0);
+        assert_eq!(lexical_text_score("alpha", &BTreeMap::new(), 1.0), 0.0);
+        assert_eq!(lexical_text_score("alpha", &query_weights, 0.0), 0.0);
+    }
+
+    #[test]
+    fn limited_lexical_term_weights_keeps_highest_terms_only() {
+        let weights = limited_lexical_term_weights("alpha alpha beta", 1);
+
+        assert_eq!(weights.len(), 1);
+        assert!(weights.contains_key("alpha"));
+        assert!(limited_lexical_term_weights("alpha beta", 0).is_empty());
     }
 }
