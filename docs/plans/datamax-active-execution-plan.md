@@ -498,6 +498,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_answer_policy_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、answer policy/customer tone/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run model context/scope compact helper 已拆到 `assistant_run_model_context_support` 模块并补模块单测；nested answer_policy 转专业边界、scope document 采样预算、scope id 数组预算、候选 scope 嵌套压缩和 metadata/raw blob 不入模型上下文语义保持不变。本地 `cargo check`、model context/large document scope/answer policy/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_model_context_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、model context/large document scope/answer policy/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run model supplied-items bucket/budget helper 已拆到 `assistant_run_model_supply_budget_support` 模块并补模块单测；不同供料类型独立 quota、原始顺序保持、unknown type 归入 other、included/omitted budget 字段和 model_rule 语义保持不变。本地 `cargo check`、supply budget/model context/web search/large document scope/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
