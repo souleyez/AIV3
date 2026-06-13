@@ -42,6 +42,21 @@
 | 生产观测 | 未授权 operator/queue stats 路径已验证返回 401；观测 key 路径返回脱敏聚合。 | authenticated operator live 需要合法 operator 凭证或运维侧脱敏回执。 |
 | CI | 本地和 8 服务器 smoke 覆盖主要缺口。 | GitHub Actions 因账号付款/额度状态在 job 启动前失败，账号恢复后重跑。 |
 
+## 2.1 待完成清单与完成标准
+
+| 优先级 | 工作项 | 当前状态 | 下一步 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| P0 | 发布前固定回归和部署边界 | self-test、8 服务器 code deploy、docs-only sync 口径已稳定。 | 每次发版继续执行 P0 命令并写 validation；docs-only 不重启服务。 | 本地和 8 服务器 P0 smoke 通过；服务全 `active`；`/readyz` 正常；validation 记录 head、命令、结果和安全边界。 |
+| P1 | operator 观测闭环 | 未授权和观测 key 脱敏路径已验证；authenticated operator live 缺合法凭证或运维脱敏回执。 | 拿到 operator cookie/bearer/local-key 后跑 live；拿不到则不阻塞 P5。 | 未授权仍 401；授权回执只含脱敏 provider/queue/fallback 聚合；不泄露 token、cookie、任务原文、客户数据或对象路径。 |
+| P1 | 20 路问答和重任务并发 live | self-test 已覆盖主站、第三方、静态页 5 路、Cloudflare fallback 2 路。 | 在受控窗口跑 live 20 路问答和 5/2 路重任务，并记录瓶颈分类。 | 主站和第三方 20 路问答成功；本地重任务 5 路、fallback 2 路不越限；失败能归因到模型供应商、队列、权限、模板命中或发布。 |
+| P2 | 异步深解析和事实用途分类 | 多类型 summary-only dry-run 已覆盖；真实写入仍关闭。 | 继续用新失败样例或新类型扩样；不重复跑已覆盖类型。 | fact 类型均归入 `report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 或 `review_required`；未知类型进 review；未经确认不写库、不入队。 |
+| P2 | fingerprint、对象治理和重复文档 | inventory、repair plan、filesystem preflight 已是只读计划；缺真实 backfill/清理确认。 | 仅在用户确认后准备 operator-reviewed manifest、回滚说明和小批量执行方案。 | 真实 hash/backfill/对象清理前有 reviewed manifest；执行结果只记录聚合计数和原因分布；不输出对象 key、hash、标题或正文。 |
+| P3 | 新百默认报表模板和第三方触发 | 默认模板、focus、导出字段和链接去重 smoke 已稳定。 | 继续用真实客户问题做 targeted smoke；发现 focus 错位时只改模板/focus 判断，不改公开接口。 | 取高、经营状况、风险识别、低活跃、销售缺口、助推门店均能前置正确模块；解释型问题不误触发；链接只出现一次且结构字段可识别。 |
+| P3 | 数据集模板复用与低负载预热 | 模板复用链路存在；低负载静默预热仍是待实现/待观测项。 | 先做队列/限流/跳过条件设计，再做 self-test；不在客户未要求时打扰客户。 | 相同或有交集的数据集组合和相同 `default_prompt` 优先复用已有模板；低负载预热不重复生成、不影响在线问答、不产生用户可见噪声。 |
+| P4 | 数据接入与 CC/Codex 模式 | staging analysis 存在；生产同步必须人工确认。 | 保持“先分析、出 staging_plan、落目标数据集”的闭环；确认前不写生产。 | 无目标数据集时拒绝生产同步；有目标数据集时只输出分析和 `staging_plan`；confirm 前不创建/更新生产数据集或 schema。 |
+| P5 | 工程治理和复杂文件拆分 | `platform-api` 与主站前端已持续小切片拆分；仍是当前可独立推进主线。 | 无 P1 凭证、无 P2/P4 写入确认、无新客户失败样例时，继续 P5 行为保持切片。 | 每个切片有定向测试、`cargo fmt --check`/`cargo check`/Web build/P0 smoke；提交可单独回退；不改变第三方公开契约。 |
+| CI | GitHub Actions | job 启动前失败，`steps=[]`，本地和 8 服务器验证可替代但不能声称 CI 通过。 | 账号额度/runner 恢复后重跑 DataMax CI。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
+
 ## 3. P0 发布前固定回归
 
 **目标:** 每次准备发 8 服务器前，先确认主站、第三方、报表、静态页、导出字段和 scoped document 没有回归。
@@ -243,6 +258,24 @@ npm run smoke:external-video-ppt -- --self-test
 - 同一 conversation 的授权范围可延续。
 - 传 `dataset_external_ids` 与额外 document refs 时，分组内重复文档不重复供料，分组外显式文档可补充生效。
 - 模板参考文档不污染事实回答。
+
+### P3-3 数据集模板复用与低负载预热
+
+**目标:** 客户未明确要求更换样式时，相同或有交集的数据集组合优先复用已发布模板；低负载时可静默补齐缺失模板，但不影响在线问答。
+
+**Commands:**
+
+```bash
+npm run smoke:static-page-prewarm-observability -- --self-test
+npm run smoke:external-report-focus -- --self-test
+npm run smoke:external-report-export -- --self-test
+```
+
+**Done when:**
+- 已有模板的数据集组合不重复走 image2 设计链路。
+- 无模板的数据集组合只在低负载、队列容量允许、无同类任务运行时预热。
+- 预热任务失败不影响客户对话；客户未要求报表时不主动推送链接。
+- 预热状态可在观测页或 smoke 回执中按 queued/running/published/failed/skipped 脱敏查看。
 
 ## 8. P4 数据接入与 CC/Codex 模式
 
@@ -527,21 +560,31 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 
 ```bash
 cargo fmt --check
-cargo test -p platform-api gateway_limiter --lib
-cargo test -p platform-api model_gateway_profile --lib
-cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
+cargo test -p platform-api <touched_module_or_behavior_filter> --lib
+cargo test -p platform-api external_channel_static_page_artifact --lib
+cargo check -p platform-api
 npm --prefix apps/web run build
+npm run smoke:external-report-focus -- --self-test
+npm run smoke:external-report-export -- --self-test
+npm run smoke:external-scoped-document-chat -- --self-test
+npm run smoke:static-page-5way -- --self-test
+npm run smoke:cloudflare-fallback-2way -- --self-test
+node --test apps/web/app/lib/assistant-run-progress.test.mjs
+node --test apps/web/app/lib/local-chat-sessions.test.mjs
 ```
 
 **Done when:**
 - 行为不变。
 - 回归集通过。
 - 每个提交可单独回退。
+- 不改第三方公开 API URL、鉴权、必填请求字段或已有响应字段。
 
 ## 10. 当前下一步
 
-1. 若拿到合法 operator 凭证或脱敏回执，继续做 P1-1 authenticated operator live。
-2. 若没有 operator 凭证，继续 P5：再选一个 `platform-api` 或主站前端小切片做行为保持重构，测试先行。
-3. 若出现新客户失败样例，按 P2-1 做 summary-only dry-run，不重复跑已覆盖类型。
-4. 若准备发布，先跑 P0 固定回归，再按 P0 部署边界同步 8 服务器。
-5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
+1. 默认继续 P5：选择一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+2. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
+3. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
+4. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
+5. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
+6. 若准备发布，先跑 P0 固定回归，再按 P0 部署边界同步 8 服务器。
+7. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
