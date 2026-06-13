@@ -14286,3 +14286,24 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
   - no service was restarted during local verification;
   - 120 server was not touched.
+
+## 2026-06-14 P3 Static-Page Prewarm Observability 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `1d55360a` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `77f2d0d6f` to `1d55360ae`;
+  - remote `git rev-parse --short HEAD` returned `1d55360ae` and `git status --short --branch` returned `## main...origin/main`;
+  - `node --check scripts/smoke/static-page-prewarm-observability.mjs`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `waitingForLowLoadCount=1`, `customerVisiblePrewarmLeakCount=0`, `prewarmCustomerVisibilityOk=true`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` remained `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned `{"service":"platform-api","status":"ok","version":"0.1.0"}`;
+  - `GET http://127.0.0.1:3000/readyz` returned `{"service":"platform-api","status":"ready","version":"0.1.0"}`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server verification;
+  - no service was restarted;
+  - 120 server was not touched.
