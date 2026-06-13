@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataMax V3 企业级数据智能与员工 AI 工作平台</title>
+  <meta name="description" content="DataMax V3 企业公开方案：统一接入企业数据、模型能力、员工工具和业务产物，支持可控、可审、可溯源的企业 AI 落地。">
+  <style>
+    :root {
+      color-scheme: dark;
+      --navy: #07111f;
+      --navy-2: #0b2036;
+      --ink: #f8fafc;
+      --muted: #b7c6d8;
+      --paper: #f4efe4;
+      --gold: #ffd466;
+      --cyan: #18a8c7;
+      --line: rgba(255, 255, 255, 0.16);
+      --panel: rgba(9, 24, 42, 0.78);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--navy);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 14% 10%, rgba(24, 168, 199, 0.22), transparent 35%),
+        radial-gradient(circle at 92% 18%, rgba(255, 212, 102, 0.18), transparent 31%),
+        linear-gradient(135deg, #07111f 0%, #0b2036 58%, #efe8d9 58%, #fff8e8 100%);
+      overflow-x: hidden;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .topbar {
+      position: fixed;
+      z-index: 20;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 14px max(18px, calc((100vw - 1320px) / 2));
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 17, 31, 0.82);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 16px 60px rgba(0, 0, 0, 0.18);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--gold), #ffffff);
+      box-shadow: 0 14px 30px rgba(255, 212, 102, 0.22);
+    }
+
+    .brand small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      padding: 9px 15px;
+      color: #f8fafc;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 14px;
+      font-weight: 800;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .button.primary {
+      border-color: rgba(255, 212, 102, 0.42);
+      color: #07111f;
+      background: var(--gold);
+    }
+
+    .deck {
+      scroll-snap-type: y mandatory;
+    }
+
+    .section {
+      position: relative;
+      min-height: 100vh;
+      scroll-snap-align: start;
+      display: grid;
+      align-items: center;
+      justify-items: center;
+      padding: 92px 22px 34px;
+    }
+
+    .intro {
+      width: min(1180px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(320px, 0.98fr);
+      gap: 34px;
+      align-items: center;
+    }
+
+    .intro-card {
+      padding: clamp(26px, 4vw, 54px);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 28px;
+      background: linear-gradient(145deg, rgba(9, 24, 42, 0.88), rgba(11, 32, 54, 0.76));
+      box-shadow: 0 32px 100px rgba(0, 0, 0, 0.28);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      padding: 8px 13px;
+      color: #d7e7ff;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+    }
+
+    h1,
+    h2 {
+      margin: 18px 0 0;
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 790px;
+      font-size: clamp(46px, 7vw, 92px);
+    }
+
+    h2 {
+      font-size: clamp(32px, 4.8vw, 64px);
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 22px 0 0;
+      color: #d5e2f2;
+      font-size: clamp(17px, 2vw, 22px);
+      line-height: 1.82;
+    }
+
+    .highlight-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    .highlight {
+      min-height: 118px;
+      padding: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .highlight strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #ffffff;
+      font-size: 18px;
+    }
+
+    .highlight span {
+      color: #c9d7e8;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .cover-image {
+      width: min(100%, 620px);
+      border: 10px solid rgba(255, 255, 255, 0.86);
+      border-radius: 30px;
+      background: #ffffff;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35);
+    }
+
+    .slide-shell {
+      width: min(94vw, 1280px);
+      display: grid;
+      gap: 14px;
+    }
+
+    .slide-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      color: #d9e7f6;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+    }
+
+    .slide-image {
+      display: block;
+      width: 100%;
+      max-height: calc(100vh - 132px);
+      object-fit: contain;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 20px;
+      background: #f4efe4;
+      box-shadow: 0 30px 110px rgba(0, 0, 0, 0.38);
+    }
+
+    .note-panel {
+      width: min(1120px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 0.85fr) minmax(320px, 1.15fr);
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .note-panel .intro-card {
+      min-height: 100%;
+    }
+
+    .note-list {
+      display: grid;
+      gap: 14px;
+      margin: 28px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .note-list li {
+      padding: 16px 18px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 18px;
+      color: #d8e5f5;
+      background: rgba(255, 255, 255, 0.08);
+      line-height: 1.68;
+    }
+
+    .pager {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 22;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 13px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      color: #f8fafc;
+      background: rgba(7, 17, 31, 0.78);
+      backdrop-filter: blur(16px);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .pager button {
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 999px;
+      color: #07111f;
+      background: #ffffff;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    @media (max-width: 860px) {
+      .topbar {
+        position: sticky;
+        padding: 12px 14px;
+        align-items: flex-start;
+      }
+
+      .brand small {
+        display: none;
+      }
+
+      .actions {
+        gap: 8px;
+      }
+
+      .button {
+        min-height: 34px;
+        padding: 8px 11px;
+        font-size: 12px;
+      }
+
+      .section {
+        min-height: auto;
+        padding: 26px 14px 34px;
+        scroll-snap-align: none;
+      }
+
+      .intro,
+      .note-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .highlight-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .slide-image {
+        max-height: none;
+        border-radius: 14px;
+      }
+
+      .pager {
+        display: none;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      .topbar,
+      .pager {
+        display: none;
+      }
+
+      .section {
+        min-height: auto;
+        page-break-after: always;
+        padding: 0;
+        background: #ffffff;
+      }
+
+      .intro,
+      .note-panel {
+        width: 100%;
+        min-height: 100vh;
+        padding: 36px;
+        color: #07111f;
+        background: #ffffff;
+      }
+
+      .intro-card,
+      .highlight,
+      .note-list li {
+        color: #07111f;
+        background: #ffffff;
+        border-color: #d7d1c4;
+        box-shadow: none;
+      }
+
+      .lead,
+      .highlight span,
+      .note-list li {
+        color: #334155;
+      }
+
+      .slide-shell {
+        width: 100%;
+      }
+
+      .slide-meta {
+        display: none;
+      }
+
+      .slide-image {
+        width: 100%;
+        max-height: none;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar" aria-label="页面导航">
+    <div class="brand" aria-label="DataMax V3">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>DataMax V3<small>企业级数据智能与员工 AI 工作平台</small></span>
+    </div>
+    <nav class="actions" aria-label="操作">
+      <a class="button" href="#slides">浏览方案</a>
+      <a class="button" href="/external-integrations/third-party-integration-api.zh-CN.html">公开接口</a>
+      <a class="button primary" href="/external-integrations/datamax-v3-enterprise-solution.pdf" download>下载 PDF</a>
+    </nav>
+  </header>
+
+  <main class="deck">
+    <section class="section" id="overview">
+      <div class="intro">
+        <div class="intro-card">
+          <span class="eyebrow">DATAMAX V3</span>
+          <h1>企业级数据智能与员工 AI 工作平台</h1>
+          <p class="lead">统一接入企业文档、数据库、网页和业务系统，集中提供模型能力、知识问答、经营分析、报表页面和员工 AI 客户端。</p>
+          <div class="highlight-grid">
+            <div class="highlight"><strong>统一数据与产物</strong><span>数据、模板、报告、页面、PPT 和下载文件统一管控，结果不散落在个人聊天记录里。</span></div>
+            <div class="highlight"><strong>集中模型接入</strong><span>企业统一额度、统一账号、统一审计，多种模型任选可用，国内网络使用更顺畅。</span></div>
+            <div class="highlight"><strong>定制企业版 Codex</strong><span>员工可使用定制企业版 Codex 客户端，能力不减，随时可升级最新版，快速连接企业数据和产物交付。</span></div>
+            <div class="highlight"><strong>安全可控投入</strong><span>数据思考和交互过程可控、可审、可溯源，经费用在真正产生业务结果的模型与交付环节。</span></div>
+          </div>
+        </div>
+        <img class="cover-image" src="/external-integrations/datamax-v3-public-enterprise-solution/slide-01.png" alt="DataMax V3 企业公开方案封面">
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="note-panel">
+        <div class="intro-card">
+          <span class="eyebrow">ENTERPRISE CODEX</span>
+          <h2>定制企业版 Codex：规模化使用顶尖智能体能力</h2>
+          <p class="lead">企业员工可通过定制客户端接入企业数据中心、模型中心和产物中心，保留完整智能体能力，并由企业统一管理额度、权限、审计和交付资产。</p>
+        </div>
+        <div class="intro-card">
+          <ul class="note-list">
+            <li><strong>能力不减：</strong>面向员工办公、资料处理、表格分析、页面报告和复杂任务，保留完整智能体工作能力。</li>
+            <li><strong>随时升级：</strong>客户端和能力策略可持续升级到最新版，企业不用重复重建内部工具链。</li>
+            <li><strong>统一额度：</strong>企业集中采购和分配模型额度，按部门、场景、任务做预算与审计，减少个人账号和重复浪费。</li>
+            <li><strong>快速交付：</strong>员工客户端可快速连接企业数据、模板和历史产物，在认可版本上继续修改交付。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="note-panel">
+        <div class="intro-card">
+          <span class="eyebrow">CONTROL</span>
+          <h2>对企业更安全可控，也更能把钱花在刀刃上</h2>
+          <p class="lead">DataMax V3 把模型入口、数据权限、使用过程和产物结果放进同一套企业管控体系，帮助企业把 AI 支出转化为可复用的业务资产。</p>
+        </div>
+        <div class="intro-card">
+          <ul class="note-list">
+            <li><strong>安全可控：</strong>用户、部门、数据集、业务库、模板和产物按权限管理，外发链接和导出行为可追踪。</li>
+            <li><strong>可审可溯源：</strong>问题、数据来源、输出格式、产物版本和后续修改过程可留痕，便于企业复盘和合规管理。</li>
+            <li><strong>避免滥用：</strong>高成本能力集中调度，按场景选择模型，降低重复试错和无效消耗。</li>
+            <li><strong>沉淀资产：</strong>一次交付形成可持续修改的页面、报告、表格和 Skill，后续客户需求可在认可版本上迭代。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div id="slides" aria-label="公开方案幻灯片"></div>
+  </main>
+
+  <div class="pager" aria-label="页面翻页">
+    <button type="button" data-dir="-1" aria-label="上一页">‹</button>
+    <span id="pageLabel">1 / 25</span>
+    <button type="button" data-dir="1" aria-label="下一页">›</button>
+  </div>
+
+  <script>
+    const slideTitles = [
+      "方案封面",
+      "企业 AI 落地难点",
+      "对外能力全景",
+      "数据和产物统一管控",
+      "文档知识库",
+      "业务数据库接入",
+      "模型中心",
+      "主站使用",
+      "第三方系统接入",
+      "报表和静态页",
+      "员工 Codex 客户端",
+      "典型能力案例",
+      "案例：简历分析",
+      "案例：养老服务",
+      "案例：经营数据",
+      "案例：财务 IOA",
+      "案例：视频解析与 PPT 提取",
+      "Skill 持续复用",
+      "安全与权限边界",
+      "国内企业办公网络体验",
+      "试点推广路径",
+      "下一步"
+    ];
+
+    const slidesRoot = document.getElementById("slides");
+    const fragment = document.createDocumentFragment();
+    slideTitles.forEach((title, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const section = document.createElement("section");
+      section.className = "section slide-section";
+      section.id = `slide-${number}`;
+      section.innerHTML = `
+        <div class="slide-shell">
+          <div class="slide-meta">
+            <span>${number} / ${String(slideTitles.length).padStart(2, "0")}</span>
+            <span>${title}</span>
+          </div>
+          <img class="slide-image" src="/external-integrations/datamax-v3-public-enterprise-solution/slide-${number}.png" alt="DataMax V3 企业公开方案：${title}" loading="${index < 2 ? "eager" : "lazy"}">
+        </div>
+      `;
+      fragment.appendChild(section);
+    });
+    slidesRoot.appendChild(fragment);
+
+    const sections = Array.from(document.querySelectorAll(".section"));
+    const pageLabel = document.getElementById("pageLabel");
+    let activeIndex = 0;
+
+    function updatePager() {
+      const middle = window.scrollY + window.innerHeight / 2;
+      let nextIndex = 0;
+      sections.forEach((section, index) => {
+        if (section.offsetTop <= middle) nextIndex = index;
+      });
+      activeIndex = nextIndex;
+      pageLabel.textContent = `${activeIndex + 1} / ${sections.length}`;
+    }
+
+    function go(delta) {
+      const next = Math.max(0, Math.min(sections.length - 1, activeIndex + delta));
+      sections[next].scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    document.querySelectorAll(".pager button").forEach((button) => {
+      button.addEventListener("click", () => go(Number(button.dataset.dir)));
+    });
+
+    window.addEventListener("scroll", updatePager, { passive: true });
+    window.addEventListener("resize", updatePager);
+    window.addEventListener("keydown", (event) => {
+      if (["ArrowDown", "PageDown", " "].includes(event.key)) {
+        event.preventDefault();
+        go(1);
+      }
+      if (["ArrowUp", "PageUp"].includes(event.key)) {
+        event.preventDefault();
+        go(-1);
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        sections[0].scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        sections[sections.length - 1].scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+    updatePager();
+  </script>
+</body>
+</html>
