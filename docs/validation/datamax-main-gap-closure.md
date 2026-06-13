@@ -10698,6 +10698,38 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 HTML Artifact Static Page Patch Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move HTML artifact patch-to-static-page operation translation helpers out of `lib.rs` while keeping the original entrypoint validation flow.
+- Code change:
+  - added `crates/platform-api/src/html_artifact_static_page_patch_support.rs`;
+  - moved JSON pointer decoding, static page module selector resolution, nested patch-key normalization, current module object merge, string value checks, layout value checks, and patch-to-operation translation into that module;
+  - kept `static_page_operations_from_html_artifact_patch` in `lib.rs` as the original entrypoint wrapper and still runs `validate_static_page_operations` after translation;
+  - added module coverage for style direction, module title, data binding alias, layout field merge, remove-as-null, mobile order, unsupported operation, unsupported target, and invalid layout values.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api html_artifact_static_page_patch_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api html_artifact_patch --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api html_artifact_event_validation_allows_only_safe_interactions --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 HTML Artifact Event Support 8-Server Verification
 
 - 8-server post-sync verification:
