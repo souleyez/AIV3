@@ -14324,6 +14324,43 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Bot Message Parse Support Local Verification
+
+- Scope:
+  - moved `parse_external_bot_message_payload` from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/external_bot_message_parse_support.rs`;
+  - kept third-party message schema, aliases, error code `external_channel_event_payload_invalid`, accepted field/alias detail payload, artifact request validation, requested skill validation, AI Golf guard, and answer policy validation order unchanged;
+  - no public API URL, auth method, required request field, existing response field, database schema, provider configuration, or production data mapping changed.
+- Local head before commit: `55d6d4c2`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_bot_message_parse_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_bot_message_payload_accepts --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_requested_skills_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_artifact_request_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_answer_policy --lib`: passed, 7/7 tests;
+  - `cargo test -p platform-api external_aigolf_course_map_segmentation --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `npm run smoke:main-assistant-streaming -- --self-test`: not applicable, script does not support `--self-test` and requires a live base URL plus cookie/bearer for real streaming verification;
+  - `npm run smoke:external-channel-streaming-10way -- --self-test`: not applicable, script does not support `--self-test` and requires a live external bearer/context for real streaming verification.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during local verification;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Bot Message Payload Support 8-Server Verification
 
 - 8-server post-sync verification:

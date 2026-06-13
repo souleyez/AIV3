@@ -207,6 +207,7 @@ mod document_model_facing_support;
 mod document_view_support;
 mod external_answer_policy_support;
 mod external_artifact_request_support;
+mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
@@ -312,6 +313,7 @@ use document_model_facing_support::format_document_lifecycle_view;
 use document_view_support::*;
 use external_answer_policy_support::*;
 use external_artifact_request_support::*;
+use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
@@ -12272,96 +12274,6 @@ async fn infer_external_document_source_id(
             }),
         )),
     }
-}
-
-fn parse_external_bot_message_payload(
-    payload: Value,
-    connection: &ExternalChannelConnectionSummary,
-) -> std::result::Result<ExternalBotMessageView, ApiError> {
-    let normalized = normalize_external_bot_message_payload(payload, connection);
-    let mut message: ExternalBotMessageView =
-        serde_json::from_value(normalized.clone()).map_err(|error| {
-            ApiError::bad_request_with_details(
-                "external_channel_event_payload_invalid",
-                format!(
-                "external channel event JSON does not match the expected message schema: {error}"
-            ),
-                json!({
-                    "expected_platform": external_channel_platform_wire_value(&connection.platform),
-                    "expected_message_type": "text",
-                    "accepted_field_names": [
-                        "platform",
-                        "tenant_external_id",
-                        "bot_external_id",
-                        "conversation_external_id",
-                        "sender_external_id",
-                        "message_external_id",
-                        "message_type",
-                        "text",
-                        "default_prompt",
-                        "output_format",
-                        "render_mode",
-                        "artifact_type",
-                        "template",
-                        "mention_external_user_ids",
-                        "attachment_refs",
-                        "business_datasource_ids",
-                        "available_document_source_id",
-                        "available_document_external_ids",
-                        "dataset_external_id",
-                        "dataset_external_ids",
-                        "requested_skills",
-                        "idempotency_key",
-                        "received_at"
-                    ],
-                    "accepted_aliases": [
-                        "tenantExternalId",
-                        "botExternalId",
-                        "conversationExternalId",
-                        "senderExternalId",
-                        "messageExternalId",
-                        "messageType",
-                        "defaultPrompt",
-                        "systemPrompt",
-                        "outputFormat",
-                        "answerFormat",
-                        "replyFormat",
-                        "renderMode",
-                        "responseMode",
-                        "artifactType",
-                        "artifactTemplate",
-                        "templateRef",
-                        "mentionExternalUserIds",
-                        "attachmentRefs",
-                        "businessDatasourceIds",
-                        "businessDataSourceIds",
-                        "business_database_source_ids",
-                        "businessDatabaseSourceIds",
-                        "databaseSourceIds",
-                        "database_source_ids",
-                        "availableDocumentSourceId",
-                        "availableDocumentExternalIds",
-                        "availableDocumentExternalId",
-                        "documentExternalId",
-                        "documentExternalIds",
-                        "datasetExternalId",
-                        "availableDatasetExternalId",
-                        "datasetExternalIds",
-                        "availableDatasetExternalIds",
-                        "requestedSkills",
-                        "skillRefs",
-                        "skill_refs",
-                        "idempotencyKey",
-                        "receivedAt"
-                    ],
-                }),
-            )
-        })?;
-    validate_and_normalize_external_artifact_request(&mut message)?;
-    validate_and_normalize_external_requested_skills(&mut message.requested_skills)?;
-    validate_external_aigolf_requested_skills(&message)?;
-    validate_and_normalize_external_answer_policy(&mut message)?;
-    Ok(message)
 }
 
 async fn to_external_document_parse_detail_item(
