@@ -76,6 +76,18 @@ export default function V3LandingPage() {
             }}>
               公开接口文档
             </a>
+            <a href="/external-integrations/datamax-v3-enterprise-codex-solution.html" style={{
+              color: '#082033',
+              border: '1px solid rgba(8, 32, 51, 0.14)',
+              textDecoration: 'none',
+              fontWeight: 800,
+              borderRadius: 16,
+              padding: '14px 20px',
+              background: 'rgba(255, 250, 240, 0.92)',
+              boxShadow: '0 18px 46px rgba(7, 17, 31, 0.16)',
+            }}>
+              企业方案页
+            </a>
           </div>
         </div>
         <div style={{

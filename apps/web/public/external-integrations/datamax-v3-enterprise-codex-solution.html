@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="DataMax V3 企业智能体平台方案：企业规模化、安全化、可审计地使用世界顶尖智能体 Codex 的最佳实践。" />
+  <title>DataMax V3 企业智能体平台方案</title>
+  <style>
+    :root {
+      --ink: #07111f;
+      --navy: #07182a;
+      --blue: #0b66d8;
+      --cyan: #18a8c7;
+      --gold: #ffd466;
+      --mint: #56d39a;
+      --paper: #f7f3e8;
+      --line: rgba(7, 17, 31, 0.12);
+      --muted: #526174;
+      --white: #fffaf0;
+      --panel: #ffffff;
+      --shadow: 0 24px 80px rgba(7, 17, 31, 0.16);
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--paper);
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Aptos", "Segoe UI", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 10% 8%, rgba(24, 168, 199, 0.18), transparent 30rem),
+        linear-gradient(135deg, #07111f 0 39rem, #f4efe4 39.1rem 100%);
+      letter-spacing: 0;
+    }
+
+    a { color: inherit; }
+
+    .page {
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(19rem, 0.86fr) minmax(22rem, 1.14fr);
+      align-items: center;
+      gap: clamp(2rem, 5vw, 5rem);
+      width: min(1180px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: clamp(3rem, 8vh, 6rem) 0;
+      color: #f8fafc;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -10vw 0 38%;
+      height: 68%;
+      background: linear-gradient(135deg, transparent 0 49%, rgba(255, 250, 240, 0.98) 49.2% 100%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .hero-copy,
+    .hero-visual {
+      position: relative;
+      z-index: 1;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 0.55rem;
+      border: 1px solid rgba(248, 250, 252, 0.22);
+      border-radius: 999px;
+      padding: 0.48rem 0.82rem;
+      color: #d7e7ff;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 999px;
+      background: var(--mint);
+      box-shadow: 0 0 0 0.35rem rgba(86, 211, 154, 0.14);
+    }
+
+    h1 {
+      margin: 1.55rem 0 0;
+      max-width: 45rem;
+      font-size: clamp(3.2rem, 7.4vw, 6.7rem);
+      line-height: 0.9;
+      letter-spacing: -0.055em;
+    }
+
+    .hero-lead {
+      margin: 1.45rem 0 0;
+      max-width: 39rem;
+      color: #cbd5e1;
+      font-size: clamp(1.02rem, 1.6vw, 1.25rem);
+      line-height: 1.75;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      margin-top: 2rem;
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 3.15rem;
+      align-items: center;
+      justify-content: center;
+      border-radius: 1rem;
+      padding: 0.88rem 1.14rem;
+      text-decoration: none;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .button.primary {
+      color: #07111f;
+      background: var(--gold);
+      box-shadow: 0 18px 50px rgba(255, 212, 102, 0.26);
+    }
+
+    .button.ghost {
+      color: #e5edf8;
+      border: 1px solid rgba(229, 237, 248, 0.28);
+      background: rgba(7, 17, 31, 0.62);
+      box-shadow: 0 14px 38px rgba(7, 17, 31, 0.18);
+    }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.7rem;
+      margin-top: 2.1rem;
+      max-width: 38rem;
+    }
+
+    .metric {
+      border: 1px solid rgba(248, 250, 252, 0.16);
+      border-radius: 1.05rem;
+      padding: 0.9rem;
+      background: rgba(7, 17, 31, 0.82);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 16px 42px rgba(7, 17, 31, 0.22);
+    }
+
+    .metric strong {
+      display: block;
+      color: #fff;
+      font-size: 1rem;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 0.25rem;
+      color: #aebfd3;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .hero-visual {
+      align-self: stretch;
+      display: grid;
+      align-items: center;
+    }
+
+    .device {
+      position: relative;
+      border-radius: 2rem;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,212,102,0.78));
+      box-shadow: var(--shadow);
+      transform: rotate(-0.5deg);
+    }
+
+    .device img {
+      display: block;
+      width: 100%;
+      border-radius: 1.45rem;
+      background: #fff;
+    }
+
+    .device-card {
+      position: absolute;
+      left: -1.3rem;
+      bottom: -1.1rem;
+      width: min(19rem, 78vw);
+      border: 1px solid rgba(255,255,255,0.5);
+      border-radius: 1.25rem;
+      padding: 1rem;
+      color: #07111f;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: 0 18px 60px rgba(7,17,31,0.18);
+      backdrop-filter: blur(18px);
+    }
+
+    .device-card b {
+      display: block;
+      margin-bottom: 0.35rem;
+      font-size: 0.95rem;
+    }
+
+    .device-card span {
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+
+    .section {
+      width: min(1180px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: clamp(4rem, 9vw, 7rem) 0;
+    }
+
+    .section-title {
+      max-width: 48rem;
+      margin-bottom: 2rem;
+    }
+
+    .kicker {
+      color: #0b66d8;
+      font-size: 0.82rem;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 0.7rem 0 0;
+      font-size: clamp(2rem, 4vw, 4rem);
+      line-height: 1.04;
+      letter-spacing: -0.045em;
+    }
+
+    .section-title p {
+      margin: 1rem 0 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.75;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      padding: 1.25rem;
+      background: rgba(255, 255, 255, 0.76);
+      box-shadow: 0 16px 42px rgba(7, 17, 31, 0.08);
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 1.08rem;
+    }
+
+    .card p,
+    .card li {
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 0.95rem;
+    }
+
+    .card p { margin: 0.7rem 0 0; }
+    .card ul { margin: 0.8rem 0 0; padding-left: 1.1rem; }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 1.12fr;
+      gap: 1.2rem;
+      align-items: stretch;
+    }
+
+    .flow {
+      display: grid;
+      gap: 0.8rem;
+    }
+
+    .flow-node {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.9rem;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      padding: 1rem;
+      background: #fff;
+    }
+
+    .number {
+      display: grid;
+      place-items: center;
+      width: 2.1rem;
+      height: 2.1rem;
+      border-radius: 0.65rem;
+      color: #fff;
+      background: var(--ink);
+      font-weight: 900;
+    }
+
+    .flow-node b { display: block; }
+    .flow-node span {
+      display: block;
+      margin-top: 0.25rem;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 0.94rem;
+    }
+
+    .blue-band {
+      color: #f8fafc;
+      background:
+        radial-gradient(circle at 82% 18%, rgba(24, 168, 199, 0.35), transparent 24rem),
+        linear-gradient(135deg, #07111f, #09284a);
+    }
+
+    .blue-band .section-title p,
+    .blue-band .card p,
+    .blue-band .card li {
+      color: #b8c7d8;
+    }
+
+    .blue-band .card {
+      border-color: rgba(255, 255, 255, 0.12);
+      color: #f8fafc;
+      background: rgba(255, 255, 255, 0.075);
+      box-shadow: none;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-top: 1rem;
+    }
+
+    .pill {
+      border: 1px solid rgba(7, 17, 31, 0.12);
+      border-radius: 999px;
+      padding: 0.45rem 0.72rem;
+      color: #18304a;
+      background: #fff;
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
+    .blue-band .pill {
+      border-color: rgba(255,255,255,0.14);
+      color: #eaf4ff;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .timeline .card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .timeline .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 0.28rem;
+      background: linear-gradient(90deg, var(--blue), var(--cyan), var(--gold));
+    }
+
+    .cta {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) auto;
+      gap: 1.5rem;
+      align-items: center;
+      border-radius: 0.75rem;
+      padding: clamp(1.4rem, 4vw, 2.2rem);
+      color: #fff;
+      background: linear-gradient(135deg, #07111f, #0b66d8);
+      box-shadow: var(--shadow);
+    }
+
+    .cta h2 {
+      color: #fff;
+      font-size: clamp(1.9rem, 3vw, 3rem);
+    }
+
+    .cta p {
+      max-width: 46rem;
+      color: #d7e7ff;
+      line-height: 1.75;
+    }
+
+    footer {
+      padding: 2rem 0 3rem;
+      color: #607086;
+      text-align: center;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        background:
+          radial-gradient(circle at 8% 2%, rgba(24, 168, 199, 0.18), transparent 18rem),
+          linear-gradient(155deg, #07111f 0 42rem, #f4efe4 42.1rem 100%);
+      }
+
+      .hero {
+        grid-template-columns: 1fr;
+        min-height: auto;
+        padding-top: 4rem;
+      }
+
+      .hero::after {
+        inset: auto -28vw 18rem 12%;
+        height: 26rem;
+      }
+
+      .hero-visual {
+        margin-top: 1rem;
+      }
+
+      .grid,
+      .architecture,
+      .matrix,
+      .timeline,
+      .cta {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .hero,
+      .section {
+        width: min(100% - 28px, 1180px);
+      }
+
+      h1 {
+        font-size: clamp(3rem, 18vw, 4.4rem);
+      }
+
+      .hero-actions,
+      .metric-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .button {
+        width: 100%;
+      }
+
+      .metric-strip {
+        display: grid;
+      }
+
+      .device {
+        border-radius: 1.2rem;
+        padding: 0.5rem;
+      }
+
+      .device img {
+        border-radius: 0.9rem;
+      }
+
+      .device-card {
+        position: static;
+        width: 100%;
+        margin-top: 0.7rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero" aria-label="DataMax V3 企业智能体平台方案">
+      <div class="hero-copy">
+        <div class="eyebrow">DataMax V3</div>
+        <h1>企业规模化使用 Codex 的最佳实践</h1>
+        <p class="hero-lead">
+          DataMax V3 把世界顶尖智能体 Codex 纳入企业可控的数据、权限、任务、产物和审计体系，让企业在主站、第三方系统和本地行业客户端中安全使用强大的智能体执行能力。
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#architecture">查看方案架构</a>
+          <a class="button ghost" href="/external-integrations/third-party-integration-api.zh-CN.html">接口文档</a>
+        </div>
+        <div class="metric-strip" aria-label="方案核心指标">
+          <div class="metric"><strong>统一数据集</strong><span>文档、数据库、网页和产物沉淀到企业数据中心。</span></div>
+          <div class="metric"><strong>执行器阵列</strong><span>Mac mini、自有节点和客户本地 Codex 分担复杂任务。</span></div>
+          <div class="metric"><strong>可审计落地</strong><span>权限、临时授权、产物回传和日志脱敏全链路可控。</span></div>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="device">
+          <img src="/external-integrations/v3-enterprise-assistant-hero.png" alt="DataMax V3 企业智能体架构图" />
+          <div class="device-card">
+            <b>从个人智能体到企业执行网络</b>
+            <span>V3 负责数据和权限，Codex 节点负责复杂执行，确认后的产物回到企业数据中心。</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-title">
+        <div class="kicker">Enterprise Architecture</div>
+        <h2>一套平台，连接企业数据中心和 Codex 执行网络</h2>
+        <p>V3 不是单个聊天窗口，而是企业把顶尖智能体能力规模化落地的组织方式：统一入口、统一权限、统一数据集、统一任务调度、统一产物沉淀。</p>
+      </div>
+      <div class="architecture">
+        <div class="flow">
+          <div class="flow-node"><div class="number">1</div><div><b>企业入口</b><span>主站用户、第三方系统、行业版 Codex 客户端统一接入。</span></div></div>
+          <div class="flow-node"><div class="number">2</div><div><b>V3 数据中心</b><span>管理数据集、文档、数据库、模板、权限、会话和产物。</span></div></div>
+          <div class="flow-node"><div class="number">3</div><div><b>Codex 执行器中转站</b><span>识别复杂任务，按租户、能力、负载和数据位置分配节点。</span></div></div>
+          <div class="flow-node"><div class="number">4</div><div><b>执行结果回流</b><span>页面、报表、脚本、分析结论同步回 V3，形成可复用企业资产。</span></div></div>
+        </div>
+        <div class="card">
+          <h3>企业级最佳实践</h3>
+          <p>把 Codex 从个人工具升级为企业生产力系统，关键不是让模型看到更多数据，而是让数据、权限、任务、工具和产物在企业边界内有序流转。</p>
+          <div class="pill-list">
+            <span class="pill">数据集统一管理</span>
+            <span class="pill">复杂任务异步执行</span>
+            <span class="pill">本地和云端协同</span>
+            <span class="pill">产物自动归档</span>
+            <span class="pill">权限和审计内置</span>
+            <span class="pill">行业模板复用</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="blue-band">
+      <div class="section">
+        <div class="section-title">
+          <div class="kicker">Core Capabilities</div>
+          <h2>企业客户真正需要的不是“聊天”，而是可交付结果</h2>
+          <p>V3 把问答、文档理解、数据库分析、报表页面、第三方回调和 Codex 执行器合并成同一条业务链路。</p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>企业知识库</h3>
+            <p>文档、ZIP、PDF、Excel、PPT、图片和第三方资料统一解析入库，支持问答、证据引用和后台深度理解。</p>
+          </article>
+          <article class="card">
+            <h3>数据库接入</h3>
+            <p>业务库同步到数据集，先做字段画像、指标口径和聚合摘要，再支撑经营分析和可视化报表。</p>
+          </article>
+          <article class="card">
+            <h3>报表和静态页</h3>
+            <p>按企业数据生成 HTML、CSV、PPT、Markdown 和数据快照；客户认可的页面后续直接修改。</p>
+          </article>
+          <article class="card">
+            <h3>第三方集成</h3>
+            <p>第三方可传用户、会话、文档范围、数据集、业务库、输出格式和模板技能，结果可同步或异步回推。</p>
+          </article>
+          <article class="card">
+            <h3>Codex 执行阵列</h3>
+            <p>Mac mini、自有节点、云端节点和客户本地节点共同承接复杂任务、并发任务和长任务。</p>
+          </article>
+          <article class="card">
+            <h3>行业版客户端</h3>
+            <p>客户本地一键使用 Codex，直联自己的 V3 数据中心，本地处理文件和系统数据，确认后同步产物。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="kicker">Execution Network</div>
+        <h2>把单点 Codex 能力组织成企业执行网络</h2>
+        <p>个人使用 Codex 解决单点任务，V3 让企业按权限、负载、数据敏感度和行业场景调度 Codex 节点。</p>
+      </div>
+      <div class="matrix">
+        <article class="card">
+          <h3>Mac mini 自有阵列</h3>
+          <ul>
+            <li>每台机器安装独立 Codex 和节点代理。</li>
+            <li>按能力标签承接静态页、数据分析、文档理解和自动化任务。</li>
+            <li>空闲时分担 V3 主系统的重任务和后台处理压力。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>客户本地行业版 Codex</h3>
+          <ul>
+            <li>直联客户自己的 V3 数据中心。</li>
+            <li>本地处理敏感文件、表格和业务系统数据。</li>
+            <li>结果经客户确认后同步回数据集和产物中心。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>任务转派边界</h3>
+          <ul>
+            <li>普通短问答留在主系统快速完成。</li>
+            <li>报表、页面、脚本、深度分析和多步骤检查转给执行器。</li>
+            <li>写生产库、删除、覆盖发布必须确认。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>产物沉淀</h3>
+          <ul>
+            <li>页面、报表、脚本、分析结果统一回传 V3。</li>
+            <li>产物绑定数据集、会话、模板和权限。</li>
+            <li>后续需求默认在客户认可版本上继续修改。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="kicker">Security Model</div>
+        <h2>让智能体强大，但不越过企业边界</h2>
+        <p>V3 是权限中心和产物中心。Codex 节点只拿本次任务所需的最小上下文、临时授权和限定工具。</p>
+      </div>
+      <div class="grid">
+        <article class="card"><h3>数据不裸奔</h3><p>不把数据库明文密码、完整 dump、长期 token、私有对象路径传给执行节点。</p></article>
+        <article class="card"><h3>权限可追踪</h3><p>每次任务都有租户、用户、会话、数据集、业务库和产物归属记录。</p></article>
+        <article class="card"><h3>产物先验收</h3><p>执行器完成结果后回传 V3，由平台做越权检查、脱敏、归档和发布。</p></article>
+      </div>
+    </section>
+
+    <section class="blue-band">
+      <div class="section">
+        <div class="section-title">
+          <div class="kicker">Business Scenarios</div>
+          <h2>面向企业真实任务，而不是演示型问答</h2>
+          <p>V3 把数据接入、模型推理、智能体执行和结果交付组合到一个闭环里。</p>
+        </div>
+        <div class="grid">
+          <article class="card"><h3>经营分析</h3><p>门店、品牌、区域、租金、风险、取高机会和趋势页面。</p></article>
+          <article class="card"><h3>养老运营</h3><p>制度手册、应急流程、护理质量、现场处置和培训资料。</p></article>
+          <article class="card"><h3>招聘和训练</h3><p>简历维度统计、工程人员/外卖员训练、项目经验结构化。</p></article>
+          <article class="card"><h3>合同制度</h3><p>合同条款、制度流程、关键责任、风险点和对外答复。</p></article>
+          <article class="card"><h3>数据库报表</h3><p>业务库接入、字段理解、口径校验、可视化静态页和导出。</p></article>
+          <article class="card"><h3>第三方系统</h3><p>文档解析、聊天同步、模板报表、图片字段抽取和结果回推。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="kicker">Roadmap</div>
+        <h2>从单点试点到企业级执行网络</h2>
+        <p>优先用低风险闭环验证价值，再逐步扩展到节点阵列、行业客户端和客户私有化部署。</p>
+      </div>
+      <div class="timeline">
+        <article class="card"><h3>第一阶段</h3><p>V3 数据集、文档、数据库、报表和静态页闭环稳定运行。</p></article>
+        <article class="card"><h3>第二阶段</h3><p>Mac mini 节点池接入，承接静态页修改、报表生成和数据分析草案。</p></article>
+        <article class="card"><h3>第三阶段</h3><p>行业版 Codex 客户端上线，直联客户 V3 数据中心。</p></article>
+        <article class="card"><h3>第四阶段</h3><p>形成企业级智能体执行网络，支持私有节点、专属行业工具和空闲算力回流。</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="cta">
+        <div>
+          <div class="kicker" style="color:#ffd466">Next Step</div>
+          <h2>从一个数据集和一个真实业务场景开始</h2>
+          <p>建议企业客户先选一个高价值场景：经营分析、制度问答、数据库报表或第三方系统接入。V3 先打通数据集和产物闭环，再逐步接入 Codex 执行器阵列和行业版客户端。</p>
+        </div>
+        <a class="button primary" href="/">返回 V3 首页</a>
+      </div>
+    </section>
+  </main>
+  <footer>
+    DataMax V3 Enterprise Agent Platform · 企业规模化使用 Codex 的最佳实践
+  </footer>
+</body>
+</html>
