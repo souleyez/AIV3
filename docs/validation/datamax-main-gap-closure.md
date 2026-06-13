@@ -14650,3 +14650,39 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Chat Session Turn Manifest Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move chat session in-progress turn detection and pending turn manifest construction out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/chat_session_turn_manifest_support.rs`;
+  - moved `chat_session_has_in_progress_turn` and `build_pending_chat_session_turn_manifest` into the support module;
+  - kept pending/completed/failed turn detection, prompt trimming, `initial_prompt` preservation, `context_binding` defaulting, latest memory directory/output id mapping, `last_turn_kind`, `turn_started` event, pending provider state, and null completion semantics unchanged;
+  - added module coverage for in-progress detection, manifest preservation/defaulting, latest scope mapping, and pending last_turn event fields.
+- Local verification:
+  - `cargo fmt`: completed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api chat_session_turn_manifest_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api pending_chat_session_view --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api to_chat_message_view_parses_placeholder_runtime_manifest --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api to_chat_message_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `failed=false`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
