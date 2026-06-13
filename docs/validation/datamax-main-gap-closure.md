@@ -3617,6 +3617,41 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, or 120 server action was performed.
 
+## 2026-06-13 P5 Static Page Payload Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api`;
+  - move static-page payload accessors, preview-contract helpers, design fingerprinting, recursive JSON merge, and payload set/object helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_payload_support.rs`;
+  - moved preview-contract construction, stale detection, stale marking, contract status lookup, design fingerprinting, module/mobile-order extraction, payload field alias lookup, recursive JSON merge, object coercion, and payload set helpers into the new module;
+  - left async draft loading, owner visibility, API handlers, data snapshot building, and static-page operation orchestration in `lib.rs`;
+  - added module tests for stale preview contract behavior, mobile-order normalization, and recursive JSON merge semantics.
+- Local verification:
+  - `cargo fmt --check`: passed after running `cargo fmt`;
+  - `cargo test -p platform-api static_page_payload_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api static_page_design_edit_marks_confirmed_preview_and_final_render_stale --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page_supplied_operation_payload_refreshes_stale_preview_contract --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page_mobile_reorder_marks_confirmed_preview_stale --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page_render_guard --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api html_artifact_patch_translates_to_static_page_operations --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed with all required statuses observed: `queued`, `running`, `published`, `failed`, `skipped_existing_template`, `waiting_for_low_load`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, service restart, or 120 server action was performed.
+
 ## 2026-06-13 P5 Static Page Template Missing Evidence Support 8-Server Verification
 
 - 8-server post-sync verification:
