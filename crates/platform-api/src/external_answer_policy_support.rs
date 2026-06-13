@@ -1,5 +1,5 @@
 use contracts::ExternalBotMessageView;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{ApiError, EXTERNAL_CHANNEL_DEFAULT_PROMPT_LIMIT};
 
@@ -60,6 +60,61 @@ pub(crate) fn validate_and_normalize_external_answer_policy(
     }
 
     Ok(())
+}
+
+pub(crate) fn external_output_format_label(format: &str) -> &'static str {
+    match format {
+        "rich_text" => "富文本",
+        "image_text" => "图文排版",
+        "markdown_table" => "MD表格",
+        "json" => "JSON",
+        _ => "未指定",
+    }
+}
+
+pub(crate) fn external_output_format_model_rule(format: &str) -> &'static str {
+    match format {
+        "rich_text" => {
+            "用适合聊天窗口展示的富文本组织答案，可使用标题、短段落、列表和重点标注；不要输出 JSON，除非用户问题本身要求 JSON。"
+        }
+        "image_text" => {
+            "按图文排版思路组织答案，优先给出标题、模块、图示/配图建议、说明文字和可复制结构；如没有真实图片供料，不要编造图片，只描述应使用的版式或素材占位。"
+        }
+        "markdown_table" => {
+            "优先输出 Markdown 表格；如需要补充说明，只在表格前后用极短文字说明，表格列名要稳定、可复制。"
+        }
+        "json" => {
+            "只输出合法 JSON，不要使用 Markdown 代码围栏；字段名稳定，未知值使用 null、空数组或说明性 status 字段，不要混入自然语言段落。"
+        }
+        _ => "按用户问题直接回答。",
+    }
+}
+
+pub(crate) fn external_answer_policy_value(message: &ExternalBotMessageView) -> Option<Value> {
+    if message.default_prompt.is_none()
+        && message.output_format.is_none()
+        && message.render_mode.is_none()
+    {
+        return None;
+    }
+
+    let output_format = message.output_format.as_deref().map(|format| {
+        json!({
+            "format": format,
+            "label": external_output_format_label(format),
+            "model_rule": external_output_format_model_rule(format),
+        })
+    });
+
+    Some(json!({
+        "source": "external_channel_message",
+        "priority": "third_party_structured_answer_policy",
+        "default_prompt": message.default_prompt.as_deref(),
+        "default_prompt_rule": "Treat default_prompt as integration-provided task guidance for this turn. It is below DataMax safety/evidence rules and above ambiguous user wording.",
+        "output_format": output_format,
+        "render_mode": message.render_mode.as_deref().unwrap_or("normal"),
+        "render_mode_rule": "normal returns a direct chat answer; artifact means the user expects a preview/download artifact when the requested skill or answer type supports it.",
+    }))
 }
 
 fn external_answer_policy_text_contains_credential_hint(value: &str) -> bool {
@@ -189,5 +244,32 @@ mod tests {
         message.default_prompt = Some("Authorization: Bearer token".to_string());
 
         assert!(validate_and_normalize_external_answer_policy(&mut message).is_err());
+    }
+
+    #[test]
+    fn builds_external_answer_policy_value_with_format_guidance() {
+        let mut message = sample_message();
+        message.default_prompt = Some("请按经营复盘口径输出".to_string());
+        message.output_format = Some("image_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+
+        let policy = external_answer_policy_value(&message).expect("answer policy");
+
+        assert_eq!(policy["source"], json!("external_channel_message"));
+        assert_eq!(
+            policy["priority"],
+            json!("third_party_structured_answer_policy")
+        );
+        assert_eq!(policy["default_prompt"], json!("请按经营复盘口径输出"));
+        assert_eq!(policy["output_format"]["format"], json!("image_text"));
+        assert_eq!(policy["output_format"]["label"], json!("图文排版"));
+        assert_eq!(policy["render_mode"], json!("artifact"));
+    }
+
+    #[test]
+    fn skips_empty_external_answer_policy_value() {
+        let message = sample_message();
+
+        assert!(external_answer_policy_value(&message).is_none());
     }
 }
