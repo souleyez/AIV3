@@ -292,7 +292,6 @@ use assistant_run_structured_fact_context_support::*;
 use assistant_run_xinbai_report_link_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
-use chat_message_model_facing::*;
 use chat_session_manifest_view_support::*;
 use chat_session_model_facing::*;
 use chat_session_titles::*;
@@ -73243,36 +73242,6 @@ fn latest_assistant_message_from_views(messages: &[ChatMessageView]) -> Option<C
         .rev()
         .find(|message| message.role == ChatMessageRole::Assistant)
         .cloned()
-}
-
-fn to_chat_message_view(
-    message: ChatMessage,
-    llm_invocations: Vec<LlmInvocationView>,
-    tool_executions: Vec<ToolExecutionView>,
-) -> ChatMessageView {
-    let mut message_manifest_view = hydrate_chat_message_manifest_view(
-        &message.message_manifest,
-        &llm_invocations,
-        &tool_executions,
-    );
-    hydrate_assistant_turn_from_message_record(&message, &mut message_manifest_view);
-
-    let mut view = ChatMessageView {
-        id: message.id,
-        session_id: message.session_id,
-        role: message.role,
-        turn_index: message.turn_index,
-        content: message.content,
-        llm_invocations,
-        tool_executions,
-        message_manifest_view,
-        message_manifest: message.message_manifest,
-        model_facing: None,
-        created_at: message.created_at,
-    };
-    view.model_facing = derive_chat_message_model_facing_summary(&view);
-
-    view
 }
 
 async fn hydrate_chat_message_view(

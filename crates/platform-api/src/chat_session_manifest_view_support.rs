@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use contracts::{LlmInvocationView, ToolExecutionView};
+use contracts::{ChatMessageView, LlmInvocationView, ToolExecutionView};
 use domain_model::{
     ChatMessage, ChatMessageId, ChatMessageRole, DatasetId, DatasetOutputId, MemoryDirectoryId,
     ReportPlanId, RetrievalEvidenceId,
@@ -7,6 +7,7 @@ use domain_model::{
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::chat_message_model_facing::derive_chat_message_model_facing_summary;
 use crate::manifest_runtime_view_support::{
     parse_manifest_context_binding, parse_manifest_finish_reason, parse_manifest_provider_failure,
     parse_manifest_runtime,
@@ -1068,6 +1069,36 @@ pub(crate) fn hydrate_assistant_turn_from_message_metadata(
     turn.events = build_chat_turn_events(turn);
 }
 
+pub(crate) fn to_chat_message_view(
+    message: ChatMessage,
+    llm_invocations: Vec<LlmInvocationView>,
+    tool_executions: Vec<ToolExecutionView>,
+) -> ChatMessageView {
+    let mut message_manifest_view = hydrate_chat_message_manifest_view(
+        &message.message_manifest,
+        &llm_invocations,
+        &tool_executions,
+    );
+    hydrate_assistant_turn_from_message_record(&message, &mut message_manifest_view);
+
+    let mut view = ChatMessageView {
+        id: message.id,
+        session_id: message.session_id,
+        role: message.role,
+        turn_index: message.turn_index,
+        content: message.content,
+        llm_invocations,
+        tool_executions,
+        message_manifest_view,
+        message_manifest: message.message_manifest,
+        model_facing: None,
+        created_at: message.created_at,
+    };
+    view.model_facing = derive_chat_message_model_facing_summary(&view);
+
+    view
+}
+
 #[cfg(test)]
 mod tests {
     use domain_model::{
@@ -1511,6 +1542,61 @@ mod tests {
             turn.artifact_commit_status,
             contracts::ChatTurnArtifactCommitStatusView::NotReady
         );
+    }
+
+    #[test]
+    fn chat_message_view_hydrates_assistant_turn_and_model_facing() {
+        let dataset_id = DatasetId::new();
+        let now = fixed_time();
+        let message_id = ChatMessageId::new();
+        let session_id = ChatSessionId::new();
+        let message = ChatMessage {
+            id: message_id,
+            tenant_id: TenantId::new(),
+            session_id,
+            role: ChatMessageRole::Assistant,
+            turn_index: 2,
+            content: "已完成回答".to_string(),
+            message_manifest: json!({
+                "generator": "chat-session-worker",
+                "schema_version": "0.3.0",
+                "dataset_id": dataset_id,
+                "prompt": "继续回答",
+                "indexed_document_count": 2,
+                "refreshed_chunks": 8,
+                "prior_message_count": 1,
+                "context_binding": "creation_time",
+                "tool_trace": [],
+                "turn": {
+                    "turn_id": "turn-message-view",
+                    "status": "completed",
+                    "stream_mode": "buffered",
+                    "provider_status": "responded",
+                    "provider_responded_at": "2026-06-14T00:00:05Z",
+                    "tool_trace_count": 0,
+                    "started_at": "2026-06-14T00:00:00Z"
+                }
+            }),
+            created_at: now,
+        };
+
+        let view = to_chat_message_view(message, Vec::new(), Vec::new());
+
+        assert_eq!(view.id, message_id);
+        assert_eq!(view.session_id, session_id);
+        assert!(view.model_facing.is_some());
+        let turn = view
+            .message_manifest_view
+            .as_ref()
+            .and_then(|manifest| manifest.turn.as_ref())
+            .expect("turn should be hydrated");
+        assert_eq!(turn.assistant_message_id, Some(message_id));
+        assert_eq!(turn.assistant_message_persisted_at, Some(now));
+        assert_eq!(turn.completed_at, Some(now));
+        assert!(turn
+            .events
+            .iter()
+            .any(|event| event.kind == contracts::ChatTurnEventKindView::TurnCompleted));
     }
 
     #[test]
