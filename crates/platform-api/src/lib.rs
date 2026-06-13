@@ -160,13 +160,12 @@ use std::{
 #[cfg(test)]
 use storage::NewModelGatewayProfile;
 use storage::{
-    DocumentEnrichmentRun, LexicalRetrievalQuery, ModelGatewayProfile,
-    ModelGatewayProfileUsageSummary, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
-    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
-    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
-    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
-    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
-    NewWorkflowTask, PgStorage,
+    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssistantRun,
+    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
+    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
+    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
@@ -70550,50 +70549,6 @@ fn to_compare_documents_view(documents: Vec<DocumentDetailView>) -> CompareDocum
     };
     view.model_facing = Some(derive_compare_documents_model_facing_summary(&view));
     view
-}
-
-fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
-    let section_title_hints = document_chunk_section_title_hints(&chunk);
-    let mut metadata = Map::from_iter(chunk.metadata);
-    if !section_title_hints.is_empty() {
-        metadata.insert(
-            "section_title_hints".to_string(),
-            json!(section_title_hints),
-        );
-    }
-
-    DocumentChunkView {
-        id: chunk.id,
-        document_id: chunk.document_id,
-        chunk_index: chunk.chunk_index,
-        token_count: chunk.token_count,
-        state: contracts::DocumentChunkStateView::from_domain(chunk.state),
-        content: chunk.content,
-        metadata: Value::Object(metadata),
-        created_at: chunk.created_at,
-        updated_at: chunk.updated_at,
-    }
-}
-
-fn to_document_enrichment_run_view(run: DocumentEnrichmentRun) -> DocumentEnrichmentRunView {
-    DocumentEnrichmentRunView {
-        id: run.id.to_string(),
-        document_id: run.document_id,
-        enrichment_kind: run.enrichment_kind,
-        parse_version: run.parse_version,
-        input_fingerprint: run.input_fingerprint,
-        status: run.status,
-        priority: run.priority,
-        attempt_count: run.attempt_count,
-        max_attempts: run.max_attempts,
-        available_at: run.available_at,
-        started_at: run.started_at,
-        finished_at: run.finished_at,
-        error_message: run.error_message,
-        output_summary: run.output_summary,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-    }
 }
 
 fn extract_media_metadata_from_chunks(chunks: &[DocumentChunk]) -> Option<Value> {
