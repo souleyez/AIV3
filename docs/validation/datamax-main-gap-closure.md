@@ -3547,6 +3547,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Prompt Match Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move shared prompt substring/token/metric matching helper functions out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/prompt_match_support.rs`;
+  - moved `prompt_contains_any`, `ascii_prompt_contains_any`, `prompt_has_any`, `prompt_has_metric_terms`, and `contains_ascii_token` into the new module;
+  - kept all higher-level prompt intent classifiers in `lib.rs` for this slice;
+  - added module coverage for Chinese substring matching, case-sensitive substring behavior, ASCII token matching, case-insensitive substring matching, metric-token boundaries, and the existing `markdown`/`down` false-positive guard.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api prompt_match_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api database_aggregate_heuristics_do_not_read_markdown_as_down_metric --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_general_entity_scan_prompts_request_dataset_scan --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_selected_document_attendance_prompts_skip_generic_entity_scan --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_static_page_scope_expands_evidence_limit_and_actions --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Scope Selection Support 8-Server Verification
 
 - 8-server post-sync verification:

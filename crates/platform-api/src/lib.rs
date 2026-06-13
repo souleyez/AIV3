@@ -224,6 +224,7 @@ mod model_gateway_admin;
 mod model_gateway_runtime;
 mod model_gateway_status;
 mod not_found_errors;
+mod prompt_match_support;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
@@ -316,6 +317,7 @@ use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
 use not_found_errors::*;
+use prompt_match_support::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
@@ -61315,40 +61317,6 @@ fn assistant_run_database_aggregate_scan_limit() -> u32 {
         .clamp(1, ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX)
 }
 
-fn prompt_has_any(prompt: &str, needles: &[&str]) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    needles.iter().any(|needle| {
-        let needle = needle.to_ascii_lowercase();
-        !needle.is_empty() && lower.contains(&needle)
-    })
-}
-
-fn prompt_has_metric_terms(prompt: &str, needles: &[&str]) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    needles.iter().any(|needle| {
-        let needle = needle.to_ascii_lowercase();
-        if needle.is_empty() {
-            return false;
-        }
-        if needle
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        {
-            return contains_ascii_token(&lower, &needle);
-        }
-        lower.contains(&needle)
-    })
-}
-
-fn contains_ascii_token(haystack: &str, needle: &str) -> bool {
-    haystack.match_indices(needle).any(|(index, _)| {
-        let before = haystack[..index].chars().next_back();
-        let after = haystack[index + needle.len()..].chars().next();
-        !before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-            && !after.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    })
-}
-
 async fn build_assistant_run_document_parse_status_supply(
     state: &AppState,
     dataset: &Dataset,
@@ -73090,22 +73058,6 @@ fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
             .any(|hint| lower_prompt.contains(hint));
 
     has_resume_signal && has_company_signal && (has_coverage_signal || prompt.contains("公司名"))
-}
-
-fn prompt_contains_any(prompt: &str, hints: &[&str]) -> bool {
-    hints.iter().any(|hint| prompt.contains(hint))
-}
-
-fn ascii_prompt_contains_any(lower_prompt: &str, hints: &[&str]) -> bool {
-    hints.iter().any(|hint| {
-        if hint.contains(' ') {
-            lower_prompt.contains(hint)
-        } else {
-            lower_prompt
-                .split(|ch: char| !ch.is_ascii_alphanumeric())
-                .any(|token| token == *hint)
-        }
-    })
 }
 
 fn build_workflow_signal(
