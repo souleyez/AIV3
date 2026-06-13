@@ -14287,6 +14287,7 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+
 ## 2026-06-14 P5 External Document Metadata/Key Support 8-Server Verification
 
 - 8-server post-sync verification:
@@ -15376,4 +15377,39 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
   - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Answer Policy Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `3faf4d35` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `dcb1d1978` to `3faf4d350`;
+  - remote `git status --short --branch` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_answer_policy_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_answer_policy --lib`: passed, 7/7 matching tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_bot_message_payload_accepts_requested_skills_alias --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned status `ok`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Notes:
+  - the first remote script ended with a benign Windows `true\r` tail-line failure after all Rust tests had already passed; `cargo check` and deployment verification were rerun with single-command SSH and passed;
+  - the first immediate `curl` after restart hit the service startup window; a follow-up wait-loop returned healthy `/healthz` and `/readyz`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
