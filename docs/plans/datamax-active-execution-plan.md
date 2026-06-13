@@ -509,6 +509,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` resume project delivery 直答/HTML artifact helper 已拆到 `assistant_run_resume_project_delivery_support` 模块并补模块单测；逐份简历项目交付表、未识别项目交付段占位、artifact payload summary、safe generation policy、dataset data refs 去重/截断和 rapid HTML artifact 语义保持不变。本地 `cargo check`、resume project delivery/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_resume_project_delivery_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `d8b77086f`，`cargo check`、resume project delivery/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` resume profile 匹配条件、term 匹配和评分 helper 已拆到 `assistant_run_resume_profile_match_support` 模块并补模块单测；提示词优先字段、最长 term 优先、ASCII/company/中文 term 匹配、noise 过滤、匹配评分、匹配摘要和候选人筛选语义保持不变。本地 `cargo check`、resume profile match/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `assistant_run_resume_profile_match_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `3c10124fa`，`cargo check`、resume profile match/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
