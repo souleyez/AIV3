@@ -494,6 +494,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_scope_selection_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、scope selection/static-page scope/resume scan/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` prompt substring/token/metric matching helper 已拆到 `prompt_match_support` 模块并补模块单测；中文 substring、ASCII token、case-insensitive substring、metric token boundary 和 `markdown` 不误判 `down` 的语义保持不变。本地 `cargo check`、prompt match/database aggregate/entity scan/attendance/static-page scope Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `prompt_match_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、prompt match/database aggregate/entity scan/attendance/static-page scope Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` external answer policy 输出格式、evidence-state policy、default_prompt 强语气识别和 model-facing professional boundary helper 已拆到 `assistant_run_answer_policy_support` 模块并补模块单测；output_format object/string 解析、snake/camel policy path、强语气转专业边界和原 default_prompt 保留语义保持不变。本地 `cargo check`、answer policy/customer tone/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 

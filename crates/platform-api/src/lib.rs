@@ -171,6 +171,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod assistant_run_answer_policy_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_state_support;
@@ -245,6 +246,7 @@ mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod zip_ingest_support;
 
+use assistant_run_answer_policy_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_state_support::*;
@@ -41341,101 +41343,6 @@ fn assistant_run_request_external_answer_policy(
                 .and_then(|policy| policy.get("answer_policy"))
         })?;
     (!policy.is_null()).then_some(policy)
-}
-
-fn assistant_run_evidence_state_external_answer_policy(evidence_state: &Value) -> Option<&Value> {
-    evidence_state
-        .pointer("/selected_scope/answer_policy")
-        .or_else(|| evidence_state.pointer("/selectedScope/answerPolicy"))
-        .filter(|policy| !policy.is_null())
-}
-
-fn assistant_run_answer_policy_output_format(answer_policy: &Value) -> Option<&str> {
-    answer_policy
-        .get("output_format")
-        .and_then(|format| {
-            format
-                .get("format")
-                .and_then(Value::as_str)
-                .or_else(|| format.as_str())
-        })
-        .map(str::trim)
-        .filter(|format| !format.is_empty())
-}
-
-fn assistant_run_default_prompt_has_customer_tone_intensity(default_prompt: &str) -> bool {
-    let compact = default_prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    let lower_ascii = default_prompt.to_ascii_lowercase();
-    prompt_contains_any(
-        &compact,
-        &[
-            "凶一点",
-            "凶一些",
-            "态度凶",
-            "语气凶",
-            "口吻凶",
-            "骂人",
-            "怼客户",
-            "怼用户",
-            "阴阳怪气",
-            "嘲讽客户",
-            "讽刺客户",
-            "不客气一点",
-            "不客气些",
-            "粗鲁一点",
-            "辱骂",
-            "威胁客户",
-            "恐吓客户",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower_ascii,
-        &[
-            "be rude",
-            "rude tone",
-            "insult the customer",
-            "mock the customer",
-            "sarcastic to the customer",
-            "aggressive tone",
-            "threaten the customer",
-            "hostile tone",
-        ],
-    )
-}
-
-fn assistant_run_model_facing_answer_policy(answer_policy: &Value) -> Value {
-    let mut model_policy = answer_policy.clone();
-    let Some(default_prompt) = answer_policy
-        .get("default_prompt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return model_policy;
-    };
-    if !assistant_run_default_prompt_has_customer_tone_intensity(default_prompt) {
-        return model_policy;
-    }
-
-    let Some(object) = model_policy.as_object_mut() else {
-        return model_policy;
-    };
-    object.insert(
-        "default_prompt_rule".to_string(),
-        json!("default_prompt is integration-provided task guidance. If it includes a strong customer-facing tone request, preserve the underlying need for a more direct or firm stance, but express it as polite, professional, evidence-grounded, and actionable business wording."),
-    );
-    object.insert(
-        "default_prompt_tone_policy".to_string(),
-        json!({
-            "status": "customer_tone_translated",
-            "raw_default_prompt_supplied_to_model": true,
-            "reason": "strong_customer_tone_request",
-            "model_rule": "Treat the tone request as a request for firmer, clearer, more direct business expression. Do not turn it into insults, threats, mockery, or personal attacks.",
-        }),
-    );
-    model_policy
 }
 
 fn assistant_run_model_context_value(value: &Value) -> Value {
