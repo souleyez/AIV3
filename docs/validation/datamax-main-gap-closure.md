@@ -10698,6 +10698,39 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Zip Ingest Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public upload or third-party API contracts;
+  - move ZIP archive ingest entry naming, title extraction, skip policy, extension allowlist, content-type inference, and env default helpers out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/zip_ingest_support.rs`;
+  - moved `safe_zip_entry_output_name`, `zip_entry_title`, `zip_entry_should_skip`, `zip_entry_extension_supported`, `infer_zip_child_content_type`, `zip_ingest_env_u64`, and `zip_ingest_env_usize` into that module;
+  - kept existing call names available through `use zip_ingest_support::*`;
+  - added module coverage for numbered output names, path-segment sanitization, long-extension stripping, hidden/system directory skips, extension support, MIME mapping, and unset-env fallback behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api zip_ingest_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api zip_archive_expansion_extracts_supported_entries_safely --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api zip --lib`: passed, 6/6 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, upload route, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, ZIP entry body, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, upload ingestion execution, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 External Database Source Config Support 8-Server Verification
 
 - 8-server post-sync verification:

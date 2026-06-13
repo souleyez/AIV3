@@ -446,6 +446,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `external_document_object_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、外部文档解析 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 外部数据库源 connector kind、表名、连接串库名推断和连接串脱敏 helper 已拆到 `external_database_source_config_support` 模块并补模块单测；MySQL alias、unsupported kind 错误、表名去重/长度/控制字符、JDBC/MySQL URL 解析和 raw credential 脱敏语义保持不变。本地 `cargo check`、数据库源 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `external_database_source_config_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、数据库源 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` ZIP 归档入库 entry 安全命名、标题、跳过规则、扩展名白名单、content-type 推断和 env 默认值 helper 已拆到 `zip_ingest_support` 模块并补模块单测；ZIP 展开输出命名、忽略目录、支持文件类型、子文档 content-type 和 env fallback 语义保持不变。本地 `cargo check`、ZIP 展开 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 

@@ -227,6 +227,7 @@ mod text_normalization;
 mod workflow_context_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
+mod zip_ingest_support;
 
 use assistant_run_react_support::*;
 use assistant_run_sse_support::*;
@@ -315,6 +316,7 @@ pub use workflow_runtime_summary::{
     render_report_plan_runtime_summary, render_report_render_output_runtime_summary,
     render_workflow_runtime_pretty_summaries,
 };
+use zip_ingest_support::*;
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
 const RETRIEVAL_SEARCH_BACKEND_ENV: &str = "RETRIEVAL_SEARCH_BACKEND";
@@ -69995,131 +69997,6 @@ fn zip_child_output_root(
     Ok(base
         .join("_zip_extracted")
         .join(safe_external_path_segment(&document.id.to_string())))
-}
-
-fn safe_zip_entry_output_name(index: usize, entry_name: &str, extension: &str) -> String {
-    let stem = StdPath::new(entry_name)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(safe_external_path_segment)
-        .unwrap_or_else(|| "entry".to_string());
-    let safe_extension = if extension.len() <= 16 {
-        extension.to_string()
-    } else {
-        String::new()
-    };
-    format!("{:03}-{}{}", index + 1, stem, safe_extension)
-}
-
-fn zip_entry_title(entry_name: &str) -> String {
-    StdPath::new(entry_name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| entry_name.to_string())
-}
-
-fn zip_entry_should_skip(entry_name: &str) -> bool {
-    let lower = entry_name.to_ascii_lowercase();
-    lower.starts_with("__macosx/")
-        || lower.ends_with("/.ds_store")
-        || lower.contains("/.git/")
-        || lower.contains("/node_modules/")
-}
-
-fn zip_entry_extension_supported(extension: &str) -> bool {
-    matches!(
-        extension,
-        ".txt"
-            | ".md"
-            | ".csv"
-            | ".json"
-            | ".html"
-            | ".htm"
-            | ".xml"
-            | ".pdf"
-            | ".doc"
-            | ".docx"
-            | ".xlsx"
-            | ".xlsm"
-            | ".pptx"
-            | ".pptm"
-            | ".png"
-            | ".jpg"
-            | ".jpeg"
-            | ".webp"
-            | ".bmp"
-            | ".tif"
-            | ".tiff"
-            | ".gif"
-            | ".mp3"
-            | ".wav"
-            | ".m4a"
-            | ".aac"
-            | ".flac"
-            | ".ogg"
-            | ".opus"
-            | ".mp4"
-            | ".mov"
-            | ".mkv"
-            | ".webm"
-            | ".avi"
-            | ".mpeg"
-            | ".mpg"
-    )
-}
-
-fn infer_zip_child_content_type(extension: &str) -> &'static str {
-    match extension {
-        ".md" => "text/markdown",
-        ".csv" => "text/csv",
-        ".json" => "application/json",
-        ".html" | ".htm" => "text/html",
-        ".xml" => "application/xml",
-        ".pdf" => "application/pdf",
-        ".doc" => "application/msword",
-        ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".xlsx" | ".xlsm" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".pptx" | ".pptm" => {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        }
-        ".png" => "image/png",
-        ".jpg" | ".jpeg" => "image/jpeg",
-        ".webp" => "image/webp",
-        ".bmp" => "image/bmp",
-        ".tif" | ".tiff" => "image/tiff",
-        ".gif" => "image/gif",
-        ".mp3" => "audio/mpeg",
-        ".wav" => "audio/wav",
-        ".m4a" => "audio/mp4",
-        ".aac" => "audio/aac",
-        ".flac" => "audio/flac",
-        ".ogg" => "audio/ogg",
-        ".opus" => "audio/opus",
-        ".mp4" => "video/mp4",
-        ".mov" => "video/quicktime",
-        ".mkv" => "video/x-matroska",
-        ".webm" => "video/webm",
-        ".avi" => "video/x-msvideo",
-        ".mpeg" | ".mpg" => "video/mpeg",
-        _ => "text/plain",
-    }
-}
-
-fn zip_ingest_env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(default)
-}
-
-fn zip_ingest_env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(default)
 }
 
 async fn create_report_plan(
