@@ -453,6 +453,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 文档摘要 dataset id 去重和媒体 content-type 类型推断 helper 已拆到 `document_view_support` 模块并补模块单测；canonical dataset 优先、去重顺序、audio/video/unknown 推断语义保持不变。本地 `cargo check`、文档视图 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `document_view_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、文档视图 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 检索搜索 limit/backend 和静态页/HTML 产物列表 limit helper 已拆到 `retrieval_query_support` 模块并补模块单测；默认 limit、边界 clamp、legacy/postgres backend fallback、scan/candidate limit 和列表 limit 语义保持不变。本地 `cargo check`、检索 backend Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `retrieval_query_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、检索 backend Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
