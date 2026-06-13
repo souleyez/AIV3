@@ -449,6 +449,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` ZIP 归档入库 entry 安全命名、标题、跳过规则、扩展名白名单、content-type 推断和 env 默认值 helper 已拆到 `zip_ingest_support` 模块并补模块单测；ZIP 展开输出命名、忽略目录、支持文件类型、子文档 content-type 和 env fallback 语义保持不变。本地 `cargo check`、ZIP 展开 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `zip_ingest_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、ZIP 展开 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` workflow/dataset/chat/assistant/static-page/report/document 等路径参数 UUID 解析 helper 已拆到 `id_parse_support` 模块并补模块单测；各 ID wrapper、invalid UUID 错误码和错误文案保持不变。本地 `cargo check`、ID 解析 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `id_parse_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、ID 解析 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
