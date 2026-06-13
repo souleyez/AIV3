@@ -1,4 +1,4 @@
-use domain_model::RetrievalEvidence;
+use domain_model::{DocumentChunk, RetrievalEvidence};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -126,12 +126,59 @@ pub(crate) fn limited_lexical_term_weights(content: &str, limit: usize) -> BTree
     weights.into_iter().take(limit).collect()
 }
 
+pub(crate) fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
+    let mut parts = Vec::new();
+    for value in [
+        evidence.summary.trim(),
+        evidence.content_excerpt.trim(),
+        evidence.source_locator.trim(),
+        evidence.payload_filter_key.trim(),
+    ] {
+        if !value.is_empty() {
+            parts.push(value.to_string());
+        }
+    }
+    let mut section_title_hints = Vec::new();
+    for pointer in [
+        "/evidence/section_title_hints",
+        "/section_title_hints",
+        "/metadata/section_title_hints",
+    ] {
+        if let Some(value) = evidence.evidence_manifest.pointer(pointer) {
+            crate::collect_string_list(value, &mut section_title_hints);
+        }
+    }
+    parts.extend(section_title_hints);
+    parts.join("\n")
+}
+
+pub(crate) fn document_chunk_looks_like_toc_or_index(chunk: &DocumentChunk) -> bool {
+    let content = chunk.content.trim();
+    if content.is_empty() {
+        return false;
+    }
+    let dotted_leader_count = content.matches("....").count();
+    let has_page_tail = content
+        .split_whitespace()
+        .last()
+        .is_some_and(|tail| tail.chars().all(|ch| ch.is_ascii_digit()) && tail.len() <= 4);
+    let short_line_count = content
+        .lines()
+        .filter(|line| line.trim().len() <= 80)
+        .count();
+    let line_count = content.lines().count().max(1);
+    dotted_leader_count >= 1
+        || (content.contains("目录") && short_line_count >= line_count.saturating_sub(1))
+        || (has_page_tail && content.contains('…'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
     use domain_model::{
-        DatasetId, DocumentChunkId, DocumentId, RetrievalEvidenceId, TenantId, WorkflowExecutionId,
+        DatasetId, DocumentChunkId, DocumentChunkState, DocumentId, RetrievalEvidenceId, TenantId,
+        WorkflowExecutionId,
     };
     use serde_json::json;
 
@@ -170,6 +217,23 @@ mod tests {
                 },
             }),
             created_at: Utc::now() + Duration::seconds(recency_seconds),
+        }
+    }
+
+    fn chunk(content: &str) -> DocumentChunk {
+        let now = Utc::now();
+        DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunk_index: 0,
+            content: content.to_string(),
+            token_count: content.split_whitespace().count() as i32,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -248,5 +312,49 @@ mod tests {
         assert_eq!(weights.len(), 1);
         assert!(weights.contains_key("alpha"));
         assert!(limited_lexical_term_weights("alpha beta", 0).is_empty());
+    }
+
+    #[test]
+    fn retrieval_evidence_search_text_includes_manifest_section_hints() {
+        let mut evidence = evidence("ranked", 0.5, None, 0, 0);
+        evidence.summary = "summary".to_string();
+        evidence.content_excerpt = "excerpt".to_string();
+        evidence.source_locator = "source.pdf#chunk=1".to_string();
+        evidence.payload_filter_key = "dataset/demo".to_string();
+        evidence.evidence_manifest = json!({
+            "evidence": {
+                "section_title_hints": ["经营分析", "取高机会"]
+            },
+            "section_title_hints": ["经营分析"],
+            "metadata": {
+                "section_title_hints": ["低活跃风险"]
+            }
+        });
+
+        let search_text = retrieval_evidence_search_text(&evidence);
+
+        assert!(search_text.contains("summary"));
+        assert!(search_text.contains("excerpt"));
+        assert!(search_text.contains("source.pdf#chunk=1"));
+        assert!(search_text.contains("dataset/demo"));
+        assert!(search_text.contains("经营分析"));
+        assert!(search_text.contains("取高机会"));
+        assert!(search_text.contains("低活跃风险"));
+    }
+
+    #[test]
+    fn document_chunk_toc_detection_keeps_existing_signals() {
+        assert!(document_chunk_looks_like_toc_or_index(&chunk(
+            "一、总则 .... 1\n二、细则 .... 2"
+        )));
+        assert!(document_chunk_looks_like_toc_or_index(&chunk(
+            "目录\n一、总则\n二、细则"
+        )));
+        assert!(document_chunk_looks_like_toc_or_index(&chunk(
+            "经营分析 … 12"
+        )));
+        assert!(!document_chunk_looks_like_toc_or_index(&chunk(
+            "这里是一段普通正文，描述合同续签流程和审批动作。"
+        )));
     }
 }

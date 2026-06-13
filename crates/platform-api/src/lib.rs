@@ -75187,26 +75187,6 @@ fn assistant_run_section_title_hop_query_texts(
         .collect()
 }
 
-fn document_chunk_looks_like_toc_or_index(chunk: &DocumentChunk) -> bool {
-    let content = chunk.content.trim();
-    if content.is_empty() {
-        return false;
-    }
-    let dotted_leader_count = content.matches("....").count();
-    let has_page_tail = content
-        .split_whitespace()
-        .last()
-        .is_some_and(|tail| tail.chars().all(|ch| ch.is_ascii_digit()) && tail.len() <= 4);
-    let short_line_count = content
-        .lines()
-        .filter(|line| line.trim().len() <= 80)
-        .count();
-    let line_count = content.lines().count().max(1);
-    dotted_leader_count >= 1
-        || (content.contains("目录") && short_line_count >= line_count.saturating_sub(1))
-        || (has_page_tail && content.contains('…'))
-}
-
 fn lexical_original_query_signal_overlap_score(content: &str, prompt: &str) -> f64 {
     let lower_content = content.to_ascii_lowercase();
     let mut seen = BTreeSet::new();
@@ -75383,32 +75363,6 @@ fn prompt_requests_spreadsheet_contents(prompt: &str) -> bool {
         && (prompt.contains('表')
             || prompt.contains("报表")
             || prompt.to_ascii_lowercase().contains("sheet"))
-}
-
-fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
-    let mut parts = Vec::new();
-    for value in [
-        evidence.summary.trim(),
-        evidence.content_excerpt.trim(),
-        evidence.source_locator.trim(),
-        evidence.payload_filter_key.trim(),
-    ] {
-        if !value.is_empty() {
-            parts.push(value.to_string());
-        }
-    }
-    let mut section_title_hints = Vec::new();
-    for pointer in [
-        "/evidence/section_title_hints",
-        "/section_title_hints",
-        "/metadata/section_title_hints",
-    ] {
-        if let Some(value) = evidence.evidence_manifest.pointer(pointer) {
-            collect_string_list(value, &mut section_title_hints);
-        }
-    }
-    parts.extend(section_title_hints);
-    parts.join("\n")
 }
 
 fn select_retrieval_evidence_ids_for_prompt(

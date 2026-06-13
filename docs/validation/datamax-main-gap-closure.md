@@ -3514,6 +3514,39 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Retrieval Evidence Search Text Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move retrieval evidence search-text construction and document chunk TOC/index detection helpers out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/retrieval_evidence_ranking_support.rs`;
+  - moved `retrieval_evidence_search_text` and `document_chunk_looks_like_toc_or_index` into that module;
+  - kept `document_chunk_search_text`, section-title extraction, noun-term extraction, and CJK/domain tokenization in `lib.rs` to avoid expanding this slice;
+  - kept existing call names available through `use retrieval_evidence_ranking_support::*`;
+  - added module coverage for evidence summary/excerpt/source/payload/section-hint concatenation and existing TOC/index signals: dotted leaders, short Chinese table-of-contents lines, ellipsis page tails, and normal-body rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api retrieval_evidence_ranking_support --lib`: passed, 8/8 tests;
+  - `cargo test -p platform-api retrieval_ranking --lib`: passed, 10/10 tests;
+  - `cargo test -p platform-api document_chunk_search_text --lib`: passed, 2/2 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Retrieval Evidence Lexical Text Support Local Verification
 
 - Purpose:
