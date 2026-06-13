@@ -1,13 +1,14 @@
 use serde_json::Value;
 
 use crate::{
-    ascii_prompt_contains_any, is_ascii_connector_token_char, is_document_entity_noise,
-    is_valid_company_name, known_location_names, lexical_query_tokens,
-    normalize_document_entity_value, prompt_contains_any, prompt_requests_certificate_statistics,
-    prompt_requests_degree_statistics, prompt_requests_location_statistics,
-    prompt_requests_position_statistics, prompt_requests_project_statistics,
-    prompt_requests_school_statistics, prompt_requests_skill_statistics,
-    resume_profile_array_values,
+    ascii_prompt_contains_any, assistant_run_resume_profile_table, escape_markdown_table_cell,
+    is_ascii_connector_token_char, is_document_entity_noise, is_valid_company_name,
+    known_location_names, lexical_query_tokens, normalize_document_entity_value,
+    prompt_contains_any, prompt_requests_certificate_statistics, prompt_requests_degree_statistics,
+    prompt_requests_location_statistics, prompt_requests_position_statistics,
+    prompt_requests_project_statistics, prompt_requests_school_statistics,
+    prompt_requests_skill_statistics, resume_profile_array_string, resume_profile_array_values,
+    resume_profile_candidate_name, value_i64_string, value_string, value_u64_string,
 };
 
 #[derive(Clone, Debug)]
@@ -173,6 +174,88 @@ pub(crate) fn resume_profile_row_match_summary(
     } else {
         matches.into_iter().take(5).collect::<Vec<_>>().join("；")
     }
+}
+
+pub(crate) fn assistant_run_resume_profile_match_answer(
+    mut rows: Vec<Value>,
+    prompt: &str,
+) -> Option<String> {
+    let criteria = resume_profile_match_criteria(prompt, &rows);
+    if criteria.is_empty() {
+        return None;
+    }
+
+    rows.retain(|row| {
+        criteria
+            .iter()
+            .all(|criterion| resume_profile_row_matches_criterion(row, criterion))
+    });
+    rows.sort_by(|left, right| {
+        resume_profile_row_match_score(right, &criteria)
+            .cmp(&resume_profile_row_match_score(left, &criteria))
+            .then_with(|| {
+                right
+                    .get("latest_year")
+                    .and_then(Value::as_i64)
+                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
+            })
+            .then_with(|| {
+                right
+                    .get("skill_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
+            })
+            .then_with(|| {
+                resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+            })
+    });
+
+    let criteria_label = criteria
+        .iter()
+        .map(|criterion| format!("{}={}", criterion.field_label, criterion.term))
+        .collect::<Vec<_>>()
+        .join("，");
+    if rows.is_empty() {
+        return Some(format!(
+            "未在可见简历结构化扫描中找到匹配“{}”的候选人。",
+            escape_markdown_table_cell(&criteria_label)
+        ));
+    }
+
+    Some(assistant_run_resume_profile_table(
+        &rows,
+        &format!("匹配“{criteria_label}”的候选人简历表"),
+        &[
+            "候选人",
+            "匹配项",
+            "技能",
+            "项目",
+            "公司",
+            "岗位",
+            "地点",
+            "学历",
+            "证书",
+            "年龄",
+            "最近年份",
+            "文档",
+        ],
+        |row| {
+            vec![
+                resume_profile_candidate_name(row),
+                resume_profile_row_match_summary(row, &criteria),
+                resume_profile_array_string(row, "skill_names", 4),
+                resume_profile_array_string(row, "project_names", 3),
+                resume_profile_array_string(row, "company_names", 3),
+                resume_profile_array_string(row, "position_names", 2),
+                resume_profile_array_string(row, "location_names", 2),
+                resume_profile_array_string(row, "degree_names", 2),
+                resume_profile_array_string(row, "certificate_names", 2),
+                value_u64_string(row, "age"),
+                value_i64_string(row, "latest_year"),
+                value_string(row, "document_title"),
+            ]
+        },
+    ))
 }
 
 fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
@@ -385,5 +468,63 @@ mod tests {
             "广州冠晚网络有限公司深圳分部",
             "广州冠晚网络有限公司"
         ));
+    }
+
+    #[test]
+    fn match_answer_filters_sorts_and_keeps_original_table_shape() {
+        let rows = vec![
+            json!({
+                "candidate_name": "李四",
+                "skill_names": ["Rust"],
+                "project_names": ["知识库平台"],
+                "company_names": ["甲公司"],
+                "position_names": ["后端工程师"],
+                "location_names": ["上海"],
+                "degree_names": ["本科"],
+                "certificate_names": ["PMP"],
+                "age": 31,
+                "latest_year": 2025,
+                "skill_count": 2,
+                "document_title": "李四简历.pdf"
+            }),
+            json!({
+                "candidate_name": "张三",
+                "skill_names": ["Rust", "React"],
+                "project_names": ["知识库平台"],
+                "company_names": ["乙公司"],
+                "position_names": ["全栈工程师"],
+                "location_names": ["深圳"],
+                "degree_names": ["硕士"],
+                "certificate_names": [],
+                "age": 29,
+                "latest_year": 2024,
+                "skill_count": 4,
+                "document_title": "张三简历.pdf"
+            }),
+            json!({
+                "candidate_name": "王五",
+                "skill_names": ["Java"],
+                "project_names": ["ERP"],
+                "latest_year": 2026,
+                "skill_count": 6,
+                "document_title": "王五简历.pdf"
+            }),
+        ];
+
+        let answer = assistant_run_resume_profile_match_answer(rows, "谁有 Rust 技能")
+            .expect("match answer should be produced");
+
+        assert!(answer.contains("匹配“技能=Rust”的候选人简历表"));
+        assert!(answer.contains("| 候选人 | 匹配项 | 技能 | 项目 | 公司 | 岗位 | 地点 | 学历 | 证书 | 年龄 | 最近年份 | 文档 |"));
+        assert!(answer.contains("| 张三 | 技能:Rust | Rust；React | 知识库平台 | 乙公司 | 全栈工程师 | 深圳 | 硕士 | - | 29 | 2024 | 张三简历.pdf |"));
+        assert!(answer.contains("| 李四 | 技能:Rust | Rust | 知识库平台 | 甲公司 | 后端工程师 | 上海 | 本科 | PMP | 31 | 2025 | 李四简历.pdf |"));
+        assert!(!answer.contains("王五"));
+
+        let lisi_index = answer.find("| 李四 |").expect("李四 row should exist");
+        let zhang_index = answer.find("| 张三 |").expect("张三 row should exist");
+        assert!(
+            lisi_index < zhang_index,
+            "latest_year should sort before skill_count when match score ties"
+        );
     }
 }

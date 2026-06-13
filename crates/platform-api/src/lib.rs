@@ -42716,85 +42716,6 @@ fn assistant_run_resume_profile_direct_answer(
     }
 }
 
-fn assistant_run_resume_profile_match_answer(mut rows: Vec<Value>, prompt: &str) -> Option<String> {
-    let criteria = resume_profile_match_criteria(prompt, &rows);
-    if criteria.is_empty() {
-        return None;
-    }
-
-    rows.retain(|row| {
-        criteria
-            .iter()
-            .all(|criterion| resume_profile_row_matches_criterion(row, criterion))
-    });
-    rows.sort_by(|left, right| {
-        resume_profile_row_match_score(right, &criteria)
-            .cmp(&resume_profile_row_match_score(left, &criteria))
-            .then_with(|| {
-                right
-                    .get("latest_year")
-                    .and_then(Value::as_i64)
-                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
-            })
-            .then_with(|| {
-                right
-                    .get("skill_count")
-                    .and_then(Value::as_u64)
-                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
-            })
-            .then_with(|| {
-                resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
-            })
-    });
-
-    let criteria_label = criteria
-        .iter()
-        .map(|criterion| format!("{}={}", criterion.field_label, criterion.term))
-        .collect::<Vec<_>>()
-        .join("，");
-    if rows.is_empty() {
-        return Some(format!(
-            "未在可见简历结构化扫描中找到匹配“{}”的候选人。",
-            escape_markdown_table_cell(&criteria_label)
-        ));
-    }
-
-    Some(assistant_run_resume_profile_table(
-        &rows,
-        &format!("匹配“{criteria_label}”的候选人简历表"),
-        &[
-            "候选人",
-            "匹配项",
-            "技能",
-            "项目",
-            "公司",
-            "岗位",
-            "地点",
-            "学历",
-            "证书",
-            "年龄",
-            "最近年份",
-            "文档",
-        ],
-        |row| {
-            vec![
-                resume_profile_candidate_name(row),
-                resume_profile_row_match_summary(row, &criteria),
-                resume_profile_array_string(row, "skill_names", 4),
-                resume_profile_array_string(row, "project_names", 3),
-                resume_profile_array_string(row, "company_names", 3),
-                resume_profile_array_string(row, "position_names", 2),
-                resume_profile_array_string(row, "location_names", 2),
-                resume_profile_array_string(row, "degree_names", 2),
-                resume_profile_array_string(row, "certificate_names", 2),
-                value_u64_string(row, "age"),
-                value_i64_string(row, "latest_year"),
-                value_string(row, "document_title"),
-            ]
-        },
-    ))
-}
-
 fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
     if prompt_requests_resume_company_entity_scan(prompt) {
         return true;
@@ -43669,7 +43590,7 @@ fn assistant_run_answer_quality_synthetic_response(output_text: String) -> LlmRe
     }
 }
 
-fn escape_markdown_table_cell(value: &str) -> String {
+pub(crate) fn escape_markdown_table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
 
