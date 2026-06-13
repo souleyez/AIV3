@@ -3719,6 +3719,43 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, service restart, or 120 server action was performed.
 
+## 2026-06-13 P5 Assistant Run Xinbai Report Link Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `fd7b220c` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `be27334d5` to `fd7b220cc`;
+  - remote `git rev-parse --short HEAD` returned `fd7b220cc` and `git status -s` returned no rows;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_xinbai_report_link_support --lib`: passed, 2/2 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api xinbai_published_report_link_answer --lib`: passed, 2/2 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_public_response_enriches_xinbai_report_card_exports --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_sse_completed_surfaces_xinbai_report_exports --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_answer_quality_autofix_collects_missing_report_link_case --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - first remote Web build invocation was rejected because a Windows heredoc line ending was parsed as `build\r`; rerunning Web build as a single remote command passed;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed.
+- 8-server deploy:
+  - restarted `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`;
+  - all five services reported `active`;
+  - `curl -fsS http://127.0.0.1:3000/healthz` returned `status=ok`;
+  - `curl -fsS http://127.0.0.1:3000/readyz` returned `status=ready`.
+- 8-server smoke after restart:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed and confirmed title `新世界百货经营管理月报表`, single report surface, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed with all required statuses observed: `queued`, `running`, `published`, `failed`, `skipped_existing_template`, `waiting_for_low_load`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, or 120 server action was performed.
+
 ## 2026-06-13 P5 Static Page Template Missing Evidence Support 8-Server Verification
 
 - 8-server post-sync verification:
