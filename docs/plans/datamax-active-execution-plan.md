@@ -519,6 +519,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` static-page template reference helper 已拆到 `static_page_template_reference_support` 模块并补模块单测；模板 ID 解析、intent 推断、enabled/paused 模板校验、safe design reference JSON、guardrails/forbidden outputs 和后续模板适配调用语义保持不变。本地 `cargo check`、static-page template reference/static-page artifact Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `static_page_template_reference_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `48f409b86`，`cargo check`、static-page template reference/static-page artifact Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` static-page document-template reference/evidence summary helper 已并入 `static_page_template_reference_support` 模块并补模块单测；第三方上传/选择模板只作为格式/结构/字段参考、模板不扩展事实权限、evidence summary、临时合同面积/客流 supplemental metrics 和后续静态页模板调用语义保持不变。本地 `cargo check`、static-page template reference/document template/data snapshot/static-page artifact Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `static_page_template_reference_support` document-template helper 拆分已提交并同步 8 服务器；远端 HEAD `5b25d1405`，`cargo check`、static-page template reference/document template/data snapshot/static-page artifact Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
