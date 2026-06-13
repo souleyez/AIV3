@@ -226,6 +226,7 @@ mod report_render_model_facing;
 mod report_render_output_asset;
 mod request_scope_headers;
 mod resource_access;
+mod retrieval_evidence_ranking_support;
 mod retrieval_query_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
@@ -318,6 +319,7 @@ use report_render_model_facing::*;
 use report_render_output_asset::*;
 use request_scope_headers::*;
 use resource_access::*;
+use retrieval_evidence_ranking_support::*;
 use retrieval_query_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
@@ -76740,22 +76742,6 @@ fn static_page_operations_from_html_artifact_patch(
     )?)
 }
 
-fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {
-    evidences.sort_by(|left, right| {
-        right
-            .recall_score
-            .partial_cmp(&left.recall_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                rank_hint_from_evidence_manifest(left)
-                    .unwrap_or(usize::MAX)
-                    .cmp(&rank_hint_from_evidence_manifest(right).unwrap_or(usize::MAX))
-            })
-            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
-            .then_with(|| right.created_at.cmp(&left.created_at))
-    });
-}
-
 fn lexical_query_score(
     evidence: &RetrievalEvidence,
     query_weights: &BTreeMap<String, f64>,
@@ -76976,15 +76962,6 @@ fn evidence_term_weights_from_manifest(evidence: &RetrievalEvidence) -> BTreeMap
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default()
-}
-
-fn rank_hint_from_evidence_manifest(evidence: &RetrievalEvidence) -> Option<usize> {
-    evidence
-        .evidence_manifest
-        .get("recall")
-        .and_then(|value| value.get("rank_hint"))
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
 }
 
 fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
