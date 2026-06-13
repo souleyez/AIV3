@@ -204,6 +204,7 @@ pub mod external_wecom;
 pub mod fact_index;
 mod html_artifact_collection_support;
 mod html_artifact_download_support;
+mod html_artifact_summary_support;
 mod id_parse_support;
 mod lifecycle_updates;
 mod memory_directory_scope;
@@ -287,6 +288,7 @@ use external_observability::{
 use external_system_user::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
+use html_artifact_summary_support::*;
 use id_parse_support::*;
 use lifecycle_updates::*;
 use memory_directory_scope::*;
@@ -76337,52 +76339,6 @@ fn code_review_summary_payload_signature(payload: &Value) -> String {
     format!("{summary}|{first_finding}")
 }
 
-fn html_artifact_safe_summary_text(value: &str, max_chars: usize) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let lowered = trimmed.to_ascii_lowercase();
-    let unsafe_patterns = [
-        "<script",
-        "<iframe",
-        "<object",
-        "<embed",
-        "<link",
-        "<meta",
-        "<form",
-        "javascript:",
-        "data:text/html",
-        "srcdoc",
-        "src=",
-        "href=",
-        "http://",
-        "https://",
-        "api_key",
-        "api-key",
-        "access_token",
-        "access-token",
-        "authorization",
-        "bearer ",
-        "cookie",
-        "secret",
-        "onerror=",
-        "onclick=",
-        "onload=",
-    ];
-    if unsafe_patterns
-        .iter()
-        .any(|pattern| lowered.contains(pattern))
-    {
-        return "[已移除敏感或不安全内容]".to_string();
-    }
-    let mut output = trimmed.chars().take(max_chars).collect::<String>();
-    if trimmed.chars().count() > max_chars {
-        output.push('…');
-    }
-    output
-}
-
 async fn load_html_artifacts_from_run_events(
     state: &AppState,
     run_id: AssistantRunId,
@@ -76469,13 +76425,6 @@ async fn persist_html_artifacts_for_report_plan(
             .map_err(ApiError::from_storage)?;
     }
     Ok(())
-}
-
-fn html_artifact_serialized_variant<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 async fn load_html_artifact_from_record_for_run(
@@ -76815,35 +76764,6 @@ async fn apply_html_artifact_action_intent_to_product(
     })))
 }
 
-fn html_artifact_action_intent_prompt(payload: &Value) -> std::result::Result<String, ApiError> {
-    let object = payload.as_object().ok_or_else(|| {
-        ApiError::bad_request(
-            "html_artifact_invalid_action_intent",
-            "action_intent payload must be an object".to_string(),
-        )
-    })?;
-    for key in ["prompt", "instruction", "message", "text", "note"] {
-        if let Some(prompt) = object
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            if prompt.chars().count() > 2000 {
-                return Err(ApiError::bad_request(
-                    "html_artifact_invalid_action_intent",
-                    "action_intent prompt is too long".to_string(),
-                ));
-            }
-            return Ok(prompt.to_string());
-        }
-    }
-    Err(ApiError::bad_request(
-        "html_artifact_invalid_action_intent",
-        "action_intent payload requires prompt, instruction, message, text, or note".to_string(),
-    ))
-}
-
 fn static_page_operations_from_html_artifact_patch(
     draft_payload: &Value,
     payload: &Value,
@@ -76858,20 +76778,6 @@ fn static_page_operations_from_html_artifact_patch(
         }
     }
     validate_static_page_operations(translated)
-}
-
-fn html_artifact_patch_operations(payload: &Value) -> std::result::Result<&[Value], ApiError> {
-    payload
-        .as_object()
-        .and_then(|object| object.get("operations").or_else(|| object.get("patch")))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "html_artifact_invalid_patch",
-                "patch payload.operations must be an array".to_string(),
-            )
-        })
 }
 
 fn static_page_operation_from_html_patch_operation(
@@ -119273,20 +119179,6 @@ retrieve_evidence:
         let error = static_page_operations_from_html_artifact_patch(&payload, &patch_payload)
             .expect_err("unsupported paths must be rejected");
         assert_eq!(error.payload.code, "html_artifact_patch_target_unsupported");
-    }
-
-    #[test]
-    fn html_artifact_action_intent_prompt_requires_real_instruction() {
-        let prompt = html_artifact_action_intent_prompt(&json!({
-            "action": "apply_static_page_intent",
-            "prompt": "把趋势模块改成折线图"
-        }))
-        .expect("prompt should be accepted");
-        assert_eq!(prompt, "把趋势模块改成折线图");
-
-        let error = html_artifact_action_intent_prompt(&json!({"action": "submit"}))
-            .expect_err("empty submit actions cannot mutate product state");
-        assert_eq!(error.payload.code, "html_artifact_invalid_action_intent");
     }
 
     #[test]
