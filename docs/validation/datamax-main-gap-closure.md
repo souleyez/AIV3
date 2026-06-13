@@ -3549,6 +3549,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Workflow Task View Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow task view mapping, logical queue/key inference, remote polling metadata extraction, and queue stats aggregation out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/workflow_task_view_support.rs`;
+  - moved `to_workflow_task_view`, workflow task logical queue/key helpers, static-page publish detection, remote task id/next poll extraction, queue/task-key stats accumulators, retrying detection, duration calculation, percentile aggregation, and earliest available-time aggregation into the new module;
+  - kept existing call names available through `use workflow_task_view_support::*`;
+  - added module tests for explicit logical field priority, remote poll metadata, retrying counts, and duration percentile aggregation.
+- Local verification:
+  - first targeted test attempt hit a local Windows linker error because `target/debug/deps/platform_api-b5800be81b246f66.pdb` was corrupted; only that rebuildable PDB under the repo `target/` directory was removed, then the same test set was rerun;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api workflow_task_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api workflow_task_view_exposes_logical_remote_poll_state --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api workflow_task_queue_stats_group_logical_queues_and_retrying_tasks --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Provider Retry Support 8-Server Verification
 
 - Purpose:
