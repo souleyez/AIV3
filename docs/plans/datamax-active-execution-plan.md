@@ -433,6 +433,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 第三方静态页 progress SSE payload/event helper 已并入 `external_channel_sse_support` 模块并补模块单测；运行态 public_url 提升为 published、公开 envelope、event name、sequence、artifact_links、dedupe key 和 persisted 包装调用语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `external_channel_sse_support` static-page progress SSE helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 第三方非持久化 completion SSE 测试 helper 已并入 `external_channel_sse_support` 模块并补模块单测；queued/completed/done 事件、delta 输出、sequence 和客户可见文本语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `external_channel_sse_support` non-persisted completion SSE helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
