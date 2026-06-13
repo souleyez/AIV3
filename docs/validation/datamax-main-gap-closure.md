@@ -3657,6 +3657,39 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Static Page Data Snapshot Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move static-page data snapshot metadata and validation helpers out of `lib.rs` into a focused module next to report snapshot support.
+- Code change:
+  - added `crates/platform-api/src/static_page_data_snapshot_support.rs`;
+  - moved `static_page_data_snapshot_version`, `static_page_data_snapshot_updated_at`, timestamp hint collection, validation summary construction, and unit hint collection into that module;
+  - changed `static_page_artifact_string` from private to `pub(crate)` so the moved helper can reuse the exact existing string extraction behavior;
+  - kept existing call names available through `use static_page_data_snapshot_support::*`;
+  - added module coverage for stable snapshot version generation, latest timestamp selection, validation status, module/sample/detail counts, and unit hint collection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_data_snapshot_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api static_page_data_snapshot --lib`: passed, 15/15 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 External Channel Static Page Continue Polling 8-Server Verification
 
 - 8-server post-sync verification:
