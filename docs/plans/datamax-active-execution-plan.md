@@ -500,6 +500,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_model_context_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、model context/large document scope/answer policy/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run model supplied-items bucket/budget helper 已拆到 `assistant_run_model_supply_budget_support` 模块并补模块单测；不同供料类型独立 quota、原始顺序保持、unknown type 归入 other、included/omitted budget 字段和 model_rule 语义保持不变。本地 `cargo check`、supply budget/model context/web search/large document scope/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_model_supply_budget_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、supply budget/model context/web search/large document scope/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run model supplied-item formatter helper 已拆到 `assistant_run_model_supply_item_support` 模块并补模块单测；retrieval evidence 安全 manifest 摘要、search evidence contract/model_rule、database aggregate 默认 guidance/rows 压缩和 conversation memory 摘要/ref 截断语义保持不变。本地 `cargo check`、supply item/model context/web search/large document scope/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
