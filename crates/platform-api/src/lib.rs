@@ -21,6 +21,8 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
+#[cfg(test)]
+use contracts::HtmlArtifactTemplateIdView;
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
     AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
@@ -64,18 +66,16 @@ use contracts::{
     ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
     ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
     ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
-    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
-    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
-    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
-    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
-    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
-    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
-    ModelGatewayRuntimeStatusView, ModelGatewayStatusView, PlanReportRequest,
-    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
+    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
+    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
+    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
+    ModelGatewayProviderStatusView, ModelGatewayRuntimeStatusView, ModelGatewayStatusView,
+    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
@@ -180,6 +180,7 @@ mod assistant_run_model_supply_budget_support;
 mod assistant_run_model_supply_item_support;
 mod assistant_run_react_support;
 mod assistant_run_resume_profile_support;
+mod assistant_run_resume_project_delivery_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
 mod assistant_run_sse_support;
@@ -260,6 +261,7 @@ use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
 use assistant_run_react_support::*;
 use assistant_run_resume_profile_support::*;
+use assistant_run_resume_project_delivery_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
 use assistant_run_sse_support::*;
@@ -42948,342 +42950,6 @@ fn resume_profile_row_match_summary(
     } else {
         matches.into_iter().take(5).collect::<Vec<_>>().join("；")
     }
-}
-
-fn assistant_run_resume_project_delivery_direct_answer(
-    scans: &[Value],
-    profile_rows: &[Value],
-) -> Option<String> {
-    let delivery_rows = scans
-        .iter()
-        .flat_map(|scan| {
-            scan.get("resume_project_delivery_rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    if delivery_rows.is_empty() && profile_rows.is_empty() {
-        return None;
-    }
-
-    let scanned_document_count = scans
-        .iter()
-        .filter_map(|scan| scan.get("scanned_document_count").and_then(Value::as_u64))
-        .max()
-        .unwrap_or(profile_rows.len() as u64);
-    let mut rows_by_document: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for row in delivery_rows {
-        let document_id = value_string(&row, "document_id");
-        rows_by_document.entry(document_id).or_default().push(row);
-    }
-
-    let mut lines = vec![
-        format!(
-            "已按可见简历逐份扫描项目交付经历：覆盖 {scanned_document_count} 份文档，识别到 {} 条项目交付记录。",
-            rows_by_document.values().map(Vec::len).sum::<usize>()
-        ),
-        "未识别到项目交付段的候选人会单独标记，避免只展示检索命中的个别人。".to_string(),
-        String::new(),
-        "| 候选人 | 项目/状态 | 交付职责或成果 | 技术栈 | 来源文档 |".to_string(),
-        "| --- | --- | --- | --- | --- |".to_string(),
-    ];
-
-    let mut emitted_documents = BTreeSet::new();
-    for profile in profile_rows {
-        let document_id = value_string(profile, "document_id");
-        if !document_id.is_empty() && document_id != "-" {
-            emitted_documents.insert(document_id.clone());
-        }
-        let candidate_name = resume_profile_candidate_name(profile);
-        let document_title = value_string(profile, "document_title");
-        if let Some(rows) = rows_by_document.get(&document_id) {
-            for row in rows {
-                lines.push(format!(
-                    "| {} | {} | {} | {} | {} |",
-                    escape_markdown_table_cell(&candidate_name),
-                    escape_markdown_table_cell(&value_string(row, "project_name")),
-                    escape_markdown_table_cell(&value_string(row, "delivery_summary")),
-                    escape_markdown_table_cell(&resume_profile_array_string(row, "tech_stack", 6)),
-                    escape_markdown_table_cell(&document_title),
-                ));
-            }
-        } else {
-            lines.push(format!(
-                "| {} | 未识别到项目交付段 | 当前轻量扫描未抽到明确项目名称或职责句 | - | {} |",
-                escape_markdown_table_cell(&candidate_name),
-                escape_markdown_table_cell(&document_title),
-            ));
-        }
-    }
-
-    for (document_id, rows) in rows_by_document {
-        if emitted_documents.contains(&document_id) {
-            continue;
-        }
-        for row in rows {
-            lines.push(format!(
-                "| {} | {} | {} | {} | {} |",
-                escape_markdown_table_cell(&value_string(&row, "candidate_name")),
-                escape_markdown_table_cell(&value_string(&row, "project_name")),
-                escape_markdown_table_cell(&value_string(&row, "delivery_summary")),
-                escape_markdown_table_cell(&resume_profile_array_string(&row, "tech_stack", 6)),
-                escape_markdown_table_cell(&value_string(&row, "document_title")),
-            ));
-        }
-    }
-
-    Some(lines.join("\n"))
-}
-
-fn assistant_run_resume_project_delivery_controlled_answer(
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-) -> Option<String> {
-    if !prompt_requests_resume_project_delivery_listing(&request.prompt) {
-        return None;
-    }
-    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
-        evidence_state,
-        &request.prompt,
-    );
-    if scans.is_empty() {
-        return None;
-    }
-    let profile_rows = scans
-        .iter()
-        .flat_map(|scan| {
-            scan.get("resume_profile_rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    assistant_run_resume_project_delivery_direct_answer(&scans, &profile_rows)
-}
-
-fn assistant_run_resume_project_delivery_html_artifact(
-    run_id: AssistantRunId,
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-    created_at: DateTime<Utc>,
-) -> Option<HtmlArtifactManifestView> {
-    if !prompt_requests_resume_project_delivery_listing(&request.prompt) {
-        return None;
-    }
-    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
-        evidence_state,
-        &request.prompt,
-    );
-    if scans.is_empty() {
-        return None;
-    }
-    let payload = assistant_run_resume_project_delivery_artifact_payload(&scans)?;
-    let scanned_document_count = payload
-        .get("summary")
-        .and_then(|summary| summary.get("scannedDocumentCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let rendered_row_count = payload
-        .get("summary")
-        .and_then(|summary| summary.get("renderedRowCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default() as usize;
-    if scanned_document_count < ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_DOCUMENTS
-        && rendered_row_count < ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_ROWS
-    {
-        return None;
-    }
-
-    Some(HtmlArtifactManifestView {
-        kind: "html_artifact".to_string(),
-        version: 1,
-        id: format!("html-artifact-resume-project-delivery-{run_id}"),
-        title: "简历项目交付明细表".to_string(),
-        source_type: HtmlArtifactSourceTypeView::Report,
-        template_id: HtmlArtifactTemplateIdView::ResumeProjectDeliveryMatrix,
-        owner_scope: HtmlArtifactOwnerScopeView {
-            scope_type: "assistant_run".to_string(),
-            id: run_id.to_string(),
-        },
-        data_refs: assistant_run_resume_project_delivery_data_refs(&scans),
-        provenance: HtmlArtifactProvenanceView {
-            producer: "v3-assistant-run".to_string(),
-            reason: "multi_resume_project_delivery_answer".to_string(),
-            source_run_id: Some(run_id.to_string()),
-        },
-        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
-        created_at,
-        payload,
-    })
-}
-
-fn assistant_run_resume_project_delivery_artifact_payload(scans: &[Value]) -> Option<Value> {
-    let profile_rows = scans
-        .iter()
-        .flat_map(|scan| {
-            scan.get("resume_profile_rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    let delivery_rows = scans
-        .iter()
-        .flat_map(|scan| {
-            scan.get("resume_project_delivery_rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    if profile_rows.is_empty() && delivery_rows.is_empty() {
-        return None;
-    }
-    let scanned_document_count = scans
-        .iter()
-        .filter_map(|scan| scan.get("scanned_document_count").and_then(Value::as_u64))
-        .max()
-        .unwrap_or(profile_rows.len() as u64);
-    let mut rows_by_document: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for row in &delivery_rows {
-        let document_id = value_string(row, "document_id");
-        rows_by_document
-            .entry(document_id)
-            .or_default()
-            .push(row.clone());
-    }
-
-    let mut rendered_rows = Vec::new();
-    let mut emitted_documents = BTreeSet::new();
-    let mut missing_project_delivery_count = 0usize;
-    for profile in &profile_rows {
-        let document_id = value_string(profile, "document_id");
-        if !document_id.is_empty() && document_id != "-" {
-            emitted_documents.insert(document_id.clone());
-        }
-        let candidate_name = resume_profile_candidate_name(profile);
-        let document_title = value_string(profile, "document_title");
-        if let Some(rows) = rows_by_document.get(&document_id) {
-            for row in rows {
-                rendered_rows.push(assistant_run_resume_project_delivery_artifact_row(
-                    &candidate_name,
-                    &document_title,
-                    row,
-                    "recognized",
-                ));
-            }
-        } else {
-            missing_project_delivery_count += 1;
-            rendered_rows.push(json!({
-                "candidateName": html_artifact_safe_summary_text(&candidate_name, 80),
-                "projectName": "未识别到项目交付段",
-                "status": "missing_project_delivery_section",
-                "deliverySummary": "当前轻量扫描未抽到明确项目名称或职责句",
-                "techStack": [],
-                "documentTitle": html_artifact_safe_summary_text(&document_title, 160),
-                "confidence": null,
-            }));
-        }
-    }
-
-    for (document_id, rows) in rows_by_document {
-        if emitted_documents.contains(&document_id) {
-            continue;
-        }
-        for row in rows {
-            rendered_rows.push(assistant_run_resume_project_delivery_artifact_row(
-                &value_string(&row, "candidate_name"),
-                &value_string(&row, "document_title"),
-                &row,
-                "recognized",
-            ));
-        }
-    }
-    if rendered_rows.is_empty() {
-        return None;
-    }
-    rendered_rows.truncate(ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT);
-
-    Some(json!({
-        "generationPolicy": assistant_run_rapid_html_artifact_generation_policy(),
-        "summary": {
-            "scannedDocumentCount": scanned_document_count,
-            "resumeProfileCount": profile_rows.len(),
-            "projectDeliveryRowCount": delivery_rows.len(),
-            "renderedRowCount": rendered_rows.len(),
-            "missingProjectDeliveryCount": missing_project_delivery_count,
-        },
-        "rows": rendered_rows,
-        "notes": [
-            "本页来自 DataMax 结构化简历扫描结果，用于承载高信息量回答的完整明细。",
-            "未识别到项目交付段的候选人会保留占位行，避免只展示检索命中的少数简历。"
-        ],
-    }))
-}
-
-fn assistant_run_rapid_html_artifact_generation_policy() -> Value {
-    json!({
-        "route": ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT,
-        "intendedUse": "chat_high_information_detail",
-        "templateAuthority": "v3_safe_html_artifact_manifest",
-        "htmlAnythingRole": "rapid_template_reference_only",
-        "image2Required": false,
-        "staticPagePipeline": false,
-        "publishAsGeneratedArtifact": false,
-    })
-}
-
-fn assistant_run_resume_project_delivery_artifact_row(
-    fallback_candidate_name: &str,
-    fallback_document_title: &str,
-    row: &Value,
-    status: &str,
-) -> Value {
-    let candidate_name = value_string(row, "candidate_name");
-    let document_title = value_string(row, "document_title");
-    let effective_candidate_name = if candidate_name.is_empty() {
-        fallback_candidate_name
-    } else {
-        &candidate_name
-    };
-    let effective_document_title = if document_title.is_empty() {
-        fallback_document_title
-    } else {
-        &document_title
-    };
-    json!({
-        "candidateName": html_artifact_safe_summary_text(effective_candidate_name, 80),
-        "projectName": html_artifact_safe_summary_text(&value_string(row, "project_name"), 120),
-        "status": status,
-        "deliverySummary": html_artifact_safe_summary_text(&value_string(row, "delivery_summary"), 320),
-        "techStack": resume_profile_array_values(row, "tech_stack")
-            .into_iter()
-            .map(|value| html_artifact_safe_summary_text(&value, 80))
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>(),
-        "documentTitle": html_artifact_safe_summary_text(effective_document_title, 160),
-        "confidence": row.get("confidence").cloned().unwrap_or(Value::Null),
-    })
-}
-
-fn assistant_run_resume_project_delivery_data_refs(
-    scans: &[Value],
-) -> Vec<HtmlArtifactDataRefView> {
-    let mut seen = BTreeSet::new();
-    scans
-        .iter()
-        .filter_map(|scan| scan.get("dataset_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|dataset_id| !dataset_id.is_empty())
-        .filter(|dataset_id| seen.insert((*dataset_id).to_string()))
-        .take(8)
-        .map(|dataset_id| HtmlArtifactDataRefView {
-            kind: "dataset".to_string(),
-            id: dataset_id.to_string(),
-            label: format!("数据集 {dataset_id}"),
-        })
-        .collect()
 }
 
 fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
