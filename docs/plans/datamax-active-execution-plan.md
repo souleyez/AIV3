@@ -505,6 +505,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` structured fact/entity-scan compact helper 已拆到 `assistant_run_structured_fact_context_support` 模块并补模块单测；entity scan payload、fact snapshot payload、fact snapshot as scan payload、rows_by_type 压缩、include_fact_snapshots 开关和 resume/project delivery/profile rows 语义保持不变。本地 `cargo check`、structured fact/model context/fact snapshot/direct answer/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_structured_fact_context_support` helper 拆分已提交并随最新 `main` 同步 8 服务器；远端当前 HEAD `a3fe7402b` 包含本轮 `3a7c415`，`cargo check`、structured fact Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` resume profile 表格/字段/排序 helper 已拆到 `assistant_run_resume_profile_support` 模块并补模块单测；候选人名、数组字段展示、缺失值 `-`、Markdown 表格转义、年龄/年份/技能数排序、性别统计、工作年限和学历 rank 语义保持不变。本地 `cargo check`、resume profile/entity scan/fact snapshot/direct answer/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `assistant_run_resume_profile_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `16143fb69`，`cargo check`、resume profile/entity scan/fact snapshot/direct answer/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
