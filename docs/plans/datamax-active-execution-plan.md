@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 LLM invocation view helper 拆分 | 已完成本地验证；待提交、同步 GitHub 和 8 服务器 code deploy。 | 提交本切片，拉取到 8 服务器，build `platform-api`，重启 5 个服务并跑 8 服务器 P0 smoke。 | `cargo test -p platform-api llm_invocation_view_support --lib`、`cargo test -p platform-api to_llm_invocation_view_supports_workflow_execution_source_kind --lib`、`cargo test -p platform-api summarize_execution_scope_runtime --lib`、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
-| 2 | 是否同步 8 服务器 | 本切片尚未同步 8 服务器。 | 本轮属于代码切片，需按 P0 code deploy 边界执行；docs-only 回写后再 fast-forward，不 build、不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P5 LLM invocation view helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启和 8 服务器 P0 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P3/P4 条件时切换优先级。 | `cargo test -p platform-api llm_invocation_view_support --lib`、`cargo test -p platform-api to_llm_invocation_view_supports_workflow_execution_source_kind --lib`、`cargo test -p platform-api summarize_execution_scope_runtime --lib`、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
+| 2 | 是否同步 8 服务器 | 本切片代码已同步并重启验证；后续 docs-only 只需 fast-forward。 | docs-only 回写同步到 8 服务器，不 build、不重启；下个代码切片再按 P0 code deploy 边界执行。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -579,7 +579,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` static-page render output download/preview URL、外部通道 URL、retryable failure reason 和 URL path segment encoding helper 已拆到 `static_page_render_output_view_support` 模块并补模块单测；Rendered+non-empty HTML 才出链接、external channel scope 优先、internal fallback、失败原因字段优先级和 path segment 编码语义保持不变。本地 `cargo fmt --check`、static-page render output URL/retryable reason Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `13cae778f`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 检索证据 view mapping 和 evidence manifest parser helper 已拆到 `retrieval_evidence_view_support` 模块并补模块单测；view 字段透传、manifest status/id/timestamp fallback、recall rank fallback 和 existing recall metadata regression 语义保持不变。本地 `cargo fmt --check`、retrieval evidence view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `5453d097f`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 工具定义 view、工具执行 view 和 manifest tool trace parser helper 已拆到 `tool_view_support` 模块并补模块单测；tool registry reference 展开、inline tool snapshot 解析、CLI contract、tool execution source/status 映射和 manifest tool trace 语义保持不变。本地 `cargo fmt --check`、tool view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `ec079ef8e`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
-- 2026-06-14: `crates/platform-api/src/lib.rs` LLM invocation domain-to-contract view mapping helper 已拆到 `llm_invocation_view_support` 模块并补模块单测；`source_kind`、`mode`、`finish_reason`、usage、provider metadata、system prompt 和 tool trace 字段映射语义保持不变。本地 `cargo fmt --check`、LLM invocation view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交并同步 8 服务器。
+- 2026-06-14: `crates/platform-api/src/lib.rs` LLM invocation domain-to-contract view mapping helper 已拆到 `llm_invocation_view_support` 模块并补模块单测；`source_kind`、`mode`、`finish_reason`、usage、provider metadata、system prompt 和 tool trace 字段映射语义保持不变。本地 `cargo fmt --check`、LLM invocation view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `60e37eeb7`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 
 **Regression commands:**
 
@@ -606,7 +606,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 先关闭当前 P5 `llm_invocation_view_support` 拆分：提交、同步 GitHub、8 服务器 code deploy、跑 8 服务器 P0 smoke 并补 validation。
+1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
 2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
