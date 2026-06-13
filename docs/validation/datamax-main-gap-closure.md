@@ -3549,6 +3549,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Static Page Render Output View Support 8-Server Verification
+
+- Purpose:
+  - deploy and verify the P5 static-page render output view helper extraction on 8 server;
+  - confirm rendered HTML links, external-channel delivery URLs, retryable failure reason exposure, and static-page artifact behavior remain stable after the production build and service restart.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `9ff7c5036` to `13cae778f`;
+  - remote `git status -sb` returned `## main...origin/main` after deployment verification;
+  - remote verification logs were written under `/srv/aiv3/repo/target/codex-smoke/static-page-render-output-view-8-20260614-000635`.
+- 8-server verification:
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api static_page_render_output_view_support --lib`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api static_page_html_download_url_requires_external_channel_scope --lib`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api static_page_render_output_view_exposes_retryable_failure_reason --lib`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and all returned `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok` and `ready` after restart;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Workflow Task View Support 8-Server Verification
 
 - Purpose:
