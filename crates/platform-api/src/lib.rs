@@ -220,6 +220,7 @@ pub mod external_feishu;
 mod external_integration_summary;
 mod external_message_summary;
 mod external_observability;
+mod external_requested_skills_support;
 mod external_system_user;
 pub mod external_wecom;
 pub mod fact_index;
@@ -345,6 +346,7 @@ use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
+use external_requested_skills_support::*;
 use external_system_user::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
@@ -12584,114 +12586,6 @@ fn validate_and_normalize_external_artifact_request(
     }
 
     Ok(())
-}
-
-fn validate_and_normalize_external_requested_skills(
-    requested_skills: &mut Vec<ExternalRequestedSkillView>,
-) -> std::result::Result<(), ApiError> {
-    if requested_skills.len() > EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT {
-        return Err(external_requested_skills_bad_request(
-            "too_many_requested_skills",
-            format!(
-                "requested_skills accepts at most {EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT} items"
-            ),
-        ));
-    }
-
-    for (index, skill) in requested_skills.iter_mut().enumerate() {
-        skill.skill_id = skill.skill_id.trim().to_string();
-        if skill.skill_id.is_empty() {
-            return Err(external_requested_skills_bad_request(
-                "empty_skill_id",
-                format!("requested_skills[{index}].skill_id must be a non-empty string"),
-            ));
-        }
-        if skill.skill_id.chars().count() > EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT
-            || skill.skill_id.chars().any(char::is_control)
-        {
-            return Err(external_requested_skills_bad_request(
-                "invalid_skill_id",
-                format!(
-                    "requested_skills[{index}].skill_id must be printable text within {EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT} characters"
-                ),
-            ));
-        }
-
-        if let Some(version) = skill.version.take() {
-            let normalized = version.trim().to_string();
-            if normalized.is_empty() {
-                skill.version = None;
-            } else if normalized.chars().count() > EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT
-                || normalized.chars().any(char::is_control)
-            {
-                return Err(external_requested_skills_bad_request(
-                    "invalid_skill_version",
-                    format!(
-                        "requested_skills[{index}].version must be printable text within {EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT} characters"
-                    ),
-                ));
-            } else {
-                skill.version = Some(normalized);
-            }
-        }
-
-        if let Some(mode) = skill.mode.take() {
-            let normalized = mode.trim().to_ascii_lowercase();
-            if normalized.is_empty() {
-                skill.mode = None;
-            } else if normalized.chars().count() > EXTERNAL_CHANNEL_REQUESTED_SKILL_MODE_LIMIT
-                || !matches!(normalized.as_str(), "required" | "preferred" | "disabled")
-            {
-                return Err(external_requested_skills_bad_request(
-                    "invalid_skill_mode",
-                    format!(
-                        "requested_skills[{index}].mode must be one of required, preferred, or disabled"
-                    ),
-                ));
-            } else {
-                skill.mode = Some(normalized);
-            }
-        }
-
-        if let Some(arguments) = skill.arguments.as_ref() {
-            if !arguments.is_object() {
-                return Err(external_requested_skills_bad_request(
-                    "invalid_skill_arguments",
-                    format!("requested_skills[{index}].arguments must be a JSON object"),
-                ));
-            }
-            if arguments.to_string().chars().count()
-                > EXTERNAL_CHANNEL_REQUESTED_SKILL_ARGUMENTS_LIMIT
-            {
-                return Err(external_requested_skills_bad_request(
-                    "skill_arguments_too_large",
-                    format!(
-                        "requested_skills[{index}].arguments must fit within {EXTERNAL_CHANNEL_REQUESTED_SKILL_ARGUMENTS_LIMIT} JSON characters"
-                    ),
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn external_requested_skills_bad_request(reason: &str, message: impl Into<String>) -> ApiError {
-    ApiError::bad_request_with_details(
-        "external_channel_requested_skills_invalid",
-        message.into(),
-        json!({
-            "reason": reason,
-            "schema": {
-                "requested_skills": [{
-                    "skill_id": "stable skill id",
-                    "version": "optional version",
-                    "mode": "required | preferred | disabled",
-                    "arguments": {}
-                }]
-            }
-        }),
-    )
 }
 
 async fn to_external_document_parse_detail_item(
