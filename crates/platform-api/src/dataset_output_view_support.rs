@@ -2,9 +2,7 @@ use contracts::{
     DatasetOutputView, LlmInvocationView, MemoryDirectoryView, RetrievalEvidenceView,
     ToolExecutionView,
 };
-use domain_model::{
-    DatasetId, DatasetOutput, MemoryDirectoryId, ReportPlanId, RetrievalEvidenceId,
-};
+use domain_model::{DatasetId, DatasetOutput, MemoryDirectoryId, RetrievalEvidenceId};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -183,7 +181,9 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use domain_model::{DatasetOutputId, TenantId, ToolExecutionId, WorkflowExecutionId};
+    use domain_model::{
+        DatasetOutputId, ReportPlanId, TenantId, ToolExecutionId, WorkflowExecutionId,
+    };
 
     use super::*;
 
