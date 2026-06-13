@@ -15143,3 +15143,42 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
   - no service was restarted during local verification;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Chat Session View Assembly Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `024ba375` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `9b177b697` to `024ba3755`;
+  - remote `git rev-parse --short HEAD` returned `024ba3755` and `git status --short --branch` returned `## main...origin/main`;
+  - remote code verification logs are under `/tmp/datamax-chat-session-view-remote-PTPV6j`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api chat_session_manifest_view_support --lib`: passed, 9/9 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api to_chat_session_view_embeds_latest_dataset_output --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api to_chat_session_view_exposes_pending_report_entry_confirmation_gate --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api to_chat_session_view_exposes_confirmed_report_entry_as_report_planning --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api to_chat_session_view_preserves_declined_report_entry_history --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api pending_chat_session_view --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api latest_assistant_message_from_views_prefers_last_assistant --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api to_chat_message_view_preserves_assistant_message_persisted_event --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - remote build and smoke verification logs are under `/tmp/datamax-chat-session-view-remote-build-XBb85v`;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and all returned `active`;
+  - wait-loop `GET http://127.0.0.1:3000/healthz` returned `{"service":"platform-api","status":"ok","version":"0.1.0"}`;
+  - wait-loop `GET http://127.0.0.1:3000/readyz` returned `{"service":"platform-api","status":"ready","version":"0.1.0"}`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
