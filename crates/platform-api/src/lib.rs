@@ -249,6 +249,7 @@ mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_report_snapshot;
 mod static_page_structure_signals;
+mod static_page_template_prewarm_support;
 mod static_page_template_reference_support;
 mod text_normalization;
 mod workflow_context_support;
@@ -360,6 +361,7 @@ use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_report_snapshot::*;
 use static_page_structure_signals::*;
+use static_page_template_prewarm_support::*;
 use static_page_template_reference_support::*;
 use text_normalization::*;
 use workflow_context_support::*;
@@ -2238,7 +2240,7 @@ async fn enforce_email_challenge_rate_limit(
     Ok(())
 }
 
-fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
+pub(crate) fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update(part);
@@ -21163,7 +21165,7 @@ fn external_output_format_model_rule(format: &str) -> &'static str {
     }
 }
 
-fn external_answer_policy_value(message: &ExternalBotMessageView) -> Option<Value> {
+pub(crate) fn external_answer_policy_value(message: &ExternalBotMessageView) -> Option<Value> {
     if message.default_prompt.is_none()
         && message.output_format.is_none()
         && message.render_mode.is_none()
@@ -28111,7 +28113,7 @@ fn static_page_template_match_insert_external_tokens(
     }
 }
 
-fn static_page_template_match_tokens(
+pub(crate) fn static_page_template_match_tokens(
     selected_scope: &Value,
     source_refs: &Value,
 ) -> BTreeSet<String> {
@@ -28219,7 +28221,7 @@ fn static_page_default_prompt_from_answer_policy(answer_policy: &Value) -> Optio
         .filter(|value| !value.is_empty())
 }
 
-fn static_page_default_prompt_from_scope_or_refs<'a>(
+pub(crate) fn static_page_default_prompt_from_scope_or_refs<'a>(
     selected_scope: &'a Value,
     source_refs: &'a Value,
 ) -> Option<&'a str> {
@@ -28326,7 +28328,7 @@ fn static_page_default_prompt_tokens_compatible(
     static_page_default_prompt_reuse_class(right_prompt) == Some(left_class)
 }
 
-fn static_page_default_prompt_template_token(
+pub(crate) fn static_page_default_prompt_template_token(
     selected_scope: &Value,
     source_refs: &Value,
 ) -> String {
@@ -28342,7 +28344,7 @@ fn static_page_default_prompt_template_token(
     "none".to_string()
 }
 
-fn static_page_template_stability_key_with_default_prompt(
+pub(crate) fn static_page_template_stability_key_with_default_prompt(
     template_stability_key: impl Into<String>,
     default_prompt: Option<&str>,
 ) -> String {
@@ -29089,202 +29091,6 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     Ok(outcome)
 }
 
-const STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY: &str = "prewarm_static_page_template";
-const STATIC_PAGE_TEMPLATE_PREWARM_SOURCE: &str =
-    "external_channel_static_page_template_prewarm_candidate";
-
-#[derive(Debug, Clone)]
-struct StaticPageTemplatePrewarmCandidate {
-    prewarm_key: String,
-    scope_tokens: Vec<String>,
-    source_refs: Value,
-    template_stability_key: String,
-    dataset_artifact_key: Option<String>,
-}
-
-fn static_page_template_prewarm_source_refs(
-    connection_id: &str,
-    message: &ExternalBotMessageView,
-) -> Value {
-    json!({
-        "source": STATIC_PAGE_TEMPLATE_PREWARM_SOURCE,
-        "auto_publish_generated_artifact": true,
-        "effect_image_confirmation_required": false,
-        "continue_to_publish_after_effect_image": true,
-        "prewarm": {
-            "mode": "silent_low_load_template_prewarm",
-            "customer_visible": false,
-            "trigger": "external_channel_conversation_with_authorized_scope",
-        },
-        "channel_connection_id": connection_id,
-        "platform": external_channel_platform_wire_value(&message.platform),
-        "tenant_external_id": message.tenant_external_id,
-        "bot_external_id": message.bot_external_id,
-        "conversation_external_id": message.conversation_external_id,
-        "thread_external_id": message.thread_external_id,
-        "sender_external_id": message.sender_external_id,
-        "message_external_id": message.message_external_id,
-        "message_type": external_message_type_wire_value(&message.message_type),
-        "artifact_type": "static_page",
-        "output_format": message.output_format,
-        "render_mode": "artifact",
-        "requested_skills": external_requested_skills_summary(&message.requested_skills),
-        "answer_policy": external_answer_policy_value(message),
-    })
-}
-
-fn static_page_template_prewarm_candidate(
-    connection_id: &str,
-    selected_scope: &Value,
-    message: &ExternalBotMessageView,
-) -> Option<StaticPageTemplatePrewarmCandidate> {
-    let mut source_refs = static_page_template_prewarm_source_refs(connection_id, message);
-    let tokens = static_page_template_match_tokens(selected_scope, &source_refs);
-    if tokens.is_empty() {
-        return None;
-    }
-    let scope_tokens = tokens.into_iter().collect::<Vec<_>>();
-    let default_prompt_token =
-        static_page_default_prompt_template_token(selected_scope, &source_refs);
-    let joined_tokens = scope_tokens.join("|");
-    let prewarm_hash = sha256_hex([
-        connection_id.as_bytes(),
-        b":",
-        joined_tokens.as_bytes(),
-        b":",
-        default_prompt_token.as_bytes(),
-    ]);
-    let prewarm_key = format!("static-page-template-prewarm:{}", &prewarm_hash[..24]);
-    source_refs = static_page_template_prewarm_source_refs_with_key(source_refs, &prewarm_key);
-    let template_stability_key = static_page_template_stability_key_with_default_prompt(
-        "template:default",
-        static_page_default_prompt_from_scope_or_refs(selected_scope, &source_refs),
-    );
-    let dataset_artifact_key = static_page_dataset_artifact_key(
-        selected_scope,
-        &source_refs,
-        &template_stability_key,
-        Some(connection_id),
-    );
-    Some(StaticPageTemplatePrewarmCandidate {
-        prewarm_key,
-        scope_tokens,
-        source_refs,
-        template_stability_key,
-        dataset_artifact_key,
-    })
-}
-
-fn static_page_template_prewarm_source_refs_with_key(
-    mut source_refs: Value,
-    prewarm_key: &str,
-) -> Value {
-    ensure_json_object(&mut source_refs);
-    if let Some(object) = source_refs.as_object_mut() {
-        object.insert("prewarm_key".to_string(), json!(prewarm_key));
-        let prewarm = object
-            .entry("prewarm".to_string())
-            .or_insert_with(|| Value::Object(Map::new()));
-        if let Some(prewarm_object) = prewarm.as_object_mut() {
-            prewarm_object.insert("key".to_string(), json!(prewarm_key));
-        }
-    }
-    source_refs
-}
-
-fn static_page_template_prewarm_key_from_source_refs(source_refs: &Value) -> Option<String> {
-    source_refs
-        .pointer("/prewarm/key")
-        .or_else(|| source_refs.get("prewarm_key"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn static_page_template_prewarm_delay(now: DateTime<Utc>) -> DateTime<Utc> {
-    let delay_minutes = std::env::var("STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES")
-        .ok()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .unwrap_or(30)
-        .clamp(1, 24 * 60);
-    now + Duration::minutes(delay_minutes)
-}
-
-fn static_page_template_prewarm_low_load_policy() -> Value {
-    json!({
-        "mode": "low_load_only",
-        "customer_visible": false,
-        "execution_priority": "background",
-        "worker_must_recheck_before_image2": true,
-        "skip_if_any_scope_template_exists": true,
-        "max_parallel_image2_html": 1,
-        "cloudflare_fallback_parallelism": 1,
-        "load_checks": [
-            "explicit_customer_static_page_queue_empty_or_low",
-            "codex_host_queue_below_threshold",
-            "model_gateway_assistant_chat_below_threshold",
-            "no_demo_freeze_window"
-        ],
-    })
-}
-
-fn static_page_template_prewarm_prompt(message: &ExternalBotMessageView) -> String {
-    let prompt_hint = message
-        .default_prompt
-        .as_deref()
-        .or(message.text.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(400).collect::<String>())
-        .unwrap_or_else(|| "按当前授权数据集组合生成通用经营可视化页面模板。".to_string());
-    format!(
-        "为当前授权数据集组合预热一套客户不可见、可复用的 DataMax 动态可视化页面模板。\
-默认使用现有数据源和文档范围，保留时间范围、区域/门店/分区等筛选能力；页面完成后仅作为同一数据集组合和相近 default_prompt 的默认模板，客户未明确要求时不要发送说明。\
-当前主题/默认提示：{prompt_hint}"
-    )
-}
-
-fn static_page_template_prewarm_task_payload(
-    connection_id: &str,
-    run: &AssistantRun,
-    message: &ExternalBotMessageView,
-    selected_scope: &Value,
-    candidate: &StaticPageTemplatePrewarmCandidate,
-    now: DateTime<Utc>,
-) -> Value {
-    json!({
-        "type": "static_page_template_prewarm_candidate",
-        "logical_queue": "static_page_template_prewarm",
-        "logical_task_key": "prepare_template_when_low_load",
-        "prewarm_key": candidate.prewarm_key,
-        "template_id": "static_page_image2_data_publish",
-        "fixed_task_template_id": "static_page_image2_data_publish",
-        "channel_connection_id": connection_id,
-        "platform": external_channel_platform_wire_value(&message.platform),
-        "conversation_external_id": message.conversation_external_id,
-        "message_external_id": message.message_external_id,
-        "assistant_run_id": run.id.to_string(),
-        "local_thread_id": run.local_thread_id,
-        "scope_tokens": candidate.scope_tokens,
-        "selected_scope": selected_scope,
-        "source_refs": candidate.source_refs,
-        "template_stability_key": candidate.template_stability_key,
-        "dataset_artifact_key": candidate.dataset_artifact_key,
-        "default_prompt_match_policy": "same_default_prompt_required",
-        "low_load_policy": static_page_template_prewarm_low_load_policy(),
-        "execution_contract": {
-            "next_action": "create_image2_visual_then_static_page_template_only_when_low_load",
-            "customer_reply_policy": "silent_unless_user_requests_static_page",
-            "permission_scope": "selected_external_channel_scope_only",
-            "public_api_change_allowed": false,
-            "auth_change_allowed": false,
-            "request_response_field_change_allowed": false
-        },
-        "created_at": now.to_rfc3339(),
-    })
-}
-
 async fn static_page_template_prewarm_pending_exists(
     state: &AppState,
     prewarm_key: &str,
@@ -29632,7 +29438,7 @@ fn external_channel_static_page_template_stability_key(
     static_page_template_stability_key_with_default_prompt("template:default", default_prompt)
 }
 
-fn static_page_dataset_artifact_key(
+pub(crate) fn static_page_dataset_artifact_key(
     selected_scope: &Value,
     source_refs: &Value,
     template_stability_key: &str,
