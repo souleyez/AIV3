@@ -3547,6 +3547,46 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Assistant Run Structured Fact Context Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `3a7c415` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` first fast-forwarded from `1ee7c35a6` to `3a7c41590`;
+  - a separate mainline commit `a3fe740` then landed with the enterprise Codex solution landing page and includes `3a7c415`;
+  - final `/srv/aiv3/repo` verification ran at HEAD `a3fe7402b` and `git status --porcelain` returned no rows;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_structured_fact_context_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_compacts_dataset_entity_scan_for_model_context --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_fact_snapshot_replaces_only_supported_global_scan_prompts --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_fact_snapshot_does_not_shadow_point_list_runtime_scan --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_supply_quality_reports_dataset_fact_snapshot --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_codex_package_keeps_v3_context_and_action_contracts --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and all returned `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok`/`ready` after restart;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- GitHub Actions:
+  - `DataMax CI` run `27464082168` for `3a7c41590022b99f9307d97f40de8316e8b133e0` failed during job startup;
+  - `DataMax CI` run `27464098885` for `a3fe7402bc7244fdab7dd727dbc4f22adc069d0c` failed during job startup;
+  - both runs showed `No-Credential Smoke` and `Rust Minimal` with `steps=[]`;
+  - `gh run view --log-failed` returned `log not found`, matching the known account/runner startup failure pattern rather than a repo test failure.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Structured Fact Context Support Local Verification
 
 - Purpose:
