@@ -14741,6 +14741,42 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during docs-only sync;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Bot Message Payload Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party bot message payload alias normalization, document/dataset/business-source scope normalization, attachment URL normalization, idempotency fallback, and platform/message type case normalization out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/external_bot_message_payload_support.rs`;
+  - moved `normalize_external_bot_message_payload` and its direct helper functions into the support module;
+  - kept `parse_external_bot_message_payload` and validation functions in `lib.rs` for this slice;
+  - preserved existing behavior where duplicate document ids can remain when the same id is supplied through both singular and plural aliases;
+  - added module coverage for alias normalization, multiple dataset ids, business datasource id de-duplication, URL attachment conversion, and idempotency key fallback.
+- Local verification:
+  - `cargo fmt`: completed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_bot_message_payload_support --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_bot_message_payload_accepts --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_requested_skills_validate_shape --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`, `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 Chat Session Manifest View Support Local Verification
 
 - Purpose:
