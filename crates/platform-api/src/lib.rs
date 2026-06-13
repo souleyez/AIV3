@@ -171,6 +171,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod assistant_run_detail_support;
 mod assistant_run_react_support;
 mod assistant_run_sse_support;
 mod assistant_scope_summary;
@@ -239,6 +240,7 @@ mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod zip_ingest_support;
 
+use assistant_run_detail_support::*;
 use assistant_run_react_support::*;
 use assistant_run_sse_support::*;
 use assistant_scope_summary::*;
@@ -66579,72 +66581,11 @@ fn assistant_run_detail_targets_for_scope(
     selected_scope: &Value,
     supplied_items: &[Value],
 ) -> Vec<Value> {
-    if !assistant_run_scope_prefers_detail(selected_scope) {
-        return Vec::new();
-    }
-
-    let mut seen_documents = HashSet::new();
-    supplied_items
-        .iter()
-        .filter(|item| {
-            item.get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|item_type| item_type == "retrieval_evidence")
-        })
-        .filter_map(|item| {
-            let document_id = item.get("document_id").or_else(|| item.get("documentId"))?;
-            let document_key = document_id
-                .as_str()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| document_id.to_string());
-            if document_key.trim().is_empty() || !seen_documents.insert(document_key) {
-                return None;
-            }
-
-            let media_context = item
-                .get("media_context")
-                .or_else(|| item.get("mediaContext"));
-            let has_media_context = media_context.is_some_and(Value::is_object);
-            let has_timestamped_evidence = media_context
-                .and_then(|context| context.get("has_timestamped_evidence"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let reason = if has_timestamped_evidence {
-                "timestamped_media_detail_available"
-            } else if has_media_context {
-                "media_detail_available"
-            } else {
-                "detail_first_scope"
-            };
-
-            let mut target = Map::new();
-            target.insert("type".to_string(), json!("document_detail_target"));
-            for key in [
-                "dataset_id",
-                "datasetId",
-                "document_id",
-                "documentId",
-                "retrieval_evidence_id",
-                "retrievalEvidenceId",
-                "chunk_index",
-                "chunkIndex",
-                "source_locator",
-                "sourceLocator",
-            ] {
-                if let Some(value) = item.get(key).filter(|value| !value.is_null()) {
-                    target.insert(key.to_string(), value.clone());
-                }
-            }
-            target.insert("reason".to_string(), json!(reason));
-            target.insert("has_media_context".to_string(), json!(has_media_context));
-            target.insert(
-                "has_timestamped_evidence".to_string(),
-                json!(has_timestamped_evidence),
-            );
-            Some(Value::Object(target))
-        })
-        .take(ASSISTANT_RUN_DETAIL_TARGET_LIMIT)
-        .collect()
+    assistant_run_detail_targets_for_supply(
+        assistant_run_scope_prefers_detail(selected_scope),
+        supplied_items,
+        ASSISTANT_RUN_DETAIL_TARGET_LIMIT,
+    )
 }
 
 async fn assistant_run_media_context_for_document(
@@ -68285,14 +68226,6 @@ fn assistant_run_memory_item_is_supply_eligible(item: &ConversationMemoryItem) -
 fn assistant_run_evidence_supplied_count(evidence_state: &Value) -> usize {
     evidence_state
         .get("supplied_items")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0)
-}
-
-fn assistant_run_detail_target_count(evidence_state: &Value) -> usize {
-    evidence_state
-        .get("detail_targets")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0)

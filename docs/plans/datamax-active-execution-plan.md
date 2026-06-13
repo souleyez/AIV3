@@ -478,6 +478,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `document_chunk_support` fallback helper 拆分已提交并同步 8 服务器；远端 `cargo check`、fallback supply/文档 chunk 搜索文本/检索排序 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 文档 chunk 检索供料 query-centered excerpt 和 prompt match helper 已并入 `document_chunk_support` 模块并补模块单测；文本空白规范化、问题词命中居中、无命中回退开头窗口、前后省略号和长 token 优先匹配语义保持不变。本地 `cargo check`、fallback supply/检索排序 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `document_chunk_support` excerpt helper 拆分已提交并同步 8 服务器；远端 `cargo check`、fallback supply/检索排序 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run detail target 构造和计数 helper 已拆到 `assistant_run_detail_support` 模块并补模块单测；detail-first gating、retrieval evidence 过滤、文档去重、media/timestamp reason、字段 alias 保留、limit 截断和 detail target 计数语义保持不变。本地 `cargo check`、附件标题/detail target/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
