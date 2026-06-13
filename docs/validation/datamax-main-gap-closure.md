@@ -14510,3 +14510,39 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Dataset Output View Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset output manifest parsing, manifest hydration, and `DatasetOutputView` mapping out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/dataset_output_view_support.rs`;
+  - moved `parse_dataset_output_manifest`, `hydrate_dataset_output_manifest_view`, and `to_dataset_output_view` into the support module;
+  - kept contract view types, response fields, output manifest raw pass-through, output content section parsing, retrieval evidence id parsing, service handoff parsing, context binding parsing, generator placeholder runtime fallback, LLM invocation runtime override, tool execution trace override, and `DatasetOutputView` field mapping unchanged;
+  - added module coverage for output content and service handoff preservation, generator placeholder runtime fallback, persisted LLM invocation runtime override, and persisted tool execution trace override.
+- Local verification:
+  - `cargo fmt`: completed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api dataset_output_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api to_dataset_output_view_exposes_retrieval_evidence_ids --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api to_dataset_output_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api to_dataset_output_view_prefers_tool_executions_over_manifest_tool_trace --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `failed=false`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.

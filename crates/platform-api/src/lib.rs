@@ -195,6 +195,7 @@ mod chat_message_model_facing;
 mod chat_session_model_facing;
 mod chat_session_titles;
 mod dataset_output_model_facing;
+mod dataset_output_view_support;
 mod dataset_summary_support;
 mod document_chunk_support;
 mod document_compare_model_facing;
@@ -292,6 +293,7 @@ use chat_message_model_facing::*;
 use chat_session_model_facing::*;
 use chat_session_titles::*;
 use dataset_output_model_facing::*;
+use dataset_output_view_support::*;
 use dataset_summary_support::*;
 use document_chunk_support::*;
 use document_compare_model_facing::*;
@@ -73091,107 +73093,6 @@ fn is_lexical_stop_word(token: &str) -> bool {
     )
 }
 
-fn parse_dataset_output_manifest(value: &Value) -> Option<contracts::DatasetOutputManifestView> {
-    let object = value.as_object()?;
-    let tool_trace = parse_manifest_tool_trace(object.get("tool_trace"))?;
-    let runtime = object
-        .get("runtime")
-        .and_then(parse_manifest_runtime)
-        .or_else(|| {
-            object
-                .get("generator")
-                .and_then(Value::as_str)
-                .filter(|generator| *generator == "dataset-output-worker")
-                .map(|_| contracts::ManifestRuntimeView {
-                    mode: contracts::ManifestRuntimeModeView::Placeholder,
-                    provider: None,
-                    model: None,
-                    request_id: None,
-                    finish_reason: None,
-                    provider_failure: None,
-                    latency_ms: None,
-                    usage: None,
-                    system_prompt_key: None,
-                    system_prompt_version: None,
-                    tool_trace_count: Some(tool_trace.len()),
-                })
-        });
-
-    let parse_retrieval_evidence_ids = |value: &Value| {
-        value
-            .as_array()?
-            .iter()
-            .map(|value| {
-                Uuid::parse_str(value.as_str()?)
-                    .ok()
-                    .map(RetrievalEvidenceId::from)
-            })
-            .collect::<Option<Vec<_>>>()
-    };
-    let parse_dataset_output_format = |value: &str| match value {
-        "markdown" => Some(contracts::DatasetOutputFormatView::Markdown),
-        _ => None,
-    };
-    let parse_dataset_output_section_kind = |value: &str| match value {
-        "summary" => Some(contracts::DatasetOutputSectionKindView::Summary),
-        _ => None,
-    };
-    let parse_dataset_output_content = |value: &Value| {
-        let output = value.as_object()?;
-        let sections = output
-            .get("sections")?
-            .as_array()?
-            .iter()
-            .map(|value| {
-                let section = value.as_object()?;
-                Some(contracts::DatasetOutputSectionView {
-                    section_key: section.get("section_key")?.as_str()?.to_string(),
-                    kind: parse_dataset_output_section_kind(section.get("kind")?.as_str()?)?,
-                    title: section.get("title")?.as_str()?.to_string(),
-                    content: section.get("content")?.as_str()?.to_string(),
-                    retrieval_evidence_ids: parse_retrieval_evidence_ids(
-                        section.get("retrieval_evidence_ids")?,
-                    )?,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
-
-        Some(contracts::DatasetOutputContentView {
-            format: parse_dataset_output_format(output.get("format")?.as_str()?)?,
-            sections,
-        })
-    };
-
-    Some(contracts::DatasetOutputManifestView {
-        generator: object.get("generator")?.as_str()?.to_string(),
-        schema_version: object.get("schema_version")?.as_str()?.to_string(),
-        dataset_id: DatasetId::from(Uuid::parse_str(object.get("dataset_id")?.as_str()?).ok()?),
-        prompt: object.get("prompt")?.as_str()?.to_string(),
-        indexed_document_count: object.get("indexed_document_count")?.as_u64()? as usize,
-        refreshed_chunks: object.get("refreshed_chunks")?.as_u64()? as usize,
-        memory_directory_id: object
-            .get("memory_directory_id")
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(MemoryDirectoryId::from),
-        memory_directory_version_no: object
-            .get("memory_directory_version_no")
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok()),
-        retrieval_evidence_count: object.get("retrieval_evidence_count")?.as_u64()? as usize,
-        retrieval_evidence_ids: parse_retrieval_evidence_ids(
-            object.get("retrieval_evidence_ids")?,
-        )?,
-        output: object.get("output").and_then(parse_dataset_output_content),
-        service_handoff: object
-            .get("service_handoff")
-            .and_then(parse_manifest_service_handoff),
-        tool_trace,
-        context_binding: parse_manifest_context_binding(object.get("context_binding")?.as_str()?)?,
-        runtime,
-    })
-}
-
 fn parse_chat_session_status(value: &str) -> Option<contracts::ChatSessionManifestStatusView> {
     match value {
         "pending_assistant_reply" => {
@@ -74195,24 +74096,6 @@ fn infer_chat_turn_tool_loop_settled_at(
     }
 }
 
-fn hydrate_dataset_output_manifest_view(
-    value: &Value,
-    llm_invocations: &[LlmInvocationView],
-    tool_executions: &[ToolExecutionView],
-) -> Option<contracts::DatasetOutputManifestView> {
-    let mut view = parse_dataset_output_manifest(value)?;
-    if let Some(runtime) = manifest_runtime_from_latest_llm_invocation(llm_invocations) {
-        view.runtime = Some(runtime);
-    }
-    if !tool_executions.is_empty() {
-        view.tool_trace = manifest_tool_trace_from_tool_executions(tool_executions);
-        if let Some(runtime) = view.runtime.as_mut() {
-            runtime.tool_trace_count = Some(tool_executions.len());
-        }
-    }
-    Some(view)
-}
-
 fn hydrate_chat_message_manifest_view(
     value: &Value,
     llm_invocations: &[LlmInvocationView],
@@ -74325,38 +74208,6 @@ fn hydrate_chat_session_manifest_view(
     view.runtime = None;
 
     Some(view)
-}
-
-fn to_dataset_output_view(
-    output: DatasetOutput,
-    memory_directory: Option<MemoryDirectoryView>,
-    retrieval_evidences: Vec<RetrievalEvidenceView>,
-    llm_invocations: Vec<LlmInvocationView>,
-    tool_executions: Vec<ToolExecutionView>,
-) -> DatasetOutputView {
-    let output_manifest_view = hydrate_dataset_output_manifest_view(
-        &output.output_manifest,
-        &llm_invocations,
-        &tool_executions,
-    );
-
-    DatasetOutputView {
-        id: output.id,
-        dataset_id: output.dataset_id,
-        execution_id: output.execution_id,
-        prompt: output.prompt,
-        output_text: output.output_text,
-        memory_directory_id: output.memory_directory_id,
-        memory_directory,
-        retrieval_evidence_ids: output.retrieval_evidence_ids,
-        retrieval_evidences,
-        llm_invocations,
-        tool_executions,
-        output_manifest_view,
-        output_manifest: output.output_manifest,
-        model_facing: None,
-        created_at: output.created_at,
-    }
 }
 
 fn to_chat_session_view(
