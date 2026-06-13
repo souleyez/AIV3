@@ -61,7 +61,7 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 assistant-run provider retry helper 拆分 | 本地行为保持代码、定向 Rust 回归、P0 self-test 和 validation 记录已完成；尚未提交和判断是否发布 8 服务器。 | 只提交本切片相关文件；若用户要求发布，再走 P0 code deploy 边界。 | `cargo test -p platform-api assistant_run_provider_retry_support --lib`、provider retry 回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
+| 1 | P5 assistant-run provider retry helper 拆分 | 本地行为保持代码、定向 Rust 回归、P0 self-test、validation 记录和 GitHub 同步已完成；待判断是否发布 8 服务器。 | 若用户要求发布，再走 P0 code deploy 边界；否则进入下一个 P5 小切片或等待 P1/P2/P3/P4 条件。 | `cargo test -p platform-api assistant_run_provider_retry_support --lib`、provider retry 回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
 | 2 | 是否同步 8 服务器 | 等待本地验证和用户发布口径。 | 如果用户要求发布，拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke；如果只是 docs-only，则只 `git pull --ff-only` 且不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
@@ -572,7 +572,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `static_page_payload_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `e32f40ee0`，`cargo fmt --check`、payload/render guard/static-page artifact Rust 回归、`cargo check`、Web build、release build、health/ready、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 新百已发布报表链接直答、runtime manifest 和 output artifacts helper 已拆到 `assistant_run_xinbai_report_link_support` 模块并补模块单测；新百报表链接窄触发、修复/重生成请求不误复用、导出 URL、外部通道 artifact card 和质量补链路语义保持不变。本地 `cargo check`、xinbai report link/public response/SSE exports/static-page artifact Rust 回归、prewarm observability smoke、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_xinbai_report_link_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `fd7b220cc`，`cargo fmt --check`、xinbai report link/public response/SSE exports/static-page artifact Rust 回归、`cargo check`、Web build、release build、health/ready、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过。
-- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run provider retry attempts/backoff/delay/retryable-error helper 已拆到 `assistant_run_provider_retry_support` 模块并补模块单测；retry attempts/backoff env clamp、invalid env fallback、指数退避上限和 transient provider failure retryable 判定语义保持不变。本地 `cargo fmt --check`、provider retry/support/static-page artifact Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交和发布判断。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run provider retry attempts/backoff/delay/retryable-error helper 已拆到 `assistant_run_provider_retry_support` 模块并补模块单测；retry attempts/backoff env clamp、invalid env fallback、指数退避上限和 transient provider failure retryable 判定语义保持不变。本地 `cargo fmt --check`、provider retry/support/static-page artifact Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并推送 GitHub，待发布判断。
 
 **Regression commands:**
 
