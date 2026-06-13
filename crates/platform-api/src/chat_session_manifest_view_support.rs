@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use contracts::ToolExecutionView;
+use contracts::{LlmInvocationView, ToolExecutionView};
 use domain_model::{
     DatasetId, DatasetOutputId, MemoryDirectoryId, ReportPlanId, RetrievalEvidenceId,
 };
@@ -13,6 +13,11 @@ use crate::manifest_runtime_view_support::{
 use crate::manifest_service_handoff_support::{
     parse_chat_session_report_entry_resolution, parse_manifest_service_handoff,
     parse_manifest_timestamp, parse_model_facing_report_entry_state,
+};
+use crate::runtime_manifest_support::{
+    latest_llm_invocation, manifest_finish_reason_from_invocation,
+    manifest_runtime_from_latest_llm_invocation, manifest_tool_trace_from_tool_executions,
+    summarize_tool_execution_statuses,
 };
 use crate::tool_view_support::parse_manifest_tool_trace;
 
@@ -869,8 +874,152 @@ pub(crate) fn infer_chat_turn_tool_loop_settled_at(
     }
 }
 
+fn hydrate_chat_turn_from_latest_llm_invocation(
+    turn: &mut contracts::ChatTurnRuntimeView,
+    llm_invocations: &[LlmInvocationView],
+) {
+    let Some(latest) = latest_llm_invocation(llm_invocations) else {
+        return;
+    };
+
+    turn.provider_request_id = latest.request_id.clone();
+    turn.finish_reason = latest
+        .finish_reason
+        .as_ref()
+        .map(manifest_finish_reason_from_invocation);
+    turn.provider_status = match latest.finish_reason.as_ref() {
+        Some(contracts::LlmInvocationFinishReasonView::Error) => {
+            contracts::ChatTurnProviderStatusView::Failed
+        }
+        _ => contracts::ChatTurnProviderStatusView::Responded,
+    };
+    if let Some(tool_trace_count) = latest.tool_trace_count {
+        turn.tool_trace_count = tool_trace_count;
+    }
+    turn.stream_status = infer_chat_turn_stream_status(
+        &turn.stream_mode,
+        &turn.provider_status,
+        turn.provider_requested_at,
+        turn.provider_responded_at,
+        turn.completed_at,
+    );
+    if turn.first_token_at.is_none() {
+        turn.first_token_at = infer_chat_turn_first_token_at(turn);
+    }
+    if turn.stream_completed_at.is_none() {
+        turn.stream_completed_at = infer_chat_turn_stream_completed_at(turn);
+    }
+    if turn.artifact_commit_ready_at.is_none() {
+        turn.artifact_commit_ready_at = infer_chat_turn_artifact_commit_ready_at(turn);
+    }
+    turn.artifact_commit_status = infer_chat_turn_artifact_commit_status(
+        &turn.status,
+        turn.assistant_message_persisted_at,
+        turn.provider_responded_at,
+        turn.artifact_commit_ready_at,
+    );
+    if !matches!(
+        turn.artifact_commit_status,
+        contracts::ChatTurnArtifactCommitStatusView::Failed
+    ) {
+        turn.artifact_commit_failure_source = None;
+    }
+    if turn.tool_trace_count > 0 && turn.tool_calls_emitted_at.is_none() {
+        turn.tool_calls_emitted_at = turn.provider_responded_at.or(turn.completed_at);
+    }
+    turn.tool_loop_status =
+        infer_chat_turn_tool_loop_status(turn.tool_trace_count, turn.tool_status_summary.as_ref());
+    if matches!(
+        turn.tool_loop_status,
+        contracts::ChatTurnToolLoopStatusView::Completed
+            | contracts::ChatTurnToolLoopStatusView::Failed
+    ) && turn.tool_loop_settled_at.is_none()
+    {
+        turn.tool_loop_settled_at = turn.completed_at.or(turn.provider_responded_at);
+    }
+    turn.events = build_chat_turn_events(turn);
+}
+
+pub(crate) fn hydrate_chat_message_manifest_view(
+    value: &Value,
+    llm_invocations: &[LlmInvocationView],
+    tool_executions: &[ToolExecutionView],
+) -> Option<contracts::ChatMessageManifestView> {
+    let mut view = parse_chat_message_manifest(value)?;
+    if let Some(runtime) = manifest_runtime_from_latest_llm_invocation(llm_invocations) {
+        view.runtime = Some(runtime);
+    }
+    if !tool_executions.is_empty() {
+        view.tool_trace = manifest_tool_trace_from_tool_executions(tool_executions);
+        if let Some(runtime) = view.runtime.as_mut() {
+            runtime.tool_trace_count = Some(tool_executions.len());
+        }
+    }
+    if let Some(turn) = view.turn.as_mut() {
+        if turn.finish_reason.is_none() {
+            turn.finish_reason = view
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.finish_reason.clone());
+        }
+        if matches!(
+            turn.provider_status,
+            contracts::ChatTurnProviderStatusView::Pending
+        ) {
+            turn.provider_status = match turn.finish_reason {
+                Some(contracts::ManifestFinishReasonView::Error) => {
+                    contracts::ChatTurnProviderStatusView::Failed
+                }
+                Some(_) => contracts::ChatTurnProviderStatusView::Responded,
+                None => turn.provider_status.clone(),
+            };
+        }
+        turn.events = build_chat_turn_events(turn);
+        hydrate_chat_turn_from_latest_llm_invocation(turn, llm_invocations);
+        if !tool_executions.is_empty() {
+            turn.tool_trace_count = tool_executions.len();
+            turn.tool_status_summary = summarize_tool_execution_statuses(tool_executions);
+            turn.tool_loop_status = infer_chat_turn_tool_loop_status(
+                turn.tool_trace_count,
+                turn.tool_status_summary.as_ref(),
+            );
+            if turn.tool_calls_emitted_at.is_none() {
+                turn.tool_calls_emitted_at = tool_executions
+                    .iter()
+                    .map(|execution| execution.created_at)
+                    .min()
+                    .or(turn.provider_responded_at);
+            }
+            turn.tool_loop_settled_at = infer_chat_turn_tool_loop_settled_at(turn, tool_executions);
+            turn.events = build_chat_turn_events(turn);
+        }
+        if turn.stream_status == contracts::ChatTurnStreamStatusView::NotRequested
+            && matches!(
+                turn.stream_mode,
+                contracts::ChatTurnStreamModeView::Streaming
+            )
+        {
+            turn.stream_status = infer_chat_turn_stream_status(
+                &turn.stream_mode,
+                &turn.provider_status,
+                turn.provider_requested_at,
+                turn.provider_responded_at,
+                turn.completed_at,
+            );
+        }
+        if turn.first_token_at.is_none() {
+            turn.first_token_at = infer_chat_turn_first_token_at(turn);
+        }
+        if turn.stream_completed_at.is_none() {
+            turn.stream_completed_at = infer_chat_turn_stream_completed_at(turn);
+        }
+    }
+    Some(view)
+}
+
 #[cfg(test)]
 mod tests {
+    use domain_model::{ChatMessageId, LlmInvocationId, ToolExecutionId, WorkflowExecutionId};
     use serde_json::json;
 
     use super::*;
@@ -879,6 +1028,57 @@ mod tests {
         "2026-06-14T00:00:00Z"
             .parse()
             .expect("fixed timestamp should parse")
+    }
+
+    fn llm_invocation_view(
+        sequence_no: i32,
+        finish_reason: contracts::LlmInvocationFinishReasonView,
+    ) -> LlmInvocationView {
+        LlmInvocationView {
+            id: LlmInvocationId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            source_kind: contracts::LlmInvocationSourceKindView::ChatMessage,
+            dataset_output_id: None,
+            chat_message_id: Some(ChatMessageId::new()),
+            sequence_no,
+            mode: contracts::LlmInvocationModeView::Provider,
+            provider: Some(format!("provider_{sequence_no}")),
+            model: Some(format!("model_{sequence_no}")),
+            request_id: Some(format!("req_{sequence_no}")),
+            finish_reason: Some(finish_reason),
+            latency_ms: Some(100 + u64::try_from(sequence_no).unwrap_or_default()),
+            usage: Some(contracts::LlmTokenUsageView {
+                input_tokens: 10,
+                output_tokens: 20,
+                total_tokens: 30,
+            }),
+            system_prompt_key: Some("chat.answer".to_string()),
+            system_prompt_version: Some("v1".to_string()),
+            tool_trace_count: Some(2),
+            created_at: fixed_time(),
+        }
+    }
+
+    fn tool_execution_view(
+        sequence_no: i32,
+        status: contracts::ManifestToolCallStatusView,
+        created_at: DateTime<Utc>,
+    ) -> ToolExecutionView {
+        ToolExecutionView {
+            id: ToolExecutionId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            source_kind: contracts::ToolExecutionSourceKindView::ChatMessage,
+            dataset_output_id: None,
+            chat_message_id: Some(ChatMessageId::new()),
+            sequence_no,
+            call_id: Some(format!("call_{sequence_no}")),
+            tool_name: format!("tool.{sequence_no}"),
+            tool: None,
+            status,
+            arguments: Some(json!({ "sequence": sequence_no })),
+            result: Some(json!({ "ok": true })),
+            created_at,
+        }
     }
 
     #[test]
@@ -1075,6 +1275,87 @@ mod tests {
                 .and_then(|runtime| runtime.tool_trace_count),
             Some(1)
         );
+    }
+
+    #[test]
+    fn chat_message_manifest_hydrate_prefers_latest_llm_runtime_and_tool_execution_trace() {
+        let dataset_id = DatasetId::new();
+        let earlier_tool_at: DateTime<Utc> = "2026-06-14T00:00:03Z"
+            .parse()
+            .expect("fixed timestamp should parse");
+        let later_tool_at: DateTime<Utc> = "2026-06-14T00:00:05Z"
+            .parse()
+            .expect("fixed timestamp should parse");
+
+        let manifest = hydrate_chat_message_manifest_view(
+            &json!({
+                "generator": "chat-session-worker",
+                "schema_version": "0.3.0",
+                "dataset_id": dataset_id,
+                "prompt": "生成报表",
+                "indexed_document_count": 4,
+                "refreshed_chunks": 20,
+                "prior_message_count": 1,
+                "context_binding": "creation_time",
+                "tool_trace": [],
+                "turn": {
+                    "turn_id": "turn-hydrate",
+                    "status": "completed",
+                    "stream_mode": "streaming",
+                    "provider_status": "pending",
+                    "provider_requested_at": "2026-06-14T00:00:01Z",
+                    "tool_trace_count": 0,
+                    "started_at": "2026-06-14T00:00:00Z",
+                    "completed_at": "2026-06-14T00:00:06Z"
+                }
+            }),
+            &[
+                llm_invocation_view(1, contracts::LlmInvocationFinishReasonView::Stop),
+                llm_invocation_view(2, contracts::LlmInvocationFinishReasonView::ToolCalls),
+            ],
+            &[
+                tool_execution_view(
+                    2,
+                    contracts::ManifestToolCallStatusView::Completed,
+                    later_tool_at,
+                ),
+                tool_execution_view(
+                    1,
+                    contracts::ManifestToolCallStatusView::Failed,
+                    earlier_tool_at,
+                ),
+            ],
+        )
+        .expect("valid manifest should hydrate");
+
+        let runtime = manifest.runtime.expect("runtime should be hydrated");
+        assert_eq!(runtime.provider.as_deref(), Some("provider_2"));
+        assert_eq!(runtime.request_id.as_deref(), Some("req_2"));
+        assert_eq!(
+            runtime.finish_reason,
+            Some(contracts::ManifestFinishReasonView::ToolCalls)
+        );
+        assert_eq!(runtime.tool_trace_count, Some(2));
+        assert_eq!(manifest.tool_trace[0].call_id.as_deref(), Some("call_1"));
+        assert_eq!(manifest.tool_trace[1].call_id.as_deref(), Some("call_2"));
+
+        let turn = manifest.turn.expect("turn should hydrate");
+        assert_eq!(turn.provider_request_id.as_deref(), Some("req_2"));
+        assert_eq!(turn.tool_trace_count, 2);
+        assert_eq!(
+            turn.tool_status_summary.as_ref().map(|summary| (
+                summary.requested_count,
+                summary.completed_count,
+                summary.failed_count
+            )),
+            Some((0, 1, 1))
+        );
+        assert_eq!(turn.tool_calls_emitted_at, turn.completed_at);
+        assert_eq!(turn.tool_loop_settled_at, Some(later_tool_at));
+        assert!(turn
+            .events
+            .iter()
+            .any(|event| event.kind == contracts::ChatTurnEventKindView::ToolLoopFailed));
     }
 
     #[test]
