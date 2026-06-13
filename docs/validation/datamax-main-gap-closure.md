@@ -14579,3 +14579,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Manifest Service Handoff Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move manifest service handoff, report entry state, resolution, service lane, source, and timestamp parsers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved `parse_manifest_service_handoff`, `parse_manifest_timestamp`, `parse_model_facing_report_entry_state`, and `parse_chat_session_report_entry_resolution` into the support module;
+  - kept contract view types, response fields, service handoff required enum rejection, optional timestamp behavior, suggested title/objective pass-through, and confirmed report plan id parsing unchanged;
+  - added module coverage for full handoff parsing, unknown required enum rejection, invalid optional timestamp ignore behavior, report entry state parsing, resolution parsing, and RFC3339 timestamp parsing.
+- Local verification:
+  - `cargo fmt`: completed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api manifest_service_handoff_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api dataset_output_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api report_view_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api to_chat_message_view_parses_placeholder_runtime_manifest --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api to_chat_message_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `failed=false`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.

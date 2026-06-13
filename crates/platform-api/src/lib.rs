@@ -228,6 +228,7 @@ mod id_parse_support;
 mod lifecycle_updates;
 mod llm_invocation_view_support;
 mod manifest_runtime_view_support;
+mod manifest_service_handoff_support;
 mod memory_directory_scope;
 mod memory_directory_view_support;
 mod model_facing_document_focus;
@@ -347,6 +348,7 @@ use id_parse_support::*;
 use lifecycle_updates::*;
 use llm_invocation_view_support::*;
 use manifest_runtime_view_support::*;
+use manifest_service_handoff_support::*;
 use memory_directory_scope::*;
 use memory_directory_view_support::*;
 use model_facing_format::*;
@@ -73110,96 +73112,6 @@ fn parse_chat_session_turn_kind(value: &str) -> Option<contracts::ChatSessionTur
         }
         _ => None,
     }
-}
-
-fn parse_model_facing_report_entry_state(
-    value: &str,
-) -> Option<contracts::ModelFacingReportEntryStateView> {
-    match value {
-        "not_applicable" => Some(contracts::ModelFacingReportEntryStateView::NotApplicable),
-        "confirmation_required" => {
-            Some(contracts::ModelFacingReportEntryStateView::ConfirmationRequired)
-        }
-        "confirmed" => Some(contracts::ModelFacingReportEntryStateView::Confirmed),
-        _ => None,
-    }
-}
-
-fn parse_model_facing_service_lane(value: &str) -> Option<contracts::ModelFacingServiceLaneView> {
-    match value {
-        "material_service" => Some(contracts::ModelFacingServiceLaneView::MaterialService),
-        "report_service" => Some(contracts::ModelFacingServiceLaneView::ReportService),
-        "controlled_platform_action" => {
-            Some(contracts::ModelFacingServiceLaneView::ControlledPlatformAction)
-        }
-        _ => None,
-    }
-}
-
-fn parse_chat_session_report_entry_resolution(
-    value: &str,
-) -> Option<contracts::ChatSessionReportEntryResolutionView> {
-    match value {
-        "stay_material_service" => {
-            Some(contracts::ChatSessionReportEntryResolutionView::StayMaterialService)
-        }
-        "enter_report_service" => {
-            Some(contracts::ChatSessionReportEntryResolutionView::EnterReportService)
-        }
-        _ => None,
-    }
-}
-
-fn parse_manifest_service_handoff_source(
-    value: &str,
-) -> Option<contracts::ManifestServiceHandoffSourceView> {
-    match value {
-        "chat_session_report_entry" => {
-            Some(contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry)
-        }
-        _ => None,
-    }
-}
-
-fn parse_manifest_service_handoff(value: &Value) -> Option<contracts::ManifestServiceHandoffView> {
-    let handoff = value.as_object()?;
-    Some(contracts::ManifestServiceHandoffView {
-        source: parse_manifest_service_handoff_source(handoff.get("source")?.as_str()?)?,
-        service_lane: parse_model_facing_service_lane(handoff.get("service_lane")?.as_str()?)?,
-        report_entry_state: parse_model_facing_report_entry_state(
-            handoff.get("report_entry_state")?.as_str()?,
-        )?,
-        requested_at: handoff
-            .get("requested_at")
-            .and_then(parse_manifest_timestamp),
-        resolved_at: handoff
-            .get("resolved_at")
-            .and_then(parse_manifest_timestamp),
-        resolved_action: handoff
-            .get("resolved_action")
-            .and_then(Value::as_str)
-            .and_then(parse_chat_session_report_entry_resolution),
-        suggested_title: handoff
-            .get("suggested_title")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        suggested_objective: handoff
-            .get("suggested_objective")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        confirmed_report_plan_id: handoff
-            .get("confirmed_report_plan_id")
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(ReportPlanId::from),
-    })
-}
-
-fn parse_manifest_timestamp(value: &Value) -> Option<DateTime<Utc>> {
-    let timestamp = value.as_str()?;
-    DateTime::parse_from_rfc3339(timestamp)
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
 }
 
 fn parse_chat_turn_status(value: &str) -> Option<contracts::ChatTurnStatusView> {
