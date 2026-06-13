@@ -480,6 +480,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `document_chunk_support` excerpt helper 拆分已提交并同步 8 服务器；远端 `cargo check`、fallback supply/检索排序 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run detail target 构造和计数 helper 已拆到 `assistant_run_detail_support` 模块并补模块单测；detail-first gating、retrieval evidence 过滤、文档去重、media/timestamp reason、字段 alias 保留、limit 截断和 detail target 计数语义保持不变。本地 `cargo check`、附件标题/detail target/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_detail_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、附件标题/detail target/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run evidence supplied count 和 evidence status label helper 已拆到 `assistant_run_evidence_state_support` 模块并补模块单测；`supplied_items` 数组计数、`supplied/empty/not_requested/unknown` 状态文案、fallback supply count 和 detail target count 组合文案保持不变。本地 `cargo check`、Codex package/ReAct trace/supply quality Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 

@@ -172,6 +172,7 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
 mod assistant_run_detail_support;
+mod assistant_run_evidence_state_support;
 mod assistant_run_react_support;
 mod assistant_run_sse_support;
 mod assistant_scope_summary;
@@ -241,6 +242,7 @@ mod workflow_runtime_summary;
 mod zip_ingest_support;
 
 use assistant_run_detail_support::*;
+use assistant_run_evidence_state_support::*;
 use assistant_run_react_support::*;
 use assistant_run_sse_support::*;
 use assistant_scope_summary::*;
@@ -68221,49 +68223,6 @@ fn assistant_run_memory_item_is_supply_eligible(item: &ConversationMemoryItem) -
             item.item_kind.as_str(),
             "assistant_output" | "artifact_output" | "generated_artifact"
         )
-}
-
-fn assistant_run_evidence_supplied_count(evidence_state: &Value) -> usize {
-    evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0)
-}
-
-fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
-    let status = evidence_state
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    match status {
-        "supplied" => {
-            let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
-            let detail_target_count = assistant_run_detail_target_count(evidence_state);
-            let fallback_supply_count = evidence_state
-                .get("fallback_supply_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if fallback_supply_count > 0 {
-                if detail_target_count > 0 {
-                    return format!(
-                        "已供料 {supplied_count} 条，其中 {fallback_supply_count} 条来自可见文档切片兜底，建议深读 {detail_target_count} 份文档"
-                    );
-                }
-                return format!(
-                    "已供料 {supplied_count} 条，其中 {fallback_supply_count} 条来自可见文档切片兜底"
-                );
-            }
-            if detail_target_count > 0 {
-                format!("已检索 {supplied_count} 条供料项，建议深读 {detail_target_count} 份文档")
-            } else {
-                format!("已检索 {supplied_count} 条供料项")
-            }
-        }
-        "empty" => "已请求供料，但暂未检索到可用内容".to_string(),
-        "not_requested" => "未请求数据集供料".to_string(),
-        other => other.to_string(),
-    }
 }
 
 fn assistant_run_placeholder_user_message(is_continue: bool, evidence_state: &Value) -> String {
