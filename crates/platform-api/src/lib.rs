@@ -227,6 +227,7 @@ mod id_parse_support;
 mod lifecycle_updates;
 mod llm_invocation_view_support;
 mod memory_directory_scope;
+mod memory_directory_view_support;
 mod model_facing_document_focus;
 mod model_facing_format;
 mod model_facing_handoff;
@@ -343,6 +344,7 @@ use id_parse_support::*;
 use lifecycle_updates::*;
 use llm_invocation_view_support::*;
 use memory_directory_scope::*;
+use memory_directory_view_support::*;
 use model_facing_format::*;
 #[cfg(test)]
 use model_facing_policy::build_model_facing_summary;
@@ -73085,112 +73087,6 @@ fn is_lexical_stop_word(token: &str) -> bool {
             | "were"
             | "with"
     )
-}
-
-fn to_memory_directory_view(directory: MemoryDirectory) -> MemoryDirectoryView {
-    MemoryDirectoryView {
-        id: directory.id,
-        dataset_id: directory.dataset_id,
-        execution_id: directory.execution_id,
-        owner_user_id: directory.owner_user_id,
-        source_document_ids: directory.source_document_ids,
-        version_no: directory.version_no,
-        directory_nodes: directory.directory_nodes,
-        refreshed_chunks: directory.refreshed_chunks,
-        directory_tree: parse_memory_directory_manifest(
-            &directory.directory_manifest,
-            directory.version_no,
-        ),
-        directory_manifest: directory.directory_manifest,
-        created_at: directory.created_at,
-    }
-}
-
-fn parse_memory_directory_manifest(
-    value: &Value,
-    version_no: i32,
-) -> Option<contracts::MemoryDirectoryManifestView> {
-    let object = value.as_object()?;
-
-    Some(contracts::MemoryDirectoryManifestView {
-        schema_version: object.get("schema_version")?.as_str()?.to_string(),
-        generator: object.get("generator")?.as_str()?.to_string(),
-        dataset_id: DatasetId::from(Uuid::parse_str(object.get("dataset_id")?.as_str()?).ok()?),
-        version_no: object
-            .get("version_no")
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(version_no),
-        include_directory: object.get("include_directory")?.as_bool()?,
-        root: parse_memory_directory_node(object.get("root")?, true, version_no)?,
-    })
-}
-
-fn parse_memory_directory_scope(value: &str) -> Option<contracts::MemoryDirectoryNodeScopeView> {
-    match value {
-        "dataset" => Some(contracts::MemoryDirectoryNodeScopeView::Dataset),
-        _ => None,
-    }
-}
-
-fn parse_memory_directory_node(
-    value: &Value,
-    is_root: bool,
-    root_version_no: i32,
-) -> Option<contracts::MemoryDirectoryNodeView> {
-    let object = value.as_object()?;
-    let kind = match object.get("kind")?.as_str()? {
-        "dataset" => contracts::MemoryDirectoryNodeKind::Dataset,
-        "document" => contracts::MemoryDirectoryNodeKind::Document,
-        _ => return None,
-    };
-
-    let document = match kind {
-        contracts::MemoryDirectoryNodeKind::Dataset => None,
-        contracts::MemoryDirectoryNodeKind::Document => {
-            Some(contracts::MemoryDirectoryDocumentView {
-                id: DocumentId::from(Uuid::parse_str(object.get("document_id")?.as_str()?).ok()?),
-                lifecycle: contracts::DocumentLifecycleView::from_str(
-                    object.get("lifecycle")?.as_str()?,
-                )?,
-                chunk_count: object.get("chunk_count")?.as_u64()? as usize,
-            })
-        }
-    };
-
-    let scope = object
-        .get("scope")
-        .and_then(Value::as_str)
-        .and_then(parse_memory_directory_scope)
-        .or_else(|| {
-            if is_root {
-                Some(contracts::MemoryDirectoryNodeScopeView::Dataset)
-            } else {
-                None
-            }
-        });
-    let version_no = object
-        .get("version_no")
-        .and_then(Value::as_i64)
-        .and_then(|value| i32::try_from(value).ok())
-        .or_else(|| if is_root { Some(root_version_no) } else { None });
-    let children = object
-        .get("children")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|child| parse_memory_directory_node(child, false, root_version_no))
-        .collect::<Option<Vec<_>>>()?;
-
-    Some(contracts::MemoryDirectoryNodeView {
-        kind,
-        title: object.get("title")?.as_str()?.to_string(),
-        scope,
-        version_no,
-        document,
-        children,
-    })
 }
 
 fn parse_manifest_context_binding(value: &str) -> Option<contracts::ManifestContextBindingView> {
