@@ -514,6 +514,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_resume_profile_match_support` 匹配答案 helper 拆分已提交并同步 8 服务器；远端 HEAD `a92df5c7a`，`cargo check`、resume profile match/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` resume prompt intent helper 已拆到 `assistant_run_resume_prompt_support` 模块并补模块单测；简历排序/排行/出表识别、项目交付明细识别、职位/地点/公司/教育/证书/年限排序、候选人匹配识别、频次/覆盖类问题保护和升序判断语义保持不变。本地 `cargo check`、resume prompt/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_resume_prompt_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `1d4aab509`，`cargo check`、resume prompt/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` 通用维度 prompt intent helper 已拆到 `assistant_run_prompt_dimension_support` 模块并补模块单测；技能/项目/岗位/人员/地点/学校/学历/证书/关键词/年份/章节/段落/表格/年龄/性别/时间统计识别、简历信号和简历时间统计边界语义保持不变。本地 `cargo check`、prompt dimension/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
