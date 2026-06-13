@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use contracts::{LlmInvocationView, ToolExecutionView};
 use domain_model::{
-    DatasetId, DatasetOutputId, MemoryDirectoryId, ReportPlanId, RetrievalEvidenceId,
+    ChatMessage, ChatMessageId, ChatMessageRole, DatasetId, DatasetOutputId, MemoryDirectoryId,
+    ReportPlanId, RetrievalEvidenceId,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -1017,9 +1018,61 @@ pub(crate) fn hydrate_chat_message_manifest_view(
     Some(view)
 }
 
+pub(crate) fn hydrate_assistant_turn_from_message_record(
+    message: &ChatMessage,
+    manifest_view: &mut Option<contracts::ChatMessageManifestView>,
+) {
+    if !matches!(message.role, ChatMessageRole::Assistant) {
+        return;
+    }
+
+    hydrate_assistant_turn_from_message_metadata(message.id, message.created_at, manifest_view);
+}
+
+pub(crate) fn hydrate_assistant_turn_from_message_metadata(
+    message_id: ChatMessageId,
+    persisted_at: DateTime<Utc>,
+    manifest_view: &mut Option<contracts::ChatMessageManifestView>,
+) {
+    let Some(manifest_view) = manifest_view.as_mut() else {
+        return;
+    };
+    let Some(turn) = manifest_view.turn.as_mut() else {
+        return;
+    };
+
+    if turn.assistant_message_id.is_none() {
+        turn.assistant_message_id = Some(message_id);
+    }
+    if turn.assistant_message_persisted_at.is_none() {
+        turn.assistant_message_persisted_at = Some(persisted_at);
+    }
+    if turn.completed_at.is_none() {
+        turn.completed_at = turn.assistant_message_persisted_at;
+    }
+    if turn.artifact_commit_ready_at.is_none() {
+        turn.artifact_commit_ready_at = infer_chat_turn_artifact_commit_ready_at(turn);
+    }
+    turn.artifact_commit_status = infer_chat_turn_artifact_commit_status(
+        &turn.status,
+        turn.assistant_message_persisted_at,
+        turn.provider_responded_at,
+        turn.artifact_commit_ready_at,
+    );
+    if !matches!(
+        turn.artifact_commit_status,
+        contracts::ChatTurnArtifactCommitStatusView::Failed
+    ) {
+        turn.artifact_commit_failure_source = None;
+    }
+    turn.events = build_chat_turn_events(turn);
+}
+
 #[cfg(test)]
 mod tests {
-    use domain_model::{ChatMessageId, LlmInvocationId, ToolExecutionId, WorkflowExecutionId};
+    use domain_model::{
+        ChatSessionId, LlmInvocationId, TenantId, ToolExecutionId, WorkflowExecutionId,
+    };
     use serde_json::json;
 
     use super::*;
@@ -1356,6 +1409,108 @@ mod tests {
             .events
             .iter()
             .any(|event| event.kind == contracts::ChatTurnEventKindView::ToolLoopFailed));
+    }
+
+    #[test]
+    fn assistant_turn_metadata_hydrate_sets_message_commit_fields_and_events() {
+        let dataset_id = DatasetId::new();
+        let message_id = ChatMessageId::new();
+        let persisted_at: DateTime<Utc> = "2026-06-14T00:00:08Z"
+            .parse()
+            .expect("fixed timestamp should parse");
+        let mut manifest = parse_chat_message_manifest(&json!({
+            "generator": "chat-session-worker",
+            "schema_version": "0.3.0",
+            "dataset_id": dataset_id,
+            "prompt": "继续回答",
+            "indexed_document_count": 2,
+            "refreshed_chunks": 8,
+            "prior_message_count": 1,
+            "context_binding": "creation_time",
+            "tool_trace": [],
+            "turn": {
+                "turn_id": "turn-message-commit",
+                "status": "completed",
+                "stream_mode": "buffered",
+                "provider_status": "responded",
+                "provider_responded_at": "2026-06-14T00:00:05Z",
+                "tool_trace_count": 0,
+                "started_at": "2026-06-14T00:00:00Z"
+            }
+        }));
+
+        hydrate_assistant_turn_from_message_metadata(message_id, persisted_at, &mut manifest);
+
+        let turn = manifest
+            .as_ref()
+            .and_then(|manifest| manifest.turn.as_ref())
+            .expect("turn should remain available");
+        assert_eq!(turn.assistant_message_id, Some(message_id));
+        assert_eq!(turn.assistant_message_persisted_at, Some(persisted_at));
+        assert_eq!(turn.completed_at, Some(persisted_at));
+        assert_eq!(
+            turn.artifact_commit_status,
+            contracts::ChatTurnArtifactCommitStatusView::Completed
+        );
+        assert!(
+            turn.events
+                .iter()
+                .any(|event| event.kind
+                    == contracts::ChatTurnEventKindView::AssistantMessagePersisted)
+        );
+        assert!(turn
+            .events
+            .iter()
+            .any(|event| event.kind == contracts::ChatTurnEventKindView::TurnCompleted));
+    }
+
+    #[test]
+    fn assistant_turn_record_hydrate_ignores_non_assistant_messages() {
+        let dataset_id = DatasetId::new();
+        let now = fixed_time();
+        let message = ChatMessage {
+            id: ChatMessageId::new(),
+            tenant_id: TenantId::new(),
+            session_id: ChatSessionId::new(),
+            role: ChatMessageRole::User,
+            turn_index: 1,
+            content: "用户消息".to_string(),
+            message_manifest: json!({}),
+            created_at: now,
+        };
+        let mut manifest = parse_chat_message_manifest(&json!({
+            "generator": "chat-session-worker",
+            "schema_version": "0.3.0",
+            "dataset_id": dataset_id,
+            "prompt": "用户消息",
+            "indexed_document_count": 1,
+            "refreshed_chunks": 1,
+            "prior_message_count": 0,
+            "context_binding": "creation_time",
+            "tool_trace": [],
+            "turn": {
+                "turn_id": "turn-user",
+                "status": "pending",
+                "stream_mode": "buffered",
+                "provider_status": "pending",
+                "tool_trace_count": 0,
+                "started_at": "2026-06-14T00:00:00Z"
+            }
+        }));
+
+        hydrate_assistant_turn_from_message_record(&message, &mut manifest);
+
+        let turn = manifest
+            .as_ref()
+            .and_then(|manifest| manifest.turn.as_ref())
+            .expect("turn should remain available");
+        assert_eq!(turn.assistant_message_id, None);
+        assert_eq!(turn.assistant_message_persisted_at, None);
+        assert_eq!(turn.completed_at, None);
+        assert_eq!(
+            turn.artifact_commit_status,
+            contracts::ChatTurnArtifactCommitStatusView::NotReady
+        );
     }
 
     #[test]

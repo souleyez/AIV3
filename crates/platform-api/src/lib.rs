@@ -101,7 +101,7 @@ use contracts::{
 use domain_model::StaticPageRenderOutputId;
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
-    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
+    AuthSessionMethod, ChatMessage, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
     DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
     EmailVerificationChallenge, MemoryDirectory, PublishedReport, PublishedReportId,
@@ -73273,56 +73273,6 @@ fn to_chat_message_view(
     view.model_facing = derive_chat_message_model_facing_summary(&view);
 
     view
-}
-
-fn hydrate_assistant_turn_from_message_record(
-    message: &ChatMessage,
-    manifest_view: &mut Option<contracts::ChatMessageManifestView>,
-) {
-    if !matches!(message.role, ChatMessageRole::Assistant) {
-        return;
-    }
-
-    hydrate_assistant_turn_from_message_metadata(message.id, message.created_at, manifest_view);
-}
-
-fn hydrate_assistant_turn_from_message_metadata(
-    message_id: ChatMessageId,
-    persisted_at: DateTime<Utc>,
-    manifest_view: &mut Option<contracts::ChatMessageManifestView>,
-) {
-    let Some(manifest_view) = manifest_view.as_mut() else {
-        return;
-    };
-    let Some(turn) = manifest_view.turn.as_mut() else {
-        return;
-    };
-
-    if turn.assistant_message_id.is_none() {
-        turn.assistant_message_id = Some(message_id);
-    }
-    if turn.assistant_message_persisted_at.is_none() {
-        turn.assistant_message_persisted_at = Some(persisted_at);
-    }
-    if turn.completed_at.is_none() {
-        turn.completed_at = turn.assistant_message_persisted_at;
-    }
-    if turn.artifact_commit_ready_at.is_none() {
-        turn.artifact_commit_ready_at = infer_chat_turn_artifact_commit_ready_at(turn);
-    }
-    turn.artifact_commit_status = infer_chat_turn_artifact_commit_status(
-        &turn.status,
-        turn.assistant_message_persisted_at,
-        turn.provider_responded_at,
-        turn.artifact_commit_ready_at,
-    );
-    if !matches!(
-        turn.artifact_commit_status,
-        contracts::ChatTurnArtifactCommitStatusView::Failed
-    ) {
-        turn.artifact_commit_failure_source = None;
-    }
-    turn.events = build_chat_turn_events(turn);
 }
 
 async fn hydrate_chat_message_view(
