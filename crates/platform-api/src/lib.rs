@@ -104,7 +104,7 @@ use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
     AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
-    DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId, DocumentLifecycle,
+    DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
     EmailVerificationChallenge, LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode,
     LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedReport,
     PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
@@ -249,6 +249,7 @@ mod report_render_output_asset;
 mod request_scope_headers;
 mod resource_access;
 mod retrieval_evidence_ranking_support;
+mod retrieval_evidence_view_support;
 mod retrieval_query_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
@@ -366,6 +367,7 @@ use report_render_output_asset::*;
 use request_scope_headers::*;
 use resource_access::*;
 use retrieval_evidence_ranking_support::*;
+use retrieval_evidence_view_support::*;
 use retrieval_query_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
@@ -70710,28 +70712,6 @@ fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
     })
 }
 
-fn to_retrieval_evidence_view(evidence: RetrievalEvidence) -> RetrievalEvidenceView {
-    let evidence_manifest_view = parse_retrieval_evidence_manifest(&evidence);
-
-    RetrievalEvidenceView {
-        id: evidence.id,
-        dataset_id: evidence.dataset_id,
-        document_id: evidence.document_id,
-        document_chunk_id: evidence.document_chunk_id,
-        execution_id: evidence.execution_id,
-        chunk_index: evidence.chunk_index,
-        source_locator: evidence.source_locator,
-        content_excerpt: evidence.content_excerpt,
-        summary: evidence.summary,
-        payload_filter_key: evidence.payload_filter_key,
-        embedding_model: evidence.embedding_model,
-        recall_score: evidence.recall_score,
-        evidence_manifest: evidence.evidence_manifest,
-        evidence_manifest_view,
-        created_at: evidence.created_at,
-    }
-}
-
 struct RankedRetrievalEvidence<'a> {
     evidence: &'a RetrievalEvidence,
     score: f64,
@@ -73689,124 +73669,6 @@ fn parse_manifest_timestamp(value: &Value) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(timestamp)
         .ok()
         .map(|value| value.with_timezone(&Utc))
-}
-
-fn parse_retrieval_embedding_status(
-    value: &str,
-) -> Option<contracts::RetrievalEmbeddingStatusView> {
-    match value {
-        "pending" => Some(contracts::RetrievalEmbeddingStatusView::Pending),
-        "indexed" => Some(contracts::RetrievalEmbeddingStatusView::Indexed),
-        "failed" => Some(contracts::RetrievalEmbeddingStatusView::Failed),
-        _ => None,
-    }
-}
-
-fn parse_retrieval_recall_status(value: &str) -> Option<contracts::RetrievalRecallStatusView> {
-    match value {
-        "pending" => Some(contracts::RetrievalRecallStatusView::Pending),
-        "ready" => Some(contracts::RetrievalRecallStatusView::Ready),
-        "failed" => Some(contracts::RetrievalRecallStatusView::Failed),
-        _ => None,
-    }
-}
-
-fn parse_retrieval_evidence_manifest(
-    evidence: &RetrievalEvidence,
-) -> Option<contracts::RetrievalEvidenceManifestView> {
-    let object = evidence.evidence_manifest.as_object()?;
-    let embedding = object.get("embedding")?.as_object()?;
-    let recall = object.get("recall")?.as_object()?;
-    let evidence_object = object.get("evidence")?.as_object()?;
-
-    let parse_dataset_id = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(DatasetId::from)
-    };
-    let parse_document_id = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(DocumentId::from)
-    };
-    let parse_document_chunk_id = |container: &serde_json::Map<String, Value>, key: &str| {
-        container
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(DocumentChunkId::from)
-    };
-
-    Some(contracts::RetrievalEvidenceManifestView {
-        schema_version: object
-            .get("schema_version")
-            .and_then(Value::as_str)
-            .unwrap_or("0.2.0")
-            .to_string(),
-        generator: object
-            .get("generator")
-            .and_then(Value::as_str)
-            .unwrap_or("retrieval-worker")
-            .to_string(),
-        dataset_id: parse_dataset_id("dataset_id").unwrap_or(evidence.dataset_id),
-        document_id: parse_document_id("document_id").unwrap_or(evidence.document_id),
-        document_chunk_id: parse_document_chunk_id(object, "document_chunk_id")
-            .or_else(|| parse_document_chunk_id(evidence_object, "document_chunk_id"))
-            .unwrap_or(evidence.document_chunk_id),
-        chunk_index: object
-            .get("chunk_index")
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(evidence.chunk_index),
-        indexed_at: object
-            .get("indexed_at")
-            .and_then(parse_manifest_timestamp)
-            .unwrap_or(evidence.created_at),
-        embedding: contracts::RetrievalEmbeddingManifestView {
-            status: parse_retrieval_embedding_status(embedding.get("status")?.as_str()?)?,
-            model: embedding
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or(evidence.embedding_model.as_str())
-                .to_string(),
-            token_count: embedding.get("token_count")?.as_u64()? as usize,
-        },
-        recall: contracts::RetrievalRecallManifestView {
-            status: parse_retrieval_recall_status(recall.get("status")?.as_str()?)?,
-            score: recall
-                .get("score")
-                .and_then(Value::as_f64)
-                .unwrap_or(evidence.recall_score),
-            rank_hint: recall
-                .get("rank_hint")
-                .and_then(Value::as_u64)
-                .map(|value| value as usize)
-                .or_else(|| {
-                    usize::try_from(evidence.chunk_index)
-                        .ok()
-                        .map(|value| value + 1)
-                })?,
-        },
-        evidence: contracts::RetrievalEvidenceLocatorManifestView {
-            document_chunk_id: parse_document_chunk_id(object, "document_chunk_id")
-                .or_else(|| parse_document_chunk_id(evidence_object, "document_chunk_id"))
-                .unwrap_or(evidence.document_chunk_id),
-            payload_filter_key: evidence_object
-                .get("payload_filter_key")
-                .and_then(Value::as_str)
-                .unwrap_or(evidence.payload_filter_key.as_str())
-                .to_string(),
-            source_locator: evidence_object
-                .get("source_locator")
-                .and_then(Value::as_str)
-                .unwrap_or(evidence.source_locator.as_str())
-                .to_string(),
-        },
-    })
 }
 
 fn parse_chat_turn_status(value: &str) -> Option<contracts::ChatTurnStatusView> {
