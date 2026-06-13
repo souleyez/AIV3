@@ -185,6 +185,7 @@ mod document_compare_model_facing;
 mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
+mod document_view_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_text;
@@ -244,6 +245,7 @@ use document_detail_model_facing::*;
 use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
+use document_view_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_text::*;
@@ -74367,23 +74369,6 @@ fn to_document_summary_with_dataset_ids(
     }
 }
 
-fn normalize_document_dataset_ids(
-    canonical_dataset_id: DatasetId,
-    dataset_ids: Vec<DatasetId>,
-) -> Vec<DatasetId> {
-    let mut seen = BTreeSet::new();
-    let mut normalized = Vec::new();
-    if seen.insert(canonical_dataset_id) {
-        normalized.push(canonical_dataset_id);
-    }
-    for dataset_id in dataset_ids {
-        if seen.insert(dataset_id) {
-            normalized.push(dataset_id);
-        }
-    }
-    normalized
-}
-
 async fn to_document_summaries_with_dataset_ids(
     state: &AppState,
     documents: Vec<Document>,
@@ -74632,17 +74617,6 @@ fn extract_media_metadata_from_chunks(chunks: &[DocumentChunk]) -> Option<Value>
             .or_else(|| metadata.get("media"))
             .cloned()
     })
-}
-
-fn infer_media_kind_from_content_type(content_type: &str) -> &'static str {
-    let lower = content_type.trim().to_ascii_lowercase();
-    if lower.starts_with("audio/") {
-        "audio"
-    } else if lower.starts_with("video/") {
-        "video"
-    } else {
-        "unknown"
-    }
 }
 
 fn collect_media_transcript_segments(

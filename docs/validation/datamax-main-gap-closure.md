@@ -10829,6 +10829,39 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, upload ingestion execution, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Document View Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public API contracts;
+  - move document-view helper logic for dataset-id normalization and media-kind inference out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/document_view_support.rs`;
+  - moved `normalize_document_dataset_ids` and `infer_media_kind_from_content_type` into that module;
+  - kept existing call names available through `use document_view_support::*`;
+  - added module coverage for canonical dataset priority, dedupe order, and audio/video/unknown media-kind inference.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api document_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api document_summary_dataset_ids_keep_canonical_first_and_deduplicate --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api document_media_detail_view_exposes_transcript_scene_and_provider_evidence --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api document_ --lib`: passed, 109/109 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, route, document-summary field, media-detail field, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, media transcript body, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, upload ingestion execution, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 External Database Source Config Support 8-Server Verification
 
 - 8-server post-sync verification:
