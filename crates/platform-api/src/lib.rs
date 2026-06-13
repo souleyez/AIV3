@@ -80,9 +80,8 @@ use contracts::{
     ModelGatewayProviderStatusView, ModelGatewayRuntimeStatusView, ModelGatewayStatusView,
     PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
-    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
-    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
-    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    PublishReportResponse, PublishedReportDetailView, PublishedReportView, RegisterDocumentRequest,
+    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -106,13 +105,12 @@ use domain_model::{
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
     DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
     EmailVerificationChallenge, MemoryDirectory, MemoryDirectoryId, PublishedReport,
-    PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
-    ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
-    SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
-    StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
-    StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession, UserSessionId,
-    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
-    WorkflowTask,
+    PublishedReportId, PublishedSurface, ReportPlan, ReportPlanId, ReportRenderOutput,
+    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
+    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
+    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId, User,
+    UserId, UserSession, UserSessionId, WorkflowEventRecord, WorkflowExecution,
+    WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -244,6 +242,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod report_view_support;
 mod request_scope_headers;
 mod resource_access;
 mod retrieval_evidence_ranking_support;
@@ -362,9 +361,12 @@ use react_agent_tools::{
     execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
+#[cfg(test)]
 use report_plan_model_facing::*;
+#[cfg(test)]
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use report_view_support::*;
 use request_scope_headers::*;
 use resource_access::*;
 use retrieval_evidence_ranking_support::*;
@@ -70309,25 +70311,6 @@ async fn hydrate_report_plan_summary(
     Ok(to_report_plan_summary(plan, service_handoff))
 }
 
-fn to_report_plan_summary(
-    plan: ReportPlan,
-    service_handoff: Option<contracts::ManifestServiceHandoffView>,
-) -> ReportPlanSummary {
-    let mut view = ReportPlanSummary {
-        id: plan.id,
-        dataset_id: plan.dataset_id,
-        title: plan.title,
-        objective: plan.objective,
-        status: contracts::ReportPlanStatusView::from_domain(plan.status),
-        theme_key: plan.theme_key,
-        current_ast_version_id: plan.current_ast_version_id,
-        service_handoff,
-        model_facing: None,
-    };
-    view.model_facing = Some(derive_report_plan_model_facing_summary(&view));
-    view
-}
-
 fn to_document_summary(document: Document) -> DocumentSummary {
     let dataset_ids = vec![document.dataset_id];
     to_document_summary_with_dataset_ids(document, dataset_ids)
@@ -74893,16 +74876,6 @@ async fn hydrate_chat_message_view(
     ))
 }
 
-fn to_report_plan_ast_version_view(version: ReportPlanAstVersion) -> ReportPlanAstVersionView {
-    ReportPlanAstVersionView {
-        id: version.id,
-        plan_id: version.plan_id,
-        version_no: version.version_no,
-        ast: version.ast,
-        created_at: version.created_at,
-    }
-}
-
 async fn hydrate_report_render_output_view(
     state: &AppState,
     output: ReportRenderOutput,
@@ -74916,50 +74889,6 @@ async fn hydrate_report_render_output_view(
         .as_ref()
         .and_then(workflow_execution_context_service_handoff);
     Ok(to_report_render_output_view(output, service_handoff))
-}
-
-fn to_report_render_output_view(
-    output: ReportRenderOutput,
-    service_handoff: Option<contracts::ManifestServiceHandoffView>,
-) -> ReportRenderOutputView {
-    let mut view = ReportRenderOutputView {
-        id: output.id,
-        execution_id: output.execution_id,
-        plan_id: output.plan_id,
-        dataset_id: output.dataset_id,
-        ast_version_id: output.ast_version_id,
-        surface: output.surface,
-        status: contracts::ReportRenderOutputStatusView::from_domain(output.status),
-        asset_manifest: output.asset_manifest,
-        service_handoff,
-        model_facing: None,
-        created_at: output.created_at,
-    };
-    view.model_facing = Some(derive_report_render_output_model_facing_summary(&view));
-    view
-}
-
-fn to_published_report_view(report: PublishedReport) -> PublishedReportView {
-    PublishedReportView {
-        id: report.id,
-        dataset_id: report.dataset_id,
-        plan_id: report.plan_id,
-        slug: report.slug,
-        current_version_id: report.current_version_id,
-        created_at: report.created_at,
-        updated_at: report.updated_at,
-    }
-}
-
-fn to_published_report_version_view(version: PublishedReportVersion) -> PublishedReportVersionView {
-    PublishedReportVersionView {
-        id: version.id,
-        report_id: version.report_id,
-        version_no: version.version_no,
-        surface: version.surface,
-        asset_manifest: version.asset_manifest,
-        created_at: version.created_at,
-    }
 }
 
 async fn load_published_report_detail_with_state(
