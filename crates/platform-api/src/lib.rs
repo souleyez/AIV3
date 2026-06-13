@@ -105,8 +105,7 @@ use domain_model::{
     AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
     DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
-    EmailVerificationChallenge, LlmInvocation, LlmInvocationFinishReason, LlmInvocationMode,
-    LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId, PublishedReport,
+    EmailVerificationChallenge, MemoryDirectory, MemoryDirectoryId, PublishedReport,
     PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan, ReportPlanAstVersion,
     ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
     SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
@@ -228,6 +227,7 @@ mod html_artifact_static_page_patch_support;
 mod html_artifact_summary_support;
 mod id_parse_support;
 mod lifecycle_updates;
+mod llm_invocation_view_support;
 mod memory_directory_scope;
 mod model_facing_document_focus;
 mod model_facing_format;
@@ -341,6 +341,7 @@ use html_artifact_static_page_patch_support::*;
 use html_artifact_summary_support::*;
 use id_parse_support::*;
 use lifecycle_updates::*;
+use llm_invocation_view_support::*;
 use memory_directory_scope::*;
 use model_facing_format::*;
 #[cfg(test)]
@@ -76997,60 +76998,6 @@ fn to_static_page_render_output_view(
         retryable_error_reason_camel: retryable_error_reason,
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
-    }
-}
-
-fn to_llm_invocation_view(llm_invocation: LlmInvocation) -> LlmInvocationView {
-    LlmInvocationView {
-        id: llm_invocation.id,
-        execution_id: llm_invocation.execution_id,
-        source_kind: match llm_invocation.source_kind {
-            LlmInvocationSourceKind::DatasetOutput => {
-                contracts::LlmInvocationSourceKindView::DatasetOutput
-            }
-            LlmInvocationSourceKind::ChatMessage => {
-                contracts::LlmInvocationSourceKindView::ChatMessage
-            }
-            LlmInvocationSourceKind::WorkflowExecution => {
-                contracts::LlmInvocationSourceKindView::WorkflowExecution
-            }
-        },
-        dataset_output_id: llm_invocation.dataset_output_id,
-        chat_message_id: llm_invocation.chat_message_id,
-        sequence_no: llm_invocation.sequence_no,
-        mode: match llm_invocation.mode {
-            LlmInvocationMode::Placeholder => contracts::LlmInvocationModeView::Placeholder,
-            LlmInvocationMode::Provider => contracts::LlmInvocationModeView::Provider,
-        },
-        provider: llm_invocation.provider,
-        model: llm_invocation.model,
-        request_id: llm_invocation.request_id,
-        finish_reason: llm_invocation.finish_reason.map(|reason| match reason {
-            LlmInvocationFinishReason::Stop => contracts::LlmInvocationFinishReasonView::Stop,
-            LlmInvocationFinishReason::ToolCalls => {
-                contracts::LlmInvocationFinishReasonView::ToolCalls
-            }
-            LlmInvocationFinishReason::Length => contracts::LlmInvocationFinishReasonView::Length,
-            LlmInvocationFinishReason::ContentFilter => {
-                contracts::LlmInvocationFinishReasonView::ContentFilter
-            }
-            LlmInvocationFinishReason::Error => contracts::LlmInvocationFinishReasonView::Error,
-            LlmInvocationFinishReason::Other(value) => {
-                contracts::LlmInvocationFinishReasonView::Other(value)
-            }
-        }),
-        latency_ms: llm_invocation.latency_ms,
-        usage: llm_invocation
-            .usage
-            .map(|usage| contracts::LlmTokenUsageView {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                total_tokens: usage.total_tokens,
-            }),
-        system_prompt_key: llm_invocation.system_prompt_key,
-        system_prompt_version: llm_invocation.system_prompt_version,
-        tool_trace_count: llm_invocation.tool_trace_count,
-        created_at: llm_invocation.created_at,
     }
 }
 

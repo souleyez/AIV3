@@ -14125,3 +14125,38 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 LLM Invocation View Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move LLM invocation domain-to-contract view mapping out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/llm_invocation_view_support.rs`;
+  - moved `to_llm_invocation_view` into the support module;
+  - kept route handlers, storage calls, contract view types, response field names, source kind mapping, invocation mode mapping, finish reason mapping, provider metadata, token usage, system prompt metadata, tool trace count, and timestamp behavior unchanged;
+  - added module coverage for provider metadata and usage preservation, placeholder mode preservation, workflow execution source-kind preservation, and custom provider finish reason preservation.
+- Local verification:
+  - `cargo fmt`: completed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api llm_invocation_view_support --lib`: passed, 3/3 matching tests including the existing workflow execution source-kind regression;
+  - `cargo test -p platform-api to_llm_invocation_view_supports_workflow_execution_source_kind --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api summarize_execution_scope_runtime --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
