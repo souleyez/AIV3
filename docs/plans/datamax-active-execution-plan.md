@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 report view helper 拆分 | 本地代码、格式、定向 Rust 回归、Web build、P0 smoke 和 prewarm observability self-test 已通过。 | 提交、推送 GitHub，并按 P0 code deploy 边界同步 8 服务器。 | `report_view_support` 模块单测、旧 report view 回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 2 | 是否同步 8 服务器 | 本轮是 Rust 代码切片，需要 code deploy。 | 推送后在 8 服务器 `git pull --ff-only`、build release、重启相关服务并跑私有 smoke。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P5 report view helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启、health/ready 和私有 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P4 条件或新 P3 客户样例时切换优先级。 | `report_view_support` 模块单测、旧 report view 回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 2 | 是否同步 8 服务器 | 代码切片已同步并重启；后续验证记录属于 docs-only。 | docs-only fast-forward 到 8 服务器，不 build、不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -582,7 +582,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-14: `crates/platform-api/src/lib.rs` LLM invocation domain-to-contract view mapping helper 已拆到 `llm_invocation_view_support` 模块并补模块单测；`source_kind`、`mode`、`finish_reason`、usage、provider metadata、system prompt 和 tool trace 字段映射语义保持不变。本地 `cargo fmt --check`、LLM invocation view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `60e37eeb7`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` runtime manifest helper 已拆到 `runtime_manifest_support` 模块并补模块单测；LLM finish reason 到 manifest finish reason、最新 invocation runtime、tool trace 排序、tool status 计数和 workflow execution scope runtime summary 语义保持不变。本地 `cargo fmt --check`、runtime manifest Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `cedc0f786`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `scripts/smoke/static-page-prewarm-observability.mjs` 已补强低负载预热观测回执，新增 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount` 和 `prewarmCustomerVisibilityOk`；self-test 现在明确验证 waiting-for-low-load 事件保持 `customer_visible=false` 且泄漏计数为 0。生产 prewarm 仍默认关闭，不启用后台生图。已提交并同步 8 服务器，远端 HEAD `1d55360ae`，脚本级 smoke、health/ready 和服务 active 检查均通过，未 build、未重启。
-- 2026-06-14: `crates/platform-api/src/lib.rs` report plan/render/published report view helper 已拆到 `report_view_support` 模块并补模块单测；report plan summary、AST version、render output、published report/version 字段映射、model_facing 派生和导出 artifact manifest 透传语义保持不变。本地 `cargo fmt --check`、report view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交并同步 8 服务器。
+- 2026-06-14: `crates/platform-api/src/lib.rs` report plan/render/published report view helper 已拆到 `report_view_support` 模块并补模块单测；report plan summary、AST version、render output、published report/version 字段映射、model_facing 派生和导出 artifact manifest 透传语义保持不变。本地 `cargo fmt --check`、report view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `bf62d4cbf`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 
 **Regression commands:**
 
@@ -609,8 +609,8 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 先收口当前 P5 report view helper 切片：提交、推送、8 服务器 code deploy、私有 smoke、validation 写回。
-2. 当前切片完成后，默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
 5. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
