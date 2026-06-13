@@ -3547,6 +3547,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Static Page Template Reference Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move static-page template reference ID parsing, intent inference, enabled/paused template resolution, and safe design-reference JSON helpers out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_template_reference_support.rs`;
+  - moved `StaticPageTemplateReferenceSpec`, `STATIC_PAGE_TEMPLATE_REFERENCE_GUARDRAILS`, `STATIC_PAGE_TEMPLATE_FORBIDDEN_OUTPUTS`, `normalize_static_page_template_reference_id`, `static_page_template_reference_id_from_payload`, `static_page_template_reference_id_from_source_refs`, `infer_static_page_template_reference_id`, `resolve_static_page_template_reference`, and `static_page_template_design_reference` into the new module;
+  - kept existing call names available through `use static_page_template_reference_support::*`;
+  - kept `StaticPageTemplateReferenceSpec` fields crate-visible so existing template adaptation, module scoring, payload application, and prompt/image generation logic can read the same data without behavioral change;
+  - added module coverage for payload/source-ref ID extraction, intent inference, enabled/delegated/paused template resolution, and design-reference guardrail/forbidden-output contract.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_template_reference_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page_template_reference --lib`: passed, 8/8 tests;
+  - `cargo test -p platform-api static_page_image_prompt_includes_template_adaptation_plan --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Prompt Dimension Support 8-Server Verification
 
 - 8-server post-sync verification:

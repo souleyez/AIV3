@@ -516,6 +516,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_resume_prompt_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `1d4aab509`，`cargo check`、resume prompt/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 通用维度 prompt intent helper 已拆到 `assistant_run_prompt_dimension_support` 模块并补模块单测；技能/项目/岗位/人员/地点/学校/学历/证书/关键词/年份/章节/段落/表格/年龄/性别/时间统计识别、简历信号和简历时间统计边界语义保持不变。本地 `cargo check`、prompt dimension/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_prompt_dimension_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `5de8deffa`，`cargo check`、prompt dimension/resume/entity scan/fact snapshot/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` static-page template reference helper 已拆到 `static_page_template_reference_support` 模块并补模块单测；模板 ID 解析、intent 推断、enabled/paused 模板校验、safe design reference JSON、guardrails/forbidden outputs 和后续模板适配调用语义保持不变。本地 `cargo check`、static-page template reference/static-page artifact Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
