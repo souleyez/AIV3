@@ -76742,36 +76742,6 @@ fn static_page_operations_from_html_artifact_patch(
     )?)
 }
 
-fn lexical_query_score(
-    evidence: &RetrievalEvidence,
-    query_weights: &BTreeMap<String, f64>,
-    query_norm: f64,
-) -> f64 {
-    if query_weights.is_empty() || query_norm <= 0.0 {
-        return 0.0;
-    }
-
-    let evidence_weights = evidence_term_weights_from_manifest(evidence);
-    let evidence_norm = vector_norm(&evidence_weights);
-    if evidence_weights.is_empty() || evidence_norm <= 0.0 {
-        return 0.0;
-    }
-
-    let dot_product = query_weights
-        .iter()
-        .filter_map(|(term, query_weight)| {
-            evidence_weights
-                .get(term)
-                .map(|evidence_weight| query_weight * evidence_weight)
-        })
-        .sum::<f64>();
-    if dot_product <= 0.0 {
-        return 0.0;
-    }
-
-    (dot_product / (query_norm * evidence_norm) * 10_000.0).round() / 10_000.0
-}
-
 fn lexical_text_score(
     content: &str,
     query_weights: &BTreeMap<String, f64>,
@@ -76949,21 +76919,6 @@ fn limited_lexical_term_weights(content: &str, limit: usize) -> BTreeMap<String,
     weights.into_iter().take(limit).collect()
 }
 
-fn evidence_term_weights_from_manifest(evidence: &RetrievalEvidence) -> BTreeMap<String, f64> {
-    evidence
-        .evidence_manifest
-        .get("embedding")
-        .and_then(|value| value.get("term_weights"))
-        .and_then(Value::as_object)
-        .map(|weights| {
-            weights
-                .iter()
-                .filter_map(|(term, weight)| weight.as_f64().map(|value| (term.clone(), value)))
-                .collect::<BTreeMap<_, _>>()
-        })
-        .unwrap_or_default()
-}
-
 fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
     let mut frequencies: BTreeMap<String, f64> = BTreeMap::new();
     for token in lexical_query_tokens(query) {
@@ -76977,14 +76932,6 @@ fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
             (term, (1.0 + count.ln()) * boost)
         })
         .collect()
-}
-
-fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
-    weights
-        .values()
-        .map(|weight| weight * weight)
-        .sum::<f64>()
-        .sqrt()
 }
 
 fn lexical_query_tokens(content: &str) -> Vec<String> {

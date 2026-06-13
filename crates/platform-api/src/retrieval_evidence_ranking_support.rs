@@ -1,5 +1,6 @@
 use domain_model::RetrievalEvidence;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub(crate) fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEvidence]) {
     evidences.sort_by(|left, right| {
@@ -24,6 +25,61 @@ pub(crate) fn rank_hint_from_evidence_manifest(evidence: &RetrievalEvidence) -> 
         .and_then(|value| value.get("rank_hint"))
         .and_then(Value::as_u64)
         .map(|value| value as usize)
+}
+
+pub(crate) fn lexical_query_score(
+    evidence: &RetrievalEvidence,
+    query_weights: &BTreeMap<String, f64>,
+    query_norm: f64,
+) -> f64 {
+    if query_weights.is_empty() || query_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let evidence_weights = evidence_term_weights_from_manifest(evidence);
+    let evidence_norm = vector_norm(&evidence_weights);
+    if evidence_weights.is_empty() || evidence_norm <= 0.0 {
+        return 0.0;
+    }
+
+    let dot_product = query_weights
+        .iter()
+        .filter_map(|(term, query_weight)| {
+            evidence_weights
+                .get(term)
+                .map(|evidence_weight| query_weight * evidence_weight)
+        })
+        .sum::<f64>();
+    if dot_product <= 0.0 {
+        return 0.0;
+    }
+
+    (dot_product / (query_norm * evidence_norm) * 10_000.0).round() / 10_000.0
+}
+
+pub(crate) fn evidence_term_weights_from_manifest(
+    evidence: &RetrievalEvidence,
+) -> BTreeMap<String, f64> {
+    evidence
+        .evidence_manifest
+        .get("embedding")
+        .and_then(|value| value.get("term_weights"))
+        .and_then(Value::as_object)
+        .map(|weights| {
+            weights
+                .iter()
+                .filter_map(|(term, weight)| weight.as_f64().map(|value| (term.clone(), value)))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn vector_norm(weights: &BTreeMap<String, f64>) -> f64 {
+    weights
+        .values()
+        .map(|weight| weight * weight)
+        .sum::<f64>()
+        .sqrt()
 }
 
 #[cfg(test)]
@@ -57,6 +113,14 @@ mod tests {
             embedding_model: "placeholder-embedding-v1".to_string(),
             recall_score,
             evidence_manifest: json!({
+                "embedding": {
+                    "term_weights": {
+                        "alpha": 3.0,
+                        "beta": 4.0,
+                        "ignored": null,
+                        "not_number": "5",
+                    },
+                },
                 "recall": {
                     "rank_hint": rank_hint,
                 },
@@ -98,5 +162,28 @@ mod tests {
                 "missing_rank_hint",
             ]
         );
+    }
+
+    #[test]
+    fn evidence_term_weights_reads_numeric_embedding_terms_only() {
+        let evidence = evidence("weighted", 0.5, None, 0, 0);
+
+        assert_eq!(
+            evidence_term_weights_from_manifest(&evidence)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![("alpha".to_string(), 3.0), ("beta".to_string(), 4.0)]
+        );
+    }
+
+    #[test]
+    fn lexical_query_score_uses_cosine_score_with_existing_rounding() {
+        let evidence = evidence("weighted", 0.5, None, 0, 0);
+        let query_weights = BTreeMap::from([("alpha".to_string(), 3.0), ("beta".to_string(), 4.0)]);
+
+        assert_eq!(vector_norm(&query_weights), 5.0);
+        assert_eq!(lexical_query_score(&evidence, &query_weights, 5.0), 1.0);
+        assert_eq!(lexical_query_score(&evidence, &BTreeMap::new(), 5.0), 0.0);
+        assert_eq!(lexical_query_score(&evidence, &query_weights, 0.0), 0.0);
     }
 }
