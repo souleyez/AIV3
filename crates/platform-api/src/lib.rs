@@ -192,6 +192,7 @@ mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
 mod external_conversation_timeline;
+mod external_database_source_config_support;
 mod external_document_object_support;
 pub mod external_feishu;
 mod external_integration_summary;
@@ -248,6 +249,7 @@ use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
 use external_conversation_timeline::*;
+use external_database_source_config_support::*;
 use external_document_object_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
@@ -10459,79 +10461,6 @@ fn prepare_external_channel_database_source_config(
         health_status,
         warnings,
     })
-}
-
-fn normalize_external_database_connector_kind(kind: &str) -> std::result::Result<String, ApiError> {
-    let normalized = kind
-        .trim()
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
-    match normalized.as_str() {
-        "" | "mysql" | "mysqlsource" | "databasesource" => Ok("mysql".to_string()),
-        "postgresql" | "postgres" | "sqlserver" | "oracle" | "mongodb" | "restapi" => {
-            Err(ApiError::bad_request_with_details(
-                "unsupported_connector_kind",
-                "the first external database-source API version only supports mysql".to_string(),
-                json!({
-                    "requested_connector_kind": kind,
-                    "supported_connector_kinds": ["mysql"],
-                }),
-            ))
-        }
-        _ => Err(ApiError::bad_request_with_details(
-            "unsupported_connector_kind",
-            "connector_kind must be mysql for this endpoint".to_string(),
-            json!({
-                "requested_connector_kind": kind,
-                "supported_connector_kinds": ["mysql"],
-            }),
-        )),
-    }
-}
-
-fn normalize_external_database_source_table_names(
-    tables: &[String],
-) -> std::result::Result<Vec<String>, ApiError> {
-    let mut output = Vec::new();
-    for table in tables {
-        let Some(table) = non_empty_trimmed_string(table) else {
-            continue;
-        };
-        if table.chars().count() > 128 || table.chars().any(char::is_control) {
-            return Err(ApiError::bad_request(
-                "validation_error",
-                "tables must contain printable table names within 128 characters".to_string(),
-            ));
-        }
-        if !output.contains(&table) {
-            output.push(table);
-        }
-    }
-    Ok(output)
-}
-
-fn infer_database_name_from_connection_url(url: &str) -> Option<String> {
-    let without_query = url.split(['?', '#']).next().unwrap_or(url);
-    let after_scheme = without_query
-        .strip_prefix("jdbc:mysql://")
-        .or_else(|| without_query.strip_prefix("mysql://"))
-        .unwrap_or(without_query);
-    after_scheme
-        .rsplit('/')
-        .next()
-        .and_then(non_empty_trimmed_string)
-        .and_then(|value| value.split(';').next().and_then(non_empty_trimmed_string))
-}
-
-fn redact_database_connection_url(url: &str) -> String {
-    let without_query = url.split(['?', '#']).next().unwrap_or(url.trim());
-    let Some((scheme, rest)) = without_query.split_once("://") else {
-        return "[redacted-database-url]".to_string();
-    };
-    let rest = rest.rsplit_once('@').map(|(_, host)| host).unwrap_or(rest);
-    format!("{scheme}://{rest}")
 }
 
 async fn upsert_external_channel_database_source_connection(
