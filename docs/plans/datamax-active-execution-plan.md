@@ -52,7 +52,7 @@
 | P2 | 异步深解析和事实用途分类 | 多类型 summary-only dry-run 已覆盖；真实写入仍关闭。 | 继续用新失败样例或新类型扩样；不重复跑已覆盖类型。 | fact 类型均归入 `report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 或 `review_required`；未知类型进 review；未经确认不写库、不入队。 |
 | P2 | fingerprint、对象治理和重复文档 | inventory、repair plan、filesystem preflight 已是只读计划；缺真实 backfill/清理确认。 | 仅在用户确认后准备 operator-reviewed manifest、回滚说明和小批量执行方案。 | 真实 hash/backfill/对象清理前有 reviewed manifest；执行结果只记录聚合计数和原因分布；不输出对象 key、hash、标题或正文。 |
 | P3 | 新百默认报表模板和第三方触发 | 默认模板、focus、导出字段和链接去重 smoke 已稳定。 | 继续用真实客户问题做 targeted smoke；发现 focus 错位时只改模板/focus 判断，不改公开接口。 | 取高、经营状况、风险识别、低活跃、销售缺口、助推门店均能前置正确模块；解释型问题不误触发；链接只出现一次且结构字段可识别。 |
-| P3 | 数据集模板复用与低负载预热 | 模板复用链路存在；低负载静默预热仍是待实现/待观测项。 | 先做队列/限流/跳过条件设计，再做 self-test；不在客户未要求时打扰客户。 | 相同或有交集的数据集组合和相同 `default_prompt` 优先复用已有模板；低负载预热不重复生成、不影响在线问答、不产生用户可见噪声。 |
+| P3 | 数据集模板复用与低负载预热 | 模板复用、客户不可见 prewarm candidate、worker 低负载 requeue、local render/publish 路径和 observability self-test 已具备；生产默认仍保持关闭。 | 只有在 reviewed 低负载窗口显式启用 `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` 后才跑 live；常规发版继续跑 observability self-test 和未授权 guard。 | 相同或有交集的数据集组合和相同 `default_prompt` 优先复用已有模板；低负载预热不重复生成、不影响在线问答、不产生用户可见噪声；观测回执明确 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount=0`、`prewarmCustomerVisibilityOk=true`。 |
 | P4 | 数据接入与 CC/Codex 模式 | staging analysis 存在；生产同步必须人工确认。 | 保持“先分析、出 staging_plan、落目标数据集”的闭环；确认前不写生产。 | 无目标数据集时拒绝生产同步；有目标数据集时只输出分析和 `staging_plan`；confirm 前不创建/更新生产数据集或 schema。 |
 | P5 | 工程治理和复杂文件拆分 | `platform-api` 与主站前端已持续小切片拆分；仍是当前可独立推进主线。 | 无 P1 凭证、无 P2/P4 写入确认、无新客户失败样例时，继续 P5 行为保持切片。 | 每个切片有定向测试、`cargo fmt --check`/`cargo check`/Web build/P0 smoke；提交可单独回退；不改变第三方公开契约。 |
 | CI | GitHub Actions | job 启动前失败，`steps=[]`，本地和 8 服务器验证可替代但不能声称 CI 通过。 | 账号额度/runner 恢复后重跑 DataMax CI。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
@@ -61,8 +61,8 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 runtime manifest helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启和 8 服务器 P0 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P3/P4 条件时切换优先级。 | `cargo test -p platform-api runtime_manifest_support --lib`、`cargo test -p platform-api summarize_execution_scope_runtime --lib`、`cargo test -p platform-api to_dataset_output_view_prefers_tool_executions_over_manifest_tool_trace --lib`、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
-| 2 | 是否同步 8 服务器 | 本切片代码已同步并重启验证；后续 docs-only 只需 fast-forward。 | docs-only 回写同步到 8 服务器，不 build、不重启；下个代码切片再按 P0 code deploy 边界执行。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
+| 1 | P3 prewarm observability 回执补强 | 已完成本地验证；待提交、同步 GitHub 和 8 服务器 docs/script sync。 | 提交本切片，8 服务器 fast-forward 后跑 `npm run smoke:static-page-prewarm-observability -- --self-test`，不 build、不重启服务。 | observability receipt 暴露 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount`、`prewarmCustomerVisibilityOk`；self-test 和 P0 smoke 通过；validation 写明生产 prewarm 仍未启用、无客户可见输出。 |
+| 2 | 是否同步 8 服务器 | 本切片是 smoke 脚本和文档更新，不需要 build/restart。 | docs/script 回写同步到 8 服务器；只跑脚本级验证和服务 active/health/ready。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
 | 5 | P2/P4 真实写入类工作 | 仍保持 dry-run/summary-only。 | 只有在用户明确确认 backfill、入队、对象清理、source sync 或生产数据接入后才准备执行 manifest。 | 执行前有 operator-reviewed manifest、回滚方案和小批量策略；执行后只记录脱敏聚合结果。 |
@@ -581,6 +581,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-14: `crates/platform-api/src/lib.rs` 工具定义 view、工具执行 view 和 manifest tool trace parser helper 已拆到 `tool_view_support` 模块并补模块单测；tool registry reference 展开、inline tool snapshot 解析、CLI contract、tool execution source/status 映射和 manifest tool trace 语义保持不变。本地 `cargo fmt --check`、tool view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `ec079ef8e`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` LLM invocation domain-to-contract view mapping helper 已拆到 `llm_invocation_view_support` 模块并补模块单测；`source_kind`、`mode`、`finish_reason`、usage、provider metadata、system prompt 和 tool trace 字段映射语义保持不变。本地 `cargo fmt --check`、LLM invocation view Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `60e37eeb7`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` runtime manifest helper 已拆到 `runtime_manifest_support` 模块并补模块单测；LLM finish reason 到 manifest finish reason、最新 invocation runtime、tool trace 排序、tool status 计数和 workflow execution scope runtime summary 语义保持不变。本地 `cargo fmt --check`、runtime manifest Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `cedc0f786`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
+- 2026-06-14: `scripts/smoke/static-page-prewarm-observability.mjs` 已补强低负载预热观测回执，新增 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount` 和 `prewarmCustomerVisibilityOk`；self-test 现在明确验证 waiting-for-low-load 事件保持 `customer_visible=false` 且泄漏计数为 0。生产 prewarm 仍默认关闭，不启用后台生图。
 
 **Regression commands:**
 
@@ -607,7 +608,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+1. 先关闭当前 P3 prewarm observability 回执补强：提交、同步 GitHub、8 服务器 docs/script sync、跑 8 服务器脚本级 smoke 并补 validation。
 2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。

@@ -209,11 +209,20 @@ function summarizeEvents(events, requiredStatuses) {
     counts[item.normalizedStatus] = (counts[item.normalizedStatus] || 0) + 1;
   }
   const missingStatuses = requiredStatuses.filter((status) => !counts[status]);
+  const waitingForLowLoadCount = normalized
+    .filter((item) => item.normalizedStatus === 'waiting_for_low_load')
+    .length;
+  const customerVisiblePrewarmLeakCount = normalized
+    .filter((item) => item.normalizedStatus === 'waiting_for_low_load' && item.customerVisible === true)
+    .length;
   return {
     normalized,
     counts,
     requiredStatuses,
     missingStatuses,
+    waitingForLowLoadCount,
+    customerVisiblePrewarmLeakCount,
+    prewarmCustomerVisibilityOk: customerVisiblePrewarmLeakCount === 0,
     ok: missingStatuses.length === 0,
   };
 }
@@ -270,6 +279,9 @@ function buildReport(args, { events = [], queueStats = null, queueHttpStatus = n
     requiredStatuses: args.requiredStatuses,
     observedStatuses: Object.keys(eventSummary.counts).sort(),
     missingStatuses: eventSummary.missingStatuses,
+    waitingForLowLoadCount: eventSummary.waitingForLowLoadCount,
+    customerVisiblePrewarmLeakCount: eventSummary.customerVisiblePrewarmLeakCount,
+    prewarmCustomerVisibilityOk: eventSummary.prewarmCustomerVisibilityOk,
     queueCount: queueSummary.queueCount,
     activeQueueTaskCount: queueSummary.activeCount,
     failedQueueTaskCount: queueSummary.failedCount,
@@ -385,6 +397,9 @@ async function runSelfTest(args) {
     assert.equal(report.eventSummary.counts[status], 1, `missing fixture status ${status}`);
   }
   assert.equal(report.eventSummary.normalized.find((item) => item.normalizedStatus === 'waiting_for_low_load')?.customerVisible, false);
+  assert.equal(report.summary.waitingForLowLoadCount, 1);
+  assert.equal(report.summary.customerVisiblePrewarmLeakCount, 0);
+  assert.equal(report.summary.prewarmCustomerVisibilityOk, true);
   assert.equal(report.queueSummary.queueCount, 2);
   assert.equal(report.queueSummary.activeCount, 4);
   const unauthReport = buildReport(
