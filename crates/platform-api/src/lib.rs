@@ -221,6 +221,7 @@ mod report_render_model_facing;
 mod report_render_output_asset;
 mod request_scope_headers;
 mod resource_access;
+mod retrieval_query_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_report_snapshot;
@@ -307,6 +308,7 @@ use report_render_model_facing::*;
 use report_render_output_asset::*;
 use request_scope_headers::*;
 use resource_access::*;
+use retrieval_query_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_report_snapshot::*;
@@ -75423,55 +75425,6 @@ fn search_retrieval_hits(
             source_locator: ranked.evidence.source_locator.clone(),
         })
         .collect()
-}
-
-fn normalize_retrieval_search_limit(limit: Option<usize>) -> usize {
-    limit
-        .unwrap_or(RETRIEVAL_SEARCH_DEFAULT_LIMIT)
-        .clamp(1, RETRIEVAL_SEARCH_MAX_LIMIT)
-}
-
-fn retrieval_search_scan_limit(limit: usize) -> i64 {
-    let _ = limit;
-    DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RetrievalSearchBackend {
-    LegacyScan,
-    PostgresLexical,
-}
-
-fn retrieval_search_backend() -> RetrievalSearchBackend {
-    parse_retrieval_search_backend(
-        &std::env::var(RETRIEVAL_SEARCH_BACKEND_ENV).unwrap_or_else(|_| "legacy_scan".to_string()),
-    )
-}
-
-fn parse_retrieval_search_backend(value: &str) -> RetrievalSearchBackend {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "postgres_lexical" => RetrievalSearchBackend::PostgresLexical,
-        "legacy_scan" | "" => RetrievalSearchBackend::LegacyScan,
-        _ => RetrievalSearchBackend::LegacyScan,
-    }
-}
-
-fn retrieval_search_candidate_limit(limit: usize) -> usize {
-    limit.saturating_mul(16).clamp(32, 256)
-}
-
-fn normalize_static_page_draft_list_limit(limit: Option<i64>) -> i64 {
-    limit
-        .unwrap_or(STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT)
-        .max(1)
-        .min(STATIC_PAGE_DRAFT_LIST_MAX_LIMIT)
-}
-
-fn normalize_html_artifact_list_limit(limit: Option<i64>) -> i64 {
-    limit
-        .unwrap_or(HTML_ARTIFACT_LIST_DEFAULT_LIMIT)
-        .max(1)
-        .min(HTML_ARTIFACT_LIST_MAX_LIMIT)
 }
 
 fn collect_html_artifacts_from_events(
