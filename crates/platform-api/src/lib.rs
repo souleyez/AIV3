@@ -66575,60 +66575,6 @@ async fn assistant_run_retrieval_supply_excerpt(
     }
 }
 
-fn assistant_run_query_centered_supply_excerpt(
-    content: &str,
-    prompt: &str,
-    max_chars: usize,
-) -> String {
-    let normalized = content
-        .trim()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let total_chars = normalized.chars().count();
-    if total_chars <= max_chars {
-        return normalized;
-    }
-
-    let start = assistant_run_prompt_match_char_index(&normalized, prompt)
-        .map(|index| index.saturating_sub(max_chars / 4))
-        .unwrap_or(0);
-    let mut excerpt = normalized
-        .chars()
-        .skip(start)
-        .take(max_chars)
-        .collect::<String>();
-    if start > 0 {
-        excerpt = format!("...{excerpt}");
-    }
-    if start + max_chars < total_chars {
-        excerpt.push_str("...");
-    }
-    excerpt
-}
-
-fn assistant_run_prompt_match_char_index(content: &str, prompt: &str) -> Option<usize> {
-    let content_lower = content.to_lowercase();
-    let mut tokens = lexical_query_tokens(prompt)
-        .into_iter()
-        .filter(|token| token.chars().count() >= 2)
-        .collect::<Vec<_>>();
-    tokens.sort_by(|left, right| {
-        right
-            .chars()
-            .count()
-            .cmp(&left.chars().count())
-            .then_with(|| left.cmp(right))
-    });
-    tokens.dedup();
-    tokens.into_iter().find_map(|token| {
-        let token_lower = token.to_lowercase();
-        content_lower
-            .find(&token_lower)
-            .map(|byte_index| content_lower[..byte_index].chars().count())
-    })
-}
-
 fn assistant_run_detail_targets_for_scope(
     selected_scope: &Value,
     supplied_items: &[Value],

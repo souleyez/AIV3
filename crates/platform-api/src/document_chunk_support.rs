@@ -63,6 +63,60 @@ pub(crate) fn document_chunk_fallback_summary(
     }
 }
 
+pub(crate) fn assistant_run_query_centered_supply_excerpt(
+    content: &str,
+    prompt: &str,
+    max_chars: usize,
+) -> String {
+    let normalized = content
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let total_chars = normalized.chars().count();
+    if total_chars <= max_chars {
+        return normalized;
+    }
+
+    let start = assistant_run_prompt_match_char_index(&normalized, prompt)
+        .map(|index| index.saturating_sub(max_chars / 4))
+        .unwrap_or(0);
+    let mut excerpt = normalized
+        .chars()
+        .skip(start)
+        .take(max_chars)
+        .collect::<String>();
+    if start > 0 {
+        excerpt = format!("...{excerpt}");
+    }
+    if start + max_chars < total_chars {
+        excerpt.push_str("...");
+    }
+    excerpt
+}
+
+pub(crate) fn assistant_run_prompt_match_char_index(content: &str, prompt: &str) -> Option<usize> {
+    let content_lower = content.to_lowercase();
+    let mut tokens = lexical_query_tokens(prompt)
+        .into_iter()
+        .filter(|token| token.chars().count() >= 2)
+        .collect::<Vec<_>>();
+    tokens.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then_with(|| left.cmp(right))
+    });
+    tokens.dedup();
+    tokens.into_iter().find_map(|token| {
+        let token_lower = token.to_lowercase();
+        content_lower
+            .find(&token_lower)
+            .map(|byte_index| content_lower[..byte_index].chars().count())
+    })
+}
+
 pub(crate) fn document_chunk_section_title_hints(chunk: &DocumentChunk) -> Vec<String> {
     let mut hints = Vec::new();
     for key in [
@@ -499,6 +553,44 @@ mod tests {
             ]),
             2
         );
+    }
+
+    #[test]
+    fn query_centered_excerpt_keeps_prompt_matched_answer_window() {
+        let content = format!(
+            "{}可视对讲分机上默认配置有6个场景：回家、离家、用餐、会客、观影、休息。{}",
+            "项目背景说明。".repeat(120),
+            "其他介绍。".repeat(40)
+        );
+
+        let excerpt = assistant_run_query_centered_supply_excerpt(
+            &content,
+            "可视对讲分机上默认配置有几个场景",
+            220,
+        );
+
+        assert!(excerpt.starts_with("..."));
+        assert!(excerpt.contains("默认配置有6个场景"));
+        assert!(excerpt.contains("回家、离家、用餐、会客、观影、休息"));
+    }
+
+    #[test]
+    fn query_centered_excerpt_falls_back_to_leading_window_without_match() {
+        let content = format!("{}{}", "alpha beta ".repeat(30), "omega");
+
+        let excerpt = assistant_run_query_centered_supply_excerpt(&content, "unmatched", 24);
+
+        assert!(excerpt.starts_with("alpha beta alpha beta"));
+        assert!(excerpt.ends_with("..."));
+    }
+
+    #[test]
+    fn prompt_match_char_index_prefers_longer_prompt_token() {
+        let content = "前言 智能家居系统 其他 智能";
+
+        let match_index = assistant_run_prompt_match_char_index(content, "智能 智能家居系统");
+
+        assert_eq!(match_index, Some(3));
     }
 
     #[test]
