@@ -3547,6 +3547,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Assistant Run Resume Profile Match Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move assistant-run resume profile matching criteria, term matching, scoring, and summary helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_resume_profile_match_support.rs`;
+  - moved resume profile match criteria construction, preferred match fields, field dedupe, unique field term extraction, row criterion matching, row match scoring, row match summary, prompt-term matching, ASCII term detection, term filterability, and query-token filterability into the new module;
+  - left resume profile table rendering, project delivery formatting, and direct-answer assembly unchanged;
+  - added module coverage for prompt-preferred fields, longest-term ordering, row score/summary dedupe, ASCII company matching, Chinese matching, and noisy term filtering.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api assistant_run_resume_profile_match_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api assistant_run_resume --lib`: passed, 11/11 tests;
+  - `cargo test -p platform-api assistant_run_compacts_dataset_entity_scan_for_model_context --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_codex_package_keeps_v3_context_and_action_contracts --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Assistant Run Resume Project Delivery Support 8-Server Verification
 
 - 8-server post-sync verification:
