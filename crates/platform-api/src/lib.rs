@@ -111,9 +111,9 @@ use domain_model::{
     ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
     SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
     StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
-    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession, UserSessionId,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -167,9 +167,7 @@ use storage::{
     NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
     NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
-use tool_registry::{
-    bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
-};
+use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
@@ -260,6 +258,7 @@ mod static_page_structure_signals;
 mod static_page_template_prewarm_support;
 mod static_page_template_reference_support;
 mod text_normalization;
+mod tool_view_support;
 mod workflow_context_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
@@ -378,6 +377,7 @@ use static_page_structure_signals::*;
 use static_page_template_prewarm_support::*;
 use static_page_template_reference_support::*;
 use text_normalization::*;
+use tool_view_support::*;
 use workflow_context_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
@@ -73313,154 +73313,6 @@ fn parse_manifest_runtime(value: &Value) -> Option<contracts::ManifestRuntimeVie
     })
 }
 
-fn parse_manifest_tool_call_status(value: &str) -> Option<contracts::ManifestToolCallStatusView> {
-    match value {
-        "requested" => Some(contracts::ManifestToolCallStatusView::Requested),
-        "completed" => Some(contracts::ManifestToolCallStatusView::Completed),
-        "failed" => Some(contracts::ManifestToolCallStatusView::Failed),
-        _ => None,
-    }
-}
-
-fn to_tool_reference_view(tool: &ToolDefinition) -> contracts::ToolReferenceView {
-    contracts::ToolReferenceView {
-        key: tool.key.clone(),
-        title: tool.title.clone(),
-        scope_policy: tool.scope_policy.clone(),
-        invocation_mode: match tool.invocation_mode {
-            ToolInvocationMode::Cli => contracts::ToolInvocationModeView::Cli,
-            ToolInvocationMode::Internal => contracts::ToolInvocationModeView::Internal,
-        },
-        cli: tool.cli.as_ref().map(|cli| contracts::ToolCliContractView {
-            argv: cli.argv.clone(),
-            env_allowlist: cli.env_allowlist.clone(),
-            output_mode: match cli.output_mode {
-                ToolCliOutputMode::Json => contracts::ToolCliOutputModeView::Json,
-                ToolCliOutputMode::Text => contracts::ToolCliOutputModeView::Text,
-            },
-            timeout_ms: cli.timeout_ms,
-        }),
-    }
-}
-
-fn find_registered_tool_reference(tool_name: &str) -> Option<contracts::ToolReferenceView> {
-    let registry = bootstrap_default_tool_registry();
-    registry.get(tool_name).map(to_tool_reference_view)
-}
-
-fn parse_tool_invocation_mode(value: &str) -> Option<contracts::ToolInvocationModeView> {
-    match value {
-        "cli" => Some(contracts::ToolInvocationModeView::Cli),
-        "internal" => Some(contracts::ToolInvocationModeView::Internal),
-        _ => None,
-    }
-}
-
-fn parse_tool_cli_output_mode(value: &str) -> Option<contracts::ToolCliOutputModeView> {
-    match value {
-        "json" => Some(contracts::ToolCliOutputModeView::Json),
-        "text" => Some(contracts::ToolCliOutputModeView::Text),
-        _ => None,
-    }
-}
-
-fn parse_tool_cli_contract(value: &Value) -> Option<contracts::ToolCliContractView> {
-    let object = value.as_object()?;
-    Some(contracts::ToolCliContractView {
-        argv: object
-            .get("argv")?
-            .as_array()?
-            .iter()
-            .map(|value| value.as_str().map(str::to_string))
-            .collect::<Option<Vec<_>>>()?,
-        env_allowlist: object
-            .get("env_allowlist")?
-            .as_array()?
-            .iter()
-            .map(|value| value.as_str().map(str::to_string))
-            .collect::<Option<Vec<_>>>()?,
-        output_mode: parse_tool_cli_output_mode(object.get("output_mode")?.as_str()?)?,
-        timeout_ms: object.get("timeout_ms").and_then(Value::as_u64),
-    })
-}
-
-fn parse_tool_reference(value: &Value) -> Option<contracts::ToolReferenceView> {
-    let object = value.as_object()?;
-    Some(contracts::ToolReferenceView {
-        key: object.get("key")?.as_str()?.to_string(),
-        title: object.get("title")?.as_str()?.to_string(),
-        scope_policy: object.get("scope_policy")?.as_str()?.to_string(),
-        invocation_mode: parse_tool_invocation_mode(object.get("invocation_mode")?.as_str()?)?,
-        cli: object.get("cli").and_then(parse_tool_cli_contract),
-    })
-}
-
-fn parse_manifest_tool_call(value: &Value) -> Option<contracts::ManifestToolCallView> {
-    match value {
-        Value::String(tool_name) => Some(contracts::ManifestToolCallView {
-            call_id: None,
-            tool_name: tool_name.clone(),
-            tool: find_registered_tool_reference(tool_name),
-            status: contracts::ManifestToolCallStatusView::Completed,
-            arguments: None,
-            result: None,
-        }),
-        Value::Object(object) => Some(contracts::ManifestToolCallView {
-            call_id: object
-                .get("call_id")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            tool_name: object.get("tool_name")?.as_str()?.to_string(),
-            tool: object
-                .get("tool")
-                .and_then(parse_tool_reference)
-                .or_else(|| find_registered_tool_reference(object.get("tool_name")?.as_str()?)),
-            status: parse_manifest_tool_call_status(object.get("status")?.as_str()?)?,
-            arguments: object.get("arguments").cloned(),
-            result: object.get("result").cloned(),
-        }),
-        _ => None,
-    }
-}
-
-fn parse_manifest_tool_trace(
-    value: Option<&Value>,
-) -> Option<Vec<contracts::ManifestToolCallView>> {
-    let trace = match value {
-        Some(Value::Array(entries)) => entries
-            .iter()
-            .map(parse_manifest_tool_call)
-            .collect::<Option<Vec<_>>>()?,
-        Some(_) => return None,
-        None => Vec::new(),
-    };
-
-    Some(trace)
-}
-
-fn to_tool_definition_view(tool: &ToolDefinition) -> ToolDefinitionView {
-    ToolDefinitionView {
-        key: tool.key.clone(),
-        title: tool.title.clone(),
-        scope_policy: tool.scope_policy.clone(),
-        input_schema: tool.input_schema.clone(),
-        output_schema: tool.output_schema.clone(),
-        invocation_mode: match tool.invocation_mode {
-            ToolInvocationMode::Cli => contracts::ToolInvocationModeView::Cli,
-            ToolInvocationMode::Internal => contracts::ToolInvocationModeView::Internal,
-        },
-        cli: tool.cli.as_ref().map(|cli| contracts::ToolCliContractView {
-            argv: cli.argv.clone(),
-            env_allowlist: cli.env_allowlist.clone(),
-            output_mode: match cli.output_mode {
-                ToolCliOutputMode::Json => contracts::ToolCliOutputModeView::Json,
-                ToolCliOutputMode::Text => contracts::ToolCliOutputModeView::Text,
-            },
-            timeout_ms: cli.timeout_ms,
-        }),
-    }
-}
-
 fn parse_dataset_output_manifest(value: &Value) -> Option<contracts::DatasetOutputManifestView> {
     let object = value.as_object()?;
     let tool_trace = parse_manifest_tool_trace(object.get("tool_trace"))?;
@@ -77199,41 +77051,6 @@ fn to_llm_invocation_view(llm_invocation: LlmInvocation) -> LlmInvocationView {
         system_prompt_version: llm_invocation.system_prompt_version,
         tool_trace_count: llm_invocation.tool_trace_count,
         created_at: llm_invocation.created_at,
-    }
-}
-
-fn to_tool_execution_view(tool_execution: ToolExecution) -> ToolExecutionView {
-    ToolExecutionView {
-        id: tool_execution.id,
-        execution_id: tool_execution.execution_id,
-        source_kind: match tool_execution.source_kind {
-            ToolExecutionSourceKind::DatasetOutput => {
-                contracts::ToolExecutionSourceKindView::DatasetOutput
-            }
-            ToolExecutionSourceKind::ChatMessage => {
-                contracts::ToolExecutionSourceKindView::ChatMessage
-            }
-            ToolExecutionSourceKind::WorkflowExecution => {
-                contracts::ToolExecutionSourceKindView::WorkflowExecution
-            }
-        },
-        dataset_output_id: tool_execution.dataset_output_id,
-        chat_message_id: tool_execution.chat_message_id,
-        sequence_no: tool_execution.sequence_no,
-        call_id: tool_execution.call_id,
-        tool_name: tool_execution.tool_name,
-        tool: tool_execution
-            .tool_snapshot
-            .as_ref()
-            .and_then(parse_tool_reference),
-        status: match tool_execution.status {
-            ToolExecutionStatus::Requested => contracts::ManifestToolCallStatusView::Requested,
-            ToolExecutionStatus::Completed => contracts::ManifestToolCallStatusView::Completed,
-            ToolExecutionStatus::Failed => contracts::ManifestToolCallStatusView::Failed,
-        },
-        arguments: tool_execution.arguments,
-        result: tool_execution.result,
-        created_at: tool_execution.created_at,
     }
 }
 
