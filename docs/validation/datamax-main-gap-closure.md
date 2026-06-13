@@ -3685,6 +3685,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, or 120 server action was performed.
 
+## 2026-06-13 P5 Assistant Run Xinbai Report Link Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api`;
+  - move Xinbai published-report direct-link answer helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_xinbai_report_link_support.rs`;
+  - moved Xinbai published report title/default URL, public URL resolver, sibling export URL resolver, direct-answer detector, direct-answer runtime manifest, and output artifact construction into the new module;
+  - adjusted only crate-internal helper visibility for static-page artifact sibling URLs, generated-artifact URL extraction, existing-artifact revision detection, and static-page download export construction;
+  - added module tests for report-link artifact/export metadata and direct-answer runtime manifest.
+- Local verification:
+  - `cargo fmt --check`: passed after running `cargo fmt`;
+  - `cargo test -p platform-api assistant_run_xinbai_report_link_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api xinbai_published_report_link_answer --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_channel_public_response_enriches_xinbai_report_card_exports --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_sse_completed_surfaces_xinbai_report_exports --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_answer_quality_autofix_collects_missing_report_link_case --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed with all required statuses observed: `queued`, `running`, `published`, `failed`, `skipped_existing_template`, `waiting_for_low_load`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, service restart, or 120 server action was performed.
+
 ## 2026-06-13 P5 Static Page Template Missing Evidence Support 8-Server Verification
 
 - 8-server post-sync verification:
