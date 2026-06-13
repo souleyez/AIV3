@@ -14404,6 +14404,41 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External AI Golf Skill Support Local Verification
+
+- Scope:
+  - moved AI Golf requested skill kind normalization, course map schema/image-input validation, segmentation skill selection, and AI Golf skill policy assembly from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/external_aigolf_skill_support.rs`;
+  - kept AI Golf execution, payload construction, reply card construction, event restoration, third-party request/response fields, task statuses, schema strings, card type strings, and provider-detail hiding policy unchanged;
+  - no public API URL, auth method, required request field, existing response field, database schema, provider configuration, or production data mapping changed.
+- Local head before commit: `0614b6a9`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_aigolf_skill_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_aigolf_course_map_segmentation --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_bot_message_parse_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_bot_message_payload_accepts --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during local verification;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Bot Message Payload Support 8-Server Verification
 
 - 8-server post-sync verification:
