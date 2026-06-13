@@ -493,6 +493,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run selected dataset/document/template/temporary/attachment ids、scope action/context/candidate policy、recommended tool actions 和 entity-scan policy helper 已拆到 `assistant_run_scope_selection_support` 模块并补模块单测；scope id 顺序去重、模板文档不进证据、attachment title alias、policy 默认值/覆盖、recommendedActions 截断和 coverage/recommended scan 判定语义保持不变。本地 `cargo check`、scope selection/static-page scope/resume scan/Codex package/ReAct trace Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `assistant_run_scope_selection_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、scope selection/static-page scope/resume scan/Codex package/ReAct trace Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` prompt substring/token/metric matching helper 已拆到 `prompt_match_support` 模块并补模块单测；中文 substring、ASCII token、case-insensitive substring、metric token boundary 和 `markdown` 不误判 `down` 的语义保持不变。本地 `cargo check`、prompt match/database aggregate/entity scan/attendance/static-page scope Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `prompt_match_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、prompt match/database aggregate/entity scan/attendance/static-page scope Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 

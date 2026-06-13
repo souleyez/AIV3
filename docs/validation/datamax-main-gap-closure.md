@@ -3547,6 +3547,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Prompt Match Support 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `74344fe` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `4513b9607` to `74344fee3`;
+  - remote `git rev-parse --short HEAD` returned `74344fee3` and `git status --porcelain` returned no rows;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api prompt_match_support --lib`: passed, 4/4 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api database_aggregate_heuristics_do_not_read_markdown_as_down_metric --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_general_entity_scan_prompts_request_dataset_scan --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_selected_document_attendance_prompts_skip_generic_entity_scan --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api assistant_run_static_page_scope_expands_evidence_limit_and_actions --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only; one first attempt lost the SSH connection mid-build and was rerun successfully;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed; one first attempt lost the SSH connection while compilation was still running, the process completed, and a rerun confirmed the release target was up to date;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and all returned `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok`/`ready` after restart;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- GitHub Actions:
+  - `DataMax CI` run `27462226829` for `74344fee3417830ffc2806b0692bfccbcf70393a` failed during job startup;
+  - `No-Credential Smoke` and `Rust Minimal` both reported `steps=[]`;
+  - `gh run view --log-failed` returned `log not found: 81178029659`, matching the known account/runner startup failure pattern rather than a repo test failure.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Prompt Match Support Local Verification
 
 - Purpose:
