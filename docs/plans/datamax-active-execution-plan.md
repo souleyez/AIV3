@@ -443,6 +443,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `crates/platform-api/src/lib.rs` 外部对话观测 timeline event view、payload 摘要、phase/status/display fallback 和 artifact link 提取 helper 已拆到 `external_conversation_timeline` 模块并补模块单测；SSE payload 脱敏、内部字段裁剪、状态推断、链接去重过滤和 debug payload 语义保持不变。本地 `cargo check`、关联 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `external_conversation_timeline` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` 外部文档 URL 安全校验、对象根路径、文件扩展名、路径段清洗和 URL 脱敏 helper 已拆到 `external_document_object_support` 模块并补模块单测；HTTPS/loopback/private IP 策略、content-type fallback、路径段截断和 query/credential 脱敏语义保持不变。本地 `cargo check`、外部文档解析 Rust 回归、Web build、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `external_document_object_support` helper 拆分已提交并同步 8 服务器；远端 `cargo check`、外部文档解析 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 
 **Regression commands:**
 
