@@ -3616,6 +3616,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Assistant Run Model Context Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing third-party public API contracts;
+  - move assistant-run model context/scope compaction helper functions out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_model_context_support.rs`;
+  - moved `assistant_run_model_context_value`, `assistant_run_model_scope_value`, `assistant_run_model_scope_candidates_value`, model-scope collection compaction, scope document sampling, and scope array sampling into the new module;
+  - kept answer-policy guidance, DataMax awareness lines, evidence-state budgeting, and supplied-item compaction in `lib.rs` to keep this slice behavior-preserving and narrow;
+  - added module coverage for nested answer-policy tone boundary translation, root external-channel default_prompt handling, document scope sampling budgets, scope id array budgets, nested candidate scope compaction, and raw metadata exclusion from model context.
+- Local verification:
+  - `cargo fmt --check`: passed after running `cargo fmt`;
+  - `cargo test -p platform-api assistant_run_model_context_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_channel_provider_input_compacts_large_document_scope --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_answer_policy_customer_tone_request_is_supplied_with_professional_boundary --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_answer_policy_is_normalized_and_supplied_to_model --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_codex_package_keeps_v3_context_and_action_contracts --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Prompt Match Support 8-Server Verification
 
 - 8-server post-sync verification:
