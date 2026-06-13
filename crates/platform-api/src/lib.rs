@@ -11106,13 +11106,6 @@ async fn harden_external_owned_dataset(
     Ok(dataset)
 }
 
-fn effective_external_document_parse_dataset_external_id(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn external_document_parse_dataset_title(
     request: &CreateExternalDocumentParseRequest,
     source: &ExternalSourceConnectionSummary,
@@ -11120,67 +11113,6 @@ fn external_document_parse_dataset_title(
     trim_optional(request.dataset_title.clone())
         .or_else(|| non_empty_trimmed_string(&source.display_name))
         .unwrap_or_else(|| format!("External source {}", source.source_id))
-}
-
-fn external_document_parse_dataset_key(
-    source_id: &str,
-    dataset_external_id: Option<&str>,
-) -> String {
-    let source_slug = external_document_parse_dataset_key_component(source_id);
-    let raw_key = if let Some(dataset_external_id) = dataset_external_id {
-        format!(
-            "external-source-{}-dataset-{}",
-            source_slug,
-            external_document_parse_dataset_key_component(dataset_external_id)
-        )
-    } else {
-        format!("external-source-{source_slug}")
-    };
-    compact_external_document_parse_dataset_key(raw_key)
-}
-
-fn external_document_parse_dataset_key_component(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_separator = false;
-    for character in value.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-            last_was_separator = false;
-        } else if !slug.is_empty() && !last_was_separator {
-            slug.push('-');
-            last_was_separator = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    if slug.is_empty() {
-        return format!("ref-{}", &sha256_hex([value.as_bytes()])[..12]);
-    }
-    if slug.len() > 64 {
-        let hash = sha256_hex([value.as_bytes()]);
-        slug.truncate(48);
-        while slug.ends_with('-') {
-            slug.pop();
-        }
-        slug.push('-');
-        slug.push_str(&hash[..12]);
-    }
-    slug
-}
-
-fn compact_external_document_parse_dataset_key(mut key: String) -> String {
-    if key.len() <= 128 {
-        return key;
-    }
-    let hash = sha256_hex([key.as_bytes()]);
-    key.truncate(112);
-    while key.ends_with('-') {
-        key.pop();
-    }
-    key.push('-');
-    key.push_str(&hash[..12]);
-    key
 }
 
 async fn get_external_document_parse_detail(
@@ -12248,24 +12180,6 @@ async fn find_external_documents_by_dataset_external_id(
         .collect())
 }
 
-fn external_dataset_matches_external_document_parse_dataset(
-    dataset: &Dataset,
-    source_id: &str,
-    dataset_external_id: &str,
-) -> bool {
-    if dataset.lifecycle == DatasetLifecycle::Archived {
-        return false;
-    }
-    let expected_key = external_document_parse_dataset_key(source_id, Some(dataset_external_id));
-    if dataset.key == expected_key {
-        return true;
-    }
-    external_document_source_id_from_metadata(&dataset.metadata, None).as_deref() == Some(source_id)
-        && external_document_dataset_external_ids_from_metadata(&dataset.metadata)
-            .iter()
-            .any(|value| value == dataset_external_id)
-}
-
 async fn infer_external_document_scope_source_id_by_dataset_external_ids(
     state: &AppState,
     dataset_external_ids: &[String],
@@ -12352,140 +12266,6 @@ async fn infer_external_document_source_id(
             }),
         )),
     }
-}
-
-fn external_document_source_id_from_metadata(
-    metadata: &BTreeMap<String, Value>,
-    revision_external_id: Option<&str>,
-) -> Option<String> {
-    let object = metadata
-        .get("external_source")
-        .or_else(|| metadata.get("externalSource"))
-        .and_then(Value::as_object)?;
-    let source_id = object
-        .get("source_id")
-        .or_else(|| object.get("sourceId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if revision_external_id.map_or(false, |revision| {
-        object
-            .get("revision_external_id")
-            .or_else(|| object.get("revisionExternalId"))
-            .and_then(Value::as_str)
-            != Some(revision)
-    }) {
-        return None;
-    }
-    Some(source_id.to_string())
-}
-
-fn external_document_external_id_from_metadata(
-    metadata: &BTreeMap<String, Value>,
-) -> Option<String> {
-    metadata
-        .get("external_source")
-        .or_else(|| metadata.get("externalSource"))
-        .and_then(Value::as_object)
-        .and_then(|object| {
-            object
-                .get("document_external_id")
-                .or_else(|| object.get("documentExternalId"))
-                .and_then(Value::as_str)
-        })
-        .and_then(non_empty_trimmed_string)
-}
-
-fn external_document_dataset_external_ids_from_metadata(
-    metadata: &BTreeMap<String, Value>,
-) -> Vec<String> {
-    let Some(object) = metadata
-        .get("external_source")
-        .or_else(|| metadata.get("externalSource"))
-        .and_then(Value::as_object)
-    else {
-        return Vec::new();
-    };
-    let mut values = Vec::new();
-    for key in [
-        "dataset_external_id",
-        "datasetExternalId",
-        "requested_dataset_external_id",
-        "requestedDatasetExternalId",
-    ] {
-        if let Some(value) = object
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        {
-            if !values.contains(&value) {
-                values.push(value);
-            }
-        }
-    }
-    values
-}
-
-fn external_document_metadata_matches(
-    metadata: &BTreeMap<String, Value>,
-    source_id: &str,
-    document_external_id: &str,
-    revision_external_id: Option<&str>,
-) -> bool {
-    external_document_source_matches(metadata, source_id, revision_external_id)
-        && external_document_metadata_document_id_matches(
-            metadata,
-            document_external_id,
-            revision_external_id,
-        )
-}
-
-fn external_document_metadata_document_id_matches(
-    metadata: &BTreeMap<String, Value>,
-    document_external_id: &str,
-    revision_external_id: Option<&str>,
-) -> bool {
-    let Some(object) = metadata
-        .get("external_source")
-        .or_else(|| metadata.get("externalSource"))
-        .and_then(Value::as_object)
-    else {
-        return false;
-    };
-    object
-        .get("document_external_id")
-        .or_else(|| object.get("documentExternalId"))
-        .and_then(Value::as_str)
-        == Some(document_external_id)
-        && revision_external_id.map_or(true, |revision| {
-            object
-                .get("revision_external_id")
-                .or_else(|| object.get("revisionExternalId"))
-                .and_then(Value::as_str)
-                == Some(revision)
-        })
-}
-
-fn external_document_source_matches(
-    metadata: &BTreeMap<String, Value>,
-    source_id: &str,
-    revision_external_id: Option<&str>,
-) -> bool {
-    let Some(object) = metadata
-        .get("external_source")
-        .or_else(|| metadata.get("externalSource"))
-        .and_then(Value::as_object)
-    else {
-        return false;
-    };
-    object.get("source_id").and_then(Value::as_str) == Some(source_id)
-        && revision_external_id.map_or(true, |revision| {
-            object
-                .get("revision_external_id")
-                .or_else(|| object.get("revisionExternalId"))
-                .and_then(Value::as_str)
-                == Some(revision)
-        })
 }
 
 fn parse_external_bot_message_payload(
