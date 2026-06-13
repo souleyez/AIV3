@@ -250,6 +250,7 @@ mod retrieval_query_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_payload_support;
+mod static_page_render_output_view_support;
 mod static_page_report_snapshot;
 mod static_page_structure_signals;
 mod static_page_template_prewarm_support;
@@ -366,6 +367,7 @@ use retrieval_query_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_payload_support::*;
+use static_page_render_output_view_support::*;
 use static_page_report_snapshot::*;
 use static_page_structure_signals::*;
 use static_page_template_prewarm_support::*;
@@ -77323,135 +77325,6 @@ fn to_static_page_render_output_view(
         asset_manifest: output.asset_manifest,
         created_at: output.created_at,
     }
-}
-
-fn static_page_html_download_url(
-    selected_scope: Option<&Value>,
-    output: &StaticPageRenderOutput,
-) -> Option<String> {
-    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
-        || output.html.trim().is_empty()
-    {
-        return None;
-    }
-    selected_scope
-        .and_then(|scope| static_page_external_html_download_url(scope, output.id))
-        .or_else(|| {
-            Some(format!(
-                "/v1/static-page-render-outputs/{}/download",
-                output.id
-            ))
-        })
-}
-
-fn static_page_html_preview_url(
-    selected_scope: Option<&Value>,
-    output: &StaticPageRenderOutput,
-) -> Option<String> {
-    if !matches!(output.status, StaticPageRenderOutputStatus::Rendered)
-        || output.html.trim().is_empty()
-    {
-        return None;
-    }
-    selected_scope
-        .and_then(|scope| static_page_external_html_preview_url(scope, output.id))
-        .or_else(|| {
-            Some(format!(
-                "/v1/static-page-render-outputs/{}/preview",
-                output.id
-            ))
-        })
-}
-
-fn static_page_external_html_download_url(
-    selected_scope: &Value,
-    render_output_id: StaticPageRenderOutputId,
-) -> Option<String> {
-    if value_at_any_key(selected_scope, &["type", "scope_type", "scopeType"])
-        .and_then(Value::as_str)
-        != Some("external_channel")
-    {
-        return None;
-    }
-    let channel_connection_id = value_at_any_key(
-        selected_scope,
-        &["channel_connection_id", "channelConnectionId"],
-    )
-    .and_then(Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())?;
-    Some(format!(
-        "/v1/external/channels/{}/static-page-renders/{}/download",
-        encode_url_path_segment(channel_connection_id),
-        render_output_id
-    ))
-}
-
-fn static_page_external_html_preview_url(
-    selected_scope: &Value,
-    render_output_id: StaticPageRenderOutputId,
-) -> Option<String> {
-    if value_at_any_key(selected_scope, &["type", "scope_type", "scopeType"])
-        .and_then(Value::as_str)
-        != Some("external_channel")
-    {
-        return None;
-    }
-    let channel_connection_id = value_at_any_key(
-        selected_scope,
-        &["channel_connection_id", "channelConnectionId"],
-    )
-    .and_then(Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())?;
-    Some(format!(
-        "/v1/external/channels/{}/static-page-renders/{}/preview",
-        encode_url_path_segment(channel_connection_id),
-        render_output_id
-    ))
-}
-
-fn static_page_render_output_retryable_error_reason(
-    output: &StaticPageRenderOutput,
-) -> Option<String> {
-    if !matches!(output.status, StaticPageRenderOutputStatus::Failed) {
-        return None;
-    }
-    [
-        "/retryable_error_reason",
-        "/retryableErrorReason",
-        "/failure_reason",
-        "/failureReason",
-        "/last_error",
-        "/lastError",
-        "/error/reason",
-        "/error/message",
-        "/workflow/error/reason",
-        "/workflow/error/message",
-    ]
-    .iter()
-    .find_map(|pointer| {
-        output
-            .asset_manifest
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn encode_url_path_segment(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        let ch = byte as char;
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '_' | '~') {
-            encoded.push(ch);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
 }
 
 fn to_conversation_memory_item_view(item: ConversationMemoryItem) -> ConversationMemoryItemView {

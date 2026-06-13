@@ -3584,6 +3584,40 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
   - 120 server was not touched.
 
+## 2026-06-13 P5 Static Page Render Output View Support Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page render output download/preview URL helpers, external-channel URL helpers, retryable failure reason extraction, and URL path segment encoding out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_render_output_view_support.rs`;
+  - moved `static_page_html_download_url`, `static_page_html_preview_url`, `static_page_external_html_download_url`, `static_page_external_html_preview_url`, `static_page_render_output_retryable_error_reason`, and `encode_url_path_segment` into the new module;
+  - kept `to_static_page_render_output_view` in `lib.rs` so the public response field mapping remains unchanged;
+  - added module tests for external-channel URL generation, internal fallback URLs, non-rendered/empty HTML no-link behavior, retryable failure reason field priority, and path segment encoding.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_render_output_view_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page_html_download_url_requires_external_channel_scope --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page_render_output_view_exposes_retryable_failure_reason --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-13 P5 Workflow Task View Support Local Verification
 
 - Purpose:

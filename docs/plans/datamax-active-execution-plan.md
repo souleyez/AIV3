@@ -61,7 +61,7 @@
 
 | 顺序 | 当前项 | 状态 | 下一步 | 关闭标准 |
 | --- | --- | --- | --- | --- |
-| 1 | P5 workflow task view/stats helper 拆分 | 已完成本地验证、GitHub 同步、8 服务器 code deploy、服务重启和 8 服务器 P0 smoke。 | 本项关闭；下一步默认继续 P5 小切片，或在拿到 P1/P2/P3/P4 条件时切换优先级。 | `cargo test -p platform-api workflow_task_view_support --lib`、workflow task view/stats 行为回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
+| 1 | P5 static-page render output view helper 拆分 | 本地行为保持代码、定向 Rust 回归、P0 self-test 和 validation 记录已完成；待提交和发布判断。 | 只提交本切片相关文件；若用户要求发布，再走 P0 code deploy 边界。 | `cargo test -p platform-api static_page_render_output_view_support --lib`、HTML download/preview/retryable reason 行为回归、`cargo fmt --check`、`cargo check -p platform-api`、Web build、P0 smoke 全通过；validation 写明未改公开接口/鉴权/字段；提交可单独回退。 |
 | 2 | 是否同步 8 服务器 | 等待本地验证和用户发布口径。 | 如果用户要求发布，拉取最新 `main`、build `platform-api`、重启 DataMax 相关服务、跑 8 服务器 P0 smoke；如果只是 docs-only，则只 `git pull --ff-only` 且不重启。 | 8 服务器 HEAD 与 GitHub `main` 一致；服务全 `active`；`/healthz`、`/readyz` 正常；8 服务器验证结果写入 validation。 |
 | 3 | P1 authenticated operator live | 阻塞于合法 operator cookie/bearer/local-key 或运维脱敏回执。 | 拿到凭证后只跑观测类 live smoke，不输出密钥、cookie、任务原文或客户数据。 | 未授权仍 401；授权回执只显示脱敏 queue/provider/fallback 聚合。 |
 | 4 | P1 live 并发压测 | self-test 具备；生产 live 需要受控窗口。 | 在低风险窗口跑主站/第三方 20 路问答、本地重任务 5 路、Cloudflare/Codex fallback 2 路。 | 成功率、耗时、失败归因和限流表现写入 validation；不把 self-test 当生产压测结论。 |
@@ -574,6 +574,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `assistant_run_xinbai_report_link_support` helper 拆分已提交并同步 8 服务器；远端 HEAD `fd7b220cc`，`cargo fmt --check`、xinbai report link/public response/SSE exports/static-page artifact Rust 回归、`cargo check`、Web build、release build、health/ready、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` assistant-run provider retry attempts/backoff/delay/retryable-error helper 已拆到 `assistant_run_provider_retry_support` 模块并补模块单测；retry attempts/backoff env clamp、invalid env fallback、指数退避上限和 transient provider failure retryable 判定语义保持不变。本地 `cargo fmt --check`、provider retry/support/static-page artifact Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `709bf39ce`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` workflow task view、logical queue/key、remote poll metadata 和 queue stats 聚合 helper 已拆到 `workflow_task_view_support` 模块并补模块单测；显式 logical 字段优先、legacy static-page publish 推断、retrying 计数、duration percentile 和 next available 聚合语义保持不变。本地 `cargo fmt --check`、workflow task view/stats Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；已提交并同步 8 服务器，远端 HEAD `ffb86d3aa`，release build、服务重启、health/ready 和 8 服务器 P0 smoke 均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` static-page render output download/preview URL、外部通道 URL、retryable failure reason 和 URL path segment encoding helper 已拆到 `static_page_render_output_view_support` 模块并补模块单测；Rendered+non-empty HTML 才出链接、external channel scope 优先、internal fallback、失败原因字段优先级和 path segment 编码语义保持不变。本地 `cargo fmt --check`、static-page render output URL/retryable reason Rust 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT/静态页并发/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；待提交和发布判断。
 
 **Regression commands:**
 
@@ -600,7 +601,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+1. 先关闭当前 P5 `static_page_render_output_view_support` 切片：补齐单独提交；若发布到 8 服务器，则按 P0 code deploy 边界跑远端 build、restart、health/ready 和 P0 smoke。
 2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
