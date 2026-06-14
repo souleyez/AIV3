@@ -20877,36 +20877,6 @@ async fn external_channel_response_with_event_static_page_artifact_links(
     Ok(response)
 }
 
-fn static_page_public_url_without_focus(public_url: &str) -> Option<String> {
-    let mut url = reqwest::Url::parse(public_url.trim()).ok()?;
-    if !codex_host_fixed_task_public_artifact_url_allowed(url.as_str()) {
-        return None;
-    }
-    let existing_pairs = url
-        .query_pairs()
-        .filter(|(key, _)| key != "focus")
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    url.set_query(None);
-    if !existing_pairs.is_empty() {
-        let mut pairs = url.query_pairs_mut();
-        for (key, value) in existing_pairs {
-            pairs.append_pair(&key, &value);
-        }
-    }
-    Some(url.to_string())
-}
-
-fn static_page_public_url_matches_ignoring_focus(left: &str, right: &str) -> bool {
-    let Some(left) = static_page_public_url_without_focus(left) else {
-        return false;
-    };
-    let Some(right) = static_page_public_url_without_focus(right) else {
-        return false;
-    };
-    left == right
-}
-
 fn external_channel_static_page_event_artifact_link_reply_from_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,

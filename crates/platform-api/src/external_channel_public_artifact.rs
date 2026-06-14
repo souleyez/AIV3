@@ -119,6 +119,36 @@ pub(crate) fn external_channel_text_with_public_artifact_link(
     text
 }
 
+pub(crate) fn static_page_public_url_without_focus(public_url: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(public_url.trim()).ok()?;
+    if !codex_host_fixed_task_public_artifact_url_allowed(url.as_str()) {
+        return None;
+    }
+    let existing_pairs = url
+        .query_pairs()
+        .filter(|(key, _)| key != "focus")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    if !existing_pairs.is_empty() {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in existing_pairs {
+            pairs.append_pair(&key, &value);
+        }
+    }
+    Some(url.to_string())
+}
+
+pub(crate) fn static_page_public_url_matches_ignoring_focus(left: &str, right: &str) -> bool {
+    let Some(left) = static_page_public_url_without_focus(left) else {
+        return false;
+    };
+    let Some(right) = static_page_public_url_without_focus(right) else {
+        return false;
+    };
+    left == right
+}
+
 pub(crate) fn dedupe_external_channel_public_artifact_links(links: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut output = Vec::new();
@@ -323,6 +353,33 @@ mod tests {
 
         assert!(text.contains("页面链接：[点击查看报表]("));
         assert_eq!(repeated, text);
+    }
+
+    #[test]
+    fn static_page_public_url_without_focus_removes_only_focus_query() {
+        let public_url =
+            artifact_url("reports/current/index.html?focus=%E5%8F%96%E9%AB%98&v=2&mode=live");
+
+        assert_eq!(
+            static_page_public_url_without_focus(&public_url),
+            Some(artifact_url("reports/current/index.html?v=2&mode=live"))
+        );
+    }
+
+    #[test]
+    fn static_page_public_url_matches_ignoring_focus_keeps_other_query_significant() {
+        let left = artifact_url("reports/current/index.html?focus=a&v=2");
+        let same = artifact_url("reports/current/index.html?focus=b&v=2");
+        let different = artifact_url("reports/current/index.html?focus=a&v=3");
+
+        assert!(static_page_public_url_matches_ignoring_focus(&left, &same));
+        assert!(!static_page_public_url_matches_ignoring_focus(
+            &left, &different
+        ));
+        assert!(!static_page_public_url_matches_ignoring_focus(
+            "https://example.com/reports/current/index.html?focus=a",
+            &same
+        ));
     }
 
     #[test]
