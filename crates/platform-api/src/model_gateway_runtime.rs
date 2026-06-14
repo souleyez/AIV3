@@ -1,5 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
-use llm_gateway::model_gateway_lane_env_prefix;
+use llm_gateway::{
+    model_gateway_lane_env_prefix, ModelCapabilityManifest, ModelProfileWireApi,
+    ModelProviderProfile,
+};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
@@ -9,6 +12,7 @@ use std::{
     },
     time::{Duration as StdDuration, Instant},
 };
+use storage::ModelGatewayProfile;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -718,6 +722,27 @@ pub(crate) fn model_gateway_capability_names(capabilities: &Value) -> Vec<String
         .unwrap_or_default()
 }
 
+pub(crate) fn model_gateway_provider_profile_from_record(
+    profile: ModelGatewayProfile,
+) -> ModelProviderProfile {
+    let mut provider_profile =
+        ModelProviderProfile::new(profile.profile_id, profile.provider_id, profile.model_id);
+    provider_profile.priority = profile.priority;
+    provider_profile.base_url = profile.base_url;
+    provider_profile.api_path = profile.api_path;
+    provider_profile.wire_api = ModelProfileWireApi::from_env_value(&profile.wire_api)
+        .unwrap_or(ModelProfileWireApi::ChatCompletions);
+    provider_profile.auth_env_key_name = profile.auth_env_key_name;
+    provider_profile.timeout_ms = profile.timeout_ms.map(|value| value as u64);
+    provider_profile.rate_limit.concurrent_requests =
+        profile.max_concurrency.map(|value| value as u32);
+    provider_profile.rate_limit.requests_per_minute = profile.rpm_limit.map(|value| value as u32);
+    provider_profile.rate_limit.tokens_per_minute = profile.tpm_limit.map(|value| value as u32);
+    provider_profile.capabilities =
+        ModelCapabilityManifest::from_names(&model_gateway_capability_names(&profile.capabilities));
+    provider_profile
+}
+
 pub(crate) fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
     reason.contains("timeout")
 }
@@ -803,7 +828,9 @@ pub(crate) struct GatewayModelPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain_model::TenantId;
     use std::sync::{Mutex, OnceLock};
+    use uuid::Uuid;
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -914,5 +941,107 @@ mod tests {
 
         assert!(model_gateway_capability_names(&serde_json::json!("chat")).is_empty());
         assert!(model_gateway_capability_names(&serde_json::json!(null)).is_empty());
+    }
+
+    #[test]
+    fn model_gateway_provider_profile_from_record_preserves_runtime_mapping() {
+        let now = Utc::now();
+        let profile = ModelGatewayProfile {
+            id: Uuid::new_v4(),
+            tenant_id: TenantId::new(),
+            profile_id: "profile-main".to_string(),
+            display_name: "Main Profile".to_string(),
+            lane: "assistant_chat".to_string(),
+            provider_id: "right-code".to_string(),
+            model_id: "gpt-5.5".to_string(),
+            base_url: Some("https://example.invalid/v1".to_string()),
+            api_path: Some("/chat/completions".to_string()),
+            wire_api: "responses".to_string(),
+            auth_mode: "env".to_string(),
+            auth_env_key_name: Some("RIGHT_CODE_KEY".to_string()),
+            recommended_preset: Some("default".to_string()),
+            max_concurrency: Some(20),
+            rpm_limit: Some(120),
+            tpm_limit: Some(50_000),
+            timeout_ms: Some(30_000),
+            priority: 7,
+            enabled: true,
+            capabilities: serde_json::json!(["chat", "static_page", " custom "]),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let provider_profile = model_gateway_provider_profile_from_record(profile);
+        assert_eq!(provider_profile.profile_id, "profile-main");
+        assert_eq!(provider_profile.provider_id, "right-code");
+        assert_eq!(provider_profile.model_id, "gpt-5.5");
+        assert_eq!(provider_profile.priority, 7);
+        assert_eq!(
+            provider_profile.base_url.as_deref(),
+            Some("https://example.invalid/v1")
+        );
+        assert_eq!(
+            provider_profile.api_path.as_deref(),
+            Some("/chat/completions")
+        );
+        assert_eq!(provider_profile.wire_api, ModelProfileWireApi::Responses);
+        assert_eq!(
+            provider_profile.auth_env_key_name.as_deref(),
+            Some("RIGHT_CODE_KEY")
+        );
+        assert_eq!(provider_profile.timeout_ms, Some(30_000));
+        assert_eq!(provider_profile.rate_limit.concurrent_requests, Some(20));
+        assert_eq!(provider_profile.rate_limit.requests_per_minute, Some(120));
+        assert_eq!(provider_profile.rate_limit.tokens_per_minute, Some(50_000));
+        assert!(provider_profile.capabilities.chat);
+        assert!(provider_profile.capabilities.static_page);
+        assert_eq!(
+            provider_profile.capabilities.extra,
+            vec!["custom".to_string()]
+        );
+    }
+
+    #[test]
+    fn model_gateway_provider_profile_from_record_defaults_unknown_wire_api() {
+        let now = Utc::now();
+        let profile = ModelGatewayProfile {
+            id: Uuid::new_v4(),
+            tenant_id: TenantId::new(),
+            profile_id: "profile-fallback".to_string(),
+            display_name: "Fallback Profile".to_string(),
+            lane: "assistant_chat".to_string(),
+            provider_id: "provider".to_string(),
+            model_id: "model".to_string(),
+            base_url: None,
+            api_path: None,
+            wire_api: "unknown-wire-api".to_string(),
+            auth_mode: "env".to_string(),
+            auth_env_key_name: None,
+            recommended_preset: None,
+            max_concurrency: None,
+            rpm_limit: None,
+            tpm_limit: None,
+            timeout_ms: None,
+            priority: 100,
+            enabled: true,
+            capabilities: serde_json::json!({
+                "chat": true,
+                "vision": true,
+                "tool_calling": false
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let provider_profile = model_gateway_provider_profile_from_record(profile);
+        assert_eq!(
+            provider_profile.wire_api,
+            ModelProfileWireApi::ChatCompletions
+        );
+        assert_eq!(provider_profile.timeout_ms, None);
+        assert_eq!(provider_profile.rate_limit.concurrent_requests, None);
+        assert!(provider_profile.capabilities.chat);
+        assert!(provider_profile.capabilities.vision);
+        assert!(!provider_profile.capabilities.tool_calling);
     }
 }

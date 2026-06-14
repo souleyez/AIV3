@@ -127,9 +127,8 @@ use llm_gateway::{
     model_gateway_profile_env_prefix, render_runtime_manifest, resolve_runtime_selection_from_env,
     LlmFinishReason, LlmProviderError, LlmProviderFailureKind, LlmRequest, LlmResponse,
     LlmRuntimeMetadata, LlmRuntimeMode, LlmRuntimeSelection, LlmStreamDelta,
-    ModelCapabilityManifest, ModelGatewayLaneLimits, ModelGatewayPoolConfig, ModelProfileWireApi,
-    ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
-    MODEL_LANE_CODEX_CONVERSATION,
+    ModelGatewayLaneLimits, ModelGatewayPoolConfig, ModelProviderProfile,
+    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -24239,27 +24238,6 @@ fn external_channel_chat_attempt_from_profile(
         profile: Some(profile),
         lane_limits,
     }
-}
-
-fn model_gateway_provider_profile_from_record(
-    profile: ModelGatewayProfile,
-) -> ModelProviderProfile {
-    let mut provider_profile =
-        ModelProviderProfile::new(profile.profile_id, profile.provider_id, profile.model_id);
-    provider_profile.priority = profile.priority;
-    provider_profile.base_url = profile.base_url;
-    provider_profile.api_path = profile.api_path;
-    provider_profile.wire_api = ModelProfileWireApi::from_env_value(&profile.wire_api)
-        .unwrap_or(ModelProfileWireApi::ChatCompletions);
-    provider_profile.auth_env_key_name = profile.auth_env_key_name;
-    provider_profile.timeout_ms = profile.timeout_ms.map(|value| value as u64);
-    provider_profile.rate_limit.concurrent_requests =
-        profile.max_concurrency.map(|value| value as u32);
-    provider_profile.rate_limit.requests_per_minute = profile.rpm_limit.map(|value| value as u32);
-    provider_profile.rate_limit.tokens_per_minute = profile.tpm_limit.map(|value| value as u32);
-    provider_profile.capabilities =
-        ModelCapabilityManifest::from_names(&model_gateway_capability_names(&profile.capabilities));
-    provider_profile
 }
 
 fn external_channel_model_pool_is_active(
