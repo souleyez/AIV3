@@ -60,6 +60,39 @@ pub(crate) fn prompt_contains_elder_death_signal(prompt: &str) -> bool {
     )
 }
 
+pub(crate) fn assistant_run_prompt_requests_expanded_supply(prompt: &str) -> bool {
+    prompt_requests_procedure_or_action(prompt)
+        || prompt_contains_elder_fall_signal(prompt)
+        || prompt_contains_elder_death_signal(prompt)
+}
+
+pub(crate) fn assistant_run_expanded_supply_prompt(prompt: &str) -> String {
+    let mut parts = vec![prompt.trim().to_string()];
+    if prompt_requests_procedure_or_action(prompt) {
+        parts.push(
+            "流程 步骤 处理 处置 应急 措施 要求 报告 记录 通知 医护 家属 现场评估".to_string(),
+        );
+    }
+    if prompt_contains_elder_fall_signal(prompt) {
+        parts.push(
+            "摔倒 跌倒 防跌倒 坠床 防坠床 摔伤 跌伤 骨折 老年人人身意外伤害 突发事件 应急处置 事故处理 120 通知家属 通知主管领导 医护人员 转院 记录 报告 不要急于扶起"
+                .to_string(),
+        );
+    }
+    if prompt_contains_elder_death_signal(prompt) {
+        parts.push(
+            "离世 去世 死亡 身故 病故 善后 殡葬 遗体 遗物 生命体征 医护确认 现场保护 通知负责人 通知家属 家属沟通 家属对接 死亡证明 殡仪接运 遗物清点 遗物交接 记录归档 事件报告"
+                .to_string(),
+        );
+    }
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
     let medication_dispense_query = query.contains("发药")
         || query.contains("服药")
@@ -612,6 +645,45 @@ mod tests {
 
         assert!(relevant > 1.0);
         assert_eq!(unrelated, 0.0);
+    }
+
+    #[test]
+    fn expanded_supply_prompt_only_expands_procedure_or_eldercare_signals() {
+        assert!(!assistant_run_prompt_requests_expanded_supply(
+            "这份资料的作者是谁"
+        ));
+        assert_eq!(
+            assistant_run_expanded_supply_prompt("  这份资料的作者是谁  "),
+            "这份资料的作者是谁"
+        );
+
+        assert!(assistant_run_prompt_requests_expanded_supply(
+            "老人摔倒后怎么办"
+        ));
+        let fall_prompt = assistant_run_expanded_supply_prompt("老人摔倒后怎么办");
+        for expected in ["老人摔倒后怎么办", "应急处置", "通知家属", "不要急于扶起"]
+        {
+            assert!(
+                fall_prompt.contains(expected),
+                "missing expanded fall prompt term {expected}"
+            );
+        }
+
+        assert!(assistant_run_prompt_requests_expanded_supply(
+            "长者离世后的家属对接流程"
+        ));
+        let death_prompt = assistant_run_expanded_supply_prompt("长者离世后的家属对接流程");
+        for expected in [
+            "长者离世后的家属对接流程",
+            "生命体征",
+            "遗物交接",
+            "记录归档",
+        ] {
+            assert!(
+                death_prompt.contains(expected),
+                "missing expanded death prompt term {expected}"
+            );
+        }
     }
 
     #[test]
