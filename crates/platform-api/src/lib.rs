@@ -238,6 +238,7 @@ mod external_conversation_timeline;
 mod external_database_source_config_support;
 mod external_document_object_support;
 pub mod external_feishu;
+mod external_integration_config_summary_support;
 mod external_integration_summary;
 mod external_message_summary;
 mod external_observability;
@@ -344,7 +345,8 @@ use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
 use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
-use external_channel_outbound_reply_dispatch_support::*;
+#[cfg(test)]
+use external_channel_outbound_reply_dispatch_support::external_channel_outbound_reply_dispatch_summary;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
@@ -369,6 +371,7 @@ use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
 use external_database_source_config_support::*;
 use external_document_object_support::*;
+use external_integration_config_summary_support::*;
 #[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
 use external_integration_summary::{
@@ -379,7 +382,6 @@ use external_integration_summary::{
     artifact_summary as external_artifact_summary,
     channel_drift_summary as external_channel_drift_summary,
     database_dataset_readiness_summary as external_database_dataset_readiness_summary,
-    has_redacted_value as external_integration_has_redacted_value,
     redacted_summary as external_integration_redacted_summary,
     search_evidence_summary as external_search_evidence_summary,
     source_drift_summary_with_database_readiness as external_source_drift_summary_with_database_readiness,
@@ -9737,35 +9739,6 @@ async fn load_external_source_audit_items(
             }),
         })
         .collect())
-}
-
-fn external_integration_config_summary(config: &Value) -> Value {
-    let dispatch_auth = external_action_dispatch_auth_from_config(config);
-    let inbound_auth_configured =
-        external_channel_inbound_bearer_token_from_config(config).is_some();
-    json!({
-        "key_count": config.as_object().map(Map::len).unwrap_or(0),
-        "redacted_value_present": external_integration_has_redacted_value(config),
-        "inbound_auth_mode": if inbound_auth_configured { "bearer" } else { "none" },
-        "inbound_auth_configured": inbound_auth_configured,
-        "temporary_access": external_channel_temporary_access_summary(config),
-        "dispatch_endpoint_configured": external_action_dispatch_url_from_config(config, "external_business_action.invoke").is_some()
-            || external_action_dispatch_url_from_config(config, "external_artifact.publish").is_some(),
-        "dispatch_auth_mode": external_action_dispatch_auth_mode(&dispatch_auth),
-        "platform_callback_token_configured": external_config_string(
-            config,
-            &[
-                "token",
-                "callback_token",
-                "callbackToken",
-                "verification_token",
-                "verificationToken",
-            ],
-        )
-        .is_some(),
-        "outbound_reply_dispatch": external_channel_outbound_reply_dispatch_summary(config),
-        "database_source": external_database_source_config_summary(config),
-    })
 }
 
 async fn create_external_source_sync(
