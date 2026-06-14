@@ -228,6 +228,7 @@ mod external_channel_static_page_publish_reply;
 mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
+mod external_channel_static_page_status_source_refs;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
 mod external_conversation_timeline;
@@ -353,6 +354,7 @@ use external_channel_static_page_publish_reply::*;
 use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
+use external_channel_static_page_status_source_refs::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
@@ -30137,7 +30139,7 @@ fn static_page_revision_draft_title(source_title: &str) -> String {
     }
 }
 
-fn external_channel_static_page_source_ref_string(
+pub(crate) fn external_channel_static_page_source_ref_string(
     source_refs: &Value,
     key: &str,
 ) -> Option<String> {
@@ -46805,37 +46807,6 @@ async fn maybe_attach_external_static_page_artifact_to_run(
         .await
         .map_err(ApiError::from_storage)?;
     Ok(())
-}
-
-fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value {
-    let mut output = Map::new();
-    for key in [
-        "source",
-        "local_thread_id",
-        "local_draft_id",
-        "channel_connection_id",
-        "platform",
-        "tenant_external_id",
-        "bot_external_id",
-        "conversation_external_id",
-        "thread_external_id",
-        "sender_external_id",
-        "message_external_id",
-        "output_format",
-        "render_mode",
-        "dataset_artifact_key",
-    ] {
-        if let Some(value) = external_channel_static_page_source_ref_string(source_refs, key) {
-            output.insert(key.to_string(), Value::String(value));
-        }
-    }
-    if let Some(value) = source_refs.get("recipient_delivery") {
-        output.insert("recipient_delivery".to_string(), value.clone());
-    }
-    if let Some(value) = source_refs.get("artifact_stability") {
-        output.insert("artifact_stability".to_string(), value.clone());
-    }
-    Value::Object(output)
 }
 
 fn external_channel_static_page_is_xinbai_primary_report(
