@@ -182,6 +182,7 @@ mod assistant_run_resume_prompt_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
 mod assistant_run_sse_support;
+mod assistant_run_static_page_dataset_scope_support;
 mod assistant_run_static_page_model_route_support;
 mod assistant_run_structured_fact_context_support;
 mod assistant_run_supply_dedupe_support;
@@ -335,6 +336,7 @@ use assistant_run_resume_prompt_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
 use assistant_run_sse_support::*;
+use assistant_run_static_page_dataset_scope_support::*;
 use assistant_run_static_page_model_route_support::*;
 use assistant_run_structured_fact_context_support::*;
 use assistant_run_supply_dedupe_support::*;
@@ -27178,91 +27180,6 @@ fn external_channel_static_page_dataset_scope(
             .get("available_document_source_id")
             .and_then(Value::as_str),
         "scope_source": "v3_external_channel_selected_scope",
-    })
-}
-
-fn collect_static_page_database_source_ids_from_value(value: &Value, ids: &mut BTreeSet<String>) {
-    for key in [
-        "database_source_id",
-        "databaseSourceId",
-        "source_database_id",
-        "sourceDatabaseId",
-    ] {
-        if let Some(value) = value
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        {
-            ids.insert(value);
-        }
-    }
-    for key in [
-        "database_source_ids",
-        "databaseSourceIds",
-        "source_database_ids",
-        "sourceDatabaseIds",
-        "allowed_database_source_ids",
-        "allowedDatabaseSourceIds",
-    ] {
-        collect_external_config_string_values(value.get(key), ids);
-    }
-}
-
-fn collect_static_page_database_source_ids_from_evidence(
-    evidence_state: &Value,
-    ids: &mut BTreeSet<String>,
-) {
-    for item in evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if matches!(
-            item.get("type").and_then(Value::as_str),
-            Some("database_schema_context" | "database_aggregate")
-        ) {
-            if let Some(value) = item
-                .get("source_id")
-                .and_then(Value::as_str)
-                .and_then(non_empty_trimmed_string)
-            {
-                ids.insert(value);
-            }
-        }
-    }
-}
-
-fn assistant_run_static_page_database_source_ids(
-    run: &AssistantRun,
-    draft: &StaticPageDraft,
-) -> Vec<String> {
-    let mut ids = BTreeSet::new();
-    collect_static_page_database_source_ids_from_value(&run.selected_scope, &mut ids);
-    collect_static_page_database_source_ids_from_value(&draft.selected_scope, &mut ids);
-    collect_static_page_database_source_ids_from_value(&draft.source_refs, &mut ids);
-    collect_static_page_database_source_ids_from_evidence(&run.evidence_state, &mut ids);
-    ids.into_iter().collect()
-}
-
-fn assistant_run_static_page_dataset_scope(
-    tenant_id: TenantId,
-    run: &AssistantRun,
-    draft: &StaticPageDraft,
-) -> Value {
-    json!({
-        "tenant_id": tenant_id.to_string(),
-        "dataset_ids": selected_dataset_ids_from_scope(&run.selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "database_source_ids": assistant_run_static_page_database_source_ids(run, draft),
-        "selected_document_ids": selected_document_ids_from_scope(&run.selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "local_thread_id": run.local_thread_id,
-        "scope_source": "v3_main_assistant_selected_scope",
     })
 }
 
