@@ -104,7 +104,8 @@
 | 41 | P5 static-page event reply helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_event_reply` 模块单测、静态页事件链接/focus 回归、`static_page` 广义回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 42 | P5 static-page output artifact reply helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_artifact_reply` 模块单测、静态页输出产物回归、`static_page` 广义回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 43 | P5 static-page publish completed reply helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_publish_reply` 模块单测、静态页发布完成事件回归、`static_page` 广义回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 44 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入、静态页产物周边或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
+| 44 | P5 static-page publish failed reply helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_publish_reply` 模块单测、静态页发布失败事件回归、`static_page` 广义回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 45 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入、静态页产物周边或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
