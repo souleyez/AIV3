@@ -230,6 +230,7 @@ mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
 mod external_channel_static_page_status_source_refs;
+mod external_channel_static_page_template_baseline;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
 mod external_conversation_timeline;
@@ -357,6 +358,7 @@ use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_static_page_status_source_refs::*;
+use external_channel_static_page_template_baseline::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
@@ -5292,25 +5294,6 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
         }
     }
     reply
-}
-
-fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>) -> bool {
-    let Some(card) = card else {
-        return false;
-    };
-    let accepted_reason = card
-        .get("provisional_existing_artifact_reason")
-        .or_else(|| card.get("image2_skip_reason"))
-        .and_then(Value::as_str)
-        == Some("accepted_dataset_overlap_template_baseline");
-    let accepted_marker = external_channel_static_page_provisional_existing_artifact(Some(card))
-        || card
-            .get("image2_skipped")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    accepted_reason
-        && accepted_marker
-        && external_channel_static_page_baseline_public_url(card).is_some()
 }
 
 fn external_channel_static_page_reply_with_public_artifact_terminal(
