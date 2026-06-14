@@ -9768,32 +9768,6 @@ fn external_integration_config_summary(config: &Value) -> Value {
     })
 }
 
-fn external_database_source_config_summary(config: &Value) -> Value {
-    let Some(database_source) = source_database_config_fragment(config) else {
-        if let Some(pending) = config
-            .get("database_source_pending")
-            .or_else(|| config.get("databaseSourcePending"))
-            .cloned()
-        {
-            return json!({
-                "configured": false,
-                "credential_status": "pending_secret_binding",
-                "pending": external_integration_redacted_summary(pending),
-            });
-        }
-        return json!({ "configured": false });
-    };
-    match MySqlSourceConfig::from_value(&database_source) {
-        Ok(config) => serde_json::to_value(config.redacted_summary())
-            .unwrap_or_else(|_| json!({ "configured": true, "valid": true })),
-        Err(error) => json!({
-            "configured": true,
-            "valid": false,
-            "error": error.to_string(),
-        }),
-    }
-}
-
 async fn create_external_source_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -16748,15 +16722,6 @@ fn merged_database_source_config(
         merged_object.insert(key.clone(), value.clone());
     }
     Ok(merged)
-}
-
-fn source_database_config_fragment(source_config_redacted: &Value) -> Option<Value> {
-    source_config_redacted
-        .get("database_source")
-        .or_else(|| source_config_redacted.get("databaseSource"))
-        .or_else(|| source_config_redacted.get("mysql_source"))
-        .or_else(|| source_config_redacted.get("mysqlSource"))
-        .cloned()
 }
 
 fn database_source_error_to_api(error: DatabaseSourceError) -> ApiError {

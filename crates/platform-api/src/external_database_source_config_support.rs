@@ -1,6 +1,10 @@
-use serde_json::json;
+use external_source_connectors::MySqlSourceConfig;
+use serde_json::{json, Value};
 
-use crate::{text_normalization::non_empty_trimmed_string, ApiError};
+use crate::{
+    external_integration_summary::redacted_summary, text_normalization::non_empty_trimmed_string,
+    ApiError,
+};
 
 pub(crate) fn normalize_external_database_connector_kind(
     kind: &str,
@@ -75,6 +79,41 @@ pub(crate) fn redact_database_connection_url(url: &str) -> String {
     };
     let rest = rest.rsplit_once('@').map(|(_, host)| host).unwrap_or(rest);
     format!("{scheme}://{rest}")
+}
+
+pub(crate) fn external_database_source_config_summary(config: &Value) -> Value {
+    let Some(database_source) = source_database_config_fragment(config) else {
+        if let Some(pending) = config
+            .get("database_source_pending")
+            .or_else(|| config.get("databaseSourcePending"))
+            .cloned()
+        {
+            return json!({
+                "configured": false,
+                "credential_status": "pending_secret_binding",
+                "pending": redacted_summary(pending),
+            });
+        }
+        return json!({ "configured": false });
+    };
+    match MySqlSourceConfig::from_value(&database_source) {
+        Ok(config) => serde_json::to_value(config.redacted_summary())
+            .unwrap_or_else(|_| json!({ "configured": true, "valid": true })),
+        Err(error) => json!({
+            "configured": true,
+            "valid": false,
+            "error": error.to_string(),
+        }),
+    }
+}
+
+pub(crate) fn source_database_config_fragment(source_config_redacted: &Value) -> Option<Value> {
+    source_config_redacted
+        .get("database_source")
+        .or_else(|| source_config_redacted.get("databaseSource"))
+        .or_else(|| source_config_redacted.get("mysql_source"))
+        .or_else(|| source_config_redacted.get("mysqlSource"))
+        .cloned()
 }
 
 #[cfg(test)]
@@ -170,5 +209,73 @@ mod tests {
             redact_database_connection_url("not-a-url"),
             "[redacted-database-url]"
         );
+    }
+
+    #[test]
+    fn database_source_config_summary_exposes_mysql_shape_without_secrets() {
+        let summary = external_database_source_config_summary(&json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": "018f0000-0000-7000-9000-000000000001",
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "content_columns": ["area_name"]
+                }]
+            }
+        }));
+
+        assert_eq!(summary["kind"], json!("mysql"));
+        assert_eq!(summary["database"], json!("hy_sql"));
+        assert_eq!(
+            summary["connection_env"],
+            json!("THIRD_PARTY_HY_SQL_DATABASE_URL")
+        );
+        assert_eq!(summary["table_count"], json!(1));
+        assert_eq!(summary["tables"][0], json!("bi_traffic_area"));
+        assert!(!summary.to_string().contains("password"));
+    }
+
+    #[test]
+    fn database_source_config_summary_reports_pending_secret_binding_redacted() {
+        let summary = external_database_source_config_summary(&json!({
+            "databaseSourcePending": {
+                "connection_env": "THIRD_PARTY_PENDING_URL",
+                "token": "secret-token",
+                "password": "secret-password",
+                "tables": ["sales_daily"]
+            }
+        }));
+
+        assert_eq!(summary["configured"], json!(false));
+        assert_eq!(
+            summary["credential_status"],
+            json!("pending_secret_binding")
+        );
+        assert_eq!(
+            summary["pending"]["connection_env"],
+            json!("THIRD_PARTY_PENDING_URL")
+        );
+        assert!(summary["pending"].get("token").is_none());
+        assert!(summary["pending"].get("password").is_none());
+        assert!(!summary.to_string().contains("secret-token"));
+    }
+
+    #[test]
+    fn source_database_config_fragment_accepts_legacy_aliases() {
+        for key in [
+            "database_source",
+            "databaseSource",
+            "mysql_source",
+            "mysqlSource",
+        ] {
+            let value = json!({ key: { "database": "hy_sql" } });
+            assert_eq!(
+                source_database_config_fragment(&value),
+                Some(json!({ "database": "hy_sql" }))
+            );
+        }
+        assert_eq!(source_database_config_fragment(&json!({})), None);
     }
 }
