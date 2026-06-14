@@ -19520,3 +19520,61 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Static Page Data Quality Artifact Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page final render data quality report artifact conversion out of `lib.rs` into `crates/platform-api/src/static_page_data_quality_artifact_support.rs`;
+  - preserve renderer manifest summary/module normalization, empty zero summary skipping, `StaticPageDataQualityReport` template, and read-only artifact metadata.
+- Code change:
+  - added `static_page_data_quality_artifact_support`;
+  - moved `static_page_data_quality_artifact_from_draft`, `static_page_final_data_quality_summary`, `static_page_final_data_quality_modules`, and `static_page_data_quality_module_payload` into the new module;
+  - kept async draft loading in `lib.rs` and existing call sites unchanged through module import;
+  - added module tests for chart runtime summary/modules, export package debug precedence, and empty zero summary skipping.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_data_quality_artifact_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api html_artifact_static_page_draft_builds_data_quality_report_from_final_manifest --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 288/288 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware and Turbopack NFT warnings only;
+  - all 13 P0 self-tests passed, including main/external 20way, static-page 5way, Cloudflare fallback 2way, P2 dry-run, production readiness, and prewarm observability;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-62/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Static Page Data Quality Artifact Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `5ca2e339` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `a589938aa7ae` to `5ca2e3395d92`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_data_quality_artifact_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api html_artifact_static_page_draft_builds_data_quality_report_from_final_manifest --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 288/288 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-5ca2e3395d92/`.
+- CI status:
+  - GitHub Actions run `27500071437` for `5ca2e339` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
