@@ -1,4 +1,5 @@
-use serde_json::Value;
+use domain_model::AssistantRunEvent;
+use serde_json::{json, Value};
 
 use crate::{static_page_prompt_focus_query_value, static_page_public_url_with_focus_label};
 
@@ -76,6 +77,75 @@ pub(crate) fn external_channel_static_page_focus_module_labels(
         }
     }
     labels
+}
+
+pub(crate) fn external_channel_static_page_payload_with_event_intent(
+    payload: &Value,
+    events: &[AssistantRunEvent],
+) -> Value {
+    if external_channel_static_page_user_intent_from_payload(payload).is_some()
+        || !external_channel_static_page_focus_module_labels(Some(payload)).is_empty()
+    {
+        return payload.clone();
+    }
+    let Some(intent) = external_channel_static_page_user_intent_from_events(events) else {
+        return payload.clone();
+    };
+    let mut enriched = payload.clone();
+    let Value::Object(object) = &mut enriched else {
+        return enriched;
+    };
+    match object.get_mut("template_adaptation") {
+        Some(Value::Object(adaptation)) => {
+            adaptation
+                .entry("userIntent".to_string())
+                .or_insert_with(|| Value::String(intent));
+        }
+        _ => {
+            object.insert(
+                "template_adaptation".to_string(),
+                json!({ "userIntent": intent }),
+            );
+        }
+    }
+    enriched
+}
+
+fn external_channel_static_page_user_intent_from_events(
+    events: &[AssistantRunEvent],
+) -> Option<String> {
+    for event in events.iter().rev() {
+        let payload = &event.payload;
+        if let Some(intent) = external_channel_static_page_user_intent_from_payload(payload) {
+            return Some(intent.to_string());
+        }
+        if !matches!(
+            event.event_name.as_str(),
+            "static_page_draft.created" | "assistant_run.external_channel_message_received"
+        ) {
+            continue;
+        }
+        for pointer in [
+            "/prompt",
+            "/user_prompt",
+            "/text",
+            "/message/text",
+            "/external_message/text",
+            "/request/text",
+        ] {
+            let Some(value) = payload
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+            else {
+                continue;
+            };
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn external_channel_static_page_default_modules_for_focus(focus: &str) -> Vec<String> {
@@ -178,10 +248,24 @@ pub(crate) fn external_channel_static_page_customer_ready_text_for_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use domain_model::{AssistantRunEventId, AssistantRunId, TenantId};
     use serde_json::json;
 
     fn artifact_url() -> &'static str {
         "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html"
+    }
+
+    fn assistant_event(sequence_no: i32, event_name: &str, payload: Value) -> AssistantRunEvent {
+        AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId::new(),
+            run_id: AssistantRunId::new(),
+            sequence_no,
+            event_name: event_name.to_string(),
+            payload,
+            created_at: Utc::now(),
+        }
     }
 
     #[test]
@@ -223,6 +307,111 @@ mod tests {
                 "当前/预测/取高线/需助推".to_string(),
                 "预计取高增收".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn payload_with_event_intent_keeps_payload_with_existing_intent() {
+        let payload = json!({
+            "template_adaptation": {
+                "userIntent": "已有关注焦点"
+            }
+        });
+        let events = vec![assistant_event(
+            1,
+            "assistant_run.external_channel_message_received",
+            json!({"text": "从事件补充"}),
+        )];
+
+        assert_eq!(
+            external_channel_static_page_payload_with_event_intent(&payload, &events),
+            payload
+        );
+    }
+
+    #[test]
+    fn payload_with_event_intent_keeps_payload_with_focus_modules() {
+        let payload = json!({
+            "template_adaptation": {
+                "focus": [{"label": "取高线距离排行"}]
+            }
+        });
+        let events = vec![assistant_event(
+            1,
+            "assistant_run.external_channel_message_received",
+            json!({"text": "从事件补充"}),
+        )];
+
+        assert_eq!(
+            external_channel_static_page_payload_with_event_intent(&payload, &events),
+            payload
+        );
+    }
+
+    #[test]
+    fn payload_with_event_intent_enriches_object_from_latest_event_text() {
+        let payload = json!({
+            "artifact_public_url": artifact_url()
+        });
+        let events = vec![
+            assistant_event(
+                1,
+                "assistant_run.external_channel_message_received",
+                json!({"text": "生成经营总览"}),
+            ),
+            assistant_event(
+                2,
+                "static_page_draft.created",
+                json!({"prompt": "生成取高机会"}),
+            ),
+        ];
+
+        let enriched = external_channel_static_page_payload_with_event_intent(&payload, &events);
+
+        assert_eq!(
+            enriched.pointer("/template_adaptation/userIntent"),
+            Some(&json!("生成取高机会"))
+        );
+        assert_eq!(enriched["artifact_public_url"], json!(artifact_url()));
+    }
+
+    #[test]
+    fn payload_with_event_intent_updates_existing_adaptation_object_only() {
+        let payload = json!({
+            "template_adaptation": {
+                "focus": []
+            }
+        });
+        let events = vec![assistant_event(
+            1,
+            "assistant_run.external_channel_message_received",
+            json!({"message": {"text": "生成风险店铺"}}),
+        )];
+
+        let enriched = external_channel_static_page_payload_with_event_intent(&payload, &events);
+
+        assert_eq!(
+            enriched.pointer("/template_adaptation/userIntent"),
+            Some(&json!("生成风险店铺"))
+        );
+        assert_eq!(
+            enriched.pointer("/template_adaptation/focus"),
+            Some(&json!([]))
+        );
+    }
+
+    #[test]
+    fn payload_with_event_intent_ignores_unrelated_events_and_non_object_payload() {
+        let payload = json!("raw");
+        let events = vec![assistant_event(
+            1,
+            "assistant_run.unrelated",
+            json!({"text": "生成风险店铺"}),
+        )];
+
+        assert_eq!(
+            external_channel_static_page_payload_with_event_intent(&payload, &events),
+            payload
         );
     }
 
