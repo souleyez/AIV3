@@ -243,6 +243,7 @@ mod external_channel_static_page_reply_merge;
 mod external_channel_static_page_report_scope_support;
 mod external_channel_static_page_status_source_refs;
 mod external_channel_static_page_template_baseline;
+mod external_channel_static_page_template_reference_support;
 mod external_channel_static_page_terminal_reply;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
@@ -398,6 +399,7 @@ use external_channel_static_page_reply_merge::*;
 use external_channel_static_page_report_scope_support::*;
 use external_channel_static_page_status_source_refs::*;
 use external_channel_static_page_template_baseline::*;
+use external_channel_static_page_template_reference_support::*;
 use external_channel_static_page_terminal_reply::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
@@ -24215,41 +24217,6 @@ fn append_database_source_default_datasets_to_scope(
     set_payload_value(selected_scope, "datasets", Value::Array(datasets));
 }
 
-fn external_channel_static_page_template_reference_id(
-    message: &ExternalBotMessageView,
-    prompt: &str,
-) -> Option<String> {
-    if let Some(value) = message
-        .template
-        .as_ref()
-        .and_then(|template| template.template_reference_id.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(value.to_string());
-    }
-
-    for skill in message
-        .requested_skills
-        .iter()
-        .filter(|skill| external_requested_skill_mode(skill) != "disabled")
-    {
-        if let Some(value) = external_requested_skill_argument_string(
-            skill,
-            &[
-                "template_reference_id",
-                "templateReferenceId",
-                "static_page_template",
-                "staticPageTemplate",
-            ],
-        ) {
-            return Some(value);
-        }
-    }
-
-    infer_static_page_template_reference_id(prompt).map(str::to_string)
-}
-
 fn static_page_stable_key_token(value: &str) -> Option<String> {
     let normalized = value
         .trim()
@@ -26942,38 +26909,6 @@ fn static_page_existing_artifact_reference_for_fixed_task(
         template_reference,
         source_refs,
     )
-}
-
-fn external_static_page_template_reference_label(reference: &Value) -> Option<String> {
-    ["label", "name", "title", "templateId", "template_id", "id"]
-        .iter()
-        .find_map(|key| {
-            reference
-                .get(*key)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn external_channel_static_page_pipeline_reply_text(
-    codex_auto_publish_enabled: bool,
-    template_reference: Option<&Value>,
-) -> String {
-    let task_clause = if codex_auto_publish_enabled {
-        "已创建静态页草稿并提交 Image2 可视化队列；可视化无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。"
-    } else {
-        "已创建静态页草稿并提交 Image2 可视化队列；固定发布链路当前未启用或未加入 allowlist。"
-    };
-    if let Some(label) = template_reference.and_then(external_static_page_template_reference_label)
-    {
-        format!(
-            "已收到模板参考：将以「{label}」作为页面结构、版式风格和字段组织参考；事实内容仍以本会话已授权资料和检索证据为准。{task_clause}"
-        )
-    } else {
-        format!("已收到静态页制作需求。{task_clause}")
-    }
 }
 
 fn external_static_page_prompt_contains_any(prompt: &str, needles: &[&str]) -> bool {
