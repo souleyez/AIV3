@@ -20209,6 +20209,10 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
   - post-smoke service check confirmed all five restarted services remained `active`;
   - final `healthz` returned status `ok` and final `readyz` returned status `ready`.
+- GitHub Actions:
+  - code commit run `27507138813` for `0d3f6a068` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern;
+  - docs commit run `27507334298` for `848cd07dd` completed `failure` with the same `steps=[]` pattern.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
