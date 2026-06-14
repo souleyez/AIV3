@@ -313,6 +313,7 @@ mod static_page_structure_signals;
 mod static_page_template_binding_support;
 mod static_page_template_match_support;
 mod static_page_template_prewarm_support;
+mod static_page_template_profile_support;
 mod static_page_template_reference_support;
 mod text_normalization;
 mod tool_view_support;
@@ -498,6 +499,7 @@ use static_page_structure_signals::*;
 use static_page_template_binding_support::*;
 use static_page_template_match_support::*;
 use static_page_template_prewarm_support::*;
+use static_page_template_profile_support::*;
 use static_page_template_reference_support::*;
 use text_normalization::*;
 use tool_view_support::*;
@@ -24241,149 +24243,6 @@ impl StaticPageTemplateBaselineScore {
         self.score += points;
         self.features.push(feature.into());
     }
-}
-
-fn static_page_template_limited_value_text(value: &Value) -> String {
-    value.to_string().chars().take(20_000).collect()
-}
-
-fn static_page_template_draft_profile_text(draft: &StaticPageDraft) -> String {
-    let mut text = String::new();
-    text.push_str(&draft.title);
-    text.push('\n');
-    if let Some(public_url) = static_page_published_public_url_from_draft(draft) {
-        text.push_str(&public_url);
-        text.push('\n');
-    }
-    for value in [
-        &draft.selected_scope,
-        &draft.visibility_snapshot,
-        &draft.source_refs,
-        &draft.draft_payload,
-    ] {
-        text.push_str(&static_page_template_limited_value_text(value));
-        text.push('\n');
-    }
-    text
-}
-
-fn static_page_template_profile_has_xinbai_primary_default_signal(
-    profile: &str,
-    profile_lower: &str,
-) -> bool {
-    static_page_template_text_contains_any(
-        profile,
-        profile_lower,
-        &[
-            "xinbai-functional-modular-template-20260604",
-            "xinbai_business_report",
-            "monthly_report_only_default_template",
-            "project_unique_default_template",
-            "xinbai_only_accepted_default_template",
-            XINBAI_PUBLISHED_REPORT_TITLE,
-        ],
-    )
-}
-
-fn static_page_template_draft_is_xinbai_primary_default_template(draft: &StaticPageDraft) -> bool {
-    if static_page_published_public_url_from_draft(draft).is_some_and(|url| {
-        url.to_ascii_lowercase()
-            .contains("xinbai-functional-modular-template-20260604")
-    }) {
-        return true;
-    }
-    let profile = static_page_template_draft_profile_text(draft);
-    let profile_lower = profile.to_ascii_lowercase();
-    static_page_template_profile_has_xinbai_primary_default_signal(&profile, &profile_lower)
-}
-
-fn static_page_template_draft_is_non_default_noise_baseline(draft: &StaticPageDraft) -> bool {
-    let profile = static_page_template_draft_profile_text(draft);
-    let profile_lower = profile.to_ascii_lowercase();
-    static_page_template_text_contains_any(
-        &profile,
-        &profile_lower,
-        &[
-            "并发编号",
-            "smoke",
-            "template_prewarm",
-            "prewarm",
-            "测试页",
-            "test page",
-            "static_page_template_prewarm_candidate",
-            "DataMax 静态页模板预热",
-        ],
-    )
-}
-
-fn static_page_template_draft_is_local_generated_report_instance(draft: &StaticPageDraft) -> bool {
-    if static_page_template_draft_is_xinbai_primary_default_template(draft) {
-        return false;
-    }
-    let profile = static_page_template_draft_profile_text(draft);
-    let profile_lower = profile.to_ascii_lowercase();
-    static_page_template_text_contains_any(
-        &profile,
-        &profile_lower,
-        &[
-            "local_generated_artifact_first",
-            "static-page-renderer-v1-local-generated-artifact",
-            "direct_html_fallback\":true",
-            "directHtml\":true",
-            "v3_external_channel_static_page_local_generated_artifact",
-            "/database-static-pages/external-channel/",
-        ],
-    )
-}
-
-fn static_page_template_context_prefers_xinbai_primary(
-    current_prompt: Option<&str>,
-    selected_scope: &Value,
-    source_refs: &Value,
-) -> bool {
-    let mut text = String::new();
-    if let Some(prompt) = current_prompt {
-        text.push_str(prompt);
-        text.push('\n');
-    }
-    text.push_str(&static_page_template_limited_value_text(selected_scope));
-    text.push('\n');
-    text.push_str(&static_page_template_limited_value_text(source_refs));
-    let lower = text.to_ascii_lowercase();
-    let has_xinbai_scope_or_prompt = static_page_template_text_contains_any(
-        &text,
-        &lower,
-        &[
-            "新百",
-            "新世界",
-            "新世界百货",
-            "xinbai",
-            "hy-sql-traffic-area",
-        ],
-    );
-    if !has_xinbai_scope_or_prompt {
-        return false;
-    }
-    static_page_template_intent_reuse_class(current_prompt.unwrap_or_default())
-        == Some("business_report")
-        || static_page_template_text_contains_any(
-            &text,
-            &lower,
-            &[
-                "取高",
-                "高分成",
-                "经营",
-                "报表",
-                "月报",
-                "风险",
-                "销售缺口",
-                "助推",
-                "坪效",
-                "客流",
-                "dashboard",
-                "report",
-            ],
-        )
 }
 
 async fn find_static_page_xinbai_primary_template_baseline_by_public_url(
