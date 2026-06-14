@@ -206,6 +206,7 @@ mod external_artifact_request_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
+mod external_channel_connection_id_support;
 mod external_channel_conversation_history_support;
 mod external_channel_direct_reply_budget_support;
 mod external_channel_fixed_task_status_support;
@@ -342,6 +343,7 @@ use external_artifact_request_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
+use external_channel_connection_id_support::*;
 use external_channel_conversation_history_support::*;
 use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
@@ -8751,22 +8753,6 @@ async fn external_source_connection_exists(
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
     Ok(exists)
-}
-
-fn external_channel_create_connection_id(
-    request: &CreateExternalChannelConnectionRequest,
-) -> std::result::Result<String, ApiError> {
-    let connection_id = trim_optional(request.connection_id.clone()).unwrap_or_else(|| {
-        let seed = trim_optional(request.customer_key.clone())
-            .or_else(|| trim_optional(request.display_name.clone()))
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        format!(
-            "generic-chat-{}",
-            external_document_parse_dataset_key_component(&seed)
-        )
-    });
-    validate_external_channel_connection_id(&connection_id)?;
-    Ok(connection_id)
 }
 
 async fn disable_external_channel_connection(
