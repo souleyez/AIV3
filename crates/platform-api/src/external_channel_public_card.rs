@@ -62,6 +62,20 @@ pub(crate) fn external_channel_reply_public_status(reply: &ExternalBotReplyView)
         .map(|status| external_channel_public_reply_task_status(status, reply.card.as_ref()))
 }
 
+pub(crate) fn external_channel_reply_is_static_page_like(reply: &ExternalBotReplyView) -> bool {
+    reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("type"))
+        .and_then(Value::as_str)
+        .map(|card_type| card_type.contains("static_page"))
+        .unwrap_or(false)
+        || external_channel_reply_static_page_card_status(reply)
+            .or(reply.task_status.as_deref())
+            .map(|status| status.starts_with("static_page_"))
+            .unwrap_or(false)
+}
+
 pub(crate) fn prune_external_channel_public_card_links(
     value: &mut Value,
     include_artifact_link: bool,
@@ -182,7 +196,25 @@ pub(crate) fn external_channel_public_card_value(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use contracts::ExternalBotReplyTypeView;
     use serde_json::json;
+
+    fn reply_with_card_and_status(
+        card: Option<Value>,
+        task_status: Option<&str>,
+    ) -> ExternalBotReplyView {
+        ExternalBotReplyView {
+            target_conversation_external_id: "room-1".to_string(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: None,
+            card,
+            artifact_links: Vec::new(),
+            task_status: task_status.map(ToOwned::to_owned),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        }
+    }
 
     #[test]
     fn public_card_value_strips_internal_fields_and_maps_static_page_type() {
@@ -244,5 +276,27 @@ mod tests {
                 Some(&card),
             )
         );
+    }
+
+    #[test]
+    fn reply_is_static_page_like_reads_card_type_and_status() {
+        assert!(external_channel_reply_is_static_page_like(
+            &reply_with_card_and_status(
+                Some(json!({"type": "v3_static_page_image2_pipeline"})),
+                None,
+            )
+        ));
+        assert!(external_channel_reply_is_static_page_like(
+            &reply_with_card_and_status(None, Some("static_page_published"),)
+        ));
+        assert!(external_channel_reply_is_static_page_like(
+            &reply_with_card_and_status(Some(json!({"status": "static_page_preview_ready"})), None,)
+        ));
+        assert!(!external_channel_reply_is_static_page_like(
+            &reply_with_card_and_status(
+                Some(json!({"type": "normal_task", "status": "processing"})),
+                Some("processing"),
+            )
+        ));
     }
 }

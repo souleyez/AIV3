@@ -5258,20 +5258,6 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
     reply
 }
 
-fn external_channel_reply_is_static_page_like(reply: &ExternalBotReplyView) -> bool {
-    reply
-        .card
-        .as_ref()
-        .and_then(|card| card.get("type"))
-        .and_then(Value::as_str)
-        .map(|card_type| card_type.contains("static_page"))
-        .unwrap_or(false)
-        || external_channel_reply_static_page_card_status(reply)
-            .or(reply.task_status.as_deref())
-            .map(|status| status.starts_with("static_page_"))
-            .unwrap_or(false)
-}
-
 fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>) -> bool {
     let Some(card) = card else {
         return false;
