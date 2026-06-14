@@ -231,6 +231,7 @@ mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
 mod external_channel_static_page_status_source_refs;
 mod external_channel_static_page_template_baseline;
+mod external_channel_static_page_terminal_reply;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
 mod external_conversation_timeline;
@@ -359,6 +360,7 @@ use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_static_page_status_source_refs::*;
 use external_channel_static_page_template_baseline::*;
+use external_channel_static_page_terminal_reply::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
@@ -5292,132 +5294,6 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
                 &public_url,
             ));
         }
-    }
-    reply
-}
-
-fn external_channel_static_page_reply_with_public_artifact_terminal(
-    mut reply: ExternalBotReplyView,
-) -> ExternalBotReplyView {
-    if !external_channel_reply_is_static_page_like(&reply) {
-        return reply;
-    }
-    let Some(raw_public_url) = external_channel_public_artifact_url_from_reply(&reply) else {
-        return reply;
-    };
-    let public_url = reply
-        .card
-        .as_ref()
-        .map(|card| {
-            external_channel_static_page_public_url_with_payload_focus(&raw_public_url, card)
-        })
-        .unwrap_or(raw_public_url);
-    let raw_status = external_channel_reply_static_page_card_status(&reply)
-        .or(reply.task_status.as_deref())
-        .unwrap_or_default()
-        .to_string();
-    let provisional_existing_artifact =
-        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
-    let accepted_template_baseline =
-        external_channel_static_page_accepted_template_baseline(reply.card.as_ref());
-    if provisional_existing_artifact
-        && !accepted_template_baseline
-        && raw_status != "static_page_stable_artifact_reused"
-    {
-        return reply;
-    }
-    let terminal_artifact_status = external_channel_public_status_allows_artifact_link(&raw_status);
-    let final_publish_with_artifact_url =
-        raw_status == "static_page_publish_running" || accepted_template_baseline;
-    if !terminal_artifact_status && !final_publish_with_artifact_url {
-        return reply;
-    }
-    if provisional_existing_artifact
-        && !accepted_template_baseline
-        && !terminal_artifact_status
-        && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink
-    {
-        return reply;
-    }
-    let preserve_direct_answer_text = reply.reply_type == ExternalBotReplyTypeView::Text
-        && reply.task_status.as_deref() == Some("answered")
-        && reply
-            .text
-            .as_deref()
-            .map(|text| !text.trim().is_empty())
-            .unwrap_or(false);
-    let ready_text = external_channel_static_page_customer_ready_text_for_payload(
-        external_channel_static_page_customer_ready_text(),
-        reply.card.as_ref(),
-        &public_url,
-    );
-    if preserve_direct_answer_text {
-        if let Some(text) = reply.text.take() {
-            reply.text = Some(external_channel_text_with_public_artifact_link(
-                text,
-                &public_url,
-            ));
-        }
-    } else if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
-        reply.task_status = Some("static_page_published".to_string());
-        reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
-        reply.text = Some(external_channel_text_with_public_artifact_link(
-            ready_text,
-            &public_url,
-        ));
-    } else if raw_status == "static_page_stable_artifact_reused" {
-        reply.text = Some(external_channel_text_with_public_artifact_link(
-            ready_text,
-            &public_url,
-        ));
-        reply.task_status = Some("static_page_published".to_string());
-        reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
-    } else if accepted_template_baseline {
-        let pending_text = external_channel_static_page_customer_ready_text_for_payload(
-            "已依据客户需求生成可查看的报表页面，DataMax 会继续刷新并同步最新结果。",
-            reply.card.as_ref(),
-            &public_url,
-        );
-        reply.text = Some(external_channel_text_with_public_artifact_link(
-            pending_text,
-            &public_url,
-        ));
-    } else {
-        let pending_text = external_channel_static_page_customer_ready_text_for_payload(
-            "已依据客户需求准备好可查看的报表页面，页面更新完成后会继续同步最新结果。",
-            reply.card.as_ref(),
-            &public_url,
-        );
-        reply.text = Some(external_channel_text_with_public_artifact_link(
-            pending_text,
-            &public_url,
-        ));
-    }
-    if !reply
-        .artifact_links
-        .iter()
-        .any(|link| link.trim() == public_url)
-    {
-        reply.artifact_links.insert(0, public_url.clone());
-    }
-    if let Some(Value::Object(card)) = reply.card.as_mut() {
-        if raw_status == "static_page_stable_artifact_reused" || !provisional_existing_artifact {
-            card.insert(
-                "status".to_string(),
-                Value::String("static_page_published".to_string()),
-            );
-        }
-        for key in [
-            "public_url",
-            "generated_artifact_url",
-            "download_url",
-            "html_download_url",
-        ] {
-            card.entry(key.to_string())
-                .or_insert_with(|| Value::String(public_url.clone()));
-        }
-        card.entry("artifact_links".to_string())
-            .or_insert_with(|| json!([public_url]));
     }
     reply
 }
