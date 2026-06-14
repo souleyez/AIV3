@@ -233,6 +233,7 @@ mod external_channel_sse_live_sink;
 mod external_channel_sse_support;
 mod external_channel_static_page_artifact_reply;
 mod external_channel_static_page_card_defaults;
+mod external_channel_static_page_dataset_scope_support;
 mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
 mod external_channel_static_page_publish_reply;
@@ -386,6 +387,7 @@ use external_channel_sse_live_sink::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_artifact_reply::*;
 use external_channel_static_page_card_defaults::*;
+use external_channel_static_page_dataset_scope_support::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
 use external_channel_static_page_publish_reply::*;
@@ -24328,81 +24330,6 @@ fn external_channel_static_page_template_reference_id(
     infer_static_page_template_reference_id(prompt).map(str::to_string)
 }
 
-fn collect_external_static_page_database_source_ids(
-    connection: &ExternalChannelConnectionSummary,
-    selected_scope: &Value,
-    evidence_state: &Value,
-) -> Vec<String> {
-    let mut ids = BTreeSet::new();
-    let mut selected_scope_database_ids = BTreeSet::new();
-    let fixed_report_scope = selected_scope
-        .get("database_report_scope_policy")
-        .and_then(Value::as_str)
-        == Some("fixed_dataset_independent_of_chat_selection");
-
-    for key in [
-        "database_source_id",
-        "databaseSourceId",
-        "source_database_id",
-        "sourceDatabaseId",
-    ] {
-        if let Some(value) = selected_scope
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        {
-            selected_scope_database_ids.insert(value);
-        }
-    }
-    for key in ["database_source_ids", "databaseSourceIds"] {
-        for raw in selected_scope
-            .get(key)
-            .cloned()
-            .map(external_string_ids_from_payload_value)
-            .unwrap_or_default()
-        {
-            if let Some(value) = non_empty_trimmed_string(&raw) {
-                selected_scope_database_ids.insert(value);
-            }
-        }
-    }
-    if !fixed_report_scope {
-        if let Some(default_source_id) =
-            external_channel_default_source_id_from_config(&connection.config_redacted)
-        {
-            ids.insert(default_source_id);
-        }
-        ids.extend(external_channel_allowed_database_source_ids(
-            &connection.config_redacted,
-        ));
-    }
-    ids.extend(selected_scope_database_ids);
-
-    if !fixed_report_scope {
-        for item in evidence_state
-            .get("supplied_items")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if matches!(
-                item.get("type").and_then(Value::as_str),
-                Some("database_schema_context" | "database_aggregate")
-            ) {
-                if let Some(value) = item
-                    .get("source_id")
-                    .and_then(Value::as_str)
-                    .and_then(non_empty_trimmed_string)
-                {
-                    ids.insert(value);
-                }
-            }
-        }
-    }
-
-    ids.into_iter().collect()
-}
-
 fn static_page_stable_key_token(value: &str) -> Option<String> {
     let normalized = value
         .trim()
@@ -27153,34 +27080,6 @@ fn external_channel_static_page_project_name(prompt: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn external_channel_static_page_dataset_scope(
-    tenant_id: TenantId,
-    connection: &ExternalChannelConnectionSummary,
-    run: &AssistantRun,
-) -> Value {
-    json!({
-        "tenant_id": tenant_id.to_string(),
-        "dataset_ids": selected_dataset_ids_from_scope(&run.selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "database_source_ids": collect_external_static_page_database_source_ids(
-            connection,
-            &run.selected_scope,
-            &run.evidence_state,
-        ),
-        "selected_document_ids": selected_document_ids_from_scope(&run.selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "available_document_source_id": run
-            .selected_scope
-            .get("available_document_source_id")
-            .and_then(Value::as_str),
-        "scope_source": "v3_external_channel_selected_scope",
-    })
 }
 
 fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
