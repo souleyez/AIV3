@@ -33123,19 +33123,6 @@ fn orchestrator_access_configured() -> bool {
             .unwrap_or(false)
 }
 
-fn external_channel_html_artifact_download_url(
-    connection_id: &str,
-    artifact_id: &str,
-    file_index: usize,
-) -> String {
-    format!(
-        "/v1/external/channels/{}/html-artifacts/{}/files/{}",
-        encode_url_path_segment(connection_id),
-        encode_url_path_segment(artifact_id),
-        file_index
-    )
-}
-
 fn external_channel_document_scope_guard_should_block(
     request: &CreateAssistantRunRequest,
     evidence_state: &Value,

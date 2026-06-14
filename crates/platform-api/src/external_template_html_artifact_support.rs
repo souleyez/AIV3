@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use contracts::{ExternalBotMessageView, HtmlArtifactDataRefView};
 
 use crate::{
-    external_document_template_skill_document_id, external_document_template_skill_external_id,
-    external_requested_skill_is_document_template, external_requested_skill_mode, ApiError,
+    encode_url_path_segment, external_document_template_skill_document_id,
+    external_document_template_skill_external_id, external_requested_skill_is_document_template,
+    external_requested_skill_mode, ApiError,
 };
 
 pub(crate) fn external_template_html_artifact_data_refs(
@@ -41,6 +42,19 @@ pub(crate) fn external_channel_template_html_artifact_root() -> PathBuf {
         .map(|value| PathBuf::from(value.trim()))
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| std::env::temp_dir().join("aidp-v3-external-template-html"))
+}
+
+pub(crate) fn external_channel_html_artifact_download_url(
+    connection_id: &str,
+    artifact_id: &str,
+    file_index: usize,
+) -> String {
+    format!(
+        "/v1/external/channels/{}/html-artifacts/{}/files/{}",
+        encode_url_path_segment(connection_id),
+        encode_url_path_segment(artifact_id),
+        file_index
+    )
 }
 
 pub(crate) fn extract_external_template_html_from_model_output(
@@ -277,6 +291,20 @@ mod tests {
             .ends_with("aidp-v3-external-template-html"));
 
         clear_template_html_env();
+    }
+
+    #[test]
+    fn template_html_artifact_download_url_encodes_path_segments() {
+        let url = external_channel_html_artifact_download_url(
+            "generic/chat main",
+            "html-artifact:external template/一",
+            12,
+        );
+
+        assert_eq!(
+            url,
+            "/v1/external/channels/generic%2Fchat%20main/html-artifacts/html-artifact%3Aexternal%20template%2F%E4%B8%80/files/12"
+        );
     }
 
     #[test]
