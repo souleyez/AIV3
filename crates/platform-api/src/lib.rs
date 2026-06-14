@@ -24108,20 +24108,6 @@ fn external_channel_task_status_reply_for_conversation(
     }
 }
 
-fn external_channel_public_task_status(task_status: &str) -> &str {
-    if !task_status.starts_with("static_page_") {
-        return task_status;
-    }
-    match task_status {
-        "static_page_published" => "static_page_published",
-        "static_page_stable_artifact_reused" => "static_page_published",
-        "static_page_publish_failed" => "processing",
-        "static_page_publish_cancelled" => "failed",
-        "static_page_publish_needs_human" => "processing",
-        _ => "processing",
-    }
-}
-
 #[derive(Clone, Debug)]
 struct ExternalChannelChatRuntimeAttempt {
     env_prefix: String,

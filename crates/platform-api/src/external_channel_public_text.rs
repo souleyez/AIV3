@@ -15,6 +15,20 @@ pub(crate) fn external_channel_public_status(status: &str) -> String {
     }
 }
 
+pub(crate) fn external_channel_public_task_status(task_status: &str) -> &str {
+    if !task_status.starts_with("static_page_") {
+        return task_status;
+    }
+    match task_status {
+        "static_page_published" => "static_page_published",
+        "static_page_stable_artifact_reused" => "static_page_published",
+        "static_page_publish_failed" => "processing",
+        "static_page_publish_cancelled" => "failed",
+        "static_page_publish_needs_human" => "processing",
+        _ => "processing",
+    }
+}
+
 pub(crate) fn external_channel_public_text(text: &str) -> String {
     let trimmed = text.trim_start();
     if trimmed.starts_with("http://")
@@ -227,6 +241,35 @@ mod tests {
             external_channel_public_status("static_page_image2_auto_publish_running"),
             "static_page_generation_running"
         );
+    }
+
+    #[test]
+    fn external_channel_public_task_status_maps_static_page_terminal_states() {
+        assert_eq!(
+            external_channel_public_task_status("static_page_published"),
+            "static_page_published"
+        );
+        assert_eq!(
+            external_channel_public_task_status("static_page_stable_artifact_reused"),
+            "static_page_published"
+        );
+        assert_eq!(
+            external_channel_public_task_status("static_page_publish_failed"),
+            "processing"
+        );
+        assert_eq!(
+            external_channel_public_task_status("static_page_publish_cancelled"),
+            "failed"
+        );
+        assert_eq!(
+            external_channel_public_task_status("static_page_publish_needs_human"),
+            "processing"
+        );
+        assert_eq!(
+            external_channel_public_task_status("static_page_effect_image_ready"),
+            "processing"
+        );
+        assert_eq!(external_channel_public_task_status("answered"), "answered");
     }
 
     #[test]
