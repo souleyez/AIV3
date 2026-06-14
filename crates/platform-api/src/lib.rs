@@ -288,6 +288,7 @@ mod runtime_manifest_support;
 mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_payload_support;
+mod static_page_public_template_update_support;
 mod static_page_render_output_view_support;
 mod static_page_report_snapshot;
 mod static_page_structure_signals;
@@ -451,6 +452,7 @@ use runtime_manifest_support::*;
 use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_payload_support::*;
+use static_page_public_template_update_support::*;
 use static_page_render_output_view_support::*;
 use static_page_report_snapshot::*;
 use static_page_structure_signals::*;
@@ -76054,166 +76056,6 @@ fn static_page_draft_list_item_is_visible(
     static_page_owner_is_visible(draft.owner_user_id, current_user_id)
         || (allow_public_template_baselines
             && static_page_public_template_baseline_is_visible(draft))
-}
-
-fn static_page_update_value_baseline_status(value: &Value) -> Option<&str> {
-    [
-        value.pointer("/artifact_stability/baseline_status"),
-        value.pointer("/artifact_stability/baselineStatus"),
-        value.pointer("/artifactStability/baselineStatus"),
-        value.pointer("/artifactStability/baseline_status"),
-        value.pointer("/finalPage/baselineStatus"),
-        value.pointer("/finalPage/baseline_status"),
-        value.pointer("/final_page/baselineStatus"),
-        value.pointer("/final_page/baseline_status"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-    .map(str::trim)
-    .find(|value| !value.is_empty())
-}
-
-fn static_page_update_value_status(value: &Value) -> Option<&str> {
-    [
-        value.pointer("/status"),
-        value.pointer("/backendStatus"),
-        value.pointer("/backend_status"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-    .map(str::trim)
-    .find(|value| !value.is_empty())
-}
-
-fn static_page_update_report_shelf_defaults(value: &Value) -> Option<&Value> {
-    [
-        value.pointer("/artifact_stability/report_shelf_defaults"),
-        value.pointer("/artifact_stability/reportShelfDefaults"),
-        value.pointer("/artifactStability/reportShelfDefaults"),
-        value.pointer("/artifactStability/report_shelf_defaults"),
-        value.pointer("/report_shelf_defaults"),
-        value.pointer("/reportShelfDefaults"),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|value| value.as_object().is_some_and(|object| !object.is_empty()))
-}
-
-fn static_page_report_shelf_defaults_value_is_safe(value: &Value) -> bool {
-    let Some(defaults) = value.as_object() else {
-        return false;
-    };
-    !defaults.is_empty()
-        && defaults.iter().all(|(dataset_id, enabled)| {
-            let dataset_id = dataset_id.trim();
-            !dataset_id.is_empty()
-                && (enabled.is_boolean()
-                    || enabled.as_str().is_some_and(|value| {
-                        matches!(
-                            value.trim().to_ascii_lowercase().as_str(),
-                            "true"
-                                | "false"
-                                | "1"
-                                | "0"
-                                | "yes"
-                                | "no"
-                                | "default"
-                                | "not_default"
-                                | "non_default"
-                                | "accepted"
-                                | "retired"
-                                | "enabled"
-                                | "disabled"
-                        )
-                    }))
-        })
-}
-
-fn static_page_public_template_default_update_is_safe(
-    request: &UpdateStaticPageDraftRequest,
-) -> bool {
-    if request.title.is_some()
-        || request.status.is_some()
-        || request.selected_scope.is_some()
-        || request.visibility_snapshot.is_some()
-        || request.draft_payload.is_some()
-    {
-        return false;
-    }
-    let Some(source_refs) = request.source_refs.as_ref() else {
-        return false;
-    };
-    let baseline_status_safe =
-        static_page_update_value_baseline_status(source_refs).is_none_or(|status| {
-            matches!(
-                status.trim().to_ascii_lowercase().as_str(),
-                "accepted" | "retired"
-            )
-        });
-    baseline_status_safe
-        && static_page_update_report_shelf_defaults(source_refs)
-            .is_some_and(static_page_report_shelf_defaults_value_is_safe)
-}
-
-fn merge_public_template_default_source_refs(mut current: Value, requested: &Value) -> Value {
-    let Some(defaults) = static_page_update_report_shelf_defaults(requested).cloned() else {
-        return current;
-    };
-    if !current.is_object() {
-        current = json!({});
-    }
-    let object = current.as_object_mut().expect("source_refs is object");
-    let stability_entry = object
-        .entry("artifact_stability".to_string())
-        .or_insert_with(|| json!({}));
-    if !stability_entry.is_object() {
-        *stability_entry = json!({});
-    }
-    let stability = stability_entry
-        .as_object_mut()
-        .expect("artifact_stability is object");
-    stability.insert("report_shelf_defaults".to_string(), defaults.clone());
-    stability.insert("reportShelfDefaults".to_string(), defaults);
-    if static_page_update_value_baseline_status(requested)
-        .is_some_and(|status| status.trim().eq_ignore_ascii_case("accepted"))
-    {
-        stability.insert("baseline_status".to_string(), json!("accepted"));
-        stability.insert("baselineStatus".to_string(), json!("accepted"));
-    }
-    let camel_stability = Value::Object(stability.clone());
-    object.insert("artifactStability".to_string(), camel_stability);
-    current
-}
-
-fn static_page_public_template_update_is_safe(request: &UpdateStaticPageDraftRequest) -> bool {
-    if request.title.is_some()
-        || request.selected_scope.is_some()
-        || request.visibility_snapshot.is_some()
-    {
-        return false;
-    }
-    let archives = request
-        .status
-        .as_ref()
-        .is_some_and(|status| status == &contracts::StaticPageDraftStatusView::Archived)
-        || request
-            .draft_payload
-            .as_ref()
-            .and_then(static_page_update_value_status)
-            .is_some_and(|status| status == "archived");
-    let retires_template = request
-        .source_refs
-        .as_ref()
-        .and_then(static_page_update_value_baseline_status)
-        .is_some_and(|status| status == "retired")
-        || request
-            .draft_payload
-            .as_ref()
-            .and_then(static_page_update_value_baseline_status)
-            .is_some_and(|status| status == "retired");
-    archives || retires_template
 }
 
 async fn load_static_page_image_job_or_404(
