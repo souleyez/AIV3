@@ -18297,3 +18297,80 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Static-Page Publish Completed Reply Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page publish-completed reply construction out of `lib.rs` into `crates/platform-api/src/external_channel_static_page_publish_reply.rs`;
+  - preserve the behavior that a publish-completed event with an allowed public URL and conversation scope becomes the public report reply.
+- Code change:
+  - added `external_channel_static_page_publish_reply` and moved `external_channel_static_page_publish_completed_reply_from_event_payload` into it;
+  - kept the existing function name and call sites unchanged through the module re-export;
+  - added module tests for direct `conversation_external_id`, `/source_refs/conversation_external_id`, and invalid URL or empty scope rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_static_page_publish_reply --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_channel_static_page_publish_completed_event_becomes_artifact_link_reply --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 253/253 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - logs were written under `target/datamax-local-smoke-43/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Static-Page Publish Completed Reply Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `a36b1b70` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `aad5711bd` to `a36b1b70b797`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_static_page_publish_reply --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_channel_static_page_publish_completed_event_becomes_artifact_link_reply --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 253/253 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-a36b1b70b797/`.
+- CI status:
+  - GitHub Actions run `27492946097` for `a36b1b70` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
