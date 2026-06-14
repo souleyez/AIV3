@@ -193,6 +193,7 @@ mod chat_session_manifest_view_support;
 mod chat_session_model_facing;
 mod chat_session_titles;
 mod chat_session_turn_manifest_support;
+mod codex_orchestrator_access_support;
 mod dataset_output_model_facing;
 mod dataset_output_view_support;
 mod dataset_summary_support;
@@ -308,6 +309,7 @@ use chat_session_manifest_view_support::*;
 use chat_session_model_facing::*;
 use chat_session_titles::*;
 use chat_session_turn_manifest_support::*;
+use codex_orchestrator_access_support::*;
 use dataset_output_model_facing::*;
 use dataset_output_view_support::*;
 use dataset_summary_support::*;
@@ -33110,17 +33112,6 @@ fn external_channel_static_page_codex_auto_publish_readiness() -> StaticPageCode
         ready: true,
         reason: "ready",
     }
-}
-
-fn orchestrator_access_configured() -> bool {
-    std::env::var("CODEX_ORCHESTRATOR_ACCESS_KEY")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        || std::env::var("CODEX_ORCHESTRATOR_KEY_FILE")
-            .ok()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
 }
 
 fn external_channel_document_scope_guard_should_block(
