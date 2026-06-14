@@ -213,6 +213,7 @@ mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
+mod external_channel_public_citation_support;
 mod external_channel_public_text;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
@@ -322,6 +323,7 @@ use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
+use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
@@ -22741,143 +22743,6 @@ fn external_channel_assistant_text_reply_for_conversation(
         external_channel_text_reply_for_conversation(conversation_external_id, reply, "answered")
     });
     external_channel_reply_with_public_citations(reply, &run.evidence_state)
-}
-
-fn external_channel_reply_with_public_citations(
-    mut reply: ExternalBotReplyView,
-    evidence_state: &Value,
-) -> ExternalBotReplyView {
-    if reply.reply_type != ExternalBotReplyTypeView::Text {
-        return reply;
-    }
-    let citations = external_channel_public_citations_from_evidence_state(evidence_state);
-    if citations.is_empty() {
-        return reply;
-    }
-    let citations = Value::Array(citations);
-    match reply.card.as_mut() {
-        Some(Value::Object(card)) => {
-            card.entry("citations".to_string()).or_insert(citations);
-        }
-        Some(_) => {}
-        None => {
-            reply.card = Some(json!({
-                "type": "answer_citations",
-                "citations": citations,
-            }));
-        }
-    }
-    reply
-}
-
-fn external_channel_public_citations_from_evidence_state(evidence_state: &Value) -> Vec<Value> {
-    const CITATION_LIMIT: usize = 8;
-    const CITATION_TEXT_LIMIT: usize = 520;
-
-    let Some(items) = evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let mut citations = Vec::new();
-    let mut seen = BTreeSet::new();
-    for item in items {
-        let Some(item_type) = item
-            .get("type")
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        else {
-            continue;
-        };
-        if matches!(item_type.as_str(), "dataset" | "external_channel") {
-            continue;
-        }
-        let Some(text) = external_channel_public_citation_text(item, CITATION_TEXT_LIMIT) else {
-            continue;
-        };
-        let source =
-            external_channel_public_citation_source(item).unwrap_or_else(|| item_type.clone());
-        let dedupe_key = format!("{item_type}\n{source}\n{text}");
-        if !seen.insert(dedupe_key) {
-            continue;
-        }
-        citations.push(json!({
-            "type": item_type,
-            "source": source,
-            "text": text,
-        }));
-        if citations.len() >= CITATION_LIMIT {
-            break;
-        }
-    }
-    citations
-}
-
-fn external_channel_public_citation_text(item: &Value, limit: usize) -> Option<String> {
-    for key in ["summary", "content_excerpt", "text", "note", "title"] {
-        if let Some(value) = item
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        {
-            return Some(truncate_assistant_supply_text(&value, limit));
-        }
-    }
-    None
-}
-
-fn external_channel_public_citation_source(item: &Value) -> Option<String> {
-    if let Some(source) = external_channel_public_database_citation_source(item) {
-        return Some(source);
-    }
-    for key in [
-        "source_locator",
-        "sourceLocator",
-        "document_external_id",
-        "documentExternalId",
-        "source_id",
-        "sourceId",
-        "source",
-        "dataset_key",
-        "datasetKey",
-    ] {
-        if let Some(value) = item
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-        {
-            return Some(truncate_assistant_supply_text(&value, 240));
-        }
-    }
-    None
-}
-
-fn external_channel_public_database_citation_source(item: &Value) -> Option<String> {
-    let item_type = item.get("type").and_then(Value::as_str)?;
-    if !item_type.starts_with("database_") {
-        return None;
-    }
-    let table = item
-        .get("table")
-        .and_then(Value::as_str)
-        .and_then(non_empty_trimmed_string)?;
-    let source_id = item
-        .get("source_id")
-        .or_else(|| item.get("sourceId"))
-        .and_then(Value::as_str)
-        .and_then(non_empty_trimmed_string)
-        .unwrap_or_else(|| "database".to_string());
-    let mut source = format!("database://{source_id}/{table}");
-    if let Some(metric) = item
-        .get("metric")
-        .and_then(Value::as_str)
-        .and_then(non_empty_trimmed_string)
-    {
-        source.push('#');
-        source.push_str(&metric);
-    }
-    Some(truncate_assistant_supply_text(&source, 240))
 }
 
 fn external_channel_needs_input_reply_from_recovery_followup(
