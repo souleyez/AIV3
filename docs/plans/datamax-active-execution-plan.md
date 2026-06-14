@@ -131,7 +131,8 @@
 | 68 | P5 assistant run expanded supply prompt helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_lexical_query_support` 模块单测、既有 lexical query/文档 chunk 排名回归、`static_page` 广义回归、`cargo check`、P0 smoke、8 服务器 Web/release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 69 | P5 assistant supply dedupe helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_supply_dedupe_support` 模块单测、assistant supply 回归、`static_page` 广义回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、主站/第三方并发、静态页 5 路、Cloudflare fallback、P2 dry-run、production readiness、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 70 | P5 assistant supply recovery helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_supply_recovery_support` 模块单测、既有 recovery follow-up 回归、assistant supply 回归、`static_page` 广义回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、主站/第三方并发、静态页 5 路、Cloudflare fallback、P2 dry-run、production readiness、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
-| 71 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 71 | P5 assistant supply quality helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_supply_quality_support` 模块单测、既有 supply quality 回归、assistant supply 回归、`static_page` 广义回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、主站/第三方并发、静态页 5 路、Cloudflare fallback、P2 dry-run、production readiness、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
+| 72 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
@@ -738,6 +739,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 - 2026-06-14: `crates/platform-api/src/lib.rs` 的 assistant-run 供料去重 helper 已拆到新 `assistant_run_supply_dedupe_support` 模块并补模块单测；document chunk、retrieval evidence、source locator 身份优先级、空 locator 忽略、已有身份跳过和无身份供料保留语义保持不变。本地 Rust 回归、P0 self-test 和前端 Node 回归通过；本机 web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `700584a70541`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 的 assistant-run 弱供料恢复追问 helper 已拆到新 `assistant_run_supply_recovery_support` 模块并补模块单测；供料未请求时跳过、无可答供料追问、低文本可答供料先答后追问、弱扩展 evidence、scope 计数和同会话继续扩检索语义保持不变。本地 Rust 回归、P0 self-test 和前端 Node 回归通过；本机 web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `c0a78b693fff`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。
+- 2026-06-14: `crates/platform-api/src/lib.rs` 的 assistant-run 供料质量报告和推荐动作 helper 已拆到新 `assistant_run_supply_quality_support` 模块并补模块单测；供料状态、低文本 evidence、citation locator 去重、selection notes、qualityFirst、model guidance、推荐工具动作和媒体动作语义保持不变。本地 Rust 回归、P0 self-test 和前端 Node 回归通过；本机 web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `1d8688ed015d`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。
 
 ## 10. 当前下一步
 
