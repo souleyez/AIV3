@@ -216,6 +216,7 @@ mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_citation_support;
 mod external_channel_public_text;
+mod external_channel_recipient_delivery_support;
 mod external_channel_runtime_selection_support;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
@@ -333,6 +334,7 @@ use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
+use external_channel_recipient_delivery_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
@@ -19521,143 +19523,6 @@ async fn infer_external_document_scope_source_id(
     } else {
         Ok(None)
     }
-}
-
-fn external_channel_static_page_recipient_delivery(
-    message: &ExternalBotMessageView,
-    prompt: &str,
-) -> Value {
-    let explicit_mapping = external_requested_skills_permission_mapping(&message.requested_skills);
-    let role_scope_candidates = external_channel_static_page_role_scope_candidates(prompt);
-    let mapping_status = if explicit_mapping.is_some() {
-        "provided_for_auto_configuration"
-    } else if !message.mention_external_user_ids.is_empty() && !role_scope_candidates.is_empty() {
-        "needs_user_role_scope_mapping"
-    } else if !role_scope_candidates.is_empty() {
-        "role_requirements_detected"
-    } else {
-        "needs_user_role_mapping"
-    };
-    json!({
-        "enabled": true,
-        "editable_after_publish": true,
-        "can_create_recipient_specific_links": true,
-        "recipient_link_policy": "create_separate_static_page_link_per_role_or_store_scope",
-        "current_delivery_mode": "base_link_first_then_recipient_specific_adjustment",
-        "mapping_status": mapping_status,
-        "permission_review_status": mapping_status,
-        "operator_external_user_id": message.sender_external_id,
-        "target_external_user_ids": message.mention_external_user_ids,
-        "role_scope_candidates": role_scope_candidates,
-        "provided_mapping": explicit_mapping.unwrap_or(Value::Null),
-        "default_page_scope": "summary_view_until_user_role_store_mapping_is_confirmed",
-        "operator_hint": "页面链接可先交付；如需分别发送给总部、分店店总或指定门店人员，请继续提供用户-角色-门店映射，DataMax 可基于当前页面继续生成对应权限口径的单独链接。",
-        "mapping_input_hint": {
-            "users": "external_user_id -> role",
-            "scopes": "role -> store_ids/region_ids/brand_ids",
-            "examples": [
-                {"external_user_id": "user-hq-001", "role": "headquarters", "scope": "all_stores"},
-                {"external_user_id": "user-store-001", "role": "store_manager", "store_scope": ["南京新百店"]}
-            ]
-        }
-    })
-}
-
-fn external_requested_skills_permission_mapping(
-    skills: &[ExternalRequestedSkillView],
-) -> Option<Value> {
-    for skill in skills {
-        let Some(arguments) = skill.arguments.as_ref().and_then(Value::as_object) else {
-            continue;
-        };
-        for key in [
-            "user_role_mappings",
-            "userRoleMappings",
-            "recipient_permissions",
-            "recipientPermissions",
-            "permission_mappings",
-            "permissionMappings",
-            "user_permission_scope",
-            "userPermissionScope",
-        ] {
-            if let Some(value) = arguments.get(key).filter(|value| !value.is_null()) {
-                return Some(value.clone());
-            }
-        }
-    }
-    None
-}
-
-fn external_channel_static_page_role_scope_candidates(prompt: &str) -> Vec<Value> {
-    let normalized = prompt.to_ascii_lowercase();
-    let mut candidates = Vec::new();
-    let has_headquarters = prompt.contains("总部")
-        || prompt.contains("管理层")
-        || normalized.contains("headquarters")
-        || normalized.contains("hq");
-    if has_headquarters {
-        candidates.push(json!({
-            "role": "headquarters",
-            "label": "总部管理层",
-            "default_scope": "all_stores",
-            "page_focus": ["经营健康度", "区域/门店排行", "风险机会池", "全量汇总"]
-        }));
-    }
-    let has_store_manager = prompt.contains("分店")
-        || prompt.contains("店总")
-        || prompt.contains("门店")
-        || prompt.contains("店长")
-        || normalized.contains("store_manager")
-        || normalized.contains("store manager");
-    if has_store_manager {
-        candidates.push(json!({
-            "role": "store_manager",
-            "label": "分店店总",
-            "default_scope": "assigned_store_only",
-            "page_focus": ["本店经营问题", "品牌明细", "行动清单", "本店风险预警"]
-        }));
-    }
-    candidates
-}
-
-fn external_channel_recipient_delivery_from_payload(payload: &Value) -> Value {
-    [
-        payload.get("recipient_delivery"),
-        payload.pointer("/source_refs/recipient_delivery"),
-        payload.pointer("/requirements/recipient_delivery"),
-        payload.pointer("/fixed_task/requirements/recipient_delivery"),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|value| !value.is_null())
-    .cloned()
-    .unwrap_or(Value::Null)
-}
-
-fn external_channel_permission_review_status_from_payload(payload: &Value) -> Value {
-    if let Some(value) = payload
-        .get("permission_review_status")
-        .filter(|value| !value.is_null())
-    {
-        return value.clone();
-    }
-    external_channel_recipient_delivery_from_payload(payload)
-        .get("permission_review_status")
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
-fn external_channel_editable_after_publish_from_payload(payload: &Value) -> Value {
-    if let Some(value) = payload
-        .get("editable_after_publish")
-        .filter(|value| !value.is_null())
-    {
-        return value.clone();
-    }
-    external_channel_recipient_delivery_from_payload(payload)
-        .get("editable_after_publish")
-        .cloned()
-        .unwrap_or(Value::Null)
 }
 
 fn selected_scope_document_id_by_external_ref(
