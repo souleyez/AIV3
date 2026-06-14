@@ -278,6 +278,7 @@ mod react_agent_tools;
 mod report_plan_model_facing;
 mod report_render_model_facing;
 mod report_render_output_asset;
+mod report_render_summary_artifact_support;
 mod report_view_support;
 mod request_scope_headers;
 mod resource_access;
@@ -447,6 +448,7 @@ use report_plan_model_facing::*;
 #[cfg(test)]
 use report_render_model_facing::*;
 use report_render_output_asset::*;
+use report_render_summary_artifact_support::*;
 use report_view_support::*;
 use request_scope_headers::*;
 use resource_access::*;
@@ -44588,7 +44590,7 @@ fn data_ingestion_analysis_result_summary_from_output(
     })
 }
 
-fn external_channel_output_artifact_manifest(
+pub(crate) fn external_channel_output_artifact_manifest(
     artifact_type: &str,
     artifact_kind: &str,
     title: &str,
@@ -67079,119 +67081,6 @@ async fn load_report_render_summary_artifacts_for_plan(
         ));
     }
     Ok((plan, artifacts))
-}
-
-fn report_render_summary_artifact_from_view(
-    plan: &ReportPlan,
-    output: &ReportRenderOutputView,
-) -> HtmlArtifactManifestView {
-    let output_id = output.id.to_string();
-    let asset_path = report_render_output_asset_path(output).unwrap_or_default();
-    let asset_kind = report_render_output_asset_kind(output).unwrap_or_default();
-    let publishable = output.status == contracts::ReportRenderOutputStatusView::Rendered
-        && !asset_path.is_empty();
-    let title = format!("{} · 渲染摘要", plan.title);
-    let status = html_artifact_serialized_variant(&output.status);
-    let artifact_manifest = external_channel_output_artifact_manifest(
-        "report",
-        "report_render_summary",
-        &title,
-        json!(status.clone()),
-        None,
-        Vec::new(),
-        json!({
-            "report_plan_id": plan.id,
-            "report_render_output_id": output.id,
-            "workflow_execution_id": output.execution_id,
-            "ast_version_id": output.ast_version_id,
-            "asset_kind": asset_kind,
-            "asset_path_present": !asset_path.is_empty(),
-        }),
-        json!({
-            "customer_visible": true,
-            "credentials_exposed": false,
-            "raw_logs_exposed": false,
-            "publishable": publishable,
-        }),
-    );
-
-    HtmlArtifactManifestView {
-        kind: "html_artifact".to_string(),
-        version: 1,
-        id: format!("html-report-render-{output_id}"),
-        title,
-        source_type: contracts::HtmlArtifactSourceTypeView::Report,
-        template_id: contracts::HtmlArtifactTemplateIdView::ReportRenderSummary,
-        owner_scope: contracts::HtmlArtifactOwnerScopeView {
-            scope_type: "report_render_output".to_string(),
-            id: output_id.clone(),
-        },
-        data_refs: vec![
-            contracts::HtmlArtifactDataRefView {
-                kind: "report_plan".to_string(),
-                id: plan.id.to_string(),
-                label: "Report Plan".to_string(),
-            },
-            contracts::HtmlArtifactDataRefView {
-                kind: "report_render_output".to_string(),
-                id: output_id.clone(),
-                label: "Render Output".to_string(),
-            },
-            contracts::HtmlArtifactDataRefView {
-                kind: "workflow_execution".to_string(),
-                id: output.execution_id.to_string(),
-                label: "Workflow".to_string(),
-            },
-        ],
-        provenance: contracts::HtmlArtifactProvenanceView {
-            producer: "v3-report-runtime".to_string(),
-            reason: "report render output summary".to_string(),
-            source_run_id: None,
-        },
-        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
-        created_at: output.created_at,
-        payload: json!({
-            "reportTitle": plan.title,
-            "objective": plan.objective,
-            "surface": output.surface.as_str(),
-            "status": status,
-            "publishable": publishable,
-            "assetPath": asset_path,
-            "assetKind": asset_kind,
-            "artifactManifest": artifact_manifest,
-            "reportPlanId": plan.id,
-            "reportRenderOutputId": output.id,
-            "workflowExecutionId": output.execution_id,
-            "astVersionId": output.ast_version_id,
-            "modelFacing": output.model_facing,
-            "serviceHandoff": output.service_handoff,
-            "warnings": report_render_summary_warnings(output, publishable),
-        }),
-    }
-}
-
-fn report_render_summary_warnings(
-    output: &ReportRenderOutputView,
-    publishable: bool,
-) -> Vec<Value> {
-    if publishable {
-        return Vec::new();
-    }
-    let (title, detail) = if output.status == contracts::ReportRenderOutputStatusView::Failed {
-        (
-            "渲染失败",
-            "需要重试渲染或检查 report-render-worker 写回的 asset manifest。",
-        )
-    } else {
-        (
-            "尚不可发布",
-            "报告还没有可发布资产路径，先等待渲染完成或重新发起渲染。",
-        )
-    };
-    vec![json!({
-        "title": title,
-        "detail": detail,
-    })]
 }
 
 async fn load_static_page_handoff_artifacts_for_run(
