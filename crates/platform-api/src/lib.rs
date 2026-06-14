@@ -211,6 +211,7 @@ mod external_artifact_request_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
+mod external_channel_model_rejection_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_citation_support;
@@ -321,6 +322,7 @@ use external_artifact_request_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
+use external_channel_model_rejection_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
@@ -24489,21 +24491,6 @@ fn external_channel_same_runtime_selection(
         && left.lane == right.lane
 }
 
-fn external_channel_model_reply_rejection_reason(response: &LlmResponse) -> Option<String> {
-    if let Some(failure) = response.runtime.provider_failure.as_ref() {
-        return Some(format!("provider_failure:{}", failure.kind.as_str()));
-    }
-    if matches!(
-        response.runtime.finish_reason.as_ref(),
-        Some(LlmFinishReason::ContentFilter)
-    ) {
-        return Some("model_output_suppressed".to_string());
-    }
-
-    let output_text = response.output_text.trim();
-    external_channel_model_output_text_rejection_reason(output_text)
-}
-
 fn external_channel_direct_reply_env_ms(key: &str, default_ms: u64) -> u64 {
     std::env::var(key)
         .ok()
@@ -24534,89 +24521,6 @@ fn external_channel_direct_reply_attempt_timeout(
     configured
         .min(remaining_budget)
         .max(std::time::Duration::from_millis(1))
-}
-
-fn external_channel_model_output_text_rejection_reason(output_text: &str) -> Option<String> {
-    let output_text = output_text.trim();
-    if output_text.is_empty() {
-        return Some("empty_output".to_string());
-    }
-    if assistant_run_react_output_contains_internal_marker(output_text) {
-        return Some("internal_payload_marker".to_string());
-    }
-    if external_channel_output_is_generic_orchestration_ack(output_text) {
-        return Some("generic_orchestration_ack".to_string());
-    }
-    None
-}
-
-fn external_channel_output_is_generic_orchestration_ack(output_text: &str) -> bool {
-    let normalized = normalize_external_channel_output_for_rejection(output_text);
-    if normalized.is_empty() {
-        return false;
-    }
-    let ack_markers = [
-        "已收到指令",
-        "已收到你的问题",
-        "已收到您的问题",
-        "收到指令",
-        "收到你的问题",
-        "收到您的问题",
-    ];
-    if ack_markers.iter().any(|marker| normalized.contains(marker)) {
-        return true;
-    }
-    let short_ack = normalized.chars().count() <= 24
-        && ["已收到", "收到", "已接收", "已接受"]
-            .iter()
-            .any(|marker| normalized.starts_with(marker));
-    if short_ack {
-        return true;
-    }
-    let orchestration_markers = [
-        "系统将结合知识库",
-        "结合知识库与数据源",
-        "为您输出结论",
-        "为你输出结论",
-        "稍后为您输出",
-        "稍后为你输出",
-        "正在为您分析",
-        "正在为你分析",
-        "请稍候",
-    ];
-    orchestration_markers
-        .iter()
-        .any(|marker| normalized.contains(marker))
-}
-
-fn normalize_external_channel_output_for_rejection(output_text: &str) -> String {
-    output_text
-        .chars()
-        .filter(|ch| {
-            !ch.is_whitespace()
-                && !matches!(
-                    ch,
-                    '。' | '，'
-                        | '、'
-                        | '；'
-                        | '：'
-                        | '！'
-                        | '？'
-                        | '.'
-                        | ','
-                        | ';'
-                        | ':'
-                        | '!'
-                        | '?'
-                        | '"'
-                        | '\''
-                        | '“'
-                        | '”'
-                        | '‘'
-                        | '’'
-                )
-        })
-        .collect()
 }
 
 fn spawn_external_channel_observe_only_would_throttle(
