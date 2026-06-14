@@ -6,9 +6,10 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use super::{
-    collect_external_config_string_values, external_config_string, remove_payload_keys,
-    set_payload_value, ExternalChannelConnectionSummary,
+    collect_external_config_string_values, external_config_string, set_payload_value,
+    ExternalChannelConnectionSummary,
 };
+use crate::static_page_payload_support::ensure_json_object;
 use crate::text_normalization::non_empty_trimmed_string;
 
 #[derive(Clone, Debug, Default)]
@@ -344,6 +345,15 @@ pub(crate) fn apply_external_channel_inbound_token_config(
             "updated_at": now,
         }),
     );
+}
+
+pub(crate) fn remove_payload_keys(payload: &mut Value, keys: &[&str]) {
+    ensure_json_object(payload);
+    if let Some(object) = payload.as_object_mut() {
+        for key in keys {
+            object.remove(*key);
+        }
+    }
 }
 
 pub(crate) fn external_channel_inbound_token_rotated_at(config: &Value) -> Option<String> {
