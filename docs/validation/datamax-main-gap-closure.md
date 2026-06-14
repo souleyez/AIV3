@@ -19872,3 +19872,71 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw code-review log URL, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Assistant Run Lexical Query Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move assistant-run lexical query tokenization, CJK phrase weighting, ASCII connector normalization, elder-care domain expansion, procedure intent signals, and domain hint scoring out of `lib.rs` into `crates/platform-api/src/assistant_run_lexical_query_support.rs`;
+  - preserve existing function names at call sites through the crate-level module import.
+- Code change:
+  - added `assistant_run_lexical_query_support`;
+  - moved `prompt_requests_procedure_or_action`, elder fall/death prompt signals, `lexical_domain_hint_score`, `lexical_query_term_weights`, `lexical_query_tokens`, `is_cjk_query_token_char`, and private lexical helpers into the new module;
+  - kept `is_ascii_connector_token_char` crate-visible because resume matching already imports it from the crate root;
+  - added module tests for CJK phrase ngrams, ASCII connector acronyms, nursing handover domain scoring, elder fall expansion, and elder death expansion.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api assistant_run_lexical_query_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api lexical_query_term_weights --lib`: passed, 8/8 tests;
+  - `cargo test -p platform-api rank_document_chunks_for_prompt --lib`: passed, 7/7 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/assistant_run_lexical_query_support.rs`: no whitespace errors, only the existing CRLF warning on touched Rust files;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - logs were written under `target/datamax-local-smoke-67/`.
+- Local web build note:
+  - `npm --prefix apps/web run build` still failed before build execution because local `apps/web/node_modules` lacks `next`;
+  - this local dependency state is inherited and was not used as acceptance evidence for this backend-only slice; 8-server Web build below is the build evidence.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Assistant Run Lexical Query Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `aeccae5f` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `b74684b717c3` to `aeccae5fae58`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api assistant_run_lexical_query_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api lexical_query_term_weights --lib`: passed, 8/8 tests;
+  - `cargo test -p platform-api rank_document_chunks_for_prompt --lib`: passed, 7/7 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - an immediate readyz probe during restart saw port 3000 startup timing once; independent follow-up returned `healthz` status `ok` and `readyz` status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-aeccae5f/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.

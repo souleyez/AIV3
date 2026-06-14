@@ -127,7 +127,8 @@
 | 64 | P5 wechat-video login handoff helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `wechat_video_login_handoff_support` 模块单测、既有 wechat/video_ppt 短路回归、`static_page` 广义回归、`cargo check`、P0 smoke、8 服务器 Web/release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 65 | P5 report render summary artifact helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `report_render_summary_artifact_support` 模块单测、既有 report render summary artifact 回归、`report_render_summary` 回归、`static_page` 广义回归、`cargo check`、P0 smoke、8 服务器 Web/release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 66 | P5 code review summary artifact helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `code_review_summary_artifact_support` 模块单测、既有 code review HTML artifact 回归、`static_page` 广义回归、`cargo check`、P0 smoke、8 服务器 Web/release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 67 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 67 | P5 assistant run lexical query helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_lexical_query_support` 模块单测、既有 lexical query/文档 chunk 排名回归、`static_page` 广义回归、`cargo check`、P0 smoke、8 服务器 Web/release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 68 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
