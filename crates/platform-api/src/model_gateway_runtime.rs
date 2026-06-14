@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
+use llm_gateway::model_gateway_lane_env_prefix;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -676,6 +677,23 @@ pub(crate) fn model_gateway_estimated_input_tokens(input: &str) -> u64 {
     ((input.chars().count() as u64) / 4).max(1)
 }
 
+pub(crate) fn model_gateway_lane_routing_mode(lane: &str) -> String {
+    let prefix = model_gateway_lane_env_prefix(lane);
+    std::env::var(format!("{prefix}_MODE"))
+        .or_else(|_| std::env::var(format!("{prefix}_ROUTING_MODE")))
+        .unwrap_or_else(|_| "observe_only".to_string())
+        .trim()
+        .to_ascii_lowercase()
+}
+
+pub(crate) fn model_gateway_lane_canary_percent(lane: &str) -> Option<u32> {
+    let prefix = model_gateway_lane_env_prefix(lane);
+    std::env::var(format!("{prefix}_CANARY_PERCENT"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|value| value.min(100))
+}
+
 pub(crate) fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
     reason.contains("timeout")
 }
@@ -761,6 +779,21 @@ pub(crate) struct GatewayModelPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    fn clear_lane_env(lane: &str) {
+        let prefix = model_gateway_lane_env_prefix(lane);
+        std::env::remove_var(format!("{prefix}_MODE"));
+        std::env::remove_var(format!("{prefix}_ROUTING_MODE"));
+        std::env::remove_var(format!("{prefix}_CANARY_PERCENT"));
+    }
 
     #[test]
     fn gateway_limit_error_reason_preserves_public_reason_strings() {
@@ -795,5 +828,44 @@ mod tests {
         assert_eq!(model_gateway_estimated_input_tokens("abcdefgh"), 2);
         assert_eq!(model_gateway_estimated_input_tokens("数据平台问答"), 1);
         assert_eq!(model_gateway_estimated_input_tokens("数据平台问答测试"), 2);
+    }
+
+    #[test]
+    fn model_gateway_lane_routing_mode_preserves_env_precedence_and_defaults() {
+        let _guard = env_lock();
+        let lane = "test-runtime-selection-lane";
+        clear_lane_env(lane);
+
+        assert_eq!(model_gateway_lane_routing_mode(lane), "observe_only");
+
+        let prefix = model_gateway_lane_env_prefix(lane);
+        std::env::set_var(format!("{prefix}_ROUTING_MODE"), " CANARY ");
+        assert_eq!(model_gateway_lane_routing_mode(lane), "canary");
+
+        std::env::set_var(format!("{prefix}_MODE"), " ACTIVE ");
+        assert_eq!(model_gateway_lane_routing_mode(lane), "active");
+
+        clear_lane_env(lane);
+    }
+
+    #[test]
+    fn model_gateway_lane_canary_percent_trims_caps_and_ignores_invalid_values() {
+        let _guard = env_lock();
+        let lane = "test-runtime-canary-lane";
+        clear_lane_env(lane);
+        let prefix = model_gateway_lane_env_prefix(lane);
+
+        assert_eq!(model_gateway_lane_canary_percent(lane), None);
+
+        std::env::set_var(format!("{prefix}_CANARY_PERCENT"), " 35 ");
+        assert_eq!(model_gateway_lane_canary_percent(lane), Some(35));
+
+        std::env::set_var(format!("{prefix}_CANARY_PERCENT"), "150");
+        assert_eq!(model_gateway_lane_canary_percent(lane), Some(100));
+
+        std::env::set_var(format!("{prefix}_CANARY_PERCENT"), "bad");
+        assert_eq!(model_gateway_lane_canary_percent(lane), None);
+
+        clear_lane_env(lane);
     }
 }

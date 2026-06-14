@@ -24315,23 +24315,6 @@ fn external_channel_model_pool_is_observe_only(
         && external_channel_model_pool_scope_is_active(connection_id, message)
 }
 
-fn model_gateway_lane_routing_mode(lane: &str) -> String {
-    let prefix = model_gateway_lane_env_prefix(lane);
-    std::env::var(format!("{prefix}_MODE"))
-        .or_else(|_| std::env::var(format!("{prefix}_ROUTING_MODE")))
-        .unwrap_or_else(|_| "observe_only".to_string())
-        .trim()
-        .to_ascii_lowercase()
-}
-
-fn model_gateway_lane_canary_percent(lane: &str) -> Option<u32> {
-    let prefix = model_gateway_lane_env_prefix(lane);
-    std::env::var(format!("{prefix}_CANARY_PERCENT"))
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .map(|value| value.min(100))
-}
-
 fn external_channel_model_pool_canary_hit(
     connection_id: &str,
     message: &ExternalBotMessageView,
