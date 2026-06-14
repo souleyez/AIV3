@@ -222,6 +222,7 @@ mod external_channel_runtime_selection_support;
 mod external_channel_scope_document_support;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
+mod external_channel_static_page_reply_merge;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
 mod external_conversation_timeline;
@@ -341,6 +342,7 @@ use external_channel_recipient_delivery_support::*;
 use external_channel_scope_document_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
+use external_channel_static_page_reply_merge::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
@@ -20380,70 +20382,6 @@ fn external_channel_static_page_event_artifact_link_reply_from_events(
         ));
     }
     None
-}
-
-fn external_channel_reply_with_static_page_artifact_links(
-    mut reply: ExternalBotReplyView,
-    static_page_reply: Option<&ExternalBotReplyView>,
-) -> ExternalBotReplyView {
-    let Some(static_page_reply) = static_page_reply else {
-        return reply;
-    };
-    let static_page_public_url = external_channel_public_artifact_url_from_reply(static_page_reply);
-    let reply_card_allows_artifact = reply
-        .card
-        .as_ref()
-        .map(|card| {
-            let status = card
-                .get("status")
-                .and_then(Value::as_str)
-                .or(reply.task_status.as_deref())
-                .unwrap_or_default();
-            external_channel_public_status_allows_artifact_link_for_card(status, Some(card))
-        })
-        .unwrap_or(false);
-    if reply.card.is_none() || (static_page_public_url.is_some() && !reply_card_allows_artifact) {
-        reply.card = static_page_reply.card.clone();
-        if reply.reply_type != ExternalBotReplyTypeView::Text {
-            reply.reply_type = static_page_reply.reply_type.clone();
-            reply.task_status = static_page_reply.task_status.clone();
-        }
-    }
-    let mut first_public_link: Option<String> = None;
-    for link in &static_page_reply.artifact_links {
-        let link = link.trim();
-        if link.is_empty() || !codex_host_fixed_task_public_artifact_url_allowed(link) {
-            continue;
-        }
-        if first_public_link.is_none() {
-            first_public_link = Some(link.to_string());
-        }
-    }
-    if let Some(public_url) = first_public_link.as_deref() {
-        reply.artifact_links.retain(|existing| {
-            !static_page_public_url_matches_ignoring_focus(existing, public_url)
-        });
-        reply.artifact_links.insert(0, public_url.to_string());
-        if let Some(Value::Object(card)) = reply.card.as_mut() {
-            for key in [
-                "public_url",
-                "generated_artifact_url",
-                "download_url",
-                "html_download_url",
-            ] {
-                card.insert(key.to_string(), Value::String(public_url.to_string()));
-            }
-            card.insert("artifact_links".to_string(), json!([public_url]));
-        }
-        if let Some(text) = reply.text.take() {
-            reply.text = Some(external_channel_text_with_public_artifact_link(
-                text, public_url,
-            ));
-        } else {
-            reply.text = static_page_reply.text.clone();
-        }
-    }
-    reply
 }
 
 const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME: &str =
