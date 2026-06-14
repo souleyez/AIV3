@@ -14324,6 +14324,63 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 Static-Page Public Terminal Reply Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page public terminal reply assembly out of `lib.rs` into `crates/platform-api/src/external_channel_static_page_terminal_reply.rs`;
+  - preserve the public reply behavior for published static-page links, preserved direct model answers, provisional existing artifacts, and accepted template baseline links.
+- Code change:
+  - added `external_channel_static_page_terminal_reply`;
+  - moved `external_channel_static_page_reply_with_public_artifact_terminal` into the new module;
+  - kept existing function name and call sites unchanged through module import;
+  - added module tests for terminal artifact promotion, preserving direct answer text while appending the public link, keeping non-accepted provisional replies in processing state, and allowing accepted template baseline links.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_static_page_terminal_reply --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_channel_static_page_provisional_existing_artifact_keeps_processing_status --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_reply_prefers_model_answer_and_keeps_static_page_link --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-50/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Static-Page Public Terminal Reply Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `bff0543b` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `7d4111d6ed01` to `bff0543b62ca`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_static_page_terminal_reply --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_channel_static_page_provisional_existing_artifact_keeps_processing_status --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready` at `2026-06-14T10:06:30.035275289Z`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, `prewarmCustomerVisibilityOk=true`;
+  - logs were written under `/tmp/datamax-p0-smoke-bff0543b62ca/`.
+- CI status:
+  - GitHub Actions run `27495370238` for `bff0543b` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 Static-Page Accepted Template Baseline Helper Local Verification
 
 - Purpose:
