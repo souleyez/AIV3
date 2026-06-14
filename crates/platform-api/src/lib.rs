@@ -186,6 +186,7 @@ mod assistant_run_structured_fact_context_support;
 mod assistant_run_supply_dedupe_support;
 mod assistant_run_supply_quality_support;
 mod assistant_run_supply_recovery_support;
+mod assistant_run_text_support;
 mod assistant_run_xinbai_report_link_support;
 mod assistant_scope_summary;
 pub mod auth_email;
@@ -337,6 +338,7 @@ use assistant_run_structured_fact_context_support::*;
 use assistant_run_supply_dedupe_support::*;
 use assistant_run_supply_quality_support::*;
 use assistant_run_supply_recovery_support::*;
+pub(crate) use assistant_run_text_support::*;
 use assistant_run_xinbai_report_link_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
@@ -58778,38 +58780,6 @@ fn filter_retrieval_evidences_for_selected_documents(
     evidences
         .into_iter()
         .filter(|evidence| selected_document_ids.contains(&evidence.document_id))
-        .collect()
-}
-
-pub(crate) fn collect_string_list(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(text) => {
-            push_string_hint(output, text);
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_string_list(item, output);
-            }
-        }
-        _ => {}
-    }
-}
-
-pub(crate) fn push_string_hint(output: &mut Vec<String>, text: impl AsRef<str>) {
-    let normalized = text.as_ref().trim().chars().take(80).collect::<String>();
-    if !normalized.is_empty() && !output.iter().any(|existing| existing == &normalized) {
-        output.push(normalized);
-    }
-}
-
-fn truncate_assistant_supply_text(value: &str, max_chars: usize) -> String {
-    value
-        .trim()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(max_chars)
         .collect()
 }
 
