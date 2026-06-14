@@ -14391,6 +14391,75 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Public Citation Helper Local And 8-Server Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party answer citation card injection, evidence citation filtering, dedupe, source formatting, and text truncation out of `lib.rs` into `external_channel_public_citation_support`.
+- Code change:
+  - added `crates/platform-api/src/external_channel_public_citation_support.rs`;
+  - kept text-reply-only citation attachment, existing card citation preservation, citation dedupe, dataset/external-channel citation exclusion, `database://source/table#metric` formatting, fallback source keys, text field priority, and 8 citation limit unchanged;
+  - retained the existing end-to-end public reply integration test and added module tests for filtering, dedupe, database source formatting, existing-card preservation, and non-text reply guard.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_public_citation_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_channel_text_reply_includes_public_citations --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_channel_document_scope --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`, `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- 8-server post-sync verification:
+  - local commit `5a839004` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `ecfab2953` to `5a839004b`;
+  - remote `git status --short --branch` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_public_citation_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_text_reply_includes_public_citations --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_document_scope --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned status `ok`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `customerVisiblePrewarmLeakCount=0`, `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - final remote check returned HEAD `5a839004b`, clean branch status, all five services `active`, and `/readyz` `ready`.
+- CI status:
+  - GitHub Actions run `27484970155` for `5a839004b` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Static Page Baseline Public URL 8-Server Verification
 
 - Scope:
