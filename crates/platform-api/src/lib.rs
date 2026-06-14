@@ -221,6 +221,7 @@ mod external_channel_recipient_delivery_support;
 mod external_channel_runtime_selection_support;
 mod external_channel_scope_document_support;
 mod external_channel_sse_support;
+mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
 mod external_channel_static_page_reply_merge;
 mod external_channel_support;
@@ -341,6 +342,7 @@ use external_channel_public_text::*;
 use external_channel_recipient_delivery_support::*;
 use external_channel_scope_document_support::*;
 use external_channel_sse_support::*;
+use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_support::*;
@@ -20349,39 +20351,6 @@ async fn external_channel_response_with_event_static_page_artifact_links(
         );
     }
     Ok(response)
-}
-
-fn external_channel_static_page_event_artifact_link_reply_from_events(
-    events: &[AssistantRunEvent],
-    conversation_external_id: &str,
-) -> Option<ExternalBotReplyView> {
-    for event in events.iter().rev() {
-        let event_name = event.event_name.as_str();
-        let payload = &event.payload;
-        let template_baseline_link = event_name
-            == "assistant_run.external_channel_static_page_pipeline_queued"
-            && external_channel_static_page_accepted_template_baseline(Some(payload));
-        let terminal_or_stable_link = matches!(
-            event_name,
-            "assistant_run.external_channel_static_page_stable_artifact_reused"
-                | "assistant_run.external_channel_static_page_publish_completed"
-                | "assistant_run.external_channel_static_page_pipeline_queued"
-        )
-            && !external_channel_static_page_provisional_existing_artifact(Some(payload));
-        if !template_baseline_link && !terminal_or_stable_link {
-            continue;
-        }
-        let payload = external_channel_static_page_payload_with_event_intent(payload, events);
-        let Some(public_url) = external_channel_public_artifact_url_from_value(&payload) else {
-            continue;
-        };
-        return Some(external_channel_static_page_published_reply(
-            conversation_external_id,
-            &public_url,
-            &payload,
-        ));
-    }
-    None
 }
 
 const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME: &str =
