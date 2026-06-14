@@ -224,6 +224,7 @@ mod external_channel_sse_support;
 mod external_channel_static_page_artifact_reply;
 mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
+mod external_channel_static_page_publish_reply;
 mod external_channel_static_page_reply_merge;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
@@ -346,6 +347,7 @@ use external_channel_sse_support::*;
 use external_channel_static_page_artifact_reply::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
+use external_channel_static_page_publish_reply::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
@@ -47723,33 +47725,6 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         action_id: None,
         confirmation_id: None,
     }
-}
-
-fn external_channel_static_page_publish_completed_reply_from_event_payload(
-    payload: &Value,
-) -> Option<ExternalBotReplyView> {
-    let public_url = payload
-        .get("public_url")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))?;
-    let conversation_external_id = payload
-        .get("conversation_external_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            payload
-                .pointer("/source_refs/conversation_external_id")
-                .and_then(Value::as_str)
-        })?
-        .trim();
-    if conversation_external_id.is_empty() {
-        return None;
-    }
-    Some(external_channel_static_page_published_reply(
-        conversation_external_id,
-        public_url,
-        payload,
-    ))
 }
 
 fn external_channel_static_page_publish_failed_reply_from_event_payload(
