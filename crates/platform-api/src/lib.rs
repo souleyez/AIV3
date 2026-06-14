@@ -23198,43 +23198,6 @@ fn external_channel_static_page_fixed_task_reply_from_events(
     ))
 }
 
-fn external_channel_static_page_fixed_task_event_with_status_context(
-    events: &[AssistantRunEvent],
-    fixed_event: &AssistantRunEvent,
-) -> AssistantRunEvent {
-    let mut event = fixed_event.clone();
-    let Some(context) = events.iter().rev().find(|candidate| {
-        candidate.sequence_no <= fixed_event.sequence_no
-            && matches!(
-                candidate.event_name.as_str(),
-                "assistant_run.external_channel_static_page_pipeline_queued"
-                    | "assistant_run.external_channel_static_page_publish_queued"
-            )
-    }) else {
-        return event;
-    };
-    let Some(target) = event.payload.as_object_mut() else {
-        return event;
-    };
-    for key in [
-        "status_url",
-        "status_method",
-        "draft_id",
-        "image_job_id",
-        "poll_after_seconds",
-        "recipient_delivery",
-        "permission_review_status",
-        "editable_after_publish",
-    ] {
-        if target.get(key).is_none_or(Value::is_null) {
-            if let Some(value) = context.payload.get(key) {
-                target.insert(key.to_string(), value.clone());
-            }
-        }
-    }
-    event
-}
-
 fn external_channel_data_ingestion_analysis_reply_from_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
