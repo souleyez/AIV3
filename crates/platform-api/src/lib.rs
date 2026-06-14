@@ -286,6 +286,7 @@ mod retrieval_evidence_view_support;
 mod retrieval_query_support;
 mod runtime_manifest_support;
 mod sse_support;
+mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
 mod static_page_payload_support;
@@ -452,6 +453,7 @@ use retrieval_evidence_view_support::*;
 use retrieval_query_support::*;
 use runtime_manifest_support::*;
 use sse_support::*;
+use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_payload_support::*;
@@ -67471,106 +67473,6 @@ async fn load_static_page_data_quality_artifacts_for_run(
         .filter_map(static_page_data_quality_artifact_from_draft)
         .take(limit)
         .collect())
-}
-
-fn static_page_data_quality_artifact_from_draft(
-    draft: StaticPageDraft,
-) -> Option<HtmlArtifactManifestView> {
-    let final_page = static_page_payload_value(&draft.draft_payload, &["finalPage", "final_page"])?;
-    let asset_manifest = final_page
-        .get("assetManifest")
-        .or_else(|| final_page.get("asset_manifest"))?;
-    let summary = static_page_final_data_quality_summary(asset_manifest)?;
-    let modules = static_page_final_data_quality_modules(asset_manifest);
-    if modules.is_empty()
-        && !summary.as_object().is_some_and(|object| {
-            object
-                .values()
-                .any(|value| value.as_i64().unwrap_or_default() > 0)
-        })
-    {
-        return None;
-    }
-
-    let draft_id = draft.id.to_string();
-    Some(HtmlArtifactManifestView {
-        kind: "html_artifact".to_string(),
-        version: 1,
-        id: format!("html-static-page-quality-{draft_id}"),
-        title: format!("{} · 数据质量报告", draft.title),
-        source_type: contracts::HtmlArtifactSourceTypeView::StaticPage,
-        template_id: contracts::HtmlArtifactTemplateIdView::StaticPageDataQualityReport,
-        owner_scope: contracts::HtmlArtifactOwnerScopeView {
-            scope_type: "static_page_draft".to_string(),
-            id: draft_id.clone(),
-        },
-        data_refs: Vec::new(),
-        provenance: contracts::HtmlArtifactProvenanceView {
-            producer: "v3-static-page-renderer".to_string(),
-            reason: "static page final render data quality report".to_string(),
-            source_run_id: Some(draft.assistant_run_id.to_string()),
-        },
-        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
-        created_at: draft.updated_at,
-        payload: json!({
-            "draftId": draft_id,
-            "finalStatus": final_page.get("status").and_then(Value::as_str).unwrap_or("unknown"),
-            "summary": summary,
-            "modules": modules,
-            "note": "最终渲染数据质量报告用于交付前检查模块数据、ECharts 可水合状态和静态回退。"
-        }),
-    })
-}
-
-fn static_page_final_data_quality_summary(asset_manifest: &Value) -> Option<Value> {
-    asset_manifest
-        .get("export_package")
-        .and_then(|package| package.get("debug"))
-        .and_then(|debug| debug.get("data_quality_summary"))
-        .cloned()
-        .or_else(|| {
-            asset_manifest
-                .get("chart_runtime")
-                .and_then(|runtime| runtime.get("dataQualitySummary"))
-                .cloned()
-        })
-        .or_else(|| asset_manifest.get("data_quality_summary").cloned())
-}
-
-fn static_page_final_data_quality_modules(asset_manifest: &Value) -> Vec<Value> {
-    asset_manifest
-        .get("export_package")
-        .and_then(|package| package.get("debug"))
-        .and_then(|debug| debug.get("data_quality_modules"))
-        .or_else(|| {
-            asset_manifest
-                .get("chart_runtime")
-                .and_then(|runtime| runtime.get("modules"))
-        })
-        .or_else(|| asset_manifest.get("data_quality_modules"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(static_page_data_quality_module_payload)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn static_page_data_quality_module_payload(module: &Value) -> Value {
-    json!({
-        "moduleId": module.get("moduleId").or_else(|| module.get("module_id")).and_then(Value::as_str).unwrap_or_default(),
-        "title": module.get("title").and_then(Value::as_str).unwrap_or("未命名模块"),
-        "dataQuality": module.get("dataQuality").or_else(|| module.get("data_quality")).and_then(Value::as_str).unwrap_or("unknown"),
-        "dataQualityStatus": module.get("dataQualityStatus").or_else(|| module.get("data_quality_status")).and_then(Value::as_str).unwrap_or("unknown"),
-        "dataQualityReason": module.get("dataQualityReason").or_else(|| module.get("data_quality_reason")).and_then(Value::as_str).unwrap_or_default(),
-        "recommendedAction": module.get("recommendedAction").or_else(|| module.get("recommended_action")).and_then(Value::as_str).unwrap_or_default(),
-        "chartRuntime": module.get("chartRuntime").or_else(|| module.get("chart_runtime")).and_then(Value::as_str).unwrap_or("deterministic"),
-        "fallback": module.get("fallback").and_then(Value::as_bool).unwrap_or(false),
-        "sampleDataRows": module.get("sampleDataRows").or_else(|| module.get("sample_data_rows")).and_then(Value::as_i64).unwrap_or(0),
-        "echartsHydratable": module.get("echartsHydratable").or_else(|| module.get("echarts_hydratable")).and_then(Value::as_bool).unwrap_or(false),
-    })
 }
 
 struct CodeReviewSummaryArtifactCandidate {
