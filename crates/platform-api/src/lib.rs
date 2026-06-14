@@ -145,10 +145,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path as StdPath, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
 };
 #[cfg(test)]
@@ -220,6 +217,7 @@ mod external_channel_public_text;
 mod external_channel_recipient_delivery_support;
 mod external_channel_runtime_selection_support;
 mod external_channel_scope_document_support;
+mod external_channel_sse_live_sink;
 mod external_channel_sse_support;
 mod external_channel_static_page_artifact_reply;
 mod external_channel_static_page_card_defaults;
@@ -349,6 +347,7 @@ use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
 use external_channel_recipient_delivery_support::*;
 use external_channel_scope_document_support::*;
+use external_channel_sse_live_sink::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_artifact_reply::*;
 use external_channel_static_page_card_defaults::*;
@@ -5347,30 +5346,6 @@ enum ExternalChannelEventSseState {
     End,
 }
 
-enum ExternalChannelEventSseWorkerMessage {
-    AnswerDelta(String),
-    Progress(ExternalChannelSseProgressMessage),
-    Finished(std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError>),
-}
-
-#[derive(Clone)]
-struct ExternalChannelAnswerDeltaSink {
-    sender: tokio::sync::mpsc::UnboundedSender<ExternalChannelEventSseWorkerMessage>,
-    run_id: Option<AssistantRunId>,
-    connection_id: Option<String>,
-    idempotency_key: Option<String>,
-    conversation_external_id: Option<String>,
-    progress_sequence: Arc<AtomicUsize>,
-}
-
-struct ExternalChannelSseProgressMessage {
-    run_id: AssistantRunId,
-    event_name: &'static str,
-    dedupe_key: String,
-    display_text: String,
-    payload: Value,
-}
-
 struct ExternalChannelStreamedProviderResponse {
     response: LlmResponse,
     deltas: Vec<LlmStreamDelta>,
@@ -5379,102 +5354,6 @@ struct ExternalChannelStreamedProviderResponse {
 struct ExternalChannelProviderAttemptResult {
     response: LlmResponse,
     deltas: Vec<LlmStreamDelta>,
-}
-
-impl ExternalChannelAnswerDeltaSink {
-    fn new(
-        sender: tokio::sync::mpsc::UnboundedSender<ExternalChannelEventSseWorkerMessage>,
-    ) -> Self {
-        Self {
-            sender,
-            run_id: None,
-            connection_id: None,
-            idempotency_key: None,
-            conversation_external_id: None,
-            progress_sequence: Arc::new(AtomicUsize::new(
-                external_channel_static_page_sse_sequence("answer_retrying") as usize,
-            )),
-        }
-    }
-
-    fn with_run(
-        mut self,
-        connection_id: String,
-        run_id: AssistantRunId,
-        idempotency_key: String,
-        conversation_external_id: String,
-    ) -> Self {
-        self.connection_id = Some(connection_id);
-        self.run_id = Some(run_id);
-        self.idempotency_key = Some(idempotency_key);
-        self.conversation_external_id = Some(conversation_external_id);
-        self
-    }
-
-    fn emit(&self, delta: LlmStreamDelta) {
-        if delta.delta.is_empty() {
-            return;
-        }
-        let _ = self
-            .sender
-            .send(ExternalChannelEventSseWorkerMessage::AnswerDelta(
-                sse_text_delta_event("external_channel.delta", delta.index, &delta.delta),
-            ));
-    }
-
-    fn emit_many(&self, deltas: Vec<LlmStreamDelta>) {
-        for delta in deltas {
-            self.emit(delta);
-        }
-    }
-
-    fn emit_answer_retrying(&self, reason: &'static str) {
-        let Some(run_id) = self.run_id else {
-            return;
-        };
-        let Some(connection_id) = self.connection_id.as_deref() else {
-            return;
-        };
-        let idempotency_key = self.idempotency_key.as_deref().unwrap_or_default();
-        let conversation_external_id = self.conversation_external_id.as_deref().unwrap_or_default();
-        let display_text = external_channel_answer_retrying_text(reason);
-        let sequence = self.progress_sequence.fetch_add(1, Ordering::AcqRel) as i64;
-        let status_url = external_channel_assistant_run_reply_status_url(connection_id, run_id);
-        let data = json!({
-            "assistant_run_id": run_id,
-            "idempotency_key": idempotency_key,
-            "conversation_external_id": conversation_external_id,
-            "status": "retrying",
-            "phase": "answering",
-            "reason": reason,
-            "retryable": true,
-            "text": display_text,
-        });
-        let payload = external_channel_sse_public_payload(
-            Some(run_id),
-            idempotency_key,
-            conversation_external_id,
-            sequence,
-            "answering",
-            "retrying",
-            display_text,
-            Some(status_url),
-            Some(15),
-            data,
-        );
-        let dedupe_key = format!("external_channel.answer_retrying:{reason}:{sequence}");
-        let _ = self
-            .sender
-            .send(ExternalChannelEventSseWorkerMessage::Progress(
-                ExternalChannelSseProgressMessage {
-                    run_id,
-                    event_name: "external_channel.answer_retrying",
-                    dedupe_key,
-                    display_text: display_text.to_string(),
-                    payload,
-                },
-            ));
-    }
 }
 
 async fn external_channel_event_sse_next(
