@@ -1,8 +1,10 @@
 use contracts::ExternalRequestedSkillView;
-use serde_json::{json, Value};
+use domain_model::DocumentId;
+use serde_json::{json, Map, Value};
+use uuid::Uuid;
 
 use crate::{
-    ApiError, EXTERNAL_CHANNEL_REQUESTED_SKILL_ARGUMENTS_LIMIT,
+    object_string, ApiError, EXTERNAL_CHANNEL_REQUESTED_SKILL_ARGUMENTS_LIMIT,
     EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT, EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT,
     EXTERNAL_CHANNEL_REQUESTED_SKILL_MODE_LIMIT, EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT,
 };
@@ -104,6 +106,99 @@ pub(crate) fn external_requested_skill_mode(skill: &ExternalRequestedSkillView) 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("preferred")
+}
+
+pub(crate) fn external_requested_skill_argument_object(
+    skill: &ExternalRequestedSkillView,
+) -> Option<&Map<String, Value>> {
+    skill.arguments.as_ref().and_then(Value::as_object)
+}
+
+pub(crate) fn external_requested_skill_argument_string(
+    skill: &ExternalRequestedSkillView,
+    keys: &[&str],
+) -> Option<String> {
+    object_string(external_requested_skill_argument_object(skill)?, keys)
+}
+
+pub(crate) fn external_requested_skill_is_document_template(
+    skill: &ExternalRequestedSkillView,
+) -> bool {
+    let normalized_skill_id = skill
+        .skill_id
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' '))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    matches!(
+        normalized_skill_id.as_str(),
+        "documenttemplateskill" | "documenttemplate" | "doctemplate" | "templatefromdocument"
+    ) || external_requested_skill_argument_string(
+        skill,
+        &[
+            "template_document_id",
+            "templateDocumentId",
+            "template_document_external_id",
+            "templateDocumentExternalId",
+        ],
+    )
+    .is_some()
+}
+
+pub(crate) fn external_document_template_skill_output_type(
+    skill: &ExternalRequestedSkillView,
+) -> String {
+    external_requested_skill_argument_string(skill, &["output_type", "outputType", "surface"])
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "any".to_string())
+}
+
+pub(crate) fn external_document_template_skill_source_id(
+    skill: &ExternalRequestedSkillView,
+) -> Option<String> {
+    external_requested_skill_argument_string(skill, &["source_id", "sourceId"])
+}
+
+pub(crate) fn external_document_template_skill_revision_external_id(
+    skill: &ExternalRequestedSkillView,
+) -> Option<String> {
+    external_requested_skill_argument_string(
+        skill,
+        &["revision_external_id", "revisionExternalId", "revision"],
+    )
+}
+
+pub(crate) fn external_document_template_skill_document_id(
+    skill: &ExternalRequestedSkillView,
+) -> Option<DocumentId> {
+    external_requested_skill_argument_string(
+        skill,
+        &[
+            "template_document_id",
+            "templateDocumentId",
+            "document_id",
+            "documentId",
+        ],
+    )
+    .and_then(|value| Uuid::parse_str(value.trim()).ok())
+    .map(DocumentId)
+}
+
+pub(crate) fn external_document_template_skill_external_id(
+    skill: &ExternalRequestedSkillView,
+) -> Option<String> {
+    external_requested_skill_argument_string(
+        skill,
+        &[
+            "template_document_external_id",
+            "templateDocumentExternalId",
+            "document_external_id",
+            "documentExternalId",
+            "external_document_id",
+            "externalDocumentId",
+        ],
+    )
 }
 
 pub(crate) fn external_requested_skills_policy_value(
@@ -240,5 +335,81 @@ mod tests {
         };
 
         assert_eq!(external_requested_skill_mode(&skill), "preferred");
+    }
+
+    #[test]
+    fn document_template_skill_parses_aliases_from_id_and_arguments() {
+        let skill = ExternalRequestedSkillView {
+            skill_id: " Document-Template Skill ".to_string(),
+            version: None,
+            mode: None,
+            arguments: Some(json!({
+                "templateDocumentExternalId": "template-ext-001",
+                "sourceId": "third-party-source-main",
+                "outputType": "HTML"
+            })),
+        };
+
+        assert!(external_requested_skill_is_document_template(&skill));
+        assert_eq!(
+            external_document_template_skill_external_id(&skill).as_deref(),
+            Some("template-ext-001")
+        );
+        assert_eq!(
+            external_document_template_skill_source_id(&skill).as_deref(),
+            Some("third-party-source-main")
+        );
+        assert_eq!(external_document_template_skill_output_type(&skill), "html");
+    }
+
+    #[test]
+    fn document_template_skill_parses_uuid_document_id_and_revision_alias() {
+        let document_id = Uuid::new_v4();
+        let skill = ExternalRequestedSkillView {
+            skill_id: "custom_template_skill".to_string(),
+            version: None,
+            mode: None,
+            arguments: Some(json!({
+                "template_document_id": document_id.to_string(),
+                "revisionExternalId": "v3"
+            })),
+        };
+
+        assert!(external_requested_skill_is_document_template(&skill));
+        assert_eq!(
+            external_document_template_skill_document_id(&skill),
+            Some(DocumentId(document_id))
+        );
+        assert_eq!(
+            external_document_template_skill_revision_external_id(&skill).as_deref(),
+            Some("v3")
+        );
+    }
+
+    #[test]
+    fn document_template_skill_defaults_output_type_and_rejects_unrelated_skill() {
+        let skill = ExternalRequestedSkillView {
+            skill_id: "chat_helper".to_string(),
+            version: None,
+            mode: None,
+            arguments: Some(json!({"surface": "Static_Page"})),
+        };
+
+        assert!(!external_requested_skill_is_document_template(&skill));
+        assert_eq!(
+            external_document_template_skill_output_type(&skill),
+            "static_page"
+        );
+
+        let no_arguments = ExternalRequestedSkillView {
+            skill_id: "doc_template".to_string(),
+            version: None,
+            mode: None,
+            arguments: None,
+        };
+        assert_eq!(
+            external_document_template_skill_output_type(&no_arguments),
+            "any"
+        );
     }
 }

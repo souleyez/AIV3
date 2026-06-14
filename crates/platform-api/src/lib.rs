@@ -363,7 +363,7 @@ use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
-use external_requested_skills_support::*;
+pub(crate) use external_requested_skills_support::*;
 use external_system_user::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
@@ -19654,95 +19654,6 @@ fn external_channel_editable_after_publish_from_payload(payload: &Value) -> Valu
         .get("editable_after_publish")
         .cloned()
         .unwrap_or(Value::Null)
-}
-
-fn external_requested_skill_argument_object(
-    skill: &ExternalRequestedSkillView,
-) -> Option<&Map<String, Value>> {
-    skill.arguments.as_ref().and_then(Value::as_object)
-}
-
-fn external_requested_skill_argument_string(
-    skill: &ExternalRequestedSkillView,
-    keys: &[&str],
-) -> Option<String> {
-    object_string(external_requested_skill_argument_object(skill)?, keys)
-}
-
-fn external_requested_skill_is_document_template(skill: &ExternalRequestedSkillView) -> bool {
-    let normalized_skill_id = skill
-        .skill_id
-        .trim()
-        .chars()
-        .filter(|ch| !matches!(ch, '-' | '_' | ' '))
-        .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
-    matches!(
-        normalized_skill_id.as_str(),
-        "documenttemplateskill" | "documenttemplate" | "doctemplate" | "templatefromdocument"
-    ) || external_requested_skill_argument_string(
-        skill,
-        &[
-            "template_document_id",
-            "templateDocumentId",
-            "template_document_external_id",
-            "templateDocumentExternalId",
-        ],
-    )
-    .is_some()
-}
-
-fn external_document_template_skill_output_type(skill: &ExternalRequestedSkillView) -> String {
-    external_requested_skill_argument_string(skill, &["output_type", "outputType", "surface"])
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_else(|| "any".to_string())
-}
-
-fn external_document_template_skill_source_id(
-    skill: &ExternalRequestedSkillView,
-) -> Option<String> {
-    external_requested_skill_argument_string(skill, &["source_id", "sourceId"])
-}
-
-fn external_document_template_skill_revision_external_id(
-    skill: &ExternalRequestedSkillView,
-) -> Option<String> {
-    external_requested_skill_argument_string(
-        skill,
-        &["revision_external_id", "revisionExternalId", "revision"],
-    )
-}
-
-fn external_document_template_skill_document_id(
-    skill: &ExternalRequestedSkillView,
-) -> Option<DocumentId> {
-    external_requested_skill_argument_string(
-        skill,
-        &[
-            "template_document_id",
-            "templateDocumentId",
-            "document_id",
-            "documentId",
-        ],
-    )
-    .and_then(|value| Uuid::parse_str(value.trim()).ok())
-    .map(DocumentId)
-}
-
-fn external_document_template_skill_external_id(
-    skill: &ExternalRequestedSkillView,
-) -> Option<String> {
-    external_requested_skill_argument_string(
-        skill,
-        &[
-            "template_document_external_id",
-            "templateDocumentExternalId",
-            "document_external_id",
-            "documentExternalId",
-            "external_document_id",
-            "externalDocumentId",
-        ],
-    )
 }
 
 fn selected_scope_document_id_by_external_ref(
