@@ -216,6 +216,7 @@ mod external_channel_public_text;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
+mod external_channel_temporary_dataset_support;
 mod external_conversation_timeline;
 mod external_database_source_config_support;
 mod external_document_object_support;
@@ -323,6 +324,7 @@ use external_channel_public_text::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
+use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
 use external_database_source_config_support::*;
 use external_document_object_support::*;
@@ -19672,69 +19674,6 @@ fn set_external_channel_temporary_dataset_scope(
         }
     }
     set_payload_value(selected_scope, "temporary_dataset", payload);
-}
-
-fn external_channel_temporary_dataset_key(
-    connection_id: &str,
-    message: &ExternalBotMessageView,
-    source_id: Option<&str>,
-) -> String {
-    let mut parts = vec![
-        "external".to_string(),
-        "session".to_string(),
-        external_channel_temporary_dataset_key_component(connection_id),
-    ];
-    parts.push(external_channel_temporary_dataset_key_component(
-        &message.conversation_external_id,
-    ));
-    if let Some(source_id) = source_id.and_then(non_empty_trimmed_string) {
-        parts.push(external_channel_temporary_dataset_key_component(&source_id));
-    }
-    compact_external_channel_temporary_dataset_key(parts.join("-"))
-}
-
-fn external_channel_temporary_dataset_key_component(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_separator = false;
-    for character in value.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-            last_was_separator = false;
-        } else if !slug.is_empty() && !last_was_separator {
-            slug.push('-');
-            last_was_separator = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    if slug.is_empty() {
-        return format!("ref-{}", &sha256_hex([value.as_bytes()])[..12]);
-    }
-    if slug.len() > 64 {
-        let hash = sha256_hex([value.as_bytes()]);
-        slug.truncate(48);
-        while slug.ends_with('-') {
-            slug.pop();
-        }
-        slug.push('-');
-        slug.push_str(&hash[..12]);
-    }
-    slug
-}
-
-fn compact_external_channel_temporary_dataset_key(mut key: String) -> String {
-    if key.len() <= 128 {
-        return key;
-    }
-    let hash = sha256_hex([key.as_bytes()]);
-    key.truncate(112);
-    while key.ends_with('-') {
-        key.pop();
-    }
-    key.push('-');
-    key.push_str(&hash[..12]);
-    key
 }
 
 async fn infer_external_document_scope_source_id(
