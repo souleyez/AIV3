@@ -19166,3 +19166,61 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 External Integration Audit Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party integration audit query/filter parsing and item matching out of `lib.rs` into `crates/platform-api/src/external_integration_audit_support.rs`;
+  - preserve audit item type filtering, action state filtering, action id filtering, limit clamping, conflict validation, and action lifecycle state matching.
+- Code change:
+  - added `external_integration_audit_support`;
+  - moved `ExternalIntegrationAuditQuery`, `ExternalIntegrationAuditFilter`, `external_integration_audit_filter`, and `external_integration_audit_item_matches` into the new module;
+  - kept existing handler call sites unchanged through module import;
+  - added module tests for lowercase `all` handling, limit clamp, invalid item type rejection, action filter conflicts, lifecycle states, action id matching, and item type mismatch handling.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_integration_audit_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_integration_audit --lib`: passed, 10/10 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware and Turbopack NFT warnings only;
+  - all 13 P0 self-tests passed, including main/external 20way, static-page 5way, Cloudflare fallback 2way, P2 dry-run, production readiness, and prewarm observability;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-56/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Integration Audit Support Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `4fb658c7` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded to `4fb658c7a445`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_integration_audit_support --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_integration_audit --lib`: passed, 10/10 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-4fb658c7a445/`.
+- CI status:
+  - GitHub Actions run `27497620319` for `4fb658c7` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
