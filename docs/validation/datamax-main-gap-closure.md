@@ -19578,3 +19578,75 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Static Page Handoff Artifact Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page planning handoff artifact conversion out of `lib.rs` into `crates/platform-api/src/static_page_handoff_artifact_support.rs`;
+  - preserve ActionIntent artifact metadata, module binding labels, visual bridge status, image job fields, preview contract fields, and final render status.
+- Code change:
+  - added `static_page_handoff_artifact_support`;
+  - moved `static_page_handoff_artifact_from_draft` and `static_page_visual_bridge_payload` into the new module;
+  - kept async draft loading in `lib.rs` and existing call sites unchanged through module import;
+  - added module tests for action-intent handoff payloads and asset-manifest render spec fallback.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_handoff_artifact_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api static_page_draft_builds_interactive_handoff_artifact --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `git diff --check`: no whitespace errors, only existing CRLF warnings on unrelated dirty files and touched Rust files;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - logs were written under `target/datamax-local-smoke-63/`.
+- Local web build note:
+  - `pnpm --dir apps/web build` first stopped on non-TTY module purge protection, then with `CI=true` repeatedly timed out downloading `next`, `@next/swc-win32-x64-msvc`, and related tarballs from the registry;
+  - `npm --prefix apps/web run build` then failed because local `apps/web/node_modules` lacked `next`;
+  - this local dependency recovery failure did not execute Next build code and was not used as acceptance evidence for this backend-only slice; 8-server Web build below is the build evidence.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Static Page Handoff Artifact Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `d5e438ff` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `19d0214871d5` to `d5e438fff1a7`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api static_page_handoff_artifact_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api static_page_draft_builds_interactive_handoff_artifact --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - the first immediate post-restart `/readyz` probe hit listener startup timing; a follow-up probe returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-d5e438fff1a7/`.
+- CI status:
+  - GitHub Actions run `27500837195` for `d5e438ff` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local Rust/P0 and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
