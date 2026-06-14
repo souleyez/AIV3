@@ -14324,6 +14324,69 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Channel Conversation History Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party conversation-history restoration helpers out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/external_channel_conversation_history_support.rs`;
+  - preserve recent-run ordering, external-channel lane filtering, assistant-message extraction, conversation-id recovery, and the existing 1200-character truncation contract.
+- Code change:
+  - added `external_channel_conversation_history_support`;
+  - moved `external_channel_conversation_history_messages_from_recent_runs`, `external_channel_assistant_reply_from_run`, `external_channel_conversation_external_id_from_run`, and `external_channel_assistant_reply_from_output_artifacts`;
+  - kept `EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT` in `lib.rs` and moved the history text limit next to the new helper implementation;
+  - added module tests for oldest-first message reconstruction, latest non-empty assistant message extraction, trimmed conversation id recovery, blank id rejection, and prompt/reply truncation.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_conversation_history_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_channel_conversation_history --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_channel_sse --lib`: passed, 34/34 tests;
+  - `cargo test -p platform-api external_channel_static_page_sse --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_channel_conversation_history_support.rs`: passed with Windows line-ending warning only;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-52/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Channel Conversation History Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `b6a6a360` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `f02734e600ac` to `b6a6a360f25b`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_conversation_history_support --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_channel_conversation_history --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_channel_sse --lib`: passed, 34/34 tests;
+  - `cargo test -p platform-api external_channel_static_page_sse --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-b6a6a360f25b/`;
+  - a follow-up health check confirmed remote HEAD `b6a6a360f25b`, all five services `active`, and `/readyz` status `ready`.
+- CI status:
+  - GitHub Actions run `27496123035` for `b6a6a360` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Channel SSE Live Sink Helper Local Verification
 
 - Purpose:
