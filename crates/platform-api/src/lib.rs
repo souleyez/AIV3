@@ -222,6 +222,7 @@ mod external_channel_runtime_selection_support;
 mod external_channel_scope_document_support;
 mod external_channel_sse_support;
 mod external_channel_static_page_artifact_reply;
+mod external_channel_static_page_card_defaults;
 mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
 mod external_channel_static_page_publish_reply;
@@ -348,6 +349,7 @@ use external_channel_recipient_delivery_support::*;
 use external_channel_scope_document_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_artifact_reply::*;
+use external_channel_static_page_card_defaults::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
 use external_channel_static_page_publish_reply::*;
@@ -46838,13 +46840,6 @@ fn external_channel_static_page_is_xinbai_primary_report(
         || template_reference_text.contains("新世界百货")
 }
 
-fn external_channel_static_page_report_title_is_generic(title: &str) -> bool {
-    matches!(
-        title.trim(),
-        "" | "static_page_image2_data_publish" | "DataMax 静态页" | "DataMax 经营分析报表"
-    )
-}
-
 fn external_channel_static_page_report_title(payload: &Value, public_url: &str) -> String {
     if let Some(title) = external_channel_static_page_artifact_payload_string(
         payload,
@@ -46869,32 +46864,6 @@ fn external_channel_static_page_report_title(payload: &Value, public_url: &str) 
         return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
     }
     "DataMax 经营分析报表".to_string()
-}
-
-fn external_channel_static_page_card_value_missing(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => true,
-        Some(Value::String(value)) => value.trim().is_empty(),
-        Some(Value::Array(items)) => items.is_empty(),
-        _ => false,
-    }
-}
-
-fn external_channel_static_page_card_title_missing_or_generic(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_str)
-        .map(external_channel_static_page_report_title_is_generic)
-        .unwrap_or(true)
-}
-
-fn external_channel_static_page_card_insert_if_missing(
-    object: &mut Map<String, Value>,
-    key: &str,
-    value: Value,
-) {
-    if external_channel_static_page_card_value_missing(object.get(key)) {
-        object.insert(key.to_string(), value);
-    }
 }
 
 fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyView) {
