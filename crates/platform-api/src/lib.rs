@@ -312,6 +312,7 @@ mod static_page_report_snapshot;
 mod static_page_structure_signals;
 mod static_page_template_binding_support;
 mod static_page_template_match_support;
+mod static_page_template_overlap_support;
 mod static_page_template_prewarm_support;
 mod static_page_template_profile_support;
 mod static_page_template_reference_support;
@@ -499,6 +500,7 @@ use static_page_report_snapshot::*;
 use static_page_structure_signals::*;
 use static_page_template_binding_support::*;
 use static_page_template_match_support::*;
+use static_page_template_overlap_support::*;
 use static_page_template_prewarm_support::*;
 use static_page_template_profile_support::*;
 use static_page_template_reference_support::*;
@@ -24304,67 +24306,6 @@ async fn find_static_page_xinbai_primary_template_baseline_by_public_url(
         return Ok(Some((draft, candidate_score)));
     }
     Ok(None)
-}
-
-struct StaticPageTemplateOverlapSearchOutcome {
-    draft: Option<StaticPageDraft>,
-    selected_score: Option<i32>,
-    selected_features: Vec<String>,
-    current_token_count: usize,
-    accepted_baseline_count: usize,
-    visible_published_baseline_count: usize,
-    scope_intersection_count: usize,
-    template_intent_match_count: usize,
-    template_intent_mismatch_count: usize,
-    default_prompt_match_count: usize,
-    default_prompt_mismatch_count: usize,
-}
-
-impl StaticPageTemplateOverlapSearchOutcome {
-    fn not_matched_reason(&self) -> &'static str {
-        if self.current_token_count == 0 {
-            "missing_candidate_scope_tokens"
-        } else if self.accepted_baseline_count == 0 {
-            "no_accepted_template_baseline"
-        } else if self.visible_published_baseline_count == 0 {
-            "no_visible_published_template_baseline"
-        } else if self.scope_intersection_count == 0 {
-            "no_dataset_scope_intersection"
-        } else if self.template_intent_match_count == 0 && self.template_intent_mismatch_count > 0 {
-            "template_intent_mismatch"
-        } else if self.default_prompt_match_count == 0 && self.default_prompt_mismatch_count > 0 {
-            "default_prompt_mismatch"
-        } else {
-            "no_matching_template_baseline"
-        }
-    }
-
-    fn summary(&self, selected_scope: &Value, source_refs: &Value) -> Value {
-        json!({
-            "policy": "dataset_overlap",
-            "status": if self.draft.is_some() { "matched" } else { "not_matched" },
-            "reason": if self.draft.is_some() {
-                "dataset_scope_intersects_existing_template_baseline_and_default_prompt_matches"
-            } else {
-                self.not_matched_reason()
-            },
-            "default_prompt_match_policy": "same_or_compatible_business_default_prompt",
-            "candidate_default_prompt_present": static_page_default_prompt_from_scope_or_refs(
-                selected_scope,
-                source_refs,
-            ).is_some(),
-            "current_token_count": self.current_token_count,
-            "selected_score": self.selected_score,
-            "selected_features": self.selected_features,
-            "accepted_baseline_count": self.accepted_baseline_count,
-            "visible_published_baseline_count": self.visible_published_baseline_count,
-            "scope_intersection_count": self.scope_intersection_count,
-            "template_intent_match_count": self.template_intent_match_count,
-            "template_intent_mismatch_count": self.template_intent_mismatch_count,
-            "default_prompt_match_count": self.default_prompt_match_count,
-            "default_prompt_mismatch_count": self.default_prompt_mismatch_count,
-        })
-    }
 }
 
 async fn find_static_page_template_baseline_by_dataset_overlap(
