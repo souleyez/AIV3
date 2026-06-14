@@ -166,6 +166,7 @@ use zip::ZipArchive;
 mod assistant_run_answer_policy_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
+mod assistant_run_evidence_limit_support;
 mod assistant_run_evidence_state_support;
 mod assistant_run_lexical_query_support;
 mod assistant_run_model_context_support;
@@ -316,6 +317,7 @@ mod zip_ingest_support;
 use assistant_run_answer_policy_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
+use assistant_run_evidence_limit_support::*;
 use assistant_run_evidence_state_support::*;
 use assistant_run_lexical_query_support::*;
 use assistant_run_model_context_support::*;
@@ -507,9 +509,10 @@ const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page
 const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
 const CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
 const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
-const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
-const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
-const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize = RETRIEVAL_SEARCH_MAX_LIMIT;
+pub(crate) const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
+pub(crate) const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
+pub(crate) const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize =
+    RETRIEVAL_SEARCH_MAX_LIMIT;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT: u32 = 8;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
@@ -58778,38 +58781,6 @@ fn filter_retrieval_evidences_for_selected_documents(
         .collect()
 }
 
-#[cfg(test)]
-fn assistant_run_evidence_limit_for_scope(selected_scope: &Value) -> usize {
-    assistant_run_evidence_limit_for_scope_and_prompt(selected_scope, "")
-}
-
-fn assistant_run_evidence_limit_for_scope_and_prompt(
-    selected_scope: &Value,
-    prompt: &str,
-) -> usize {
-    if !selected_document_ids_for_evidence_from_scope(selected_scope).is_empty()
-        && prompt_requests_spreadsheet_row_level_analysis(prompt)
-        && !prompt_has_resume_signal(prompt)
-    {
-        return ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT;
-    }
-    if assistant_run_scope_prefers_detail(selected_scope)
-        && !selected_dataset_ids_from_scope(selected_scope).is_empty()
-    {
-        ASSISTANT_RUN_EVIDENCE_MAX_LIMIT
-    } else {
-        assistant_run_evidence_limit()
-    }
-}
-
-fn assistant_run_evidence_limit() -> usize {
-    std::env::var("ASSISTANT_RUN_EVIDENCE_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT)
-        .clamp(1, ASSISTANT_RUN_EVIDENCE_MAX_LIMIT)
-}
-
 pub(crate) fn collect_string_list(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::String(text) => {
@@ -64743,7 +64714,7 @@ fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> b
     prompt_requests_document_entity_scan(prompt)
 }
 
-fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bool {
+pub(crate) fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bool {
     let lower_prompt = prompt.to_ascii_lowercase();
     let has_row_context = prompt_contains_any(
         prompt,
