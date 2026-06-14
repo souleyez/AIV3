@@ -225,6 +225,7 @@ mod external_channel_static_page_artifact_reply;
 mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
 mod external_channel_static_page_publish_reply;
+mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_reply_merge;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
@@ -348,6 +349,7 @@ use external_channel_static_page_artifact_reply::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
 use external_channel_static_page_publish_reply::*;
+use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
@@ -43455,7 +43457,7 @@ fn codex_host_fixed_task_output_summary(output: Option<&Value>) -> Value {
     })
 }
 
-fn codex_host_fixed_task_safe_text(value: &str) -> String {
+pub(crate) fn codex_host_fixed_task_safe_text(value: &str) -> String {
     let compact = truncate_assistant_supply_text(value, 500);
     let lowered = compact.to_ascii_lowercase();
     if lowered.contains("database_url")
@@ -44619,30 +44621,6 @@ fn publish_external_static_page_exec_completed_html_as_generated_artifact(
         public_url,
         local_path: index_path.display().to_string(),
         manifest_path: manifest_path.display().to_string(),
-    })
-}
-
-fn external_channel_static_page_publish_validation_summary_from_fixed_task_output(
-    fixed_task_output: &Value,
-) -> Value {
-    let report = fixed_task_output
-        .get("validation_report")
-        .unwrap_or(&Value::Null);
-    json!({
-        "status": fixed_task_output.get("status").cloned().unwrap_or(Value::Null),
-        "reason": "new_generated_artifact_validated",
-        "latest_snapshot": report.get("latest_snapshot").cloned().unwrap_or(Value::Null),
-        "source_row_count": report.get("source_row_count").cloned().unwrap_or(Value::Null),
-        "current_state_row_count": report
-            .get("current_state_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "detail_row_count": report.get("detail_row_count").cloned().unwrap_or(Value::Null),
-        "unit_policy": report.get("unit_policy").cloned().unwrap_or(Value::Null),
-        "warnings": report
-            .get("warnings")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
     })
 }
 
@@ -46892,43 +46870,6 @@ fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value
         output.insert("artifact_stability".to_string(), value.clone());
     }
     Value::Object(output)
-}
-
-fn external_channel_static_page_publish_validation_summary(payload: &Value) -> Value {
-    let output = payload.get("output").unwrap_or(&Value::Null);
-    let validation = payload.get("validation").unwrap_or(&Value::Null);
-    json!({
-        "status": payload.get("status").cloned().unwrap_or(Value::Null),
-        "reason": validation
-            .get("reason")
-            .and_then(Value::as_str)
-            .map(codex_host_fixed_task_safe_text)
-            .unwrap_or_default(),
-        "latest_snapshot": output
-            .get("latest_snapshot")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "source_row_count": output
-            .get("source_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "current_state_row_count": output
-            .get("current_state_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "detail_row_count": output
-            .get("detail_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "unit_policy": output
-            .get("unit_policy")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "warnings": output
-            .get("warnings")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-    })
 }
 
 fn external_channel_static_page_is_xinbai_primary_report(
