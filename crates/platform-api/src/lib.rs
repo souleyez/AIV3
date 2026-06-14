@@ -236,6 +236,7 @@ mod external_channel_static_page_card_defaults;
 mod external_channel_static_page_dataset_scope_support;
 mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
+mod external_channel_static_page_prompt_support;
 mod external_channel_static_page_publish_reply;
 mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_publish_visibility;
@@ -392,6 +393,7 @@ use external_channel_static_page_card_defaults::*;
 use external_channel_static_page_dataset_scope_support::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
+use external_channel_static_page_prompt_support::*;
 use external_channel_static_page_publish_reply::*;
 use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_publish_visibility::*;
@@ -26909,32 +26911,6 @@ fn static_page_existing_artifact_reference_for_fixed_task(
         template_reference,
         source_refs,
     )
-}
-
-fn external_static_page_prompt_contains_any(prompt: &str, needles: &[&str]) -> bool {
-    let normalized = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    external_channel_text_has_any(&normalized, prompt, needles)
-}
-
-fn external_channel_static_page_project_name(prompt: &str) -> Option<String> {
-    for marker in ["项目", "门店", "商场", "客户"] {
-        if let Some(index) = prompt.find(marker) {
-            let prefix = prompt[..index].trim();
-            let value = prefix
-                .split(['，', '。', ',', '.', '\n', '\r'])
-                .next_back()
-                .unwrap_or(prefix)
-                .trim();
-            if !value.is_empty() && value.chars().count() <= 32 {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
