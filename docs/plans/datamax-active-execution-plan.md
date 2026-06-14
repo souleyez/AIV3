@@ -80,7 +80,8 @@
 | 17 | P5 external attachment title matching helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_attachment_title_support` 模块单测、第三方文档范围回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 18 | P5 external public citation helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_public_citation_support` 模块单测、第三方公开引用集成回归、第三方文档范围回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 19 | P5 external public task status helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_public_text` 模块单测、静态页进度/失败状态回归、第三方文档范围回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 20 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
+| 20 | P5 external model reply/output rejection helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_model_rejection_support` 模块单测、质量门禁扩供料判断回归、第三方文档范围回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 21 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
@@ -330,6 +331,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 4. integration HTML 若只是行尾/stat 噪声，不纳入提交。
 
 **Current progress:**
+- 2026-06-14: `crates/platform-api/src/lib.rs` 第三方模型回复拒绝原因、空输出/内部标记/泛化编排确认文本判断已拆到 `external_channel_model_rejection_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api external_channel_model_rejection_support --lib`、质量门禁扩供料判断回归、第三方文档范围回归、第三方静态页触发回归、`cargo check -p platform-api`、Web build、P0 smoke、release build、health/ready 和服务 active 均通过，已提交并同步 8 服务器。
 - 2026-06-14: `crates/platform-api/src/lib.rs` document chunk 和 document enrichment run view mapping helper 已拆到 `document_view_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api document_view_support --lib`、`cargo test -p platform-api to_document_chunk_view_exposes_typed_state --lib`、`cargo check -p platform-api`、第三方静态页触发单测、Web build 和 P0 smoke 均通过，已提交并同步 8 服务器。
 - 2026-06-14: `crates/platform-api/src/lib.rs` conversation memory item 和 workflow event view mapping helper 已拆到 `basic_view_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api basic_view_support --lib`、`cargo check -p platform-api`、第三方静态页触发单测、Web build 和 P0 smoke 均通过，已提交并同步 8 服务器。
 - 2026-06-12: `external_observability` helper 已从 `crates/platform-api/src/lib.rs` 拆到独立模块；header 名称、环境变量、默认放行逻辑和哈希比较逻辑保持不变。
