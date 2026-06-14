@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use llm_gateway::model_gateway_lane_env_prefix;
+use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -694,6 +695,29 @@ pub(crate) fn model_gateway_lane_canary_percent(lane: &str) -> Option<u32> {
         .map(|value| value.min(100))
 }
 
+pub(crate) fn model_gateway_capability_names(capabilities: &Value) -> Vec<String> {
+    if let Some(names) = capabilities.as_array() {
+        return names
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    capabilities
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| value.as_bool().filter(|enabled| *enabled).map(|_| key))
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
     reason.contains("timeout")
 }
@@ -867,5 +891,28 @@ mod tests {
         assert_eq!(model_gateway_lane_canary_percent(lane), None);
 
         clear_lane_env(lane);
+    }
+
+    #[test]
+    fn model_gateway_capability_names_preserves_array_and_object_semantics() {
+        assert_eq!(
+            model_gateway_capability_names(&serde_json::json!([
+                "chat", " report ", "", "   ", 42, null
+            ])),
+            vec!["chat".to_string(), "report".to_string()]
+        );
+
+        assert_eq!(
+            model_gateway_capability_names(&serde_json::json!({
+                "chat": true,
+                "report": false,
+                "vision": true,
+                "text": "true"
+            })),
+            vec!["chat".to_string(), "vision".to_string()]
+        );
+
+        assert!(model_gateway_capability_names(&serde_json::json!("chat")).is_empty());
+        assert!(model_gateway_capability_names(&serde_json::json!(null)).is_empty());
     }
 }

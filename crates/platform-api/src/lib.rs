@@ -24262,29 +24262,6 @@ fn model_gateway_provider_profile_from_record(
     provider_profile
 }
 
-fn model_gateway_capability_names(capabilities: &Value) -> Vec<String> {
-    if let Some(names) = capabilities.as_array() {
-        return names
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-    }
-
-    capabilities
-        .as_object()
-        .map(|object| {
-            object
-                .iter()
-                .filter_map(|(key, value)| value.as_bool().filter(|enabled| *enabled).map(|_| key))
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn external_channel_model_pool_is_active(
     connection_id: &str,
     message: &ExternalBotMessageView,
