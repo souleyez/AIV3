@@ -48515,19 +48515,6 @@ fn external_channel_static_page_publish_validation_summary(payload: &Value) -> V
     })
 }
 
-fn external_channel_static_page_artifact_payload_string(
-    payload: &Value,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|key| {
-        external_channel_static_page_artifact_payload_value(payload, key)
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
 fn external_channel_static_page_is_xinbai_primary_report(
     payload: &Value,
     public_url: &str,

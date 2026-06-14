@@ -149,6 +149,19 @@ pub(crate) fn external_channel_static_page_artifact_payload_value(
         .unwrap_or(Value::Null)
 }
 
+pub(crate) fn external_channel_static_page_artifact_payload_string(
+    payload: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        external_channel_static_page_artifact_payload_value(payload, key)
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
 pub(crate) fn external_channel_static_page_download_exports(
     public_url: &str,
     data_url: Value,
@@ -321,6 +334,31 @@ mod tests {
         assert_eq!(
             external_channel_static_page_artifact_payload_value(&payload, "missing"),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn static_page_artifact_payload_string_trims_and_skips_empty_values() {
+        let payload = json!({
+            "title": "   ",
+            "artifact": {
+                "display_title": "  新世界百货经营管理月报表  "
+            },
+            "output": {
+                "report_title": "ignored"
+            }
+        });
+
+        assert_eq!(
+            external_channel_static_page_artifact_payload_string(
+                &payload,
+                &["title", "display_title", "report_title"]
+            ),
+            Some("新世界百货经营管理月报表".to_string())
+        );
+        assert_eq!(
+            external_channel_static_page_artifact_payload_string(&payload, &["missing"]),
+            None
         );
     }
 }
