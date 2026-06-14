@@ -218,6 +218,7 @@ mod external_channel_public_citation_support;
 mod external_channel_public_text;
 mod external_channel_recipient_delivery_support;
 mod external_channel_runtime_selection_support;
+mod external_channel_scope_document_support;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
@@ -335,6 +336,7 @@ use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
 use external_channel_recipient_delivery_support::*;
+use external_channel_scope_document_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
@@ -19525,48 +19527,6 @@ async fn infer_external_document_scope_source_id(
     }
 }
 
-fn selected_scope_document_id_by_external_ref(
-    selected_scope: &Value,
-    source_id: Option<&str>,
-    document_external_id: &str,
-) -> Option<DocumentId> {
-    let source_id = source_id.map(str::trim).filter(|value| !value.is_empty());
-    let document_external_id = document_external_id.trim();
-    if document_external_id.is_empty() {
-        return None;
-    }
-    let documents = selected_scope.get("documents").and_then(Value::as_array)?;
-    for document in documents {
-        let Some(object) = document.as_object() else {
-            continue;
-        };
-        let matches_external_id = object_string(
-            object,
-            &[
-                "document_external_id",
-                "documentExternalId",
-                "external_document_id",
-                "externalDocumentId",
-            ],
-        )
-        .is_some_and(|value| value == document_external_id);
-        if !matches_external_id {
-            continue;
-        }
-        if let Some(expected_source_id) = source_id {
-            let matches_source = object_string(object, &["source_id", "sourceId"])
-                .is_some_and(|value| value == expected_source_id);
-            if !matches_source {
-                continue;
-            }
-        }
-        if let Some(document_id) = document_id_from_scope_item(document) {
-            return Some(document_id);
-        }
-    }
-    None
-}
-
 fn normalize_external_template_reference_title(raw: &str) -> Option<String> {
     let value = raw
         .trim()
@@ -19634,37 +19594,6 @@ fn external_prompt_template_reference_titles(prompt: &str) -> Vec<String> {
         }
     }
     titles
-}
-
-fn external_template_reference_title_key(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect()
-}
-
-fn selected_scope_document_item_by_title<'a>(
-    selected_scope: &'a Value,
-    title: &str,
-) -> Option<&'a Value> {
-    let target = external_template_reference_title_key(title);
-    if target.is_empty() {
-        return None;
-    }
-    selected_scope
-        .get("documents")
-        .and_then(Value::as_array)?
-        .iter()
-        .find(|document| {
-            document
-                .as_object()
-                .and_then(|object| object_string(object, &["title", "filename", "name"]))
-                .is_some_and(|candidate| {
-                    external_template_reference_title_key(&candidate) == target
-                })
-        })
 }
 
 fn external_prompt_template_reference_skill_from_scope_item(
