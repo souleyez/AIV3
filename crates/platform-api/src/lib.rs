@@ -126,9 +126,8 @@ use llm_gateway::{
     build_provider_from_env, build_provider_from_profile_env, model_gateway_profile_env_prefix,
     render_runtime_manifest, resolve_runtime_selection_from_env, LlmFinishReason, LlmProviderError,
     LlmProviderFailureKind, LlmRequest, LlmResponse, LlmRuntimeMetadata, LlmRuntimeMode,
-    LlmRuntimeSelection, LlmStreamDelta, ModelGatewayLaneLimits, ModelGatewayPoolConfig,
-    ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
-    MODEL_LANE_CODEX_CONVERSATION,
+    LlmRuntimeSelection, LlmStreamDelta, ModelGatewayPoolConfig, ModelProviderProfile,
+    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -330,7 +329,6 @@ use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
-use external_channel_runtime_selection_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
@@ -24112,57 +24110,6 @@ fn external_channel_task_status_reply_for_conversation(
     }
 }
 
-#[derive(Clone, Debug)]
-struct ExternalChannelChatRuntimeAttempt {
-    env_prefix: String,
-    label: String,
-    runtime: LlmRuntimeSelection,
-    profile: Option<ModelProviderProfile>,
-    lane_limits: Option<ModelGatewayLaneLimits>,
-}
-
-fn external_channel_chat_runtime_attempts(
-    primary: LlmRuntimeSelection,
-) -> Vec<ExternalChannelChatRuntimeAttempt> {
-    let mut attempts = vec![ExternalChannelChatRuntimeAttempt {
-        env_prefix: "ASSISTANT_RUN".to_string(),
-        label: "primary".to_string(),
-        runtime: primary.clone(),
-        profile: None,
-        lane_limits: None,
-    }];
-
-    let mut has_distinct_fallback = false;
-    if let Some(fallback) = external_channel_fallback_runtime_selection_from_env() {
-        if !external_channel_same_runtime_selection(&primary, &fallback) {
-            has_distinct_fallback = true;
-            attempts.push(ExternalChannelChatRuntimeAttempt {
-                env_prefix: "ASSISTANT_RUN_FALLBACK".to_string(),
-                label: "fallback".to_string(),
-                runtime: fallback,
-                profile: None,
-                lane_limits: None,
-            });
-        }
-    }
-
-    if !has_distinct_fallback && external_channel_same_runtime_retry_enabled() {
-        attempts.push(ExternalChannelChatRuntimeAttempt {
-            env_prefix: "ASSISTANT_RUN".to_string(),
-            label: "primary_retry".to_string(),
-            runtime: primary,
-            profile: None,
-            lane_limits: None,
-        });
-    }
-
-    attempts
-}
-
-fn external_channel_same_runtime_retry_enabled() -> bool {
-    env_flag("EXTERNAL_CHANNEL_DIRECT_REPLY_SAME_RUNTIME_RETRY", true)
-}
-
 async fn external_channel_chat_model_pool_attempts(
     state: &AppState,
     connection_id: &str,
@@ -24216,29 +24163,6 @@ async fn load_external_channel_chat_model_pool_attempts(
             })
             .collect(),
     ))
-}
-
-fn external_channel_chat_attempt_from_db_profile(
-    profile: ModelGatewayProfile,
-) -> ExternalChannelChatRuntimeAttempt {
-    let lane_limits = ModelGatewayLaneLimits::default();
-    let provider_profile = model_gateway_provider_profile_from_record(profile);
-    external_channel_chat_attempt_from_profile(provider_profile, Some(lane_limits))
-}
-
-fn external_channel_chat_attempt_from_profile(
-    profile: ModelProviderProfile,
-    lane_limits: Option<ModelGatewayLaneLimits>,
-) -> ExternalChannelChatRuntimeAttempt {
-    let env_prefix = model_gateway_profile_env_prefix(&profile.profile_id);
-    let runtime = profile.runtime_selection_for_lane(MODEL_LANE_ASSISTANT_CHAT);
-    ExternalChannelChatRuntimeAttempt {
-        label: format!("profile:{}", profile.profile_id),
-        env_prefix,
-        runtime,
-        profile: Some(profile),
-        lane_limits,
-    }
 }
 
 async fn external_channel_acquire_gateway_permit(
