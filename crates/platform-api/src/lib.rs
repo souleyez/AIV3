@@ -289,6 +289,7 @@ mod sse_support;
 mod static_page_data_snapshot_support;
 mod static_page_payload_support;
 mod static_page_public_template_update_support;
+mod static_page_render_gate_support;
 mod static_page_render_output_view_support;
 mod static_page_report_snapshot;
 mod static_page_structure_signals;
@@ -453,6 +454,7 @@ use sse_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
+use static_page_render_gate_support::*;
 use static_page_render_output_view_support::*;
 use static_page_report_snapshot::*;
 use static_page_structure_signals::*;
@@ -73285,7 +73287,7 @@ fn build_static_page_visual_spec(style_direction: &str) -> Value {
     }
 }
 
-fn build_static_page_render_spec() -> Value {
+pub(crate) fn build_static_page_render_spec() -> Value {
     json!({
         "renderer": "static-page-renderer-v1",
         "layoutEngine": "css-grid-12",
@@ -76081,79 +76083,6 @@ async fn load_visible_static_page_image_job(
     Ok(job)
 }
 
-fn static_page_draft_allows_preview_ready_render(draft: &StaticPageDraft) -> bool {
-    draft
-        .source_refs
-        .get("effect_image_confirmation_required")
-        .and_then(Value::as_bool)
-        != Some(true)
-}
-
-fn static_page_draft_requires_preview_data_quality_gate(draft: &StaticPageDraft) -> bool {
-    if draft
-        .source_refs
-        .get("preview_data_quality_gate_required")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return true;
-    }
-    if draft
-        .source_refs
-        .get("continue_to_publish_after_effect_image")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return false;
-    }
-    draft
-        .source_refs
-        .get("effect_image_confirmation_required")
-        .and_then(Value::as_bool)
-        != Some(false)
-}
-
-fn static_page_draft_requires_final_render_data_quality_gate(draft: &StaticPageDraft) -> bool {
-    if draft
-        .source_refs
-        .get("final_render_data_quality_gate_required")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return true;
-    }
-    if draft
-        .source_refs
-        .get("continue_to_publish_after_effect_image")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return false;
-    }
-    draft
-        .source_refs
-        .get("effect_image_confirmation_required")
-        .and_then(Value::as_bool)
-        != Some(false)
-}
-
-fn static_page_image_job_has_preview_asset(job: &StaticPageImageJob) -> bool {
-    job.preview_asset_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn static_page_image_job_ready_for_render(
-    draft: &StaticPageDraft,
-    job: &StaticPageImageJob,
-) -> bool {
-    matches!(job.status, StaticPageImageJobStatus::Confirmed)
-        || (static_page_draft_allows_preview_ready_render(draft)
-            && matches!(job.status, StaticPageImageJobStatus::PreviewReady)
-            && static_page_image_job_has_preview_asset(job))
-}
-
 async fn resolve_static_page_render_image_job(
     state: &AppState,
     draft: &StaticPageDraft,
@@ -76190,105 +76119,6 @@ async fn resolve_static_page_render_image_job(
         ));
     }
     Ok(Some(job))
-}
-
-fn static_page_current_design_fingerprint_from_payload(payload: &Value) -> String {
-    let style_direction =
-        static_page_payload_string(payload, &["styleDirection", "style_direction"])
-            .unwrap_or_else(|| "client-delivery".to_string());
-    let modules = static_page_payload_modules(payload);
-    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
-        .unwrap_or_else(build_static_page_render_spec);
-    let mobile_order = static_page_payload_mobile_order(payload, &modules);
-    static_page_design_fingerprint(&json!({
-        "style_direction": style_direction,
-        "modules": modules,
-        "render_spec": render_spec,
-        "mobile_order": mobile_order,
-    }))
-}
-
-fn static_page_preview_contract_fingerprint(contract: &Value) -> Option<String> {
-    contract
-        .get("draftFingerprint")
-        .or_else(|| contract.get("draft_fingerprint"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn static_page_image_job_prompt_fingerprint(job: &StaticPageImageJob) -> Option<String> {
-    job.image_prompt_payload
-        .get("preview_contract")
-        .or_else(|| job.image_prompt_payload.get("previewContract"))
-        .and_then(static_page_preview_contract_fingerprint)
-}
-
-fn ensure_static_page_preview_contract_current(
-    draft: &StaticPageDraft,
-    image_job: Option<&StaticPageImageJob>,
-) -> std::result::Result<(), ApiError> {
-    let current_fingerprint =
-        static_page_current_design_fingerprint_from_payload(&draft.draft_payload);
-    let preview_contract = static_page_payload_value(
-        &draft.draft_payload,
-        &["previewContract", "preview_contract"],
-    )
-    .unwrap_or_else(|| {
-        let style_direction = static_page_payload_string(
-            &draft.draft_payload,
-            &["styleDirection", "style_direction"],
-        )
-        .unwrap_or_else(|| "client-delivery".to_string());
-        let modules = static_page_payload_modules(&draft.draft_payload);
-        let render_spec =
-            static_page_payload_value(&draft.draft_payload, &["renderSpec", "render_spec"])
-                .unwrap_or_else(build_static_page_render_spec);
-        let mobile_order = static_page_payload_mobile_order(&draft.draft_payload, &modules);
-        build_static_page_preview_contract(
-            &style_direction,
-            &modules,
-            &render_spec,
-            &mobile_order,
-            None,
-        )
-    });
-    let allow_preview_ready = static_page_draft_allows_preview_ready_render(draft)
-        && image_job.is_some_and(|job| {
-            matches!(job.status, StaticPageImageJobStatus::PreviewReady)
-                && static_page_image_job_has_preview_asset(job)
-        });
-    let contract_status = static_page_preview_contract_status(&preview_contract);
-    let status_current = contract_status == Some("confirmed")
-        || (allow_preview_ready && contract_status == Some("preview_ready"));
-    if !status_current {
-        return Err(ApiError::bad_request(
-            "static_page_preview_stale",
-            "current static page draft needs a fresh effect preview before rendering".to_string(),
-        ));
-    }
-    let contract_fingerprint = static_page_preview_contract_fingerprint(&preview_contract);
-    let job_fingerprint = image_job.and_then(static_page_image_job_prompt_fingerprint);
-    let has_any_fingerprint = contract_fingerprint.is_some() || job_fingerprint.is_some();
-    let has_matching_fingerprint = contract_fingerprint.as_deref()
-        == Some(current_fingerprint.as_str())
-        || job_fingerprint.as_deref() == Some(current_fingerprint.as_str());
-    if has_any_fingerprint && !has_matching_fingerprint {
-        return Err(ApiError::bad_request(
-            "static_page_preview_stale",
-            "effect preview does not match the current static page draft".to_string(),
-        ));
-    }
-    if let Some(job_fingerprint) = job_fingerprint {
-        if job_fingerprint != current_fingerprint {
-            return Err(ApiError::bad_request(
-                "static_page_preview_stale",
-                "effect preview was generated for an older static page draft".to_string(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 async fn append_static_page_draft_run_event(
