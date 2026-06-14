@@ -211,6 +211,7 @@ mod external_artifact_request_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
+mod external_channel_direct_reply_budget_support;
 mod external_channel_model_rejection_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
@@ -322,6 +323,7 @@ use external_artifact_request_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
+use external_channel_direct_reply_budget_support::*;
 use external_channel_model_rejection_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
@@ -463,8 +465,6 @@ const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_ROWS: usize = 8;
 const ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT: &str = "rapid_html_artifact";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS: usize = 20;
-const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 60_000;
-const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS: u64 = 20_000;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT: usize = 16;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT: usize = 128;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT: usize = 64;
@@ -24489,38 +24489,6 @@ fn external_channel_same_runtime_selection(
         && left.provider == right.provider
         && left.model == right.model
         && left.lane == right.lane
-}
-
-fn external_channel_direct_reply_env_ms(key: &str, default_ms: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| {
-            let value = value.trim();
-            (!value.is_empty())
-                .then(|| value.parse::<u64>().ok())
-                .flatten()
-        })
-        .filter(|value| *value > 0)
-        .unwrap_or(default_ms)
-}
-
-fn external_channel_direct_reply_total_budget() -> std::time::Duration {
-    std::time::Duration::from_millis(external_channel_direct_reply_env_ms(
-        "EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS",
-        EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS,
-    ))
-}
-
-fn external_channel_direct_reply_attempt_timeout(
-    remaining_budget: std::time::Duration,
-) -> std::time::Duration {
-    let configured = std::time::Duration::from_millis(external_channel_direct_reply_env_ms(
-        "EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS",
-        EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_ATTEMPT_TIMEOUT_MS,
-    ));
-    configured
-        .min(remaining_budget)
-        .max(std::time::Duration::from_millis(1))
 }
 
 fn spawn_external_channel_observe_only_would_throttle(
@@ -96333,45 +96301,6 @@ mod tests {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
                 && event.payload["attempt"] == json!("profile:pool-secondary")
         }));
-        clear_assistant_openclaw_env();
-    }
-
-    #[tokio::test]
-    async fn external_channel_direct_reply_timeout_defaults_are_20_way_safe() {
-        let _guard = shared_local_postgres_test_lock().lock().await;
-        clear_assistant_openclaw_env();
-
-        assert_eq!(
-            external_channel_direct_reply_total_budget(),
-            std::time::Duration::from_millis(60_000)
-        );
-        assert_eq!(
-            external_channel_direct_reply_attempt_timeout(std::time::Duration::from_millis(60_000)),
-            std::time::Duration::from_millis(20_000)
-        );
-
-        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS", "45000");
-        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS", "15000");
-        assert_eq!(
-            external_channel_direct_reply_total_budget(),
-            std::time::Duration::from_millis(45_000)
-        );
-        assert_eq!(
-            external_channel_direct_reply_attempt_timeout(std::time::Duration::from_millis(5_000)),
-            std::time::Duration::from_millis(5_000)
-        );
-
-        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS", "0");
-        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS", "bad");
-        assert_eq!(
-            external_channel_direct_reply_total_budget(),
-            std::time::Duration::from_millis(60_000)
-        );
-        assert_eq!(
-            external_channel_direct_reply_attempt_timeout(std::time::Duration::from_millis(60_000)),
-            std::time::Duration::from_millis(20_000)
-        );
-
         clear_assistant_openclaw_env();
     }
 
