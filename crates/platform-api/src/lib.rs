@@ -48515,32 +48515,6 @@ fn external_channel_static_page_publish_validation_summary(payload: &Value) -> V
     })
 }
 
-fn external_channel_static_page_artifact_payload_value(payload: &Value, key: &str) -> Value {
-    payload
-        .get(key)
-        .cloned()
-        .or_else(|| {
-            payload
-                .get("artifact")
-                .and_then(|artifact| artifact.get(key))
-                .cloned()
-        })
-        .or_else(|| {
-            payload
-                .get("output")
-                .and_then(|output| output.get(key))
-                .cloned()
-        })
-        .or_else(|| {
-            payload
-                .get("output")
-                .and_then(|output| output.get("artifact"))
-                .and_then(|artifact| artifact.get(key))
-                .cloned()
-        })
-        .unwrap_or(Value::Null)
-}
-
 fn external_channel_static_page_artifact_payload_string(
     payload: &Value,
     keys: &[&str],

@@ -120,6 +120,35 @@ pub(crate) fn dedupe_external_channel_public_artifact_links(links: Vec<String>) 
     output
 }
 
+pub(crate) fn external_channel_static_page_artifact_payload_value(
+    payload: &Value,
+    key: &str,
+) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("artifact")
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get("artifact"))
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
 pub(crate) fn external_channel_static_page_download_exports(
     public_url: &str,
     data_url: Value,
@@ -257,6 +286,41 @@ mod tests {
         assert_eq!(
             exports[2]["url"],
             json!(artifact_url("reports/current/report.md"))
+        );
+    }
+
+    #[test]
+    fn static_page_artifact_payload_value_uses_existing_precedence() {
+        let payload = json!({
+            "public_url": "root",
+            "artifact": {
+                "public_url": "artifact",
+                "data_url": "artifact-data"
+            },
+            "output": {
+                "data_url": "output-data",
+                "artifact": {
+                    "data_url": "output-artifact-data",
+                    "report_url": "output-artifact-report"
+                }
+            }
+        });
+
+        assert_eq!(
+            external_channel_static_page_artifact_payload_value(&payload, "public_url"),
+            json!("root")
+        );
+        assert_eq!(
+            external_channel_static_page_artifact_payload_value(&payload, "data_url"),
+            json!("artifact-data")
+        );
+        assert_eq!(
+            external_channel_static_page_artifact_payload_value(&payload, "report_url"),
+            json!("output-artifact-report")
+        );
+        assert_eq!(
+            external_channel_static_page_artifact_payload_value(&payload, "missing"),
+            Value::Null
         );
     }
 }
