@@ -1,5 +1,6 @@
 use crate::prompt_match_support::prompt_contains_any;
-use std::collections::BTreeMap;
+use crate::retrieval_evidence_ranking_support::vector_norm;
+use std::collections::{BTreeMap, BTreeSet};
 
 const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
 
@@ -91,6 +92,171 @@ pub(crate) fn assistant_run_expanded_supply_prompt(prompt: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub(crate) struct AssistantRunRankQuery {
+    pub(crate) text: String,
+    pub(crate) weights: BTreeMap<String, f64>,
+    pub(crate) norm: f64,
+}
+
+pub(crate) fn assistant_run_rank_query_variants(prompt: &str) -> Vec<AssistantRunRankQuery> {
+    let mut texts = Vec::new();
+    let mut seen = BTreeSet::new();
+    for text in
+        std::iter::once(prompt.trim().to_string()).chain(assistant_run_reduced_query_texts(prompt))
+    {
+        let text = normalize_assistant_reduced_query_text(&text);
+        if text.is_empty() || !seen.insert(text.clone()) {
+            continue;
+        }
+        let weights = lexical_query_term_weights(&text);
+        let norm = vector_norm(&weights);
+        if norm > 0.0 {
+            texts.push(AssistantRunRankQuery {
+                text,
+                weights,
+                norm,
+            });
+        }
+    }
+    texts
+}
+
+pub(crate) fn assistant_run_reduced_query_texts(prompt: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+    let stripped = assistant_run_strip_question_noise(prompt);
+    if !stripped.is_empty() && stripped != prompt.trim() {
+        variants.push(stripped.clone());
+    }
+
+    let key_terms = assistant_run_key_terms_query(prompt, 10);
+    if !key_terms.is_empty() {
+        variants.push(key_terms);
+    }
+
+    if prompt_requests_procedure_or_action(prompt) && !stripped.is_empty() {
+        variants.push(format!("{stripped} 处理 处置 应急 流程"));
+    }
+    if prompt_contains_elder_fall_signal(prompt) {
+        variants.push("摔倒 跌倒 意外伤害 突发事件 事故处理 应急处置 120 通知家属".to_string());
+    }
+    if prompt_contains_elder_death_signal(prompt) {
+        variants.push(
+            "离世 去世 死亡 身故 善后 遗体 遗物 医护确认 生命体征 通知家属 家属沟通 殡仪接运 遗物交接 记录归档"
+                .to_string(),
+        );
+    }
+
+    let mut seen = BTreeSet::new();
+    variants
+        .into_iter()
+        .map(|text| normalize_assistant_reduced_query_text(&text))
+        .filter(|text| !text.is_empty() && seen.insert(text.clone()))
+        .collect()
+}
+
+pub(crate) fn assistant_run_strip_question_noise(prompt: &str) -> String {
+    let mut text = prompt.trim().to_string();
+    for noise in [
+        "请问",
+        "帮我",
+        "帮忙",
+        "回答",
+        "总结",
+        "一下",
+        "这个",
+        "那个",
+        "这份",
+        "文档里",
+        "文档里面",
+        "资料里",
+        "资料里面",
+        "问题",
+        "是什么",
+        "是谁",
+        "怎么办",
+        "怎么处理",
+        "如何处理",
+        "如何",
+        "哪些",
+        "需要",
+        "可以",
+        "能不能",
+        "应该",
+        "到底",
+        "吗",
+        "呢",
+    ] {
+        text = text.replace(noise, " ");
+    }
+    normalize_assistant_reduced_query_text(&text)
+}
+
+pub(crate) fn assistant_run_key_terms_query(prompt: &str, limit: usize) -> String {
+    let mut terms = lexical_query_term_weights(prompt)
+        .into_iter()
+        .filter(|(term, _)| assistant_run_reduced_query_term_is_signal(term))
+        .collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.0.chars().count().cmp(&left.0.chars().count()))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    terms
+        .into_iter()
+        .map(|(term, _)| term)
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn assistant_run_reduced_query_term_is_signal(term: &str) -> bool {
+    let char_count = term.chars().count();
+    if char_count < 2 || assistant_run_reduced_query_term_is_noise(term) {
+        return false;
+    }
+    if term.chars().all(is_cjk_query_token_char) {
+        return char_count >= 2;
+    }
+    term.chars().any(|value| value.is_ascii_alphanumeric())
+}
+
+fn assistant_run_reduced_query_term_is_noise(term: &str) -> bool {
+    matches!(
+        term,
+        "请问"
+            | "帮我"
+            | "帮忙"
+            | "回答"
+            | "总结"
+            | "一下"
+            | "这个"
+            | "那个"
+            | "这份"
+            | "文档"
+            | "资料"
+            | "里面"
+            | "问题"
+            | "是什么"
+            | "是谁"
+            | "怎么办"
+            | "怎么处理"
+            | "如何"
+            | "哪些"
+            | "需要"
+            | "可以"
+            | "能不能"
+            | "应该"
+            | "到底"
+    )
+}
+
+pub(crate) fn normalize_assistant_reduced_query_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
@@ -684,6 +850,36 @@ mod tests {
                 "missing expanded death prompt term {expected}"
             );
         }
+    }
+
+    #[test]
+    fn reduced_query_helpers_strip_noise_and_keep_business_terms() {
+        assert_eq!(
+            assistant_run_strip_question_noise("请问这份资料里邓工是谁"),
+            "邓工"
+        );
+
+        let key_terms = assistant_run_key_terms_query("请问邓工是谁 IOA系统", 20);
+        for expected in ["邓工", "ioa", "系统"] {
+            assert!(
+                key_terms.split_whitespace().any(|term| term == expected),
+                "missing key term {expected} from {key_terms}"
+            );
+        }
+    }
+
+    #[test]
+    fn rank_query_variants_preserve_original_and_eldercare_expansions() {
+        let variants = assistant_run_rank_query_variants("老人摔倒后怎么办");
+        let texts = variants
+            .iter()
+            .map(|variant| variant.text.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(texts.iter().any(|text| *text == "老人摔倒后怎么办"));
+        assert!(texts.iter().any(|text| text.contains("老人摔倒后")));
+        assert!(texts.iter().any(|text| text.contains("事故处理")));
+        assert!(variants.iter().all(|variant| variant.norm > 0.0));
     }
 
     #[test]
