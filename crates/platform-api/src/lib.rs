@@ -182,6 +182,7 @@ mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
 mod assistant_run_sse_support;
 mod assistant_run_structured_fact_context_support;
+mod assistant_run_supply_dedupe_support;
 mod assistant_run_xinbai_report_link_support;
 mod assistant_scope_summary;
 pub mod auth_email;
@@ -329,6 +330,7 @@ use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
 use assistant_run_sse_support::*;
 use assistant_run_structured_fact_context_support::*;
+use assistant_run_supply_dedupe_support::*;
 use assistant_run_xinbai_report_link_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
@@ -58757,45 +58759,6 @@ async fn build_assistant_run_chunk_fallback_supply(
         items.push(supplied_item);
     }
     Ok(items)
-}
-
-fn append_deduped_assistant_supply_items(target: &mut Vec<Value>, candidates: Vec<Value>) -> usize {
-    let mut seen = target
-        .iter()
-        .filter_map(assistant_run_supply_item_identity)
-        .collect::<BTreeSet<_>>();
-    let before = target.len();
-    for item in candidates {
-        let Some(identity) = assistant_run_supply_item_identity(&item) else {
-            target.push(item);
-            continue;
-        };
-        if seen.insert(identity) {
-            target.push(item);
-        }
-    }
-    target.len().saturating_sub(before)
-}
-
-fn assistant_run_supply_item_identity(item: &Value) -> Option<String> {
-    item.get("document_chunk_id")
-        .or_else(|| item.get("documentChunkId"))
-        .and_then(Value::as_str)
-        .map(|value| format!("chunk:{value}"))
-        .or_else(|| {
-            item.get("retrieval_evidence_id")
-                .or_else(|| item.get("retrievalEvidenceId"))
-                .and_then(Value::as_str)
-                .map(|value| format!("evidence:{value}"))
-        })
-        .or_else(|| {
-            item.get("source_locator")
-                .or_else(|| item.get("sourceLocator"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| format!("locator:{value}"))
-        })
 }
 
 fn assistant_run_recovery_followup_for_weak_supply(
