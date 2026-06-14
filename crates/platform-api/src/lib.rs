@@ -248,6 +248,7 @@ mod model_facing_format;
 mod model_facing_handoff;
 mod model_facing_policy;
 mod model_gateway_admin;
+mod model_gateway_event_support;
 mod model_gateway_runtime;
 mod model_gateway_status;
 mod not_found_errors;
@@ -379,6 +380,7 @@ use model_facing_format::*;
 #[cfg(test)]
 use model_facing_policy::build_model_facing_summary;
 use model_gateway_admin::*;
+use model_gateway_event_support::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
 use not_found_errors::*;
@@ -24659,18 +24661,6 @@ fn model_gateway_shadow_eval_max_profiles() -> usize {
         .filter(|value| *value > 0)
         .map(|value| value.min(4))
         .unwrap_or(1)
-}
-
-fn model_gateway_u64_to_i32(value: u64) -> Option<i32> {
-    i32::try_from(value).ok()
-}
-
-fn model_gateway_sanitized_error_kind(reason: &str) -> String {
-    reason
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.'))
-        .take(120)
-        .collect()
 }
 
 struct ExternalChannelTemplateHtmlArtifact {
