@@ -217,6 +217,7 @@ mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_citation_support;
 mod external_channel_public_text;
+mod external_channel_runtime_selection_support;
 mod external_channel_sse_support;
 mod external_channel_static_page_focus;
 mod external_channel_support;
@@ -329,6 +330,7 @@ use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
 use external_channel_public_text::*;
+use external_channel_runtime_selection_support::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_focus::*;
 use external_channel_support::*;
@@ -24446,35 +24448,6 @@ async fn external_channel_acquire_gateway_permit(
         _runtime: Some(runtime_permit),
         rate_reservation: Some(rate_reservation),
     })
-}
-
-fn external_channel_fallback_runtime_selection_from_env() -> Option<LlmRuntimeSelection> {
-    let mode = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE").ok();
-    let provider = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER").ok();
-    let model = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL").ok();
-    if mode.is_none() && provider.is_none() && model.is_none() {
-        return None;
-    }
-
-    let mode = mode.unwrap_or_else(|| "provider".to_string());
-    let provider = provider.unwrap_or_else(|| mode.clone());
-    let model = model.unwrap_or_else(|| DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL.to_string());
-    Some(LlmRuntimeSelection {
-        mode,
-        provider,
-        model,
-        lane: MODEL_LANE_ASSISTANT_CHAT.to_string(),
-    })
-}
-
-fn external_channel_same_runtime_selection(
-    left: &LlmRuntimeSelection,
-    right: &LlmRuntimeSelection,
-) -> bool {
-    left.mode == right.mode
-        && left.provider == right.provider
-        && left.model == right.model
-        && left.lane == right.lane
 }
 
 fn spawn_external_channel_observe_only_would_throttle(
