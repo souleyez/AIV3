@@ -14324,6 +14324,67 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Outbound Reply Dispatch Summary Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party outbound reply dispatch summary logic out of `lib.rs` into `crates/platform-api/src/external_channel_outbound_reply_dispatch_support.rs`;
+  - preserve reply-specific auth precedence, action dispatch auth fallback, redacted endpoint/auth readiness reporting, endpoint host parsing, and token/secret non-disclosure.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_support`;
+  - moved `external_channel_outbound_reply_dispatch_summary` into the new module;
+  - kept the existing summary shape and call site behavior unchanged through module import;
+  - added module tests for reply-specific auth precedence, action dispatch auth fallback, and unready state when endpoint/auth are missing.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_outbound_reply_dispatch_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_outbound_reply_dispatch --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_channel_sse --lib`: passed, 34/34 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next/Turbopack warnings only;
+  - all 13 P0 self-tests passed, including report export/focus, scoped document chat, video PPT, main/external 20way, static-page 5way, Cloudflare fallback 2way, P2 dry-run, production readiness, and prewarm observability;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-53/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Outbound Reply Dispatch Summary Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `7aa06667` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded to `7aa0666736eb`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_channel_outbound_reply_dispatch_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_outbound_reply_dispatch --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_channel_sse --lib`: passed, 34/34 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including `external-report-focus reportCases=7 ordinaryGuards=4`, main/external 20way, static-page 5way, Cloudflare fallback 2way, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-7aa0666736eb/`.
+- CI status:
+  - GitHub Actions run `27496419770` for `7aa06667` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Channel Conversation History Helper Local Verification
 
 - Purpose:
