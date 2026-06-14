@@ -210,6 +210,7 @@ mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
 mod external_channel_direct_reply_budget_support;
+mod external_channel_fixed_task_status_support;
 mod external_channel_model_pool_support;
 mod external_channel_model_rejection_support;
 mod external_channel_public_artifact;
@@ -329,6 +330,7 @@ use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
 use external_channel_direct_reply_budget_support::*;
+use external_channel_fixed_task_status_support::*;
 use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
 use external_channel_public_artifact::*;
@@ -23523,44 +23525,6 @@ fn external_channel_fixed_task_reply_from_events(
             Vec::new(),
         )
     })
-}
-
-fn external_channel_fixed_task_template_id(event: &AssistantRunEvent) -> Option<String> {
-    event
-        .payload
-        .get("template_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("capability").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn external_channel_fixed_task_workflow_execution_id(event: &AssistantRunEvent) -> Value {
-    event
-        .payload
-        .get("workflow_execution_id")
-        .or_else(|| event.payload.get("codex_host_workflow_execution_id"))
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
-fn external_channel_fixed_task_card_type(template_id: &str) -> &'static str {
-    match template_id {
-        "data_ingestion_analysis" => "v3_data_ingestion_analysis",
-        "static_page_image2_data_publish" => "v3_static_page_image2_publish_status",
-        "answer_quality_autofix" => "v3_answer_quality_autofix",
-        _ => "v3_codex_fixed_task",
-    }
-}
-
-fn external_channel_fixed_task_status_prefix(template_id: &str) -> &'static str {
-    match template_id {
-        "data_ingestion_analysis" => "data_ingestion_analysis",
-        "static_page_image2_data_publish" => "static_page_publish",
-        "answer_quality_autofix" => "answer_quality_autofix",
-        _ => "codex_fixed_task",
-    }
 }
 
 fn external_channel_fixed_task_processing_reply(
