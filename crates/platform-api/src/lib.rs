@@ -211,6 +211,7 @@ mod external_channel_direct_reply_budget_support;
 mod external_channel_fixed_task_status_support;
 mod external_channel_model_pool_support;
 mod external_channel_model_rejection_support;
+mod external_channel_outbound_reply_dispatch_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_citation_support;
@@ -343,6 +344,7 @@ use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
 use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
+use external_channel_outbound_reply_dispatch_support::*;
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
@@ -9763,37 +9765,6 @@ fn external_integration_config_summary(config: &Value) -> Value {
         .is_some(),
         "outbound_reply_dispatch": external_channel_outbound_reply_dispatch_summary(config),
         "database_source": external_database_source_config_summary(config),
-    })
-}
-
-fn external_channel_outbound_reply_dispatch_summary(config: &Value) -> Value {
-    let reply_auth = external_channel_reply_specific_dispatch_auth_from_config(config);
-    let action_auth = external_action_dispatch_auth_from_config(config);
-    let effective_auth = external_channel_outbound_reply_dispatch_auth_from_config(config);
-    let dispatch_url = external_channel_outbound_reply_dispatch_url_from_config(config);
-    let endpoint_configured = dispatch_url.is_some();
-    let endpoint_host = dispatch_url
-        .as_deref()
-        .and_then(|value| reqwest::Url::parse(value).ok())
-        .and_then(|url| url.host_str().map(str::to_string));
-    let reply_auth_configured = external_action_dispatch_auth_configured(&reply_auth);
-    let action_auth_fallback_available = external_action_dispatch_auth_configured(&action_auth);
-    let auth_configured = external_action_dispatch_auth_configured(&effective_auth);
-    let auth_source = if reply_auth_configured {
-        "reply_specific"
-    } else if action_auth_fallback_available {
-        "action_dispatch_fallback"
-    } else {
-        "none"
-    };
-    json!({
-        "endpoint_configured": endpoint_configured,
-        "endpoint_host": endpoint_host,
-        "auth_configured": auth_configured,
-        "auth_mode": external_action_dispatch_auth_mode(&effective_auth),
-        "auth_source": auth_source,
-        "action_auth_fallback_available": action_auth_fallback_available,
-        "ready": endpoint_configured && auth_configured,
     })
 }
 
