@@ -24647,22 +24647,6 @@ async fn record_model_gateway_shadow_quality_event(
     Ok(())
 }
 
-fn model_gateway_shadow_eval_timeout() -> StdDuration {
-    StdDuration::from_millis(external_channel_direct_reply_env_ms(
-        "LLM_GATEWAY_SHADOW_EVAL_TIMEOUT_MS",
-        3_000,
-    ))
-}
-
-fn model_gateway_shadow_eval_max_profiles() -> usize {
-    std::env::var("LLM_GATEWAY_SHADOW_EVAL_MAX_PROFILES")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| value.min(4))
-        .unwrap_or(1)
-}
-
 struct ExternalChannelTemplateHtmlArtifact {
     download_url: String,
 }
