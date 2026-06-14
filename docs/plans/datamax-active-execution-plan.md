@@ -136,7 +136,8 @@
 | 73 | P5 assistant run text helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_text_support` 模块单测、model context/document chunk/public citation/assistant supply/static_page 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 74 | P5 assistant run query variant helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_lexical_query_support` 模块单测、既有文档 chunk 排名/assistant supply/static_page 回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 75 | P5 assistant run static-page model route helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_static_page_model_route_support` 模块单测、既有 GPT-5.5 静态页路由/`static_page` 广义回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
-| 76 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 76 | P5 assistant run static-page dataset scope helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_static_page_dataset_scope_support` 模块单测、`static_page` 广义回归、`cargo check`、Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
+| 77 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
