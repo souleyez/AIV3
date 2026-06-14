@@ -19102,3 +19102,67 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 External Integration Config Summary Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party external integration config summary assembly out of `lib.rs` into `crates/platform-api/src/external_integration_config_summary_support.rs`;
+  - preserve config key counting, redacted value detection, inbound auth summary, temporary access summary, dispatch endpoint/auth summary, callback token readiness, outbound reply dispatch summary, and database source summary behavior.
+- Code change:
+  - added `external_integration_config_summary_support`;
+  - moved `external_integration_config_summary` into the new module and kept the existing function name available to current call sites through module import;
+  - kept outbound reply dispatch and database source config helpers reused from their existing support modules;
+  - added module tests for secret redaction, redacted/empty callback token handling, and embedded database source plus outbound reply dispatch summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_integration_config_summary_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_outbound_reply_dispatch --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_database_source_config_support --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api external_source_sync_mysql --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware and Turbopack NFT warnings only;
+  - all 13 P0 self-tests passed, including main/external 20way, static-page 5way, Cloudflare fallback 2way, P2 dry-run, production readiness, and prewarm observability;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-55/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Integration Config Summary Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `312f3124` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` is at `312f31240ff3`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_integration_config_summary_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api external_outbound_reply_dispatch --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_database_source_config_support --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api external_source_sync_mysql --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-312f31240ff3/`.
+- CI status:
+  - GitHub Actions run `27497236091` for `312f3124` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
