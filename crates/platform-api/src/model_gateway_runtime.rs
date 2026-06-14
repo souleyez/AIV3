@@ -662,6 +662,20 @@ pub(crate) fn percentile_latency(sorted_latencies: &[u64], percentile: usize) ->
     sorted_latencies.get(index).copied()
 }
 
+pub(crate) fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
+    match error {
+        GatewayLimitError::QueueFull => "model_gateway_queue_full",
+        GatewayLimitError::QueueTimeout => "model_gateway_queue_timeout",
+        GatewayLimitError::CircuitOpen => "model_gateway_circuit_open",
+        GatewayLimitError::RequestRateLimit => "model_gateway_request_rate_limit",
+        GatewayLimitError::TokenRateLimit => "model_gateway_token_rate_limit",
+    }
+}
+
+pub(crate) fn model_gateway_estimated_input_tokens(input: &str) -> u64 {
+    ((input.chars().count() as u64) / 4).max(1)
+}
+
 pub(crate) fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
     reason.contains("timeout")
 }
@@ -742,4 +756,44 @@ pub(crate) struct GatewayRuntimePermit {
 pub(crate) struct GatewayModelPermit {
     pub(crate) _runtime: Option<GatewayRuntimePermit>,
     pub(crate) rate_reservation: Option<GatewayRateLimitReservation>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_limit_error_reason_preserves_public_reason_strings() {
+        assert_eq!(
+            gateway_limit_error_reason(GatewayLimitError::QueueFull),
+            "model_gateway_queue_full"
+        );
+        assert_eq!(
+            gateway_limit_error_reason(GatewayLimitError::QueueTimeout),
+            "model_gateway_queue_timeout"
+        );
+        assert_eq!(
+            gateway_limit_error_reason(GatewayLimitError::CircuitOpen),
+            "model_gateway_circuit_open"
+        );
+        assert_eq!(
+            gateway_limit_error_reason(GatewayLimitError::RequestRateLimit),
+            "model_gateway_request_rate_limit"
+        );
+        assert_eq!(
+            gateway_limit_error_reason(GatewayLimitError::TokenRateLimit),
+            "model_gateway_token_rate_limit"
+        );
+    }
+
+    #[test]
+    fn model_gateway_estimated_input_tokens_uses_quarter_char_floor() {
+        assert_eq!(model_gateway_estimated_input_tokens(""), 1);
+        assert_eq!(model_gateway_estimated_input_tokens("abc"), 1);
+        assert_eq!(model_gateway_estimated_input_tokens("abcd"), 1);
+        assert_eq!(model_gateway_estimated_input_tokens("abcde"), 1);
+        assert_eq!(model_gateway_estimated_input_tokens("abcdefgh"), 2);
+        assert_eq!(model_gateway_estimated_input_tokens("数据平台问答"), 1);
+        assert_eq!(model_gateway_estimated_input_tokens("数据平台问答测试"), 2);
+    }
 }

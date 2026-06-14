@@ -24448,20 +24448,6 @@ async fn external_channel_acquire_gateway_permit(
     })
 }
 
-fn gateway_limit_error_reason(error: GatewayLimitError) -> &'static str {
-    match error {
-        GatewayLimitError::QueueFull => "model_gateway_queue_full",
-        GatewayLimitError::QueueTimeout => "model_gateway_queue_timeout",
-        GatewayLimitError::CircuitOpen => "model_gateway_circuit_open",
-        GatewayLimitError::RequestRateLimit => "model_gateway_request_rate_limit",
-        GatewayLimitError::TokenRateLimit => "model_gateway_token_rate_limit",
-    }
-}
-
-fn model_gateway_estimated_input_tokens(input: &str) -> u64 {
-    ((input.chars().count() as u64) / 4).max(1)
-}
-
 fn external_channel_fallback_runtime_selection_from_env() -> Option<LlmRuntimeSelection> {
     let mode = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE").ok();
     let provider = std::env::var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER").ok();
