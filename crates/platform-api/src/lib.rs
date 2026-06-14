@@ -5272,23 +5272,6 @@ fn external_channel_reply_is_static_page_like(reply: &ExternalBotReplyView) -> b
             .unwrap_or(false)
 }
 
-fn external_channel_static_page_baseline_public_url(payload: &Value) -> Option<String> {
-    external_channel_public_artifact_url_from_value(payload).or_else(|| {
-        [
-            "/visual_contract_url",
-            "/relaxed_template_match/baseline_public_url",
-            "/template_reference/public_url",
-            "/template_reference/publicUrl",
-        ]
-        .into_iter()
-        .filter_map(|pointer| payload.pointer(pointer).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-        .map(ToOwned::to_owned)
-        .next()
-    })
-}
-
 fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>) -> bool {
     let Some(card) = card else {
         return false;

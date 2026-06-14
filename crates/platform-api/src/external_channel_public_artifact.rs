@@ -84,6 +84,23 @@ pub(crate) fn external_channel_public_artifact_url_from_reply(
         })
 }
 
+pub(crate) fn external_channel_static_page_baseline_public_url(payload: &Value) -> Option<String> {
+    external_channel_public_artifact_url_from_value(payload).or_else(|| {
+        [
+            "/visual_contract_url",
+            "/relaxed_template_match/baseline_public_url",
+            "/template_reference/public_url",
+            "/template_reference/publicUrl",
+        ]
+        .into_iter()
+        .filter_map(|pointer| payload.pointer(pointer).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
+        .map(ToOwned::to_owned)
+        .next()
+    })
+}
+
 pub(crate) fn external_channel_text_with_public_artifact_link(
     text: impl Into<String>,
     public_url: &str,
@@ -239,6 +256,46 @@ mod tests {
         assert_eq!(
             external_channel_public_artifact_url_from_value(&value),
             Some(public_url)
+        );
+    }
+
+    #[test]
+    fn static_page_baseline_public_url_reads_template_baseline_pointers() {
+        let visual_contract_url = artifact_url("reports/visual-contract/index.html");
+        let baseline_url = artifact_url("reports/baseline/index.html");
+        let template_url = artifact_url("reports/template/index.html");
+
+        let value = json!({
+            "public_url": "https://example.com/not-allowed",
+            "visual_contract_url": format!(" {visual_contract_url} "),
+            "relaxed_template_match": {
+                "baseline_public_url": baseline_url,
+            },
+            "template_reference": {
+                "publicUrl": template_url,
+            },
+        });
+
+        assert_eq!(
+            external_channel_static_page_baseline_public_url(&value),
+            Some(visual_contract_url)
+        );
+    }
+
+    #[test]
+    fn static_page_baseline_public_url_prefers_standard_public_artifact_url() {
+        let direct_url = artifact_url("reports/direct/index.html");
+        let baseline_url = artifact_url("reports/baseline/index.html");
+        let value = json!({
+            "public_url": direct_url,
+            "relaxed_template_match": {
+                "baseline_public_url": baseline_url,
+            },
+        });
+
+        assert_eq!(
+            external_channel_static_page_baseline_public_url(&value),
+            Some(direct_url)
         );
     }
 
