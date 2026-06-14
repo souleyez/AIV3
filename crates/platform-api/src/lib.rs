@@ -226,6 +226,7 @@ mod external_channel_static_page_event_reply;
 mod external_channel_static_page_focus;
 mod external_channel_static_page_publish_reply;
 mod external_channel_static_page_publish_validation;
+mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
@@ -350,6 +351,7 @@ use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
 use external_channel_static_page_publish_reply::*;
 use external_channel_static_page_publish_validation::*;
+use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
@@ -29568,42 +29570,6 @@ fn assistant_run_static_page_should_use_gpt_55_local_route(run: &AssistantRun) -
         || (run.service_lane == "external_channel"
             && assistant_run_primary_model_unresolved_for_static_page(run)
             && assistant_chat_runtime_uses_gpt_55_primary_model())
-}
-
-fn external_channel_static_page_publish_completed_event_is_final(
-    event: &AssistantRunEvent,
-) -> bool {
-    if event.event_name != "assistant_run.external_channel_static_page_publish_completed" {
-        return false;
-    }
-    let publish_mode = event
-        .payload
-        .get("publish_mode")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let provisional_direct_html = event
-        .payload
-        .get("provisional_direct_html")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    publish_mode != "demo_direct_generated_artifact" && !provisional_direct_html
-}
-
-fn external_channel_static_page_source_allows_auto_publish(source_kind: Option<&str>) -> bool {
-    matches!(
-        source_kind,
-        Some("external_channel_static_page_artifact_request")
-            | Some("local_chat_static_page_image2_pipeline")
-            | Some(STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
-    )
-}
-
-fn external_channel_static_page_publish_customer_visible(source_refs: &Value) -> bool {
-    source_refs
-        .get("prewarm")
-        .and_then(|value| value.get("customer_visible"))
-        .and_then(Value::as_bool)
-        != Some(false)
 }
 
 async fn external_channel_static_page_image2_enqueue_if_enabled(
