@@ -47727,67 +47727,6 @@ fn external_channel_static_page_stable_artifact_reused_reply(
     }
 }
 
-fn external_channel_static_page_publish_failed_reply_from_event_payload(
-    payload: &Value,
-    fallback_conversation_external_id: &str,
-) -> ExternalBotReplyView {
-    let conversation_external_id = payload
-        .get("conversation_external_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            payload
-                .pointer("/source_refs/conversation_external_id")
-                .and_then(Value::as_str)
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(fallback_conversation_external_id);
-    external_channel_task_status_reply_for_conversation(
-        conversation_external_id,
-        "static_page_publish_failed",
-        Some(
-            "DataMax 已完成页面规划，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
-                .to_string(),
-        ),
-        Some(external_channel_static_page_card_with_template_payload(json!({
-            "type": "v3_static_page_image2_publish_status",
-            "status": "static_page_publish_failed",
-            "template_id": payload
-                .get("template_id")
-                .cloned()
-                .unwrap_or_else(|| json!("static_page_image2_data_publish")),
-            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
-            "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
-            "codex_host_workflow_execution_id": payload
-                .get("codex_host_workflow_execution_id")
-                .cloned()
-                .unwrap_or(Value::Null),
-            "publish_mode": payload
-                .get("publish_mode")
-                .cloned()
-                .unwrap_or(Value::Null),
-            "retryable": payload
-                .get("retryable")
-                .cloned()
-                .unwrap_or(Value::Bool(false)),
-            "error": payload.get("error").cloned().unwrap_or(Value::Null),
-            "output": payload.get("output").cloned().unwrap_or(Value::Null),
-            "validation": payload.get("validation").cloned().unwrap_or(Value::Null),
-            "validation_summary": payload
-                .get("validation_summary")
-                .cloned()
-                .unwrap_or(Value::Null),
-            "status_url": payload.get("status_url").cloned().unwrap_or(Value::Null),
-            "status_method": payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
-            "recipient_delivery": external_channel_recipient_delivery_from_payload(payload),
-            "permission_review_status": external_channel_permission_review_status_from_payload(payload),
-            "editable_after_publish": external_channel_editable_after_publish_from_payload(payload),
-            "poll_after_seconds": Value::Null,
-        }), payload)),
-        Vec::new(),
-    )
-}
-
 pub(crate) async fn record_codex_host_fixed_task_preflight_rejected(
     state: &AppState,
     assistant_run_id: AssistantRunId,
