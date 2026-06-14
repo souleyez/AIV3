@@ -206,6 +206,7 @@ mod external_artifact_request_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_attachment_title_support;
+mod external_channel_conversation_history_support;
 mod external_channel_direct_reply_budget_support;
 mod external_channel_fixed_task_status_support;
 mod external_channel_model_pool_support;
@@ -337,6 +338,7 @@ use external_artifact_request_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_attachment_title_support::*;
+use external_channel_conversation_history_support::*;
 use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
 use external_channel_model_pool_support::*;
@@ -531,7 +533,6 @@ const ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT: usize = 12;
 const ASSISTANT_RUN_MODEL_SCOPE_ID_LIMIT: usize = 24;
 const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
-const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
 const ASSISTANT_RUN_LEXICAL_CJK_NGRAM_MAX: usize = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
@@ -19954,49 +19955,6 @@ async fn external_channel_duplicate_reply(
     Ok(external_channel_task_status_reply(message, "processing"))
 }
 
-fn external_channel_conversation_history_messages_from_recent_runs(
-    recent_runs_newest_first: &[AssistantRun],
-) -> Vec<AssistantRunMessageView> {
-    let mut messages = Vec::new();
-    for run in recent_runs_newest_first
-        .iter()
-        .rev()
-        .filter(|run| run.service_lane == "external_channel")
-    {
-        let user_prompt = truncate_assistant_supply_text(
-            &run.user_prompt,
-            EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
-        );
-        if !user_prompt.is_empty() {
-            messages.push(AssistantRunMessageView {
-                role: ChatMessageRole::User,
-                content: user_prompt,
-            });
-        }
-
-        if let Some(reply) = external_channel_assistant_reply_from_run(run) {
-            messages.push(AssistantRunMessageView {
-                role: ChatMessageRole::Assistant,
-                content: reply,
-            });
-        }
-    }
-    messages
-}
-
-fn external_channel_assistant_reply_from_run(run: &AssistantRun) -> Option<String> {
-    external_channel_assistant_reply_from_output_artifacts(&run.output_artifacts)
-}
-
-fn external_channel_conversation_external_id_from_run(run: &AssistantRun) -> Option<String> {
-    run.selected_scope
-        .get("conversation_external_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 fn external_channel_reply_from_run_and_events(
     run: &AssistantRun,
     events: &[AssistantRunEvent],
@@ -22105,27 +22063,6 @@ fn external_channel_needs_input_reply_from_recovery_followup(
         action_id: None,
         confirmation_id: None,
     })
-}
-
-fn external_channel_assistant_reply_from_output_artifacts(
-    output_artifacts: &Value,
-) -> Option<String> {
-    output_artifacts
-        .as_array()?
-        .iter()
-        .rev()
-        .find_map(|artifact| {
-            (artifact.get("type").and_then(Value::as_str) == Some("assistant_message"))
-                .then(|| artifact.get("content").and_then(Value::as_str))
-                .flatten()
-                .map(|content| {
-                    truncate_assistant_supply_text(
-                        content,
-                        EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
-                    )
-                })
-                .filter(|content| !content.is_empty())
-        })
 }
 
 fn external_channel_observation_answer_text_from_output_artifacts(
