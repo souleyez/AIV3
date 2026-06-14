@@ -14324,6 +14324,68 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-14 P5 External Database Source Config Summary Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move database source config summary and source-config fragment alias handling out of `lib.rs` into `crates/platform-api/src/external_database_source_config_support.rs`;
+  - preserve database source alias handling, pending secret-binding redaction, MySQL redacted summary shape, and non-disclosure of raw database secrets.
+- Code change:
+  - moved `external_database_source_config_summary` into `external_database_source_config_support`;
+  - moved `source_database_config_fragment` into `external_database_source_config_support`;
+  - kept existing function names and call sites unchanged through existing module import;
+  - added module tests for MySQL summary shape, pending secret-binding redaction, and `database_source`/`databaseSource`/`mysql_source`/`mysqlSource` aliases.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_database_source_config_support --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_source_sync_mysql --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_integrations_list_exposes_database_dataset_readiness --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next/Turbopack warnings only;
+  - all 13 P0 self-tests passed, including report export/focus, scoped document chat, video PPT, main/external 20way, static-page 5way, Cloudflare fallback 2way, P2 dry-run, production readiness, and prewarm observability;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `target/datamax-local-smoke-54/`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 External Database Source Config Summary Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `d5a30435` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `32ab70f0dc0a` to `d5a304350b0e`;
+  - remote `git status -sb` returned `## main...origin/main`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_database_source_config_support --lib`: passed, 6/6 tests;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api external_source_sync_mysql --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api external_integrations_list_exposes_database_dataset_readiness --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api static_page --lib`: passed, 274/274 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/readyz` returned status `ready`;
+  - all 13 P0 self-tests passed, including `external-report-focus reportCases=7 ordinaryGuards=4`, main/external 20way, static-page 5way, Cloudflare fallback 2way, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-d5a304350b0e/`.
+- CI status:
+  - GitHub Actions run `27496832653` for `d5a30435` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 External Outbound Reply Dispatch Summary Helper Local Verification
 
 - Purpose:
