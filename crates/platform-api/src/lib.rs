@@ -240,6 +240,7 @@ mod external_channel_static_page_publish_reply;
 mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
+mod external_channel_static_page_report_scope_support;
 mod external_channel_static_page_status_source_refs;
 mod external_channel_static_page_template_baseline;
 mod external_channel_static_page_terminal_reply;
@@ -394,6 +395,7 @@ use external_channel_static_page_publish_reply::*;
 use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
+use external_channel_static_page_report_scope_support::*;
 use external_channel_static_page_status_source_refs::*;
 use external_channel_static_page_template_baseline::*;
 use external_channel_static_page_terminal_reply::*;
@@ -24211,88 +24213,6 @@ fn append_database_source_default_datasets_to_scope(
         }));
     }
     set_payload_value(selected_scope, "datasets", Value::Array(datasets));
-}
-
-fn external_channel_static_page_report_scope(selected_scope: &Value) -> Value {
-    let Some(database_source_scope) = selected_scope.get("database_source_scope") else {
-        return selected_scope.clone();
-    };
-    let Some(bindings) = database_source_scope
-        .get("default_dataset_bindings")
-        .and_then(Value::as_array)
-    else {
-        return selected_scope.clone();
-    };
-
-    let mut report_datasets = Vec::new();
-    let mut database_source_ids = BTreeSet::new();
-    for binding in bindings {
-        let Some(dataset_id) = binding
-            .get("dataset_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let source_id = binding
-            .get("source_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(source_id) = source_id {
-            database_source_ids.insert(source_id.to_string());
-        }
-        let mut item = json!({
-            "type": "dataset",
-            "id": dataset_id,
-            "source": "database_source_default_dataset",
-            "report_scope": true,
-        });
-        if let Some(source_id) = source_id {
-            set_payload_value(&mut item, "database_source_id", json!(source_id));
-        }
-        report_datasets.push(item);
-    }
-
-    if report_datasets.is_empty() {
-        return selected_scope.clone();
-    }
-
-    if let Some(ids) = database_source_scope
-        .get("source_ids")
-        .and_then(Value::as_array)
-    {
-        for id in ids {
-            if let Some(id) = id.as_str().map(str::trim).filter(|value| !value.is_empty()) {
-                database_source_ids.insert(id.to_string());
-            }
-        }
-    }
-
-    let mut report_scope = json!({
-        "type": "external_channel_report",
-        "mode": "report_fixed_dataset",
-        "scope_source": "database_source_default_dataset_bindings",
-        "database_report_scope_policy": "fixed_dataset_independent_of_chat_selection",
-        "datasets": report_datasets,
-        "selected": report_datasets,
-        "database_source_scope": database_source_scope,
-        "database_source_ids": database_source_ids.into_iter().collect::<Vec<_>>(),
-    });
-
-    for key in [
-        "v3_system_user_id",
-        "answer_policy",
-        "user_context",
-        "external_user_context",
-    ] {
-        if let Some(value) = selected_scope.get(key) {
-            set_payload_value(&mut report_scope, key, value.clone());
-        }
-    }
-
-    report_scope
 }
 
 fn external_channel_static_page_template_reference_id(
