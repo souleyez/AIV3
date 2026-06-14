@@ -19799,3 +19799,76 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw report content was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-14 P5 Code Review Summary Artifact Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move code review summary HTML artifact collection, normalization, dedupe, redaction, and read-only manifest assembly out of `lib.rs` into `crates/platform-api/src/code_review_summary_artifact_support.rs`;
+  - preserve output-artifact and event-source detection, marker handling, signature dedupe, finding normalization, safe string redaction, and read-only `CodeReviewSummary` manifest behavior.
+- Code change:
+  - added `code_review_summary_artifact_support`;
+  - moved `code_review_summary_artifacts_from_run_values` and its private candidate/collector/payload/signature/finding helpers into the new module;
+  - kept `load_code_review_summary_artifacts_for_run` in `lib.rs`;
+  - made `value_array` crate-visible so the helper can reuse the same array normalization primitive used elsewhere in the crate;
+  - added module tests for output-artifact source handling and event-marker redaction behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api code_review_summary_artifact_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api html_artifact_code_review_summary --lib`: passed, 2/2 existing tests;
+  - `cargo test -p platform-api code_review_summary --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/code_review_summary_artifact_support.rs`: no whitespace errors, only the existing CRLF warning on touched Rust files;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed, `ready=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - logs were written under `target/datamax-local-smoke-66/`.
+- Local web build note:
+  - `npm --prefix apps/web run build` still failed before build execution because local `apps/web/node_modules` lacks `next`;
+  - this local dependency state is inherited from the previous pnpm registry timeout and was not used as acceptance evidence for this backend-only slice; 8-server Web build below is the build evidence.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw code-review log URL, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-14 P5 Code Review Summary Artifact Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `949f1806` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `87ca3ff07602` to `949f180636c9`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api code_review_summary_artifact_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api html_artifact_code_review_summary --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api code_review_summary --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api static_page --lib`: passed, 290/290 tests;
+  - `cargo check -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing warnings only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - an immediate readyz probe during restart saw port 3000 startup timing once; independent follow-up returned status `ready`;
+  - all 13 P0 self-tests passed, including main/external 20way `failedCount=0`, `external-report-focus reportCases=7 ordinaryGuards=4`, `production-placeholder-readiness ready=true`, and `prewarmCustomerVisibilityOk=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - logs were written under `/tmp/datamax-p0-smoke-949f1806/`.
+- CI status:
+  - GitHub Actions run `27502269534` for `949f1806` failed before executing steps;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`;
+  - this remains the existing CI runner/account startup issue, so local Rust/P0 and 8-server verification above are the acceptance evidence for this slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw code-review log URL, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
