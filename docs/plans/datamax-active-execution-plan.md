@@ -91,7 +91,8 @@
 | 28 | P5 external channel runtime attempt helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_model_pool_support` 模块单测、模型池 active/scope 回归、模型池下一 profile fallback 回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 29 | P5 model gateway event helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `model_gateway_event_support` 模块单测、模型池下一 profile fallback 回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
 | 30 | P5 model gateway shadow eval config helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `model_gateway_event_support` 模块单测、模型池下一 profile fallback 回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
-| 31 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
+| 31 | P5 document template requested-skill helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_requested_skills_support` 模块单测、artifact request 回归、AI Golf requested skill 回归、第三方静态页触发回归、`cargo check`、Web build、P0 smoke、8 服务器 release build、health/ready 和服务 active 全通过；不改变第三方公开契约。 |
+| 32 | P5 下一行为保持切片 | 待选择。 | 若仍无 P1 凭证、P2/P4 写入确认或新客户失败样例，继续评估第三方接入或主站前端周边小函数拆分。 | 单切片可独立回退，有定向测试、P0 self-test 和 8 服务器验证；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
@@ -341,6 +342,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 4. integration HTML 若只是行尾/stat 噪声，不纳入提交。
 
 **Current progress:**
+- 2026-06-14: `crates/platform-api/src/lib.rs` requested skill 参数读取和文档模板技能解析 helper 已拆到 `external_requested_skills_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api external_requested_skills_support --lib`、artifact request 回归、AI Golf requested skill 回归、第三方静态页触发回归、`cargo check -p platform-api`、Web build、P0 smoke、release build、health/ready 和服务 active 均通过，已提交并同步 8 服务器。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 模型网关 shadow eval timeout/max profiles 配置 helper 已拆到 `model_gateway_event_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api model_gateway_event_support --lib`、下一 profile fallback 回归、第三方静态页触发回归、`cargo check -p platform-api`、Web build、P0 smoke、release build、health/ready 和服务 active 均通过，已提交并同步 8 服务器。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 模型网关事件字段 helper `model_gateway_u64_to_i32` 和 `model_gateway_sanitized_error_kind` 已拆到 `model_gateway_event_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api model_gateway_event_support --lib`、下一 profile fallback 回归、第三方静态页触发回归、`cargo check -p platform-api`、Web build、P0 smoke、release build、health/ready 和服务 active 均通过，已提交并同步 8 服务器。
 - 2026-06-14: `crates/platform-api/src/lib.rs` 第三方模型池 runtime attempt struct、primary/fallback/retry attempt 组合、DB/env profile attempt 转换已并入 `external_channel_model_pool_support` 模块；本地和 8 服务器 `cargo fmt --check`、`cargo test -p platform-api external_channel_model_pool_support --lib`、模型池 active/scope 回归、下一 profile fallback 回归、第三方静态页触发回归、`cargo check -p platform-api`、Web build、P0 smoke、release build、health/ready 和服务 active 均通过，已提交并同步 8 服务器。
