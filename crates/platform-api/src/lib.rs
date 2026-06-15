@@ -300,6 +300,7 @@ mod retrieval_evidence_view_support;
 mod retrieval_query_support;
 mod runtime_manifest_support;
 mod sse_support;
+mod static_page_artifact_summary_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
@@ -494,6 +495,7 @@ use retrieval_evidence_view_support::*;
 use retrieval_query_support::*;
 use runtime_manifest_support::*;
 use sse_support::*;
+use static_page_artifact_summary_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
@@ -58918,109 +58920,6 @@ fn assistant_run_safe_artifact_scalar(value: &Value) -> Option<Value> {
         Value::String(text) => Some(json!(truncate_scope_candidate_text(text.trim()))),
         _ => None,
     }
-}
-
-pub(crate) fn static_page_artifact_string(artifact: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        artifact
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn static_page_artifact_id(artifact: &Value) -> Option<String> {
-    ["backendDraftId", "backend_draft_id", "backendId", "id"]
-        .iter()
-        .find_map(|key| {
-            artifact
-                .get(*key)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-}
-
-fn static_page_artifact_module_count(artifact: &Value) -> usize {
-    ["moduleCount", "module_count"]
-        .iter()
-        .find_map(|key| artifact.get(*key).and_then(Value::as_u64))
-        .map(|value| value as usize)
-        .or_else(|| {
-            artifact
-                .get("modules")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-        })
-        .unwrap_or(0)
-}
-
-fn static_page_artifact_preview_status(artifact: &Value) -> Option<String> {
-    static_page_artifact_string(artifact, &["previewStatus", "preview_status"])
-        .or_else(|| {
-            artifact
-                .get("previewContract")
-                .or_else(|| artifact.get("preview_contract"))
-                .and_then(|value| value.get("status"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-        .or_else(|| {
-            artifact
-                .get("imageJob")
-                .or_else(|| artifact.get("image_job"))
-                .and_then(|value| value.get("status"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-}
-
-fn static_page_artifact_final_status(artifact: &Value) -> Option<String> {
-    static_page_artifact_string(artifact, &["finalRenderStatus", "final_render_status"]).or_else(
-        || {
-            artifact
-                .get("finalPage")
-                .or_else(|| artifact.get("final_page"))
-                .and_then(|value| value.get("status"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        },
-    )
-}
-
-fn static_page_artifact_preview_stale(artifact: &Value) -> bool {
-    artifact
-        .get("previewStale")
-        .or_else(|| artifact.get("preview_stale"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || static_page_artifact_preview_status(artifact).as_deref() == Some("stale")
-        || artifact
-            .get("imageJob")
-            .or_else(|| artifact.get("image_job"))
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str)
-            == Some("stale")
-}
-
-fn static_page_artifact_label(artifact: &Value) -> Option<String> {
-    ["objective", "title"].iter().find_map(|key| {
-        artifact
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| format!("当前静态页：{}", truncate_scope_candidate_text(value)))
-    })
 }
 
 fn truncate_scope_candidate_text(value: &str) -> String {
