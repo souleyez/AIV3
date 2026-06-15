@@ -315,6 +315,7 @@ mod static_page_draft_metadata_support;
 mod static_page_draft_visibility_support;
 mod static_page_dynamic_contract_support;
 mod static_page_evidence_signal_support;
+mod static_page_existing_artifact_support;
 mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
 mod static_page_field_candidate_support;
@@ -531,6 +532,7 @@ use static_page_draft_metadata_support::*;
 use static_page_draft_visibility_support::*;
 use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
+use static_page_existing_artifact_support::*;
 use static_page_field_candidate_support::*;
 use static_page_focus_url_support::*;
 use static_page_handoff_artifact_support::*;
@@ -25684,201 +25686,6 @@ fn static_page_stable_artifact_reuse_reason(prompt: &str) -> &'static str {
     } else {
         "default_dataset_template_reuse"
     }
-}
-
-fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
-    let Some(public_url) = static_page_prompt_generated_artifact_urls(prompt)
-        .into_iter()
-        .next()
-    else {
-        return Value::Null;
-    };
-    json!({
-        "kind": "v3_generated_static_page",
-        "source": "prompt_generated_artifact_url",
-        "reference_role": "existing_artifact_to_revise",
-        "public_url": public_url,
-        "index_url": public_url,
-        "data_url": static_page_artifact_sibling_url(&public_url, "data.json"),
-        "data_snapshot_url": static_page_artifact_sibling_url(&public_url, "data-snapshot.json"),
-        "revision_requested": static_page_prompt_requests_existing_artifact_revision(prompt),
-        "preserve_style_unless_redesign_requested": !static_page_prompt_requests_explicit_redesign(prompt),
-        "data_binding_policy": "read_existing_data_json_when_available_and_rebind_requested_modules",
-        "publish_mode": "new_generated_artifact_only",
-        "materialization_policy": "host_agent_maps_v3_generated_artifact_to_local_workspace_when_available",
-    })
-}
-
-fn static_page_generated_template_reference_is_page(reference: &Value) -> bool {
-    let source = reference
-        .get("source")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let template_kind = reference
-        .get("templateKind")
-        .or_else(|| reference.get("template_kind"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let template_id = reference
-        .get("templateId")
-        .or_else(|| reference.get("template_id"))
-        .or_else(|| reference.get("id"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    source.eq_ignore_ascii_case("v3-static-page-template-library")
-        || template_kind.eq_ignore_ascii_case("generated_static_page")
-        || template_id.starts_with("generated-static-page:")
-        || template_id.starts_with("static-page-template:")
-        || template_id.starts_with("static_page_template:")
-}
-
-fn static_page_generated_template_public_url(reference: &Value) -> Option<String> {
-    if !static_page_generated_template_reference_is_page(reference) {
-        return None;
-    }
-    [
-        "publicUrl",
-        "public_url",
-        "generatedArtifactUrl",
-        "generated_artifact_url",
-    ]
-    .into_iter()
-    .filter_map(|key| reference.get(key).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-    .map(ToOwned::to_owned)
-    .next()
-}
-
-fn static_page_generated_template_preview_url(reference: &Value) -> Option<String> {
-    if !static_page_generated_template_reference_is_page(reference) {
-        return None;
-    }
-    [
-        "previewUrl",
-        "preview_url",
-        "effectImageUrl",
-        "effect_image_url",
-        "visualContractUrl",
-        "visual_contract_url",
-    ]
-    .into_iter()
-    .filter_map(|key| reference.get(key).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-    .map(ToOwned::to_owned)
-    .next()
-}
-
-fn static_page_existing_artifact_reference_from_public_url(
-    public_url: &str,
-    source: &str,
-) -> Value {
-    json!({
-        "kind": "v3_generated_static_page",
-        "source": source,
-        "reference_role": "existing_artifact_to_revise",
-        "public_url": public_url,
-        "index_url": public_url,
-        "data_url": static_page_artifact_sibling_url(public_url, "data.json"),
-        "data_snapshot_url": static_page_artifact_sibling_url(public_url, "data-snapshot.json"),
-        "revision_requested": true,
-        "preserve_style_unless_redesign_requested": true,
-        "data_binding_policy": "read_existing_data_json_when_available_and_rebind_requested_modules",
-        "publish_mode": "new_generated_artifact_only",
-        "materialization_policy": "host_agent_maps_v3_generated_artifact_to_local_workspace_when_available",
-    })
-}
-
-fn static_page_existing_artifact_reference_from_template_context(
-    prompt: &str,
-    template_reference: Option<&Value>,
-    source_refs: Option<&Value>,
-) -> Value {
-    if static_page_prompt_requests_explicit_redesign(prompt) {
-        return Value::Null;
-    }
-
-    if let Some(reference) = template_reference {
-        if let Some(public_url) = static_page_generated_template_public_url(reference) {
-            let mut existing = static_page_existing_artifact_reference_from_public_url(
-                &public_url,
-                "generated_static_page_template_reference",
-            );
-            if let Some(object) = existing.as_object_mut() {
-                object.insert("template_reference".to_string(), reference.clone());
-            }
-            return existing;
-        }
-    }
-
-    if let Some(source_refs) = source_refs {
-        for reference in source_refs
-            .get("template_references")
-            .or_else(|| source_refs.get("templateReferences"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(public_url) = static_page_generated_template_public_url(reference) {
-                let mut existing = static_page_existing_artifact_reference_from_public_url(
-                    &public_url,
-                    "generated_static_page_template_source_refs",
-                );
-                if let Some(object) = existing.as_object_mut() {
-                    object.insert("template_reference".to_string(), reference.clone());
-                }
-                return existing;
-            }
-        }
-
-        if source_refs
-            .pointer("/relaxed_template_match/policy")
-            .and_then(Value::as_str)
-            == Some("dataset_overlap")
-        {
-            if let Some(public_url) = source_refs
-                .pointer("/relaxed_template_match/baseline_public_url")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-            {
-                let mut existing = static_page_existing_artifact_reference_from_public_url(
-                    public_url,
-                    "dataset_overlap_static_page_template_baseline",
-                );
-                if let Some(object) = existing.as_object_mut() {
-                    object.insert(
-                        "relaxed_template_match".to_string(),
-                        source_refs
-                            .get("relaxed_template_match")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    );
-                }
-                return existing;
-            }
-        }
-    }
-
-    Value::Null
-}
-
-fn static_page_existing_artifact_reference_for_fixed_task(
-    prompt: &str,
-    template_reference: Option<&Value>,
-    source_refs: Option<&Value>,
-) -> Value {
-    let explicit = static_page_existing_artifact_reference_from_prompt(prompt);
-    if !explicit.is_null() {
-        return explicit;
-    }
-    static_page_existing_artifact_reference_from_template_context(
-        prompt,
-        template_reference,
-        source_refs,
-    )
 }
 
 fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
