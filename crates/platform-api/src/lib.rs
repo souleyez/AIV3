@@ -305,6 +305,7 @@ mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
 mod static_page_explicit_sample_support;
 mod static_page_handoff_artifact_support;
+mod static_page_metric_value_support;
 mod static_page_module_binding_support;
 mod static_page_payload_support;
 mod static_page_public_template_update_support;
@@ -498,6 +499,7 @@ use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_explicit_sample_support::*;
 use static_page_handoff_artifact_support::*;
+use static_page_metric_value_support::*;
 use static_page_module_binding_support::*;
 use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
@@ -70384,68 +70386,6 @@ fn static_page_evidence_value_lines(item: &Value) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn static_page_metric_value_from_line(line: &str) -> Option<f64> {
-    let candidates = static_page_number_candidates(line);
-    if candidates.is_empty() {
-        return None;
-    }
-    if candidates.len() == 1 {
-        let value = candidates.first().copied()?;
-        if static_page_number_looks_like_year(value)
-            || (static_page_number_looks_like_period_part(value)
-                && static_page_line_mentions_period(line))
-        {
-            return None;
-        }
-        return Some(value);
-    }
-
-    candidates
-        .iter()
-        .copied()
-        .filter(|value| !static_page_number_looks_like_year(*value))
-        .next_back()
-        .or_else(|| candidates.last().copied())
-}
-
-fn static_page_number_candidates(line: &str) -> Vec<f64> {
-    let mut values = Vec::new();
-    let mut token = String::new();
-    for character in line.chars().chain(std::iter::once(' ')) {
-        let can_continue_number = character.is_ascii_digit()
-            || character == '.'
-            || character == ','
-            || ((character == '-' || character == '+') && token.is_empty());
-        if can_continue_number {
-            token.push(character);
-            continue;
-        }
-        if token.chars().any(|candidate| candidate.is_ascii_digit()) {
-            let normalized = token.replace(',', "");
-            if let Ok(value) = normalized.parse::<f64>() {
-                values.push(value);
-            }
-        }
-        token.clear();
-    }
-    values
-}
-
-fn static_page_number_looks_like_year(value: f64) -> bool {
-    (1900.0..=2100.0).contains(&value) && value.fract().abs() < f64::EPSILON
-}
-
-fn static_page_number_looks_like_period_part(value: f64) -> bool {
-    (1.0..=31.0).contains(&value) && value.fract().abs() < f64::EPSILON
-}
-
-fn static_page_line_mentions_period(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    ["月", "日", "date", "month", "period", "季度", "周"]
-        .iter()
-        .any(|marker| lower.contains(marker))
 }
 
 fn static_page_metric_label_from_line(
