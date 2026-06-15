@@ -161,7 +161,8 @@
 | 98 | P5 static-page media sample helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_media_sample_support` 模块单测、media data snapshot 集成回归、上一轮 field candidate 相邻回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 99 | P5 static-page database schema sample helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_database_schema_sample_support` 模块单测、database schema data snapshot 集成回归、上一轮 media sample 相邻回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 100 | P5 static-page database aggregate sample helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_database_aggregate_sample_support` 模块单测、database aggregate data snapshot 绑定/intent 匹配集成回归、上一轮 schema sample 相邻回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
-| 101 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 101 | P5 static-page dataset fact snapshot sample helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_dataset_fact_snapshot_sample_support` 模块单测、document fact snapshot data snapshot 绑定/混合表集成回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
+| 102 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
