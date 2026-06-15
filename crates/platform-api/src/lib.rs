@@ -327,6 +327,7 @@ mod static_page_payload_support;
 mod static_page_public_template_update_support;
 mod static_page_render_gate_support;
 mod static_page_render_output_view_support;
+mod static_page_render_queue_manifest_support;
 mod static_page_report_snapshot;
 mod static_page_sample_quality_support;
 mod static_page_structure_signals;
@@ -531,6 +532,7 @@ use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
 use static_page_render_gate_support::*;
 use static_page_render_output_view_support::*;
+use static_page_render_queue_manifest_support::*;
 use static_page_report_snapshot::*;
 use static_page_sample_quality_support::*;
 use static_page_structure_signals::*;
@@ -67748,101 +67750,6 @@ fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> 
             "selected_scope": run.selected_scope,
             "evidence_state": run.evidence_state,
         },
-    })
-}
-
-fn build_static_page_render_queue_manifest(
-    draft: &StaticPageDraft,
-    image_job: Option<&StaticPageImageJob>,
-    workflow_execution: Option<&WorkflowExecution>,
-    workflow_task_id: Option<domain_model::WorkflowTaskId>,
-) -> Value {
-    let payload = &draft.draft_payload;
-    let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-        .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
-    let modules = static_page_payload_modules(payload);
-    let export_package =
-        build_static_page_queued_export_package_manifest(draft, &modules, &data_snapshot);
-    json!({
-        "draft_id": draft.id,
-        "assistant_run_id": draft.assistant_run_id,
-        "status": "queued",
-        "renderer": "static-page-renderer-v1",
-        "workflow_execution_id": workflow_execution.map(|execution| execution.id),
-        "workflow_task_id": workflow_task_id,
-        "workflow": {
-            "status": "queued",
-            "executionId": workflow_execution.map(|execution| execution.id),
-            "taskId": workflow_task_id,
-        },
-        "image_job_id": image_job.map(|job| job.id),
-        "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
-        "visual_spec": static_page_payload_value(payload, &["visualSpec", "visual_spec"])
-            .unwrap_or_else(|| build_static_page_visual_spec("client-delivery")),
-        "render_spec": static_page_payload_value(payload, &["renderSpec", "render_spec"])
-            .unwrap_or_else(build_static_page_render_spec),
-        "data_snapshot": data_snapshot,
-        "export_package": export_package,
-        "queue_copy": "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
-    })
-}
-
-fn build_static_page_queued_export_package_manifest(
-    draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
-) -> Value {
-    let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
-    let echarts_requested_modules = modules
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter(|module| static_page_module_chart_runtime(module) == "echarts")
-                .count()
-        })
-        .unwrap_or(0);
-    json!({
-        "kind": "static-page-export-package",
-        "version": 1,
-        "status": "queued",
-        "draft_id": draft.id,
-        "files": [
-            {
-                "path": "index.html",
-                "role": "rendered_static_page",
-                "mime": "text/html"
-            },
-            {
-                "path": "asset-manifest.json",
-                "role": "renderer_manifest",
-                "mime": "application/json"
-            },
-            {
-                "path": "data-snapshot.json",
-                "role": "render_data_snapshot",
-                "mime": "application/json"
-            },
-            {
-                "path": "data.json",
-                "role": "dynamic_data_snapshot",
-                "mime": "application/json"
-            },
-            {
-                "path": "modules.json",
-                "role": "editable_module_plan",
-                "mime": "application/json"
-            }
-        ],
-        "dynamic_page_contract": build_static_page_dynamic_page_contract(),
-        "debug": {
-            "renderer": "static-page-renderer-v1",
-            "module_count": module_count,
-            "echarts_requested_modules": echarts_requested_modules,
-            "data_snapshot_source": data_snapshot.get("source")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-        }
     })
 }
 
