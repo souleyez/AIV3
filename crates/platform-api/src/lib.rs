@@ -309,6 +309,7 @@ mod static_page_data_source_candidate_support;
 mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
+mod static_page_design_contract_refresh_support;
 mod static_page_draft_metadata_support;
 mod static_page_draft_visibility_support;
 mod static_page_dynamic_contract_support;
@@ -522,6 +523,7 @@ use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_data_source_candidate_support::*;
+use static_page_design_contract_refresh_support::*;
 use static_page_draft_metadata_support::*;
 use static_page_draft_visibility_support::*;
 use static_page_dynamic_contract_support::*;
@@ -68375,50 +68377,6 @@ fn validate_static_page_operations(
 ) -> std::result::Result<Vec<Value>, ApiError> {
     sanitize_static_page_operations(operations)
         .map_err(|error| ApiError::bad_request("invalid_static_page_operation", error.to_string()))
-}
-
-pub(crate) fn refresh_static_page_payload_design_contract(payload: &mut Value) {
-    ensure_json_object(payload);
-    let style_direction =
-        static_page_payload_string(payload, &["styleDirection", "style_direction"])
-            .unwrap_or_else(|| "client-delivery".to_string());
-    let modules = static_page_payload_modules(payload);
-    let visual_spec = build_static_page_visual_spec(&style_direction);
-    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
-        .unwrap_or_else(build_static_page_render_spec);
-    let mobile_order = static_page_payload_mobile_order(payload, &modules);
-    let selected_scope = payload
-        .get("assistant_context")
-        .and_then(|context| context.get("selected_scope"))
-        .cloned()
-        .or_else(|| payload.get("selected_scope").cloned())
-        .unwrap_or(Value::Null);
-    let data_snapshot = build_static_page_data_snapshot(payload, &selected_scope);
-    let previous_contract =
-        static_page_payload_value(payload, &["previewContract", "preview_contract"]);
-    let preview_contract = build_static_page_preview_contract(
-        &style_direction,
-        &modules,
-        &render_spec,
-        &mobile_order,
-        previous_contract,
-    );
-    if static_page_preview_contract_status(&preview_contract) == Some("stale") {
-        mark_static_page_payload_preview_stale(payload);
-    }
-
-    set_payload_string(payload, "styleDirection", &style_direction);
-    set_payload_string(payload, "style_direction", &style_direction);
-    set_payload_value(payload, "visualSpec", visual_spec.clone());
-    set_payload_value(payload, "visual_spec", visual_spec);
-    set_payload_value(payload, "renderSpec", render_spec.clone());
-    set_payload_value(payload, "render_spec", render_spec);
-    set_payload_value(payload, "mobileOrder", mobile_order.clone());
-    set_payload_value(payload, "mobile_order", mobile_order);
-    set_payload_value(payload, "dataSnapshot", data_snapshot.clone());
-    set_payload_value(payload, "data_snapshot", data_snapshot);
-    set_payload_value(payload, "previewContract", preview_contract.clone());
-    set_payload_value(payload, "preview_contract", preview_contract);
 }
 
 #[derive(Debug)]
