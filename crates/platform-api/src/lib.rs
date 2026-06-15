@@ -42657,35 +42657,6 @@ async fn maybe_attach_external_static_page_artifact_to_run(
     Ok(())
 }
 
-fn external_channel_static_page_is_xinbai_primary_report(
-    payload: &Value,
-    public_url: &str,
-) -> bool {
-    let lower_url = public_url.to_ascii_lowercase();
-    if lower_url.contains("xinbai-functional-modular-template-20260604")
-        || lower_url.contains("xinbai-functional-modular-report")
-        || lower_url.contains("/xinbai/")
-    {
-        return true;
-    }
-    let template_reference_id =
-        external_channel_static_page_template_reference_id_from_payload(payload);
-    let template_reference_id = template_reference_id
-        .as_str()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if template_reference_id.contains("xinbai-functional-modular-template-20260604")
-        || template_reference_id.contains("xinbai_business_report")
-    {
-        return true;
-    }
-    let template_reference = external_channel_static_page_template_reference_from_payload(payload);
-    let template_reference_text = template_reference.to_string().to_ascii_lowercase();
-    template_reference_text.contains("xinbai")
-        || template_reference_text.contains("新百")
-        || template_reference_text.contains("新世界百货")
-}
-
 fn external_channel_static_page_report_title(payload: &Value, public_url: &str) -> String {
     if let Some(title) = external_channel_static_page_artifact_payload_string(
         payload,
@@ -42806,68 +42777,6 @@ fn external_channel_static_page_enrich_report_card(card: &mut Value) {
         "download_exports",
         download_exports,
     );
-}
-
-fn external_channel_static_page_export_url(
-    payload: &Value,
-    public_url: &str,
-    keys: &[&str],
-    file_name: &str,
-) -> Value {
-    for key in keys {
-        if let Some(url) = external_channel_static_page_artifact_payload_value(payload, key)
-            .as_str()
-            .map(str::trim)
-            .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-            .map(ToOwned::to_owned)
-        {
-            return json!(url);
-        }
-    }
-    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
-        return static_page_artifact_sibling_url(public_url, file_name)
-            .map(Value::String)
-            .unwrap_or(Value::Null);
-    }
-    Value::Null
-}
-
-fn external_channel_static_page_data_url(payload: &Value, public_url: &str) -> Value {
-    external_channel_static_page_export_url(
-        payload,
-        public_url,
-        &["data_url", "dataUrl"],
-        "data.json",
-    )
-}
-
-fn external_channel_static_page_download_exports_from_payload(
-    payload: &Value,
-    public_url: &str,
-    data_url: Value,
-    report_title: &str,
-) -> Value {
-    if let Some(exports) = payload
-        .get("download_exports")
-        .or_else(|| payload.get("downloadExports"))
-        .cloned()
-        .filter(|value| {
-            value
-                .as_array()
-                .map(|items| !items.is_empty())
-                .unwrap_or(false)
-        })
-    {
-        return exports;
-    }
-    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
-        return external_channel_static_page_download_exports(
-            public_url,
-            data_url,
-            Some(report_title),
-        );
-    }
-    json!([])
 }
 
 pub(crate) fn external_channel_static_page_published_reply(

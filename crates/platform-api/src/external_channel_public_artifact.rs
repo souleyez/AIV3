@@ -3,6 +3,10 @@ use std::collections::HashSet;
 use contracts::ExternalBotReplyView;
 use serde_json::{json, Value};
 
+use crate::external_channel_static_page_template_reference_support::{
+    external_channel_static_page_template_reference_from_payload,
+    external_channel_static_page_template_reference_id_from_payload,
+};
 use crate::{codex_host_fixed_task_public_artifact_url_allowed, static_page_artifact_sibling_url};
 
 pub(crate) fn external_channel_public_artifact_url_from_links_value(
@@ -207,6 +211,97 @@ pub(crate) fn external_channel_static_page_artifact_payload_string(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+pub(crate) fn external_channel_static_page_is_xinbai_primary_report(
+    payload: &Value,
+    public_url: &str,
+) -> bool {
+    let lower_url = public_url.to_ascii_lowercase();
+    if lower_url.contains("xinbai-functional-modular-template-20260604")
+        || lower_url.contains("xinbai-functional-modular-report")
+        || lower_url.contains("/xinbai/")
+    {
+        return true;
+    }
+    let template_reference_id =
+        external_channel_static_page_template_reference_id_from_payload(payload);
+    let template_reference_id = template_reference_id
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if template_reference_id.contains("xinbai-functional-modular-template-20260604")
+        || template_reference_id.contains("xinbai_business_report")
+    {
+        return true;
+    }
+    let template_reference = external_channel_static_page_template_reference_from_payload(payload);
+    let template_reference_text = template_reference.to_string().to_ascii_lowercase();
+    template_reference_text.contains("xinbai")
+        || template_reference_text.contains("新百")
+        || template_reference_text.contains("新世界百货")
+}
+
+pub(crate) fn external_channel_static_page_export_url(
+    payload: &Value,
+    public_url: &str,
+    keys: &[&str],
+    file_name: &str,
+) -> Value {
+    for key in keys {
+        if let Some(url) = external_channel_static_page_artifact_payload_value(payload, key)
+            .as_str()
+            .map(str::trim)
+            .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+            .map(ToOwned::to_owned)
+        {
+            return json!(url);
+        }
+    }
+    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+        return static_page_artifact_sibling_url(public_url, file_name)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+    }
+    Value::Null
+}
+
+pub(crate) fn external_channel_static_page_data_url(payload: &Value, public_url: &str) -> Value {
+    external_channel_static_page_export_url(
+        payload,
+        public_url,
+        &["data_url", "dataUrl"],
+        "data.json",
+    )
+}
+
+pub(crate) fn external_channel_static_page_download_exports_from_payload(
+    payload: &Value,
+    public_url: &str,
+    data_url: Value,
+    report_title: &str,
+) -> Value {
+    if let Some(exports) = payload
+        .get("download_exports")
+        .or_else(|| payload.get("downloadExports"))
+        .cloned()
+        .filter(|value| {
+            value
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        })
+    {
+        return exports;
+    }
+    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+        return external_channel_static_page_download_exports(
+            public_url,
+            data_url,
+            Some(report_title),
+        );
+    }
+    json!([])
 }
 
 pub(crate) fn external_channel_static_page_download_exports(
@@ -473,6 +568,119 @@ mod tests {
         assert_eq!(
             external_channel_static_page_artifact_payload_string(&payload, &["missing"]),
             None
+        );
+    }
+
+    #[test]
+    fn static_page_xinbai_primary_report_detects_url_template_id_and_reference() {
+        assert!(external_channel_static_page_is_xinbai_primary_report(
+            &json!({}),
+            &artifact_url("xinbai-functional-modular-template-20260604/index.html")
+        ));
+        assert!(external_channel_static_page_is_xinbai_primary_report(
+            &json!({"templateReferenceId": "xinbai_business_report_monthly"}),
+            &artifact_url("reports/current/index.html")
+        ));
+        assert!(external_channel_static_page_is_xinbai_primary_report(
+            &json!({"template_reference": {"name": "新世界百货月报模板"}}),
+            &artifact_url("reports/current/index.html")
+        ));
+        assert!(!external_channel_static_page_is_xinbai_primary_report(
+            &json!({"templateReferenceId": "generic-report"}),
+            &artifact_url("reports/current/index.html")
+        ));
+    }
+
+    #[test]
+    fn static_page_export_url_prefers_explicit_allowed_payload_value() {
+        let public_url = artifact_url("xinbai-functional-modular-template-20260604/index.html");
+        let explicit_url = artifact_url("reports/custom/report.ppt");
+
+        assert_eq!(
+            external_channel_static_page_export_url(
+                &json!({
+                    "ppt_download_url": format!(" {explicit_url} "),
+                    "artifact": {
+                        "ppt_url": artifact_url("reports/fallback/report.ppt")
+                    }
+                }),
+                &public_url,
+                &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+                "report.ppt"
+            ),
+            json!(explicit_url)
+        );
+    }
+
+    #[test]
+    fn static_page_export_and_data_urls_use_sibling_files_for_xinbai_only() {
+        let xinbai_public_url =
+            artifact_url("xinbai-functional-modular-template-20260604/index.html?focus=risk");
+        let generic_public_url = artifact_url("reports/generic/index.html");
+
+        assert_eq!(
+            external_channel_static_page_data_url(&json!({}), &xinbai_public_url),
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/data.json"
+            ))
+        );
+        assert_eq!(
+            external_channel_static_page_export_url(
+                &json!({}),
+                &xinbai_public_url,
+                &["table_data_url", "tableDataUrl"],
+                "table-data.csv"
+            ),
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/table-data.csv"
+            ))
+        );
+        assert_eq!(
+            external_channel_static_page_data_url(&json!({}), &generic_public_url),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn static_page_download_exports_from_payload_preserves_existing_or_builds_xinbai_defaults() {
+        let public_url = artifact_url("xinbai-functional-modular-template-20260604/index.html");
+        let existing_exports = json!([{"kind": "custom", "url": "custom"}]);
+
+        assert_eq!(
+            external_channel_static_page_download_exports_from_payload(
+                &json!({"downloadExports": existing_exports.clone()}),
+                &public_url,
+                json!(artifact_url(
+                    "xinbai-functional-modular-template-20260604/data.json"
+                )),
+                "新世界百货经营管理月报表"
+            ),
+            existing_exports
+        );
+
+        let generated = external_channel_static_page_download_exports_from_payload(
+            &json!({}),
+            &public_url,
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/data.json"
+            )),
+            "新世界百货经营管理月报表",
+        );
+        assert_eq!(generated[0]["kind"], json!("table_data"));
+        assert_eq!(
+            generated[0]["url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/table-data.csv"
+            ))
+        );
+        assert_eq!(
+            external_channel_static_page_download_exports_from_payload(
+                &json!({}),
+                &artifact_url("reports/generic/index.html"),
+                Value::Null,
+                "DataMax 经营分析报表"
+            ),
+            json!([])
         );
     }
 }
