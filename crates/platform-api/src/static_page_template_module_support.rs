@@ -379,6 +379,188 @@ pub(crate) fn static_page_template_adjusted_module_copy(
     }
 }
 
+fn static_page_template_module_id(module: &Value) -> &str {
+    module
+        .get("id")
+        .or_else(|| module.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+pub(crate) fn static_page_template_module_intent_score(
+    reference: StaticPageTemplateReferenceSpec,
+    module: &Value,
+    prompt: Option<&str>,
+    original_index: usize,
+) -> i64 {
+    let module_id = static_page_template_module_id(module);
+    if module_id == "hero" {
+        return 10_000;
+    }
+
+    let mut score = 1_000_i64.saturating_sub(original_index as i64);
+    let store_scope = static_page_template_prompt_contains_any(
+        prompt,
+        &["门店", "分店", "店铺", "区域", "store", "region", "area"],
+    );
+    let sales_take_high = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "取高",
+            "高分成",
+            "销售",
+            "营业额",
+            "营收",
+            "租金",
+            "sales",
+            "revenue",
+            "rent",
+        ],
+    );
+    let time_range = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "近7日",
+            "近七日",
+            "月",
+            "季度",
+            "年度",
+            "time",
+            "date",
+            "month",
+        ],
+    );
+    let permission_views = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "权限",
+            "角色",
+            "总部",
+            "店总",
+            "分店店总",
+            "recipient",
+            "role",
+            "permission",
+        ],
+    );
+    let template_or_field_request = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "模板",
+            "字段",
+            "表格",
+            "要求文档",
+            "格式",
+            "template",
+            "field",
+        ],
+    );
+
+    if store_scope {
+        score += match module_id {
+            "kpi" => 700,
+            "trend" => 560,
+            "comparison" => 520,
+            "risk" | "evidence" | "scope" => 180,
+            "activity" | "steps" => 80,
+            _ => 0,
+        };
+    }
+    if sales_take_high {
+        score += match module_id {
+            "kpi" => 1_200,
+            "trend" => 680,
+            "comparison" => 620,
+            "risk" | "evidence" => 160,
+            _ => 0,
+        };
+    }
+    if time_range {
+        score += match module_id {
+            "trend" => 920,
+            "kpi" => 240,
+            "comparison" => 180,
+            "activity" | "steps" => 160,
+            _ => 0,
+        };
+    }
+    if permission_views {
+        score += match module_id {
+            "risk" | "evidence" | "scope" => 880,
+            "comparison" | "interfaces" => 380,
+            "kpi" => 140,
+            "activity" | "steps" => 120,
+            _ => 0,
+        };
+    }
+    if template_or_field_request {
+        score += match module_id {
+            "interfaces" | "evidence" | "scope" => 360,
+            "checks" | "risk" => 260,
+            "comparison" => 120,
+            _ => 0,
+        };
+    }
+
+    if reference.id == "docs-page" {
+        score += match module_id {
+            "scope" => 80,
+            "interfaces" => 70,
+            "steps" => 50,
+            "checks" => 40,
+            _ => 0,
+        };
+    }
+
+    score
+}
+
+fn static_page_template_layout_slot(
+    reference: StaticPageTemplateReferenceSpec,
+    index: usize,
+) -> Value {
+    let hero_height = if reference.id == "dashboard" { 2 } else { 3 };
+    let (x, y, w, h) = match index {
+        0 => (0, 0, 12, hero_height),
+        1 => (0, hero_height, 5, 3),
+        2 => (5, hero_height, 7, 3),
+        3 => (0, hero_height + 3, 6, 4),
+        4 => (6, hero_height + 3, 6, 4),
+        _ => (0, hero_height + 7 + ((index as i64 - 5) * 4), 12, 4),
+    };
+    json!({
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+    })
+}
+
+pub(crate) fn static_page_template_apply_intent_ordered_layouts(
+    modules: &mut [Value],
+    reference: StaticPageTemplateReferenceSpec,
+) {
+    for (index, module) in modules.iter_mut().enumerate() {
+        let Some(object) = module.as_object_mut() else {
+            continue;
+        };
+        object.insert(
+            "layout".to_string(),
+            static_page_template_layout_slot(reference, index),
+        );
+        if let Some(adjustment) = object
+            .get_mut("templateAdjustment")
+            .and_then(Value::as_object_mut)
+        {
+            adjustment.insert(
+                "moduleOrderPolicy".to_string(),
+                json!("current_intent_highest_relevance_first"),
+            );
+            adjustment.insert("moduleOrderIndex".to_string(), json!(index));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,5 +694,75 @@ mod tests {
             None,
         )
         .is_none());
+    }
+
+    #[test]
+    fn static_page_template_module_support_module_id_prefers_id_and_falls_back_to_role() {
+        assert_eq!(static_page_template_module_id(&json!({"id": "kpi"})), "kpi");
+        assert_eq!(
+            static_page_template_module_id(&json!({"role": "risk"})),
+            "risk"
+        );
+        assert_eq!(static_page_template_module_id(&json!({"title": "空"})), "");
+    }
+
+    #[test]
+    fn static_page_template_module_support_scores_hero_and_take_high_intent() {
+        let reference = reference("data-report");
+        let prompt = Some("销售取高按门店和区域筛选");
+
+        let hero =
+            static_page_template_module_intent_score(reference, &json!({"id": "hero"}), prompt, 4);
+        let kpi =
+            static_page_template_module_intent_score(reference, &json!({"id": "kpi"}), prompt, 0);
+        let trend =
+            static_page_template_module_intent_score(reference, &json!({"id": "trend"}), prompt, 0);
+
+        assert_eq!(hero, 10_000);
+        assert!(kpi > trend);
+    }
+
+    #[test]
+    fn static_page_template_module_support_scores_docs_template_field_modules() {
+        let reference = reference("docs-page");
+        let prompt = Some("按模板字段和表格格式输出");
+
+        let interfaces = static_page_template_module_intent_score(
+            reference,
+            &json!({"id": "interfaces"}),
+            prompt,
+            0,
+        );
+        let steps =
+            static_page_template_module_intent_score(reference, &json!({"id": "steps"}), prompt, 0);
+
+        assert!(interfaces > steps);
+    }
+
+    #[test]
+    fn static_page_template_module_support_applies_layout_and_order_metadata() {
+        let reference = reference("dashboard");
+        let mut modules = vec![
+            json!({"id": "hero", "templateAdjustment": {}}),
+            json!({"id": "kpi", "templateAdjustment": {}}),
+            json!("ignored"),
+        ];
+
+        static_page_template_apply_intent_ordered_layouts(&mut modules, reference);
+
+        assert_eq!(
+            modules[0]["layout"],
+            json!({"x": 0, "y": 0, "w": 12, "h": 2})
+        );
+        assert_eq!(
+            modules[1]["layout"],
+            json!({"x": 0, "y": 2, "w": 5, "h": 3})
+        );
+        assert_eq!(
+            modules[1]["templateAdjustment"]["moduleOrderPolicy"],
+            "current_intent_highest_relevance_first"
+        );
+        assert_eq!(modules[1]["templateAdjustment"]["moduleOrderIndex"], 1);
+        assert_eq!(modules[2], json!("ignored"));
     }
 }
