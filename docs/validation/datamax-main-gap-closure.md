@@ -19916,6 +19916,41 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-15 P5 Static-Page Render Output Workflow Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `e26af619` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `1cefe51a8` to `e26af619a`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page --lib`: passed, 468/468 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT warnings only;
+  - `CC=clang CXX=clang++ cargo build -q -p platform-api --release`: passed;
+  - after restart, `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - the first immediate `healthz` check returned connection refused because the web port was not listening yet; after a short wait, all five services remained `active`;
+  - final `healthz` returned status `ok`;
+  - final `readyz` returned status `ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with existing module-type warning only;
+  - remote `git status -sb` reported `## main...origin/main`;
+  - remote `git rev-parse HEAD` reported `e26af619af5a0837b3758fe6cda19e6d11176b6c`.
+- GitHub Actions:
+  - code commit run `27545622491` for `e26af619` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-15 P5 Static-Page Operation Apply Helper 8-Server Verification
 
 - 8-server post-sync verification:
