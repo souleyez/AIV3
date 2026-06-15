@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 
-use crate::{html_artifact_patch_operations, ApiError};
+use crate::{html_artifact_patch_operations, validate_static_page_operations, ApiError};
 
 pub(crate) fn html_artifact_static_page_operations_from_patch(
     draft_payload: &Value,
@@ -16,6 +16,16 @@ pub(crate) fn html_artifact_static_page_operations_from_patch(
         }
     }
     Ok(translated)
+}
+
+pub(crate) fn static_page_operations_from_html_artifact_patch(
+    draft_payload: &Value,
+    payload: &Value,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    validate_static_page_operations(html_artifact_static_page_operations_from_patch(
+        draft_payload,
+        payload,
+    )?)
 }
 
 fn static_page_operation_from_html_patch_operation(
@@ -396,6 +406,40 @@ mod tests {
             json!("sales.amount")
         );
         assert_eq!(operations[3]["patch"]["layout"]["w"], json!(8));
+    }
+
+    #[test]
+    fn wrapper_translates_and_validates_static_page_operations() {
+        let operations = static_page_operations_from_html_artifact_patch(
+            &draft_payload(),
+            &json!({
+                "operations": [
+                    {"op": "replace", "path": "/modules/0/title", "value": "新标题"},
+                    {"op": "replace", "path": "/styleDirection", "value": "data-command"}
+                ]
+            }),
+        )
+        .expect("wrapper should translate and validate patch operations");
+
+        assert_eq!(operations.len(), 2);
+        assert_eq!(operations[0]["type"], json!("update_module"));
+        assert_eq!(operations[0]["targetModuleId"], json!("hero"));
+        assert_eq!(operations[1]["type"], json!("change_style_direction"));
+    }
+
+    #[test]
+    fn wrapper_rejects_unsupported_static_page_patch_targets() {
+        let error = static_page_operations_from_html_artifact_patch(
+            &draft_payload(),
+            &json!({
+                "operations": [
+                    {"op": "replace", "path": "/assistant_context/secret", "value": "x"}
+                ]
+            }),
+        )
+        .expect_err("unsupported target should remain rejected through the wrapper");
+
+        assert_eq!(error.payload.code, "html_artifact_patch_target_unsupported");
     }
 
     #[test]

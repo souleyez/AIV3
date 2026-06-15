@@ -63479,16 +63479,6 @@ async fn apply_html_artifact_action_intent_to_product(
     })))
 }
 
-fn static_page_operations_from_html_artifact_patch(
-    draft_payload: &Value,
-    payload: &Value,
-) -> std::result::Result<Vec<Value>, ApiError> {
-    validate_static_page_operations(html_artifact_static_page_operations_from_patch(
-        draft_payload,
-        payload,
-    )?)
-}
-
 async fn hydrate_dataset_output_view(
     state: &AppState,
     output: DatasetOutput,
@@ -66538,7 +66528,7 @@ async fn interpret_static_page_draft_intent_for_api(
     }
 }
 
-fn validate_static_page_operations(
+pub(crate) fn validate_static_page_operations(
     operations: Vec<Value>,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     sanitize_static_page_operations(operations)
