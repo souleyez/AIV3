@@ -1,8 +1,11 @@
 use serde_json::{json, Value};
 
-use crate::static_page_template_adaptation_support::static_page_template_prompt_contains_any;
+use crate::static_page_template_adaptation_support::{
+    static_page_template_prompt_contains_any, static_page_template_prompt_subject,
+};
 use crate::static_page_template_binding_support::static_page_template_request_needs_store_sales_binding;
 use crate::static_page_template_reference_support::StaticPageTemplateReferenceSpec;
+use crate::value_array;
 
 fn static_page_template_data_binding(source_id: &str) -> Value {
     match source_id {
@@ -561,6 +564,59 @@ pub(crate) fn static_page_template_apply_intent_ordered_layouts(
     }
 }
 
+pub(crate) fn static_page_template_apply_adaptation_to_modules(
+    modules: Value,
+    reference: StaticPageTemplateReferenceSpec,
+    prompt: Option<&str>,
+) -> Value {
+    let subject = static_page_template_prompt_subject(prompt, reference.label);
+    let mut modules = value_array(modules);
+    for module in &mut modules {
+        let Some(object) = module.as_object_mut() else {
+            continue;
+        };
+        let module_id = object
+            .get("id")
+            .or_else(|| object.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some((title, content)) =
+            static_page_template_adjusted_module_copy(reference, &module_id, &subject, prompt)
+        else {
+            continue;
+        };
+        object.insert("title".to_string(), json!(title));
+        object.insert("content".to_string(), json!(content));
+        object.insert(
+            "templateAdjustment".to_string(),
+            json!({
+                "source": "current_customer_intent",
+                "subject": subject,
+                "policy": "adapted_before_delivery",
+            }),
+        );
+    }
+    let mut scored_modules = modules
+        .into_iter()
+        .enumerate()
+        .map(|(index, module)| {
+            (
+                static_page_template_module_intent_score(reference, &module, prompt, index),
+                index,
+                module,
+            )
+        })
+        .collect::<Vec<_>>();
+    scored_modules.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    let mut modules = scored_modules
+        .into_iter()
+        .map(|(_, _, module)| module)
+        .collect::<Vec<_>>();
+    static_page_template_apply_intent_ordered_layouts(&mut modules, reference);
+    Value::Array(modules)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,5 +820,60 @@ mod tests {
         );
         assert_eq!(modules[1]["templateAdjustment"]["moduleOrderIndex"], 1);
         assert_eq!(modules[2], json!("ignored"));
+    }
+
+    #[test]
+    fn static_page_template_module_support_applies_adaptation_and_intent_order() {
+        let reference = reference("data-report");
+        let modules = static_page_template_modules(reference);
+        let adapted = static_page_template_apply_adaptation_to_modules(
+            modules,
+            reference,
+            Some("销售取高按门店和区域筛选"),
+        );
+
+        assert_eq!(
+            module_ids(&adapted),
+            vec!["hero", "kpi", "trend", "comparison", "evidence"]
+        );
+        assert_eq!(adapted[0]["title"], "销售取高按门店和区域筛选核心结论");
+        assert_eq!(adapted[1]["title"], "门店取高核心 KPI");
+        assert_eq!(
+            adapted[1]["layout"],
+            json!({"x": 0, "y": 3, "w": 5, "h": 3})
+        );
+        assert_eq!(
+            adapted[1]["templateAdjustment"]["moduleOrderPolicy"],
+            "current_intent_highest_relevance_first"
+        );
+    }
+
+    #[test]
+    fn static_page_template_module_support_applies_docs_field_intent_order() {
+        let reference = reference("docs-page");
+        let modules = static_page_template_modules(reference);
+        let adapted = static_page_template_apply_adaptation_to_modules(
+            modules,
+            reference,
+            Some("按模板字段和表格格式输出"),
+        );
+
+        assert_eq!(adapted[0]["id"], "hero");
+        assert_eq!(adapted[1]["id"], "scope");
+        assert_eq!(adapted[2]["id"], "interfaces");
+        assert_eq!(adapted[2]["title"], "字段与数据");
+        assert_eq!(adapted[2]["templateAdjustment"]["moduleOrderIndex"], 2);
+    }
+
+    #[test]
+    fn static_page_template_module_support_adaptation_rejects_non_array_modules() {
+        assert_eq!(
+            static_page_template_apply_adaptation_to_modules(
+                json!({"id": "not-array"}),
+                reference("data-report"),
+                Some("经营报表"),
+            ),
+            json!([])
+        );
     }
 }

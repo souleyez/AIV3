@@ -67863,59 +67863,6 @@ fn static_page_supplemental_metric_candidate_summary(
     })
 }
 
-fn static_page_template_apply_adaptation_to_modules(
-    modules: Value,
-    reference: StaticPageTemplateReferenceSpec,
-    prompt: Option<&str>,
-) -> Value {
-    let subject = static_page_template_prompt_subject(prompt, reference.label);
-    let mut modules = value_array(modules);
-    for module in &mut modules {
-        let Some(object) = module.as_object_mut() else {
-            continue;
-        };
-        let module_id = object
-            .get("id")
-            .or_else(|| object.get("role"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let Some((title, content)) =
-            static_page_template_adjusted_module_copy(reference, &module_id, &subject, prompt)
-        else {
-            continue;
-        };
-        object.insert("title".to_string(), json!(title));
-        object.insert("content".to_string(), json!(content));
-        object.insert(
-            "templateAdjustment".to_string(),
-            json!({
-                "source": "current_customer_intent",
-                "subject": subject,
-                "policy": "adapted_before_delivery",
-            }),
-        );
-    }
-    let mut scored_modules = modules
-        .into_iter()
-        .enumerate()
-        .map(|(index, module)| {
-            (
-                static_page_template_module_intent_score(reference, &module, prompt, index),
-                index,
-                module,
-            )
-        })
-        .collect::<Vec<_>>();
-    scored_modules.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    let mut modules = scored_modules
-        .into_iter()
-        .map(|(_, _, module)| module)
-        .collect::<Vec<_>>();
-    static_page_template_apply_intent_ordered_layouts(&mut modules, reference);
-    Value::Array(modules)
-}
-
 fn json_object_string_missing(object: &Map<String, Value>, key: &str) -> bool {
     object
         .get(key)
