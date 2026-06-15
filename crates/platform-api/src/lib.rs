@@ -304,6 +304,7 @@ mod static_page_artifact_summary_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
+mod static_page_data_source_candidate_support;
 mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
@@ -506,6 +507,7 @@ use static_page_artifact_summary_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
+use static_page_data_source_candidate_support::*;
 use static_page_database_aggregate_sample_support::*;
 use static_page_database_schema_sample_support::*;
 use static_page_dataset_fact_snapshot_sample_support::*;
@@ -68580,159 +68582,6 @@ fn build_static_page_data_snapshot_with_evidence(
         "detailRowCount": validation_summary.get("detailRowCount").cloned().unwrap_or(Value::Null),
         "unitHints": validation_summary.get("unitHints").cloned().unwrap_or_else(|| json!([])),
     })
-}
-
-fn build_static_page_data_source_candidates(
-    selected_scope: &Value,
-    evidence_state: Option<&Value>,
-) -> Value {
-    let mut candidates = vec![
-        json!({
-            "sourceId": "model",
-            "type": "model_summary",
-            "label": "模型总结",
-            "available": true,
-        }),
-        json!({
-            "sourceId": "conversation_memory",
-            "type": "conversation_memory",
-            "label": "对话历史",
-            "available": selected_scope_requests_conversation_memory(selected_scope),
-        }),
-    ];
-
-    let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
-    if !selected_dataset_ids.is_empty() {
-        candidates.push(json!({
-            "sourceId": "selected_scope",
-            "type": "selected_scope",
-            "label": "当前选中范围",
-            "available": true,
-            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        }));
-        candidates.push(json!({
-            "sourceId": "dataset",
-            "type": "dataset_metrics",
-            "label": "数据集指标摘要",
-            "available": true,
-            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        }));
-        candidates.push(json!({
-            "sourceId": "evidence",
-            "type": "retrieval_evidence",
-            "label": "检索证据",
-            "available": true,
-            "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        }));
-    }
-
-    push_static_page_database_data_source_candidates(&mut candidates, evidence_state);
-
-    Value::Array(candidates)
-}
-
-fn push_static_page_database_data_source_candidates(
-    candidates: &mut Vec<Value>,
-    evidence_state: Option<&Value>,
-) {
-    let Some(evidence_items) = evidence_state
-        .and_then(|state| state.get("supplied_items"))
-        .and_then(Value::as_array)
-    else {
-        return;
-    };
-
-    let mut schema_dataset_ids = BTreeSet::new();
-    let mut schema_source_ids = BTreeSet::new();
-    let mut schema_tables = BTreeSet::new();
-    let mut aggregate_dataset_ids = BTreeSet::new();
-    let mut aggregate_source_ids = BTreeSet::new();
-    let mut aggregate_tables = BTreeSet::new();
-    let mut aggregate_fields = BTreeSet::new();
-    let mut fact_snapshot_dataset_ids = BTreeSet::new();
-    let mut fact_snapshot_sources = BTreeSet::new();
-    let mut fact_snapshot_types = BTreeSet::new();
-
-    for item in evidence_items {
-        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
-            "database_schema_context" => {
-                collect_static_page_candidate_string(item, "dataset_id", &mut schema_dataset_ids);
-                collect_static_page_candidate_string(item, "source_id", &mut schema_source_ids);
-                collect_static_page_candidate_string(item, "table", &mut schema_tables);
-            }
-            "database_aggregate" => {
-                collect_static_page_candidate_string(
-                    item,
-                    "dataset_id",
-                    &mut aggregate_dataset_ids,
-                );
-                collect_static_page_candidate_string(item, "source_id", &mut aggregate_source_ids);
-                collect_static_page_candidate_string(item, "table", &mut aggregate_tables);
-                collect_static_page_candidate_string(item, "value_label", &mut aggregate_fields);
-                collect_static_page_candidate_string(item, "metric", &mut aggregate_fields);
-            }
-            "dataset_fact_snapshot" => {
-                collect_static_page_candidate_string(
-                    item,
-                    "dataset_id",
-                    &mut fact_snapshot_dataset_ids,
-                );
-                collect_static_page_candidate_string(item, "source", &mut fact_snapshot_sources);
-                if let Some(rows_by_type) = static_page_dataset_fact_snapshot_rows_by_type(item) {
-                    for (fact_type, rows) in rows_by_type {
-                        if rows.as_array().is_some_and(|items| !items.is_empty()) {
-                            fact_snapshot_types.insert(fact_type.clone());
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !schema_tables.is_empty() {
-        candidates.push(json!({
-            "sourceId": "database_schema",
-            "type": "database_schema_context",
-            "label": "数据库结构语义",
-            "available": true,
-            "datasetIds": schema_dataset_ids.into_iter().collect::<Vec<_>>(),
-            "sourceDatabaseIds": schema_source_ids.into_iter().collect::<Vec<_>>(),
-            "tables": schema_tables.into_iter().collect::<Vec<_>>(),
-        }));
-    }
-    if !aggregate_tables.is_empty() {
-        candidates.push(json!({
-            "sourceId": "database_aggregate",
-            "type": "database_aggregate",
-            "label": "数据库聚合样本",
-            "available": true,
-            "datasetIds": aggregate_dataset_ids.into_iter().collect::<Vec<_>>(),
-            "sourceDatabaseIds": aggregate_source_ids.into_iter().collect::<Vec<_>>(),
-            "tables": aggregate_tables.into_iter().collect::<Vec<_>>(),
-            "fields": aggregate_fields.into_iter().collect::<Vec<_>>(),
-        }));
-    }
-    if !fact_snapshot_types.is_empty() {
-        candidates.push(json!({
-            "sourceId": "dataset_fact_snapshot",
-            "type": "dataset_fact_snapshot",
-            "label": "文档结构化事实快照",
-            "available": true,
-            "datasetIds": fact_snapshot_dataset_ids.into_iter().collect::<Vec<_>>(),
-            "sources": fact_snapshot_sources.into_iter().collect::<Vec<_>>(),
-            "factTypes": fact_snapshot_types.into_iter().collect::<Vec<_>>(),
-        }));
-    }
-}
-
-fn collect_static_page_candidate_string(item: &Value, key: &str, output: &mut BTreeSet<String>) {
-    if let Some(value) = item.get(key).and_then(Value::as_str) {
-        let value = value.trim();
-        if !value.is_empty() {
-            output.insert(value.to_string());
-        }
-    }
 }
 
 pub(crate) fn build_static_page_field_candidates(
