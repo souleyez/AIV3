@@ -69384,20 +69384,6 @@ fn build_static_page_module_sample_data(
     Value::Array(points)
 }
 
-fn build_static_page_field_candidate_sample_points(
-    field_candidates: &Value,
-    module: &Value,
-    field_path: &str,
-) -> Vec<Value> {
-    let source_id = static_page_module_source_id(module);
-    let Some(candidate) =
-        static_page_matching_field_candidate(field_candidates, &source_id, field_path)
-    else {
-        return Vec::new();
-    };
-    static_page_field_candidate_sample_points(candidate, field_path)
-}
-
 fn push_static_page_field_candidate(
     candidates: &mut Vec<Value>,
     seen: &mut BTreeSet<String>,

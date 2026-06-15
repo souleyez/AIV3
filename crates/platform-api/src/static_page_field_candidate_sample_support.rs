@@ -1,7 +1,24 @@
 use crate::static_page_explicit_sample_support::{
     static_page_explicit_point_label, static_page_explicit_point_value,
 };
+use crate::static_page_module_binding_support::{
+    static_page_matching_field_candidate, static_page_module_source_id,
+};
 use serde_json::{json, Value};
+
+pub(crate) fn build_static_page_field_candidate_sample_points(
+    field_candidates: &Value,
+    module: &Value,
+    field_path: &str,
+) -> Vec<Value> {
+    let source_id = static_page_module_source_id(module);
+    let Some(candidate) =
+        static_page_matching_field_candidate(field_candidates, &source_id, field_path)
+    else {
+        return Vec::new();
+    };
+    static_page_field_candidate_sample_points(candidate, field_path)
+}
 
 pub(crate) fn static_page_field_candidate_sample_points(
     candidate: &Value,
@@ -137,5 +154,95 @@ mod tests {
         assert_eq!(point.get("value"), Some(&json!(3456.7)));
         assert_eq!(point.get("kind"), Some(&json!("field_candidate_sample")));
         assert_eq!(point.get("fieldPath"), Some(&json!("time.month")));
+    }
+
+    #[test]
+    fn build_field_candidate_sample_points_matches_module_source_id() {
+        let field_candidates = json!([
+            {
+                "sourceId": "database_aggregate",
+                "fieldPath": "orders.amount",
+                "sampleData": [
+                    {"label": "门店A", "value": "1,200"}
+                ]
+            },
+            {
+                "sourceId": "dataset",
+                "fieldPath": "orders.amount",
+                "sampleData": [
+                    {"label": "数据集", "value": 1}
+                ]
+            }
+        ]);
+        let module = json!({
+            "dataBinding": {
+                "sourceId": "database_aggregate",
+                "fieldPath": "orders.amount"
+            }
+        });
+
+        let points = build_static_page_field_candidate_sample_points(
+            &field_candidates,
+            &module,
+            "orders.amount",
+        );
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].get("label"), Some(&json!("门店A")));
+        assert_eq!(points[0].get("value"), Some(&json!(1200.0)));
+    }
+
+    #[test]
+    fn build_field_candidate_sample_points_accepts_empty_module_source_id() {
+        let field_candidates = json!([
+            {
+                "sourceId": "dataset",
+                "fieldPath": "risk.level",
+                "sampleData": [
+                    {"label": "风险", "value": 3}
+                ]
+            }
+        ]);
+        let module = json!({
+            "dataBinding": {
+                "fieldPath": "risk.level"
+            }
+        });
+
+        let points = build_static_page_field_candidate_sample_points(
+            &field_candidates,
+            &module,
+            "risk.level",
+        );
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].get("label"), Some(&json!("风险")));
+    }
+
+    #[test]
+    fn build_field_candidate_sample_points_rejects_wrong_source_id() {
+        let field_candidates = json!([
+            {
+                "sourceId": "dataset",
+                "fieldPath": "orders.amount",
+                "sampleData": [
+                    {"label": "数据集", "value": 1}
+                ]
+            }
+        ]);
+        let module = json!({
+            "dataBinding": {
+                "sourceId": "database_aggregate",
+                "fieldPath": "orders.amount"
+            }
+        });
+
+        let points = build_static_page_field_candidate_sample_points(
+            &field_candidates,
+            &module,
+            "orders.amount",
+        );
+
+        assert!(points.is_empty());
     }
 }
