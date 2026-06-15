@@ -26103,16 +26103,6 @@ pub(crate) async fn publish_static_page_revision_for_current_artifact(
     })
 }
 
-fn external_channel_static_page_source_refs_string_array(
-    source_refs: &Value,
-    key: &str,
-) -> Vec<String> {
-    source_refs
-        .get(key)
-        .map(|value| external_string_ids_from_payload_value(value.clone()))
-        .unwrap_or_default()
-}
-
 fn external_channel_static_page_template_from_source_refs(
     source_refs: &Value,
 ) -> Option<ExternalArtifactTemplateView> {
