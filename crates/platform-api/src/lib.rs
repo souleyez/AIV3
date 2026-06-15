@@ -340,6 +340,7 @@ mod static_page_sample_quality_support;
 mod static_page_structure_signals;
 mod static_page_supplemental_metrics_support;
 mod static_page_template_adaptation_support;
+mod static_page_template_baseline_visual_support;
 mod static_page_template_binding_support;
 mod static_page_template_match_support;
 mod static_page_template_module_support;
@@ -552,6 +553,7 @@ use static_page_sample_quality_support::*;
 use static_page_structure_signals::*;
 use static_page_supplemental_metrics_support::*;
 use static_page_template_adaptation_support::*;
+use static_page_template_baseline_visual_support::*;
 use static_page_template_binding_support::*;
 use static_page_template_match_support::*;
 use static_page_template_overlap_support::*;
@@ -26802,35 +26804,6 @@ fn external_channel_static_page_image_job_preview_ready(
             contracts::StaticPageImageJobStatusView::PreviewReady
                 | contracts::StaticPageImageJobStatusView::Confirmed
         )
-}
-
-fn static_page_relaxed_template_match_is_dataset_overlap(relaxed_template_match: &Value) -> bool {
-    relaxed_template_match.get("policy").and_then(Value::as_str) == Some("dataset_overlap")
-}
-
-fn static_page_relaxed_template_match_baseline_public_url(
-    relaxed_template_match: &Value,
-) -> Option<String> {
-    relaxed_template_match
-        .get("baseline_public_url")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-        .map(ToOwned::to_owned)
-}
-
-fn static_page_template_baseline_visual_contract_url(
-    template_reference: Option<&Value>,
-    relaxed_template_match: &Value,
-) -> Option<String> {
-    if let Some(preview_url) =
-        template_reference.and_then(static_page_generated_template_preview_url)
-    {
-        return Some(preview_url);
-    }
-
-    static_page_relaxed_template_match_baseline_public_url(relaxed_template_match)
-        .or_else(|| template_reference.and_then(static_page_generated_template_public_url))
 }
 
 #[allow(clippy::too_many_arguments)]
