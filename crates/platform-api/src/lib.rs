@@ -304,6 +304,7 @@ mod static_page_artifact_summary_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
+mod static_page_database_schema_sample_support;
 mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
@@ -502,6 +503,7 @@ use static_page_artifact_summary_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
+use static_page_database_schema_sample_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_explicit_sample_support::*;
 use static_page_field_candidate_sample_support::*;
@@ -69405,50 +69407,7 @@ fn build_static_page_database_schema_sample_points(
         return Vec::new();
     }
 
-    let mut points = Vec::new();
-    for item in evidence_items
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_schema_context"))
-    {
-        let table =
-            static_page_artifact_string(item, &["table"]).unwrap_or_else(|| "database".to_string());
-        if let Some((requested_table, requested_group)) = requested_schema.as_ref() {
-            if requested_table != &table {
-                continue;
-            }
-            let fields = static_page_database_schema_group_fields(item, requested_group);
-            if fields.is_empty() {
-                continue;
-            }
-            points.push(static_page_database_schema_group_sample_point(
-                item,
-                &table,
-                requested_group,
-                fields,
-                field_path,
-            ));
-        } else {
-            points.push(static_page_database_schema_overview_sample_point(
-                item, &table,
-            ));
-        }
-        if points.len() >= 8 {
-            break;
-        }
-    }
-    points
-}
-
-fn static_page_database_schema_field_path_parts(field_path: &str) -> Option<(String, String)> {
-    let mut parts = field_path.split('.');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some("database"), Some("schema"), Some(table), Some(group))
-            if !table.trim().is_empty() && !group.trim().is_empty() =>
-        {
-            Some((table.trim().to_string(), group.trim().to_string()))
-        }
-        _ => None,
-    }
+    static_page_database_schema_sample_points(evidence_items, requested_schema.as_ref(), field_path)
 }
 
 fn static_page_module_requests_database_schema_overview(
@@ -69476,102 +69435,6 @@ fn static_page_module_requests_database_schema_overview(
             "metric",
             "dimension",
         ],
-    )
-}
-
-fn static_page_database_schema_group_fields(item: &Value, group: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    if group == "field_roles" {
-        if let Some(roles) = item.get("field_roles").and_then(Value::as_array) {
-            for role in roles {
-                if let Some(name) = role.get("name").and_then(Value::as_str) {
-                    push_string_hint(&mut fields, name);
-                }
-            }
-        }
-        return fields;
-    }
-    if let Some(value) = item.get(group) {
-        collect_string_list(value, &mut fields);
-    }
-    fields
-}
-
-fn static_page_database_schema_group_sample_point(
-    item: &Value,
-    table: &str,
-    group: &str,
-    fields: Vec<String>,
-    field_path: Option<&str>,
-) -> Value {
-    json!({
-        "label": format!("{table} {}", static_page_database_schema_group_label(group)),
-        "value": fields.len() as f64,
-        "kind": "database_schema",
-        "source": "database_schema",
-        "fieldPath": field_path.map(ToString::to_string).unwrap_or_else(|| format!("database.schema.{table}.{group}")),
-        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
-        "table": table,
-        "fieldGroup": group,
-        "fields": fields,
-        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
-        "text": static_page_database_schema_group_text(item, table, group),
-    })
-}
-
-fn static_page_database_schema_overview_sample_point(item: &Value, table: &str) -> Value {
-    let metrics = static_page_database_schema_group_fields(item, "metrics");
-    let entity_dimensions = static_page_database_schema_group_fields(item, "entity_dimensions");
-    let time_dimensions = static_page_database_schema_group_fields(item, "time_dimensions");
-    let category_dimensions = static_page_database_schema_group_fields(item, "category_dimensions");
-    let field_count =
-        metrics.len() + entity_dimensions.len() + time_dimensions.len() + category_dimensions.len();
-    json!({
-        "label": table,
-        "value": field_count as f64,
-        "kind": "database_schema",
-        "source": "database_schema",
-        "fieldPath": format!("database.schema.{table}.overview"),
-        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-        "sourceId": item.get("source_id").cloned().unwrap_or(Value::Null),
-        "table": table,
-        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
-        "fieldGroups": {
-            "metrics": metrics,
-            "entityDimensions": entity_dimensions,
-            "timeDimensions": time_dimensions,
-            "categoryDimensions": category_dimensions,
-        },
-        "text": item
-            .get("summary")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("数据库表 {table} 的结构语义。")),
-    })
-}
-
-fn static_page_database_schema_group_label(group: &str) -> &'static str {
-    match group {
-        "metrics" => "指标字段",
-        "entity_dimensions" => "实体维度",
-        "time_dimensions" => "时间维度",
-        "category_dimensions" => "分类维度",
-        "field_roles" => "字段角色",
-        _ => "字段",
-    }
-}
-
-fn static_page_database_schema_group_text(item: &Value, table: &str, group: &str) -> String {
-    let fields = static_page_database_schema_group_fields(item, group);
-    let fields = if fields.is_empty() {
-        "-".to_string()
-    } else {
-        fields.join(" / ")
-    };
-    format!(
-        "数据库表 {table} 的{}：{fields}。",
-        static_page_database_schema_group_label(group)
     )
 }
 
