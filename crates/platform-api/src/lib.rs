@@ -308,6 +308,7 @@ mod static_page_data_source_candidate_support;
 mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
+mod static_page_dynamic_contract_support;
 mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
@@ -510,6 +511,7 @@ use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_data_source_candidate_support::*;
+use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
 use static_page_handoff_artifact_support::*;
@@ -67959,80 +67961,6 @@ fn build_static_page_queued_export_package_manifest(
                 .unwrap_or("unknown")
         }
     })
-}
-
-fn build_static_page_dynamic_page_contract() -> Value {
-    json!({
-        "version": 1,
-        "data_file": "data.json",
-        "source_snapshot_file": "data-snapshot.json",
-        "data_role": "client_refresh_snapshot",
-        "default_controls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
-        "refresh_policy": {
-            "mode": "poll_data_json_when_published",
-            "interval_seconds": 60,
-            "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
-        },
-        "rendering_policy": "final_html_should_render_stateful_business_modules_from_data_json_when_present"
-    })
-}
-
-fn build_static_page_fixed_task_dynamic_page_contract() -> Value {
-    json!({
-        "required": true,
-        "data_file": "data.json",
-        "source_snapshot_file": "data-snapshot.json",
-        "time_selector_required": true,
-        "time_range_selector_required": true,
-        "primary_partition_selector_required": true,
-        "manual_refresh_required": true,
-        "auto_refresh_required": true,
-        "refresh_interval_seconds": 60,
-        "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
-        "static_html_must_render_from_data_json": true,
-        "report_time_range": build_static_page_report_time_range_contract(),
-    })
-}
-
-fn build_static_page_report_time_range_contract() -> Value {
-    json!({
-        "required": true,
-        "selector": "time_range",
-        "default_granularity": "month",
-        "default_preset": "latest_available_month",
-        "operating_report_default": "month",
-        "supported_granularities": ["month", "quarter", "year", "custom_range"],
-        "field_hints": [
-            "month",
-            "stat_month",
-            "biz_month",
-            "period_month",
-            "date",
-            "stat_date",
-            "txdate",
-            "created_at",
-            "updated_at"
-        ],
-        "fallback_policy": "when only daily dates are available, aggregate or label operating reports by month while preserving custom range selection"
-    })
-}
-
-fn normalize_static_page_dynamic_page_contract(candidate: Value) -> Value {
-    if candidate.is_null() {
-        return build_static_page_dynamic_page_contract();
-    }
-    let mut normalized = build_static_page_dynamic_page_contract();
-    if let (Some(normalized_object), Some(candidate_object)) =
-        (normalized.as_object_mut(), candidate.as_object())
-    {
-        for (key, value) in candidate_object {
-            if key == "report_time_range" || key == "time_range_selector_required" {
-                continue;
-            }
-            normalized_object.insert(key.clone(), value.clone());
-        }
-    }
-    normalized
 }
 
 fn build_static_page_visual_spec(style_direction: &str) -> Value {
