@@ -311,6 +311,7 @@ mod static_page_public_template_update_support;
 mod static_page_render_gate_support;
 mod static_page_render_output_view_support;
 mod static_page_report_snapshot;
+mod static_page_sample_quality_support;
 mod static_page_structure_signals;
 mod static_page_template_adaptation_support;
 mod static_page_template_binding_support;
@@ -503,6 +504,7 @@ use static_page_public_template_update_support::*;
 use static_page_render_gate_support::*;
 use static_page_render_output_view_support::*;
 use static_page_report_snapshot::*;
+use static_page_sample_quality_support::*;
 use static_page_structure_signals::*;
 use static_page_template_adaptation_support::*;
 use static_page_template_binding_support::*;
@@ -70328,52 +70330,6 @@ fn static_page_format_media_timestamp(seconds: f64) -> String {
     } else {
         format!("{minutes:02}:{secs:02}.{millis:03}")
     }
-}
-
-fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
-    let Some(items) = sample_data.as_array() else {
-        return "not_available";
-    };
-    if items.is_empty() {
-        return "not_available";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("evidence_value"))
-    {
-        return "evidence_value";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_aggregate"))
-    {
-        return "evidence_value";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
-    {
-        return "evidence_value";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("field_candidate_sample"))
-    {
-        return "evidence_value";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("module_data"))
-    {
-        return "module_data";
-    }
-    if items
-        .iter()
-        .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_schema"))
-    {
-        return "schema_context";
-    }
-    "evidence_signal"
 }
 
 fn build_static_page_explicit_metric_points(
