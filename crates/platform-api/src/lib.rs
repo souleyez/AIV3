@@ -340,6 +340,7 @@ mod static_page_render_output_view_support;
 mod static_page_render_output_workflow_support;
 mod static_page_render_queue_manifest_support;
 mod static_page_report_snapshot;
+mod static_page_revision_artifact_support;
 mod static_page_sample_quality_support;
 mod static_page_structure_signals;
 mod static_page_supplemental_metrics_support;
@@ -558,6 +559,7 @@ use static_page_render_output_view_support::*;
 use static_page_render_output_workflow_support::*;
 use static_page_render_queue_manifest_support::*;
 use static_page_report_snapshot::*;
+use static_page_revision_artifact_support::*;
 use static_page_sample_quality_support::*;
 use static_page_structure_signals::*;
 use static_page_supplemental_metrics_support::*;
@@ -26321,212 +26323,6 @@ pub(crate) async fn publish_static_page_revision_for_current_artifact(
         existing_artifact,
         public_url,
     })
-}
-
-fn static_page_current_artifact_draft_id(current_artifact: &Value) -> Option<StaticPageDraftId> {
-    [
-        "backendDraftId",
-        "backend_draft_id",
-        "staticPageDraftId",
-        "static_page_draft_id",
-        "draft_id",
-        "id",
-    ]
-    .iter()
-    .find_map(|key| {
-        current_artifact
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .map(StaticPageDraftId)
-    })
-}
-
-fn static_page_revision_explicit_intent_present(value: &str) -> bool {
-    let text = value.trim();
-    if text.is_empty() {
-        return false;
-    }
-    if text.contains("修改报表") {
-        return true;
-    }
-    let lower = text.to_ascii_lowercase();
-    let subject_terms = [
-        "报表",
-        "页面",
-        "静态页",
-        "图表",
-        "看板",
-        "模板",
-        "模块",
-        "产物",
-        "链接",
-        "html",
-        "dashboard",
-    ];
-    let action_terms = [
-        "修改",
-        "调整",
-        "更改",
-        "改成",
-        "换成",
-        "重做",
-        "重新做",
-        "重新生成",
-        "优化",
-        "修复",
-        "更正",
-        "纠正",
-        "去掉",
-        "删除",
-        "增加",
-        "新增",
-        "加上",
-        "移动",
-        "合并",
-        "拆分",
-        "前置",
-        "置顶",
-        "放到",
-        "提到",
-        "暗黑",
-        "手机端",
-        "风格",
-        "布局",
-        "字段",
-        "颜色",
-        "排序",
-        "筛选",
-        "联动",
-        "刷新数据",
-        "发布新链接",
-        "不喜欢",
-    ];
-    let has_subject = subject_terms
-        .iter()
-        .any(|needle| text.contains(needle) || lower.contains(needle));
-    let has_action = action_terms
-        .iter()
-        .any(|needle| text.contains(needle) || lower.contains(needle));
-    has_subject && has_action
-}
-
-fn static_page_public_url_from_current_artifact(current_artifact: &Value) -> Option<String> {
-    [
-        "/finalPage/publicUrl",
-        "/finalPage/public_url",
-        "/finalPage/generatedArtifactUrl",
-        "/finalPage/generated_artifact_url",
-        "/final_page/publicUrl",
-        "/final_page/public_url",
-        "/final_page/generatedArtifactUrl",
-        "/final_page/generated_artifact_url",
-        "/artifactStability/publicUrl",
-        "/artifactStability/public_url",
-        "/artifact_stability/publicUrl",
-        "/artifact_stability/public_url",
-    ]
-    .into_iter()
-    .filter_map(|pointer| current_artifact.pointer(pointer).and_then(Value::as_str))
-    .chain(
-        [
-            "publicUrl",
-            "public_url",
-            "generatedArtifactUrl",
-            "generated_artifact_url",
-        ]
-        .into_iter()
-        .filter_map(|key| current_artifact.get(key).and_then(Value::as_str)),
-    )
-    .map(str::trim)
-    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-    .map(ToOwned::to_owned)
-    .next()
-}
-
-fn static_page_revision_source_refs(
-    mut source_refs: Value,
-    source_draft: &StaticPageDraft,
-    existing_artifact: &Value,
-    instruction: &str,
-    public_url: &str,
-    now: DateTime<Utc>,
-) -> Value {
-    ensure_json_object(&mut source_refs);
-    let generated_reference = json!({
-        "templateId": format!("generated-static-page:{}", source_draft.id),
-        "source": "v3-static-page-template-library",
-        "templateKind": "generated_static_page",
-        "label": source_draft.title,
-        "publicUrl": public_url,
-        "revisionInstruction": truncate_assistant_supply_text(instruction, 1200),
-        "createdAt": now,
-    });
-    if let Some(object) = source_refs.as_object_mut() {
-        let mut template_references = object
-            .get("template_references")
-            .or_else(|| object.get("templateReferences"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|reference| {
-                static_page_generated_template_public_url(reference).as_deref() != Some(public_url)
-            })
-            .collect::<Vec<_>>();
-        template_references.insert(0, generated_reference);
-        object.insert(
-            "template_references".to_string(),
-            Value::Array(template_references.clone()),
-        );
-        object.insert(
-            "templateReferences".to_string(),
-            Value::Array(template_references),
-        );
-        object.insert(
-            "revision_source".to_string(),
-            json!("main_chat_current_static_page_artifact"),
-        );
-        object.insert(
-            "source_draft_id".to_string(),
-            json!(source_draft.id.to_string()),
-        );
-        object.insert("existing_artifact".to_string(), existing_artifact.clone());
-        object.insert(
-            "revision_instruction".to_string(),
-            json!(truncate_assistant_supply_text(instruction, 1200)),
-        );
-        object.insert(
-            "template_match_policy".to_string(),
-            json!("current_artifact_existing_revision"),
-        );
-        object.insert(
-            "style_reuse_policy".to_string(),
-            json!("preserve_existing_artifact_style_unless_explicit_redesign"),
-        );
-        object.insert(
-            "data_refresh_policy".to_string(),
-            json!("refresh_current_authorized_data_against_existing_artifact"),
-        );
-        object.insert(
-            "publish_mode".to_string(),
-            json!("new_generated_artifact_only"),
-        );
-    }
-    source_refs
-}
-
-fn static_page_revision_draft_title(source_title: &str) -> String {
-    let trimmed = source_title.trim();
-    if trimmed.is_empty() {
-        "静态页修订版".to_string()
-    } else if trimmed.contains("修订") {
-        truncate_assistant_supply_text(trimmed, 80)
-    } else {
-        truncate_assistant_supply_text(&format!("{trimmed}（修订）"), 80)
-    }
 }
 
 pub(crate) fn external_channel_static_page_source_ref_string(
