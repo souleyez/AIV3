@@ -330,6 +330,7 @@ mod static_page_module_sample_data_support;
 mod static_page_operation_apply_support;
 mod static_page_operation_metadata_support;
 mod static_page_payload_support;
+mod static_page_preview_readiness_support;
 mod static_page_public_template_update_support;
 mod static_page_render_gate_support;
 mod static_page_render_output_view_support;
@@ -543,6 +544,7 @@ use static_page_module_sample_data_support::*;
 use static_page_operation_apply_support::*;
 use static_page_operation_metadata_support::*;
 use static_page_payload_support::*;
+use static_page_preview_readiness_support::*;
 use static_page_public_template_update_support::*;
 use static_page_render_gate_support::*;
 use static_page_render_output_view_support::*;
@@ -26762,48 +26764,6 @@ fn external_channel_static_page_image2_codex_execution(
     };
     let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
     Ok((execution, initial_event))
-}
-
-fn external_channel_static_page_fixed_task_preview_ready(
-    fixed_task: &CodexHostFixedTaskTemplateContextView,
-) -> bool {
-    fixed_task.template_id == CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish
-        && fixed_task
-            .image2
-            .get("preview_asset_key")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        && fixed_task
-            .image2
-            .get("human_confirmation_required")
-            .and_then(Value::as_bool)
-            == Some(false)
-        && fixed_task
-            .policies
-            .get("effect_image_confirmation_required")
-            .and_then(Value::as_bool)
-            == Some(false)
-        && fixed_task
-            .policies
-            .get("continue_to_publish_after_effect_image")
-            .and_then(Value::as_bool)
-            == Some(true)
-}
-
-fn external_channel_static_page_image_job_preview_ready(
-    image_job: &StaticPageImageJobView,
-) -> bool {
-    image_job
-        .preview_asset_key
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        && matches!(
-            image_job.status,
-            contracts::StaticPageImageJobStatusView::PreviewReady
-                | contracts::StaticPageImageJobStatusView::Confirmed
-        )
 }
 
 #[allow(clippy::too_many_arguments)]

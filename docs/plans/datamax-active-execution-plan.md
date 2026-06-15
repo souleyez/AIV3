@@ -186,7 +186,8 @@
 | 123 | P5 static-page artifact URL helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_artifact_url_support` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 124 | P5 static-page existing artifact reference helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_existing_artifact_support` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 125 | P5 static-page template baseline visual helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_template_baseline_visual_support` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
-| 126 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 126 | P5 static-page preview readiness helper 拆分 | 本地行为保持拆分和 P0 回归已通过；待提交、推送和 8 服务器验证。 | 提交后同步 8 服务器，跑 Web build、release build、服务重启、health/ready 和 P0 smoke，再写回远端验证。 | `static_page_preview_readiness_support` 模块单测、`static_page` 广义回归、`cargo check`、P0 smoke 和前端 Node 回归通过；本机 Web build 因缺 `next` 未进入构建，8 服务器 Web build 作为发布验收；不改变第三方公开契约。 |
+| 127 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
@@ -824,13 +825,15 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 - 2026-06-15: `crates/platform-api/src/lib.rs` static-page generated artifact URL 提取和 sibling export URL helper 已拆到 `static_page_artifact_url_support` 模块并补模块单测；prompt 中生成产物 URL 的 query/fragment 清理、重复去重、pending/disallowed URL 拒绝、`index.html` sibling 文件推导和非 index leaf 追加语义保持不变。本地 `cargo fmt --check`、`static_page_artifact_url_support` 模块回归、`static_page` 广义回归、`cargo check`、第三方报表/导出/临时文档/视频 PPT/静态页 5 路/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；本机 Web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `7638c8a5a`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。GitHub Actions 仍为既有 `steps=[]` 启动前失败。
 - 2026-06-15: `crates/platform-api/src/lib.rs` static-page existing artifact reference helper 已拆到 `static_page_existing_artifact_support` 模块并补模块单测；prompt 显式产物链接、template reference、source_refs 模板引用、dataset overlap fallback、显式重设计拒绝和 data/data-snapshot sibling URL 语义保持不变。本地 `cargo fmt --check`、`static_page_existing_artifact_support` 模块回归、`static_page` 广义回归、`cargo check`、第三方报表/导出/临时文档/视频 PPT/静态页 5 路/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；本机 Web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `f1cadb60c`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。GitHub Actions 仍为既有 `steps=[]` 启动前失败。
 - 2026-06-15: `crates/platform-api/src/lib.rs` static-page template baseline visual contract helper 已拆到 `static_page_template_baseline_visual_support` 模块并补模块单测；dataset overlap policy 精确判断、baseline public URL 过滤、视觉合同 URL 按 template preview、relaxed baseline、template public URL 的优先级选择语义保持不变。本地 `cargo fmt --check`、`static_page_template_baseline_visual_support` 模块回归、`static_page` 广义回归、`cargo check`、第三方报表/导出/临时文档/视频 PPT/静态页 5 路/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；本机 Web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。已提交并同步 8 服务器，远端 HEAD `58710d6f4`，8 服务器 Web build、release build、服务重启、health/ready 和 P0 smoke 均通过。GitHub Actions 仍为既有 `steps=[]` 启动前失败。
+- 2026-06-16: `crates/platform-api/src/lib.rs` static-page fixed task/image job preview readiness helper 已拆到 `static_page_preview_readiness_support` 模块并补模块单测；固定任务自动发布策略、预览资产存在性、图片任务 `PreviewReady`/`Confirmed` 就绪和空资产拒绝语义保持不变。本地 `cargo fmt --check`、`static_page_preview_readiness_support` 模块回归、`static_page` 广义回归、`cargo check`、第三方报表/导出/临时文档/视频 PPT/静态页 5 路/Cloudflare 兜底/prewarm observability smoke 和主站流式/本地会话 Node 回归均通过；本机 Web build 仍因本地 `apps/web/node_modules` 缺 `next` 未进入构建。待提交、推送并同步 8 服务器验证。
 
 ## 10. 当前下一步
 
-1. 默认继续 P5：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
-2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
-3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
-4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
-5. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
-6. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
-7. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
+1. 当前先完成 #126：提交 static-page preview readiness helper 拆分，推送 GitHub，同步 8 服务器并跑 Web build、release build、服务重启、health/ready 和 P0 smoke。
+2. #126 远端验证写回后，默认继续 #127：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+3. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
+4. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
+5. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
+6. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
+7. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
+8. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
