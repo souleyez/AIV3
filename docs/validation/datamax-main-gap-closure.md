@@ -20007,6 +20007,42 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
   - no service was restarted during local verification.
 
+## 2026-06-15 P5 Static-Page Template Baseline Visual Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `58710d6f` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `b4f6c9198` to `58710d6f4`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page_template_baseline_visual_support --lib`: passed, 4/4 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page --lib`: passed, 492/492 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT warnings only;
+  - `CC=clang CXX=clang++ cargo build -q -p platform-api --release`: passed;
+  - after restart, `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - `healthz` returned status `ok`;
+  - `readyz` returned status `ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests;
+  - post-smoke service check confirmed all five restarted services remained `active`;
+  - final `healthz` returned status `ok` and final `readyz` returned status `ready`;
+  - remote `git status -sb` reported `## main...origin/main`;
+  - remote `git rev-parse HEAD` reported `58710d6f4155ebfd4d7df0a30b5e25158afe11b6`.
+- GitHub Actions:
+  - code commit run `27559454302` for `58710d6f` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - no 120 server deployment, restart, runner change, repository update, or configuration mutation was performed.
+
 ## 2026-06-15 P5 Static-Page Existing Artifact Reference Helper 8-Server Verification
 
 - 8-server post-sync verification:
