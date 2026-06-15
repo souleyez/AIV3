@@ -42657,32 +42657,6 @@ async fn maybe_attach_external_static_page_artifact_to_run(
     Ok(())
 }
 
-fn external_channel_static_page_report_title(payload: &Value, public_url: &str) -> String {
-    if let Some(title) = external_channel_static_page_artifact_payload_string(
-        payload,
-        &[
-            "report_title",
-            "reportTitle",
-            "display_title",
-            "displayTitle",
-            "artifact_title",
-            "artifactTitle",
-            "title",
-        ],
-    ) {
-        if !external_channel_static_page_report_title_is_generic(&title) {
-            return title;
-        }
-        if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
-            return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
-        }
-    }
-    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
-        return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
-    }
-    "DataMax 经营分析报表".to_string()
-}
-
 fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyView) {
     if let Some(card) = reply.card.as_mut() {
         external_channel_static_page_enrich_report_card(card);
