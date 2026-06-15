@@ -19916,6 +19916,43 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-15 P5 Static-Page Operation Apply Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `709dbe8f` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `dbb046e2d` to `709dbe8fe`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_operation_apply_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page --lib`: passed, 462/462 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT warnings only;
+  - `CC=clang CXX=clang++ cargo build -q -p platform-api --release`: passed;
+  - `systemctl restart aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: completed;
+  - immediate post-restart `curl http://127.0.0.1:3000/healthz` returned connection refused because port 3000 was not yet listening;
+  - after an 8 second wait, all five restarted services returned `active`, `ss` showed `platform-api` listening on `127.0.0.1:3000`, `healthz` returned status `ok`, and `readyz` returned status `ready`;
+  - remote `git status -sb` reported `## main...origin/main`;
+  - remote `git rev-parse HEAD` reported `709dbe8fe09da351a8909f17b0b6d7afbcdbfc8f`.
+- 8-server P0 smoke:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - post-smoke service check confirmed all five restarted services remained `active`;
+  - final `healthz` returned status `ok` and final `readyz` returned status `ready`.
+- GitHub Actions:
+  - code commit run `27541764499` for `709dbe8f` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-14 P5 Assistant Run Lexical Query Helper 8-Server Verification
 
 - 8-server post-sync verification:
