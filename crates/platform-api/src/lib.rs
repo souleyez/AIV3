@@ -60,17 +60,16 @@ use contracts::{
     DocumentMediaDetailView, DocumentSummary, ExternalActionConfirmationDecisionView,
     ExternalActionConfirmationRequestView, ExternalActionConfirmationResponseView,
     ExternalActionResultCallbackRequestView, ExternalActionResultCallbackResponseView,
-    ExternalArtifactTemplateView, ExternalAttachmentRefView, ExternalBotMessageView,
-    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
-    ExternalChannelPlatformView, ExternalConversationTestView,
-    ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
-    ExternalDocumentParseDocumentView, ExternalIntegrationActionDispatchConfigRequest,
-    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
-    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
-    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
-    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
+    ExternalConversationTestView, ExternalConversationTimelineResponse,
+    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
+    ExternalIntegrationActionDispatchConfigRequest, ExternalIntegrationAuditItemView,
+    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
+    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
+    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
     InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
     KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
     ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
@@ -26101,88 +26100,6 @@ pub(crate) async fn publish_static_page_revision_for_current_artifact(
         existing_artifact,
         public_url,
     })
-}
-
-fn external_channel_static_page_template_from_source_refs(
-    source_refs: &Value,
-) -> Option<ExternalArtifactTemplateView> {
-    source_refs
-        .get("artifact_template")
-        .or_else(|| source_refs.get("template"))
-        .filter(|value| !value.is_null())
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-}
-
-fn external_channel_static_page_message_from_source_refs(
-    source_refs: &Value,
-    connection: &ExternalChannelConnectionSummary,
-    run: &AssistantRun,
-) -> ExternalBotMessageView {
-    ExternalBotMessageView {
-        platform: connection.platform.clone(),
-        tenant_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "tenant_external_id",
-        )
-        .unwrap_or_else(|| "external-tenant".to_string()),
-        bot_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "bot_external_id",
-        )
-        .unwrap_or_else(|| "v3".to_string()),
-        conversation_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "conversation_external_id",
-        )
-        .unwrap_or_else(|| {
-            run.local_thread_id
-                .clone()
-                .unwrap_or_else(|| run.id.to_string())
-        }),
-        thread_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "thread_external_id",
-        ),
-        sender_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "sender_external_id",
-        )
-        .unwrap_or_else(|| "external-user".to_string()),
-        message_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "message_external_id",
-        )
-        .unwrap_or_else(|| run.id.to_string()),
-        message_type: ExternalMessageTypeView::Text,
-        text: Some(run.user_prompt.clone()),
-        default_prompt: None,
-        output_format: external_channel_static_page_source_ref_string(source_refs, "output_format")
-            .or_else(|| Some("image_text".to_string())),
-        render_mode: external_channel_static_page_source_ref_string(source_refs, "render_mode")
-            .or_else(|| Some("artifact".to_string())),
-        artifact_type: external_channel_static_page_source_ref_string(source_refs, "artifact_type")
-            .or_else(|| Some("static_page".to_string())),
-        template: external_channel_static_page_template_from_source_refs(source_refs),
-        mention_external_user_ids: Vec::new(),
-        attachment_refs: Vec::new(),
-        business_datasource_ids: Vec::new(),
-        available_document_external_ids: Vec::new(),
-        available_document_source_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "available_document_source_id",
-        ),
-        dataset_external_id: external_channel_static_page_source_ref_string(
-            source_refs,
-            "dataset_external_id",
-        ),
-        dataset_external_ids: external_channel_static_page_source_refs_string_array(
-            source_refs,
-            "dataset_external_ids",
-        ),
-        requested_skills: Vec::new(),
-        idempotency_key: format!("static-page-auto-publish:{}", run.id),
-        received_at: run.created_at,
-    }
 }
 
 async fn maybe_enqueue_external_static_page_publish_after_image_ready(
