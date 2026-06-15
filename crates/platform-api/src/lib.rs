@@ -26382,67 +26382,6 @@ fn assistant_run_static_page_image2_fixed_task(
     }
 }
 
-fn static_page_supplemental_metrics_policy() -> Value {
-    json!({
-        "schema": "v3.static_page.supplemental_metrics.v1",
-        "source_scope": "selected_scope_and_temporary_uploaded_documents_only",
-        "contract_area": {
-            "enabled": true,
-            "use_case": "per_square_meter_efficiency",
-            "accepted_fields": [
-                "storecode",
-                "store_code",
-                "store_name",
-                "area",
-                "store_area",
-                "contract_area",
-                "leased_area",
-                "business_area",
-                "经营面积",
-                "租赁面积",
-                "合同面积",
-                "门店面积",
-                "铺位面积",
-                "面积"
-            ],
-            "output_targets": [
-                "data.storeList[].area",
-                "data.supplementalMetrics.storeAreas",
-                "data.supplementalMetrics.storeAreaRows"
-            ],
-            "merge_policy": "temporary_uploaded_contract_area_overrides_missing_or_zero_store_area_only"
-        },
-        "traffic": {
-            "enabled": true,
-            "use_case": "traffic_comparison_and_drop_warning",
-            "accepted_fields": [
-                "storecode",
-                "store_code",
-                "store_name",
-                "txdate",
-                "date",
-                "traffic",
-                "traffic_count",
-                "visitor_count",
-                "customer_flow",
-                "客流",
-                "客流量",
-                "人流",
-                "人流量",
-                "客数",
-                "进店人数",
-                "到店人数"
-            ],
-            "output_targets": [
-                "data.trafficRows",
-                "data.supplementalMetrics.trafficRows"
-            ],
-            "comparison_policy": "compute_only_when_current_and_comparison_ranges_have_rows"
-        },
-        "no_invention": true,
-    })
-}
-
 fn external_channel_static_page_image2_codex_execution(
     tenant_id: TenantId,
     workflow_catalog: &WorkflowCatalog,

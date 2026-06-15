@@ -2,6 +2,67 @@ use crate::assistant_run_evidence_state_support::assistant_run_evidence_supplied
 use crate::assistant_run_text_support::push_string_hint;
 use serde_json::{json, Value};
 
+pub(crate) fn static_page_supplemental_metrics_policy() -> Value {
+    json!({
+        "schema": "v3.static_page.supplemental_metrics.v1",
+        "source_scope": "selected_scope_and_temporary_uploaded_documents_only",
+        "contract_area": {
+            "enabled": true,
+            "use_case": "per_square_meter_efficiency",
+            "accepted_fields": [
+                "storecode",
+                "store_code",
+                "store_name",
+                "area",
+                "store_area",
+                "contract_area",
+                "leased_area",
+                "business_area",
+                "经营面积",
+                "租赁面积",
+                "合同面积",
+                "门店面积",
+                "铺位面积",
+                "面积"
+            ],
+            "output_targets": [
+                "data.storeList[].area",
+                "data.supplementalMetrics.storeAreas",
+                "data.supplementalMetrics.storeAreaRows"
+            ],
+            "merge_policy": "temporary_uploaded_contract_area_overrides_missing_or_zero_store_area_only"
+        },
+        "traffic": {
+            "enabled": true,
+            "use_case": "traffic_comparison_and_drop_warning",
+            "accepted_fields": [
+                "storecode",
+                "store_code",
+                "store_name",
+                "txdate",
+                "date",
+                "traffic",
+                "traffic_count",
+                "visitor_count",
+                "customer_flow",
+                "客流",
+                "客流量",
+                "人流",
+                "人流量",
+                "客数",
+                "进店人数",
+                "到店人数"
+            ],
+            "output_targets": [
+                "data.trafficRows",
+                "data.supplementalMetrics.trafficRows"
+            ],
+            "comparison_policy": "compute_only_when_current_and_comparison_ranges_have_rows"
+        },
+        "no_invention": true,
+    })
+}
+
 pub(crate) fn build_static_page_supplemental_metrics_summary_from_candidates(
     field_candidates: &Value,
     evidence_state: Option<&Value>,
@@ -92,6 +153,48 @@ fn static_page_supplemental_metric_candidate_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supplemental_metrics_policy_declares_area_and_traffic_contracts() {
+        let policy = static_page_supplemental_metrics_policy();
+
+        assert_eq!(policy["schema"], "v3.static_page.supplemental_metrics.v1");
+        assert_eq!(
+            policy["source_scope"],
+            "selected_scope_and_temporary_uploaded_documents_only"
+        );
+        assert_eq!(policy["no_invention"], true);
+        assert_eq!(policy["contract_area"]["enabled"], true);
+        assert_eq!(
+            policy["contract_area"]["use_case"],
+            "per_square_meter_efficiency"
+        );
+        assert!(policy["contract_area"]["accepted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("合同面积")));
+        assert!(policy["contract_area"]["output_targets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("data.storeList[].area")));
+        assert_eq!(
+            policy["contract_area"]["merge_policy"],
+            "temporary_uploaded_contract_area_overrides_missing_or_zero_store_area_only"
+        );
+        assert_eq!(policy["traffic"]["enabled"], true);
+        assert!(policy["traffic"]["accepted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("客流")));
+        assert!(policy["traffic"]["output_targets"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("data.trafficRows")));
+        assert_eq!(
+            policy["traffic"]["comparison_policy"],
+            "compute_only_when_current_and_comparison_ranges_have_rows"
+        );
+    }
 
     #[test]
     fn supplemental_metrics_summary_detects_store_area_and_traffic_candidates() {
