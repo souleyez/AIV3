@@ -20123,6 +20123,42 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-15 P5 Static-Page Focus URL Helper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `a2e60af4` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `4e258a7f2` to `a2e60af40`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page_focus_url_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page_public_url_with_prompt_focus --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page --lib`: passed, 480/480 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT warnings only;
+  - `CC=clang CXX=clang++ cargo build -q -p platform-api --release`: passed;
+  - after restart, `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - first immediate `healthz` check returned connection refused because the web port was not listening yet; after a short wait all five services remained `active`, platform-api listened on `127.0.0.1:3000`, and `healthz`/`readyz` returned `ok`/`ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - post-smoke service check confirmed all five restarted services remained `active`;
+  - final `healthz` returned status `ok` and final `readyz` returned status `ready`;
+  - remote `git status -sb` reported `## main...origin/main`;
+  - remote `git rev-parse HEAD` reported `a2e60af4042e2c2b8b744f0634e5bf814b58e5d2`.
+- GitHub Actions:
+  - DataMax CI run `27552969753` for `a2e60af4` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-15 P5 Static-Page Render Output Workflow Helper 8-Server Verification
 
 - 8-server post-sync verification:
