@@ -317,6 +317,7 @@ mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
 mod static_page_field_candidate_support;
+mod static_page_focus_url_support;
 mod static_page_handoff_artifact_support;
 mod static_page_image_prompt_payload_support;
 mod static_page_media_sample_support;
@@ -529,6 +530,7 @@ use static_page_draft_visibility_support::*;
 use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
+use static_page_focus_url_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_image_prompt_payload_support::*;
 use static_page_module_binding_support::*;
@@ -25762,191 +25764,6 @@ pub(crate) fn static_page_artifact_sibling_url(
     Some(url.to_string())
 }
 
-fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    let lower = compact.to_ascii_lowercase();
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "取高",
-            "高分成",
-            "提成",
-            "分成线",
-            "取高线",
-            "超溢",
-            "缺口",
-            "机会",
-            "达线",
-            "触发取高",
-            "机会门店",
-            "助推",
-            "需助推",
-            "需要助推",
-            "助推门店",
-            "高预警",
-            "中预警",
-            "租金",
-            "rent",
-            "commission",
-            "takehigh",
-        ],
-    ) {
-        return Some("取高机会");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "低活跃",
-            "不活跃",
-            "零销售",
-            "无销售",
-            "连续无销售",
-            "低销售",
-            "客流下降",
-            "客流降低",
-            "同比下降",
-            "客流预警",
-            "异常",
-            "inactive",
-            "低活跃品牌",
-        ],
-    ) {
-        return Some("低活跃风险");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "风险店铺",
-            "风险门店",
-            "风险品牌",
-            "风险提示",
-            "风险识别",
-            "风险识别系统",
-            "风险",
-            "预警",
-            "高风险",
-            "risk",
-        ],
-    ) {
-        return Some("风险店铺");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "合同面积",
-            "门店面积",
-            "面积数据",
-            "坪效",
-            "客流统计",
-            "客流数据",
-            "客流同比",
-            "客流月同比",
-            "客流年同比",
-            "租售比",
-            "经营健康",
-            "健康度",
-            "评分",
-            "经营评分",
-            "销售趋势",
-            "月度销售趋势",
-            "收入趋势",
-            "收入总额",
-            "收入同比",
-            "计划完成",
-        ],
-    ) {
-        return Some("经营总览");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "明细",
-            "品牌",
-            "品牌店",
-            "店铺客户",
-            "客户名单",
-            "合同",
-            "detail",
-        ],
-    ) {
-        return Some("品牌明细");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "品类",
-            "品类分析",
-            "业态",
-            "类别",
-            "结构",
-            "占比",
-            "category",
-        ],
-    ) {
-        return Some("品类业态");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
-        &[
-            "经营总览",
-            "经营状况",
-            "经营情况",
-            "经营状态",
-            "总览",
-            "overview",
-            "health",
-            "经营健康度",
-        ],
-    ) {
-        return Some("经营总览");
-    }
-    None
-}
-
-fn static_page_public_url_with_prompt_focus(public_url: &str, prompt: &str) -> String {
-    let Some(focus) = static_page_prompt_focus_query_value(prompt) else {
-        return public_url.to_string();
-    };
-    static_page_public_url_with_focus_label(public_url, focus)
-}
-
-fn static_page_public_url_with_focus_label(public_url: &str, focus: &str) -> String {
-    let focus = focus.trim();
-    if focus.is_empty() {
-        return public_url.to_string();
-    }
-    let Ok(mut url) = reqwest::Url::parse(public_url) else {
-        return public_url.to_string();
-    };
-    if !codex_host_fixed_task_public_artifact_url_allowed(url.as_str()) {
-        return public_url.to_string();
-    }
-    let existing_pairs = url
-        .query_pairs()
-        .filter(|(key, _)| key != "focus")
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    url.set_query(None);
-    {
-        let mut pairs = url.query_pairs_mut();
-        for (key, value) in existing_pairs {
-            pairs.append_pair(&key, &value);
-        }
-        pairs.append_pair("focus", focus);
-    }
-    url.to_string()
-}
-
 fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
     let Some(public_url) = static_page_prompt_generated_artifact_urls(prompt)
         .into_iter()
@@ -41305,7 +41122,7 @@ fn codex_host_fixed_task_sanitize_validation(mut validation: Value) -> Value {
     validation
 }
 
-fn codex_host_fixed_task_public_artifact_url_allowed(public_url: &str) -> bool {
+pub(crate) fn codex_host_fixed_task_public_artifact_url_allowed(public_url: &str) -> bool {
     let normalized = public_url.trim();
     if normalized.contains("/generated-artifacts/pending-")
         || normalized.contains("/generated-artifacts/pending/")
