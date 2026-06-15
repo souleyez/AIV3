@@ -224,6 +224,7 @@ mod external_channel_outbound_reply_dispatch_support;
 mod external_channel_public_artifact;
 mod external_channel_public_card;
 mod external_channel_public_citation_support;
+mod external_channel_public_reply_support;
 mod external_channel_public_text;
 mod external_channel_recipient_delivery_support;
 mod external_channel_runtime_selection_support;
@@ -429,6 +430,7 @@ use external_channel_outbound_reply_dispatch_support::external_channel_outbound_
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
+use external_channel_public_reply_support::*;
 use external_channel_public_text::*;
 use external_channel_recipient_delivery_support::*;
 use external_channel_scope_document_support::*;
@@ -448,7 +450,6 @@ use external_channel_static_page_source_ref_support::*;
 use external_channel_static_page_status_source_refs::*;
 use external_channel_static_page_template_baseline::*;
 use external_channel_static_page_template_reference_support::*;
-use external_channel_static_page_terminal_reply::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
 use external_conversation_timeline::*;
@@ -5321,114 +5322,6 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
         encoded.push_str(&sse_json_event("done", json!({"ok": true})));
     }
     encoded
-}
-
-pub(crate) fn external_channel_public_response(
-    mut response: ExternalChannelEventResponse,
-) -> ExternalChannelEventResponse {
-    response.reply = external_channel_public_reply(response.reply);
-    response
-}
-
-fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBotReplyView {
-    reply = external_channel_static_page_reply_with_public_artifact_terminal(reply);
-    let static_page_like = external_channel_reply_is_static_page_like(&reply);
-    if static_page_like {
-        external_channel_static_page_enrich_reply_card(&mut reply);
-    }
-    let static_page_public_artifact_url = if static_page_like {
-        external_channel_public_artifact_url_from_reply(&reply)
-    } else {
-        None
-    };
-    let public_status = external_channel_reply_public_status(&reply);
-    let provisional_existing_artifact =
-        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
-    let include_artifact_links = if static_page_like {
-        public_status
-            .as_deref()
-            .map(|status| {
-                external_channel_public_status_allows_artifact_link_for_card(
-                    status,
-                    reply.card.as_ref(),
-                )
-            })
-            .unwrap_or(false)
-            || (reply.reply_type == ExternalBotReplyTypeView::ArtifactLink
-                && !provisional_existing_artifact)
-    } else {
-        true
-    };
-    let include_preview_link = if static_page_like {
-        external_channel_reply_static_page_card_status(&reply)
-            .or(reply.task_status.as_deref())
-            .map(external_channel_public_status_allows_preview_link)
-            .unwrap_or(false)
-    } else {
-        true
-    };
-    let cancelled_should_continue = external_channel_reply_static_page_card_status(&reply)
-        .or(reply.task_status.as_deref())
-        .map(|status| {
-            external_channel_static_page_cancelled_should_continue(status, reply.card.as_ref())
-        })
-        .unwrap_or(false);
-    if cancelled_should_continue {
-        if let Some(Value::Object(card)) = reply.card.as_mut() {
-            card.insert(
-                "status".to_string(),
-                Value::String("static_page_continue_polling".to_string()),
-            );
-            card.entry("poll_after_seconds".to_string())
-                .or_insert_with(|| json!(30));
-        }
-    }
-    reply.text = reply
-        .text
-        .take()
-        .map(|text| external_channel_public_reply_text(&text));
-    reply.task_status = reply
-        .task_status
-        .take()
-        .map(|status| external_channel_public_reply_task_status(&status, reply.card.as_ref()));
-    reply.card = reply.card.take().map(|card| {
-        let mut card = external_channel_public_card_value(card);
-        if static_page_like {
-            prune_external_channel_public_card_links(
-                &mut card,
-                include_artifact_links,
-                include_preview_link,
-            );
-            if include_artifact_links {
-                if let Some(public_url) = static_page_public_artifact_url.as_deref() {
-                    if let Some(object) = card.as_object_mut() {
-                        object.insert("public_url".to_string(), json!(public_url));
-                        object.insert("generated_artifact_url".to_string(), json!(public_url));
-                        object.insert("artifact_links".to_string(), json!([public_url]));
-                    }
-                }
-            }
-        }
-        card
-    });
-    if static_page_like && !include_artifact_links {
-        reply.artifact_links.clear();
-    } else {
-        reply.artifact_links = dedupe_external_channel_public_artifact_links(reply.artifact_links);
-    }
-    if reply.reply_type == ExternalBotReplyTypeView::ArtifactLink {
-        if let Some(public_url) = external_channel_public_artifact_url_from_reply(&reply) {
-            if !reply.artifact_links.iter().any(|link| link == &public_url) {
-                reply.artifact_links.insert(0, public_url.clone());
-            }
-            let text = reply.text.take().unwrap_or_default();
-            reply.text = Some(external_channel_text_with_public_artifact_link(
-                text,
-                &public_url,
-            ));
-        }
-    }
-    reply
 }
 
 async fn external_channel_static_page_sse_progress_events_persisted(
