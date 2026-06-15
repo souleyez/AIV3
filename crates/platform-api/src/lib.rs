@@ -322,6 +322,7 @@ mod static_page_field_candidate_sample_support;
 mod static_page_field_candidate_support;
 mod static_page_focus_url_support;
 mod static_page_handoff_artifact_support;
+mod static_page_html_response_support;
 mod static_page_image_prompt_payload_support;
 mod static_page_image_summary_support;
 mod static_page_media_sample_support;
@@ -544,6 +545,7 @@ use static_page_existing_artifact_support::*;
 use static_page_field_candidate_support::*;
 use static_page_focus_url_support::*;
 use static_page_handoff_artifact_support::*;
+use static_page_html_response_support::*;
 use static_page_image_prompt_payload_support::*;
 use static_page_image_summary_support::*;
 use static_page_module_binding_support::*;
@@ -11063,69 +11065,6 @@ async fn load_visible_static_page_render_output(
         })?;
     let draft = load_visible_static_page_draft(state, output.draft_id, current_user_id).await?;
     Ok((output, draft.selected_scope))
-}
-
-fn ensure_static_page_html_ready(
-    output: &StaticPageRenderOutput,
-) -> std::result::Result<(), ApiError> {
-    if matches!(output.status, StaticPageRenderOutputStatus::Rendered)
-        && !output.html.trim().is_empty()
-    {
-        return Ok(());
-    }
-    Err(ApiError::bad_request(
-        "static_page_html_not_ready",
-        "static page HTML is not ready for download".to_string(),
-    ))
-}
-
-fn static_page_html_preview_response(
-    output: StaticPageRenderOutput,
-) -> std::result::Result<Response, ApiError> {
-    let bytes = output.html.into_bytes();
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::CONTENT_DISPOSITION, "inline");
-    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
-        builder = builder.header(header::CONTENT_LENGTH, length);
-    }
-    builder
-        .body(axum::body::Body::from(bytes))
-        .map_err(|error| {
-            ApiError::internal(
-                "static_page_html_preview_response_failed",
-                format!("failed to build static page HTML preview response: {error}"),
-            )
-        })
-}
-
-fn static_page_html_download_response(
-    output: StaticPageRenderOutput,
-) -> std::result::Result<Response, ApiError> {
-    ensure_static_page_html_ready(&output)?;
-    let file_name = format!("v3-static-page-{}.html", output.id);
-    let bytes = output.html.into_bytes();
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{file_name}\""),
-        );
-    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
-        builder = builder.header(header::CONTENT_LENGTH, length);
-    }
-    builder
-        .body(axum::body::Body::from(bytes))
-        .map_err(|error| {
-            ApiError::internal(
-                "static_page_html_download_response_failed",
-                format!("failed to build static page HTML download response: {error}"),
-            )
-        })
 }
 
 fn ensure_static_page_render_belongs_to_external_channel(
