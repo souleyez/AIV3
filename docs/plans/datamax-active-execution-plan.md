@@ -146,7 +146,8 @@
 | 83 | P5 static-page template profile/xinbai baseline helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_template_profile_support` 模块单测、既有新百模板识别/评分/overlap 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 84 | P5 static-page template scoring helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_template_score_support` 模块单测、既有评分/overlap 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
 | 85 | P5 static-page template overlap outcome helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_template_overlap_support` 模块单测、既有 overlap 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
-| 86 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 86 | P5 static-page template adaptation helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_template_adaptation_support` 模块单测、既有 adaptation/reference 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test 和前端 Node 回归均通过；不改变第三方公开契约。 |
+| 87 | P5 下一个行为保持小切片 | 待选定。 | 从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
