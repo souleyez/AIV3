@@ -69398,49 +69398,6 @@ fn build_static_page_field_candidate_sample_points(
     static_page_field_candidate_sample_points(candidate, field_path)
 }
 
-fn build_static_page_database_schema_sample_points(
-    evidence_items: &[Value],
-    module: &Value,
-    field_path: Option<&str>,
-) -> Vec<Value> {
-    let requested_schema = field_path.and_then(static_page_database_schema_field_path_parts);
-    if requested_schema.is_none()
-        && !static_page_module_requests_database_schema_overview(module, field_path)
-    {
-        return Vec::new();
-    }
-
-    static_page_database_schema_sample_points(evidence_items, requested_schema.as_ref(), field_path)
-}
-
-fn static_page_module_requests_database_schema_overview(
-    module: &Value,
-    field_path: Option<&str>,
-) -> bool {
-    if field_path.is_some_and(|path| path.starts_with("database.schema")) {
-        return true;
-    }
-    let module_text =
-        static_page_database_aggregate_module_text(module, field_path).to_ascii_lowercase();
-    static_page_text_contains_any(
-        &module_text,
-        &[
-            "数据库",
-            "数据表",
-            "结构",
-            "字段",
-            "指标",
-            "维度",
-            "口径",
-            "schema",
-            "table",
-            "field",
-            "metric",
-            "dimension",
-        ],
-    )
-}
-
 fn push_static_page_field_candidate(
     candidates: &mut Vec<Value>,
     seen: &mut BTreeSet<String>,

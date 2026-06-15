@@ -1,6 +1,23 @@
 use crate::assistant_run_text_support::{collect_string_list, push_string_hint};
 use crate::static_page_artifact_summary_support::static_page_artifact_string;
+use crate::static_page_database_aggregate_sample_support::static_page_database_aggregate_module_text;
+use crate::static_page_evidence_signal_support::static_page_text_contains_any;
 use serde_json::{json, Value};
+
+pub(crate) fn build_static_page_database_schema_sample_points(
+    evidence_items: &[Value],
+    module: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    let requested_schema = field_path.and_then(static_page_database_schema_field_path_parts);
+    if requested_schema.is_none()
+        && !static_page_module_requests_database_schema_overview(module, field_path)
+    {
+        return Vec::new();
+    }
+
+    static_page_database_schema_sample_points(evidence_items, requested_schema.as_ref(), field_path)
+}
 
 pub(crate) fn static_page_database_schema_sample_points(
     evidence_items: &[Value],
@@ -39,6 +56,34 @@ pub(crate) fn static_page_database_schema_sample_points(
         }
     }
     points
+}
+
+fn static_page_module_requests_database_schema_overview(
+    module: &Value,
+    field_path: Option<&str>,
+) -> bool {
+    if field_path.is_some_and(|path| path.starts_with("database.schema")) {
+        return true;
+    }
+    let module_text =
+        static_page_database_aggregate_module_text(module, field_path).to_ascii_lowercase();
+    static_page_text_contains_any(
+        &module_text,
+        &[
+            "数据库",
+            "数据表",
+            "结构",
+            "字段",
+            "指标",
+            "维度",
+            "口径",
+            "schema",
+            "table",
+            "field",
+            "metric",
+            "dimension",
+        ],
+    )
 }
 
 pub(crate) fn static_page_database_schema_field_path_parts(
@@ -258,6 +303,66 @@ mod tests {
         let points = static_page_database_schema_sample_points(&[item], Some(&requested), None);
 
         assert!(points.is_empty());
+    }
+
+    #[test]
+    fn database_schema_build_wrapper_skips_plain_modules_without_schema_intent() {
+        let module = json!({
+            "title": "普通经营说明",
+            "visualization": {"type": "text-insight"}
+        });
+
+        let points = build_static_page_database_schema_sample_points(
+            &[schema_item("bi_sales")],
+            &module,
+            None,
+        );
+
+        assert!(points.is_empty());
+    }
+
+    #[test]
+    fn database_schema_build_wrapper_supports_schema_overview_intent() {
+        let module = json!({
+            "title": "数据库字段口径",
+            "visualization": {"type": "text-insight"}
+        });
+
+        let points = build_static_page_database_schema_sample_points(
+            &[schema_item("bi_sales")],
+            &module,
+            None,
+        );
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].get("label"), Some(&json!("bi_sales")));
+        assert_eq!(
+            points[0].get("fieldPath"),
+            Some(&json!("database.schema.bi_sales.overview"))
+        );
+    }
+
+    #[test]
+    fn database_schema_build_wrapper_filters_explicit_field_path() {
+        let module = json!({
+            "title": "指标字段",
+            "visualization": {"type": "bar-chart"},
+            "dataBinding": {"fieldPath": "database.schema.bi_sales.metrics"}
+        });
+
+        let points = build_static_page_database_schema_sample_points(
+            &[schema_item("bi_sales"), schema_item("bi_store")],
+            &module,
+            Some("database.schema.bi_sales.metrics"),
+        );
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].get("label"), Some(&json!("bi_sales 指标字段")));
+        assert_eq!(points[0].get("fieldGroup"), Some(&json!("metrics")));
+        assert_eq!(
+            points[0].get("fieldPath"),
+            Some(&json!("database.schema.bi_sales.metrics"))
+        );
     }
 
     fn schema_item(table: &str) -> Value {
