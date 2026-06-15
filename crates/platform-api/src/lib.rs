@@ -5900,34 +5900,6 @@ async fn external_channel_static_page_sse_continue_polling_event_persisted(
     )
 }
 
-enum AssistantRunSseWorkerMessage {
-    AnswerDelta(String),
-    CreateFinished(std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError>),
-    ContinueFinished(
-        std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError>,
-    ),
-}
-
-#[derive(Clone)]
-struct AssistantRunLiveDeltaSink {
-    sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>,
-}
-
-impl AssistantRunLiveDeltaSink {
-    fn new(sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>) -> Self {
-        Self { sender }
-    }
-
-    fn emit(&self, delta: LlmStreamDelta) {
-        if delta.delta.is_empty() {
-            return;
-        }
-        let _ = self.sender.send(AssistantRunSseWorkerMessage::AnswerDelta(
-            sse_text_delta_event("assistant_run.delta", delta.index, &delta.delta),
-        ));
-    }
-}
-
 async fn create_assistant_run_stream(
     State(state): State<AppState>,
     headers: HeaderMap,

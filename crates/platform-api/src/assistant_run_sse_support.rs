@@ -1,10 +1,45 @@
+use axum::{http::StatusCode, Json};
 use contracts::{ContinueAssistantRunResponse, CreateAssistantRunResponse};
 use domain_model::AssistantRunId;
+use llm_gateway::LlmStreamDelta;
 use serde_json::{json, Value};
 
-use crate::sse_support::{sse_json_event, sse_text_delta_events};
+use crate::{
+    sse_support::{sse_json_event, sse_text_delta_event, sse_text_delta_events},
+    ApiError,
+};
 
 pub(crate) const ASSISTANT_RUN_SSE_SCHEMA_V1: &str = "v3.assistant_run.sse.v1";
+
+pub(crate) enum AssistantRunSseWorkerMessage {
+    AnswerDelta(String),
+    CreateFinished(std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError>),
+    ContinueFinished(
+        std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError>,
+    ),
+}
+
+#[derive(Clone)]
+pub(crate) struct AssistantRunLiveDeltaSink {
+    sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>,
+}
+
+impl AssistantRunLiveDeltaSink {
+    pub(crate) fn new(
+        sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>,
+    ) -> Self {
+        Self { sender }
+    }
+
+    pub(crate) fn emit(&self, delta: LlmStreamDelta) {
+        if delta.delta.is_empty() {
+            return;
+        }
+        let _ = self.sender.send(AssistantRunSseWorkerMessage::AnswerDelta(
+            sse_text_delta_event("assistant_run.delta", delta.index, &delta.delta),
+        ));
+    }
+}
 
 fn assistant_run_sse_public_payload(
     run_id: Option<AssistantRunId>,
@@ -212,5 +247,38 @@ mod tests {
         ));
         assert!(!assistant_run_env_flag_value_is_enabled(None, false));
         assert!(assistant_run_env_flag_value_is_enabled(None, true));
+    }
+
+    #[test]
+    fn assistant_run_live_delta_sink_emits_assistant_delta_event() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = AssistantRunLiveDeltaSink::new(sender);
+
+        sink.emit(LlmStreamDelta {
+            index: 7,
+            delta: "首段 live delta".to_string(),
+        });
+
+        let body = match receiver.try_recv().expect("live delta should be queued") {
+            AssistantRunSseWorkerMessage::AnswerDelta(body) => body,
+            AssistantRunSseWorkerMessage::CreateFinished(_)
+            | AssistantRunSseWorkerMessage::ContinueFinished(_) => panic!("expected answer delta"),
+        };
+        assert!(body.contains("event: assistant_run.delta"));
+        assert!(body.contains("\"index\":7"));
+        assert!(body.contains("\"delta\":\"首段 live delta\""));
+    }
+
+    #[test]
+    fn assistant_run_live_delta_sink_ignores_empty_delta() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = AssistantRunLiveDeltaSink::new(sender);
+
+        sink.emit(LlmStreamDelta {
+            index: 1,
+            delta: String::new(),
+        });
+
+        assert!(receiver.try_recv().is_err());
     }
 }
