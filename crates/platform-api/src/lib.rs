@@ -324,6 +324,7 @@ mod static_page_render_output_view_support;
 mod static_page_report_snapshot;
 mod static_page_sample_quality_support;
 mod static_page_structure_signals;
+mod static_page_supplemental_metrics_support;
 mod static_page_template_adaptation_support;
 mod static_page_template_binding_support;
 mod static_page_template_match_support;
@@ -521,6 +522,7 @@ use static_page_render_output_view_support::*;
 use static_page_report_snapshot::*;
 use static_page_sample_quality_support::*;
 use static_page_structure_signals::*;
+use static_page_supplemental_metrics_support::*;
 use static_page_template_adaptation_support::*;
 use static_page_template_binding_support::*;
 use static_page_template_match_support::*;
@@ -67691,93 +67693,6 @@ fn finalize_report_service_handoff(
             handoff.confirmed_report_plan_id = Some(report_plan_id);
         }
         handoff
-    })
-}
-
-pub(crate) fn build_static_page_supplemental_metrics_summary_from_candidates(
-    field_candidates: &Value,
-    evidence_state: Option<&Value>,
-) -> Value {
-    let store_area =
-        static_page_supplemental_metric_candidate_summary(field_candidates, "store.area");
-    let traffic =
-        static_page_supplemental_metric_candidate_summary(field_candidates, "traffic.count");
-    let has_store_area = store_area["status"] == json!("candidate_available");
-    let has_traffic = traffic["status"] == json!("candidate_available");
-
-    json!({
-        "schema": "v3.static_page.supplemental_metrics.v1",
-        "status": if has_store_area || has_traffic {
-            "candidate_available"
-        } else {
-            "not_detected"
-        },
-        "store_area": store_area,
-        "traffic": traffic,
-        "supplied_count": evidence_state
-            .map(assistant_run_evidence_supplied_count)
-            .unwrap_or(0),
-        "temporary_upload_policy": "Selected temporary documents can supply these metrics for the current report run only; do not persist them as production master data without confirmation.",
-        "output_contract": {
-            "store_area": [
-                "data.storeList[].area",
-                "data.supplementalMetrics.storeAreas",
-                "data.supplementalMetrics.storeAreaRows"
-            ],
-            "traffic": [
-                "data.trafficRows",
-                "data.supplementalMetrics.trafficRows"
-            ]
-        },
-        "no_invention": true,
-    })
-}
-
-fn static_page_supplemental_metric_candidate_summary(
-    field_candidates: &Value,
-    field_path: &str,
-) -> Value {
-    let mut labels = Vec::<String>::new();
-    let mut evidence_refs = Vec::<Value>::new();
-    let mut confidence = 0.0f64;
-
-    if let Some(candidates) = field_candidates.as_array() {
-        for candidate in candidates {
-            if candidate.get("fieldPath").and_then(Value::as_str) != Some(field_path) {
-                continue;
-            }
-            if let Some(label) = candidate.get("label").and_then(Value::as_str) {
-                push_string_hint(&mut labels, label);
-            }
-            if let Some(value) = candidate.get("confidence").and_then(Value::as_f64) {
-                confidence = confidence.max(value);
-            }
-            let evidence_ref = candidate
-                .get("evidenceRef")
-                .or_else(|| candidate.get("evidence_ref"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            if !evidence_ref.is_null() && evidence_refs.len() < 4 {
-                evidence_refs.push(evidence_ref);
-            }
-        }
-    }
-
-    labels.truncate(4);
-    json!({
-        "status": if labels.is_empty() {
-            "not_detected"
-        } else {
-            "candidate_available"
-        },
-        "field_path": field_path,
-        "labels": labels,
-        "confidence": if confidence > 0.0 {
-            Value::from(confidence)
-        } else {
-            Value::Null
-        },
-        "evidence_refs": evidence_refs,
     })
 }
 

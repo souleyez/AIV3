@@ -1,9 +1,9 @@
 use serde_json::{json, Value};
 
+use crate::static_page_supplemental_metrics_support::build_static_page_supplemental_metrics_summary_from_candidates;
 use crate::{
     assistant_run_detail_target_count, assistant_run_evidence_supplied_count,
-    build_static_page_field_candidates,
-    build_static_page_supplemental_metrics_summary_from_candidates, ensure_json_object,
+    build_static_page_field_candidates, ensure_json_object,
     static_page_evidence_section_title_hints, static_page_generated_template_draft_id,
 };
 use domain_model::AssistantRun;
