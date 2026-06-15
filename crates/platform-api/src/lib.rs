@@ -308,6 +308,7 @@ mod static_page_data_source_candidate_support;
 mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
+mod static_page_draft_metadata_support;
 mod static_page_dynamic_contract_support;
 mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
@@ -512,6 +513,7 @@ use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_data_source_candidate_support::*;
+use static_page_draft_metadata_support::*;
 use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
@@ -67696,44 +67698,6 @@ fn finalize_report_service_handoff(
             handoff.confirmed_report_plan_id = Some(report_plan_id);
         }
         handoff
-    })
-}
-
-fn derive_static_page_draft_title(prompt: &str) -> String {
-    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return "静态页草稿".to_string();
-    }
-    let total_chars = normalized.chars().count();
-    let mut title = normalized.chars().take(42).collect::<String>();
-    if total_chars > 42 {
-        title.push_str("...");
-    }
-    format!("静态页：{title}")
-}
-
-fn build_static_page_source_refs(run: &AssistantRun) -> Value {
-    json!({
-        "source": "local_chat_static_page_image2_pipeline",
-        "assistant_run_id": run.id,
-        "local_thread_id": run.local_thread_id,
-        "output_artifact_count": value_array(run.output_artifacts.clone()).len(),
-        "evidence_status": run.evidence_state.get("status").cloned().unwrap_or(Value::Null),
-        "supplied_evidence_count": assistant_run_evidence_supplied_count(&run.evidence_state),
-        "auto_publish_generated_artifact": true,
-        "effect_image_confirmation_required": false,
-        "continue_to_publish_after_effect_image": true,
-        "fixed_task_template_id": "static_page_image2_data_publish",
-        "customer_preview_delivery": "stream_event_or_status_card",
-    })
-}
-
-fn build_static_page_visibility_snapshot(run: &AssistantRun, selected_scope: &Value) -> Value {
-    json!({
-        "assistant_run_id": run.id,
-        "selected_scope": selected_scope,
-        "policy": "assistant_run_scope_snapshot",
-        "created_from_evidence_state": run.evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
     })
 }
 
