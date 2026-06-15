@@ -34185,17 +34185,6 @@ fn refresh_static_page_payload_with_draft_context(payload: &mut Value, draft: &S
     refresh_static_page_payload_design_contract(payload);
 }
 
-fn static_page_payload_data_snapshot_validation_summary(payload: &Value) -> Value {
-    static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-        .and_then(|snapshot| {
-            snapshot
-                .get("validation_summary")
-                .or_else(|| snapshot.get("validationSummary"))
-                .cloned()
-        })
-        .unwrap_or(Value::Null)
-}
-
 async fn list_static_page_render_outputs(
     State(state): State<AppState>,
     headers: HeaderMap,

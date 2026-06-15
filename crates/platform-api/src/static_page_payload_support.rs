@@ -175,6 +175,17 @@ pub(crate) fn static_page_payload_value(payload: &Value, keys: &[&str]) -> Optio
     keys.iter().find_map(|key| payload.get(*key).cloned())
 }
 
+pub(crate) fn static_page_payload_data_snapshot_validation_summary(payload: &Value) -> Value {
+    static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+        .and_then(|snapshot| {
+            snapshot
+                .get("validation_summary")
+                .or_else(|| snapshot.get("validationSummary"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
 pub(crate) fn merge_json_value(target: &mut Value, patch: &Value) {
     match (target, patch) {
         (Value::Object(target_object), Value::Object(patch_object)) => {
@@ -304,6 +315,54 @@ mod tests {
                     "content": "新内容"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn data_snapshot_validation_summary_reads_camel_and_snake_payloads() {
+        assert_eq!(
+            static_page_payload_data_snapshot_validation_summary(&json!({
+                "dataSnapshot": {
+                    "validation_summary": {
+                        "status": "ready",
+                        "sampleRowCount": 12
+                    }
+                }
+            })),
+            json!({
+                "status": "ready",
+                "sampleRowCount": 12
+            })
+        );
+        assert_eq!(
+            static_page_payload_data_snapshot_validation_summary(&json!({
+                "data_snapshot": {
+                    "validationSummary": {
+                        "status": "partial",
+                        "needsSampleRowsCount": 2
+                    }
+                }
+            })),
+            json!({
+                "status": "partial",
+                "needsSampleRowsCount": 2
+            })
+        );
+    }
+
+    #[test]
+    fn data_snapshot_validation_summary_returns_null_when_missing() {
+        assert_eq!(
+            static_page_payload_data_snapshot_validation_summary(&json!({
+                "dataSnapshot": {
+                    "moduleBindings": []
+                }
+            })),
+            Value::Null
+        );
+        assert_eq!(
+            static_page_payload_data_snapshot_validation_summary(&json!({})),
+            Value::Null
         );
     }
 }
