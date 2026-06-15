@@ -318,6 +318,7 @@ mod static_page_handoff_artifact_support;
 mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
+mod static_page_module_operation_support;
 mod static_page_module_sample_data_support;
 mod static_page_operation_metadata_support;
 mod static_page_payload_support;
@@ -520,6 +521,7 @@ use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_module_binding_support::*;
+use static_page_module_operation_support::*;
 use static_page_module_sample_data_support::*;
 use static_page_operation_metadata_support::*;
 use static_page_payload_support::*;
@@ -68997,59 +68999,6 @@ fn append_static_page_operations_metadata(
         }
     }
     object.insert("lastOperationSummary".to_string(), json!(summary));
-}
-
-fn merge_static_page_module(payload: &mut Value, module_id: &str, patch: &Value) {
-    let Some(modules) = payload
-        .as_object_mut()
-        .and_then(|object| object.get_mut("modules"))
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-    let Some(module) = modules.iter_mut().find(|module| {
-        module
-            .as_object()
-            .and_then(|object| object.get("id"))
-            .and_then(Value::as_str)
-            == Some(module_id)
-    }) else {
-        return;
-    };
-    merge_json_value(module, patch);
-}
-
-fn push_static_page_module(payload: &mut Value, module: Value) {
-    ensure_json_object(payload);
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    let modules = object
-        .entry("modules".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if !modules.is_array() {
-        *modules = Value::Array(Vec::new());
-    }
-    if let Some(items) = modules.as_array_mut() {
-        items.push(module);
-    }
-}
-
-fn remove_static_page_module(payload: &mut Value, module_id: &str) {
-    let Some(modules) = payload
-        .as_object_mut()
-        .and_then(|object| object.get_mut("modules"))
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-    modules.retain(|module| {
-        module
-            .as_object()
-            .and_then(|object| object.get("id"))
-            .and_then(Value::as_str)
-            != Some(module_id)
-    });
 }
 
 #[derive(Debug)]
