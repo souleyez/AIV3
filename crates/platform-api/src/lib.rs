@@ -308,6 +308,7 @@ mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
 mod static_page_handoff_artifact_support;
+mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
 mod static_page_payload_support;
@@ -505,6 +506,7 @@ use static_page_evidence_signal_support::*;
 use static_page_explicit_sample_support::*;
 use static_page_field_candidate_sample_support::*;
 use static_page_handoff_artifact_support::*;
+use static_page_media_sample_support::*;
 use static_page_metric_value_support::*;
 use static_page_module_binding_support::*;
 use static_page_payload_support::*;
@@ -64429,7 +64431,7 @@ fn media_provider_evidence_from_value(
     })
 }
 
-fn media_string_field(value: &Value, keys: &[&str]) -> Option<String> {
+pub(crate) fn media_string_field(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         value
             .get(*key)
@@ -64440,7 +64442,7 @@ fn media_string_field(value: &Value, keys: &[&str]) -> Option<String> {
     })
 }
 
-fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
+pub(crate) fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter().find_map(|key| {
         value.get(*key).and_then(|item| {
             item.as_f64()
@@ -69391,54 +69393,6 @@ fn build_static_page_field_candidate_sample_points(
     static_page_field_candidate_sample_points(candidate, field_path)
 }
 
-fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &str) -> Vec<Value> {
-    let Some(array_key) = static_page_media_sample_array_key(field_path) else {
-        return Vec::new();
-    };
-    evidence_items
-        .iter()
-        .filter(|item| {
-            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
-        })
-        .flat_map(|item| {
-            item.get("media_context")
-                .and_then(|context| context.get(array_key))
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(move |window| {
-                    let text = static_page_media_sample_text(window, array_key)?;
-                    let start_seconds = media_numeric_field(
-                        window,
-                        &["start_seconds", "start", "timestamp_seconds", "timestamp"],
-                    );
-                    let end_seconds = media_numeric_field(window, &["end_seconds", "end"]);
-                    let timestamp_label =
-                        static_page_media_timestamp_label(start_seconds, end_seconds);
-                    let citation_label =
-                        static_page_media_citation_label(item, timestamp_label.as_deref());
-                    Some(json!({
-                        "label": static_page_media_sample_label(window, array_key),
-                        "value": 1.0,
-                        "kind": "media_window",
-                        "fieldPath": field_path,
-                        "text": text,
-                        "startSeconds": start_seconds,
-                        "endSeconds": end_seconds,
-                        "timestampLabel": timestamp_label,
-                        "citationLabel": citation_label,
-                        "source": media_string_field(window, &["source"]).unwrap_or_else(|| "media".to_string()),
-                        "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
-                        "evidenceIds": static_page_evidence_ids(item),
-                        "evidenceRef": static_page_evidence_ref(item),
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .take(6)
-        .collect()
-}
-
 fn build_static_page_database_schema_sample_points(
     evidence_items: &[Value],
     module: &Value,
@@ -70105,83 +70059,6 @@ fn static_page_dataset_fact_snapshot_row_value(row: &Value) -> Option<f64> {
         .and_then(static_page_json_number)
         .or_else(|| row.get("document_count").and_then(static_page_json_number))
         .or(Some(1.0))
-}
-
-fn static_page_media_sample_array_key(field_path: &str) -> Option<&'static str> {
-    let normalized = field_path.to_ascii_lowercase();
-    if normalized.contains("media.transcript") {
-        Some("transcript_windows")
-    } else if normalized.contains("media.scene") {
-        Some("scene_windows")
-    } else if normalized.contains("media.keyframe") || normalized.contains("media.ocr") {
-        Some("keyframe_ocr_snippets")
-    } else {
-        None
-    }
-}
-
-fn static_page_media_sample_text(window: &Value, array_key: &str) -> Option<String> {
-    match array_key {
-        "scene_windows" => media_string_field(window, &["summary", "label"]),
-        _ => media_string_field(window, &["text", "content", "summary"]),
-    }
-}
-
-fn static_page_media_sample_label(window: &Value, array_key: &str) -> String {
-    let timestamp = media_numeric_field(
-        window,
-        &["start_seconds", "start", "timestamp_seconds", "timestamp"],
-    );
-    let prefix = match array_key {
-        "scene_windows" => "场景",
-        "keyframe_ocr_snippets" => "关键帧",
-        _ => "转写",
-    };
-    timestamp
-        .map(|seconds| format!("{prefix} {:.1}s", seconds))
-        .unwrap_or_else(|| prefix.to_string())
-}
-
-fn static_page_media_timestamp_label(
-    start_seconds: Option<f64>,
-    end_seconds: Option<f64>,
-) -> Option<String> {
-    match (start_seconds, end_seconds) {
-        (Some(start), Some(end)) => Some(format!(
-            "{} - {}",
-            static_page_format_media_timestamp(start),
-            static_page_format_media_timestamp(end)
-        )),
-        (Some(start), None) => Some(static_page_format_media_timestamp(start)),
-        (None, Some(end)) => Some(static_page_format_media_timestamp(end)),
-        (None, None) => None,
-    }
-}
-
-fn static_page_media_citation_label(item: &Value, timestamp_label: Option<&str>) -> String {
-    let source = item
-        .get("source_locator")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("media");
-    timestamp_label
-        .map(|label| format!("{source} @ {label}"))
-        .unwrap_or_else(|| source.to_string())
-}
-
-fn static_page_format_media_timestamp(seconds: f64) -> String {
-    let safe_seconds = seconds.max(0.0);
-    let total = safe_seconds.floor() as u64;
-    let millis = ((safe_seconds - total as f64) * 1000.0).round() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let secs = total % 60;
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{secs:02}.{millis:03}")
-    } else {
-        format!("{minutes:02}:{secs:02}.{millis:03}")
-    }
 }
 
 fn build_static_page_explicit_metric_points(
