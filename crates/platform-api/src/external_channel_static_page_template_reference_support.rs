@@ -232,6 +232,54 @@ pub(crate) fn external_channel_static_page_default_template_scope_from_payload(
         .unwrap_or_else(|| json!("dataset_combination"))
 }
 
+pub(crate) fn external_channel_static_page_card_with_template_payload(
+    mut card: Value,
+    payload: &Value,
+) -> Value {
+    if let Some(object) = card.as_object_mut() {
+        object.insert(
+            "template_reference_id".to_string(),
+            external_channel_static_page_template_reference_id_from_payload(payload),
+        );
+        object.insert(
+            "template_reference".to_string(),
+            external_channel_static_page_template_reference_from_payload(payload),
+        );
+        object.insert(
+            "template_match_policy".to_string(),
+            external_channel_static_page_template_match_policy_from_payload(payload),
+        );
+        object.insert(
+            "relaxed_template_match".to_string(),
+            external_channel_static_page_relaxed_template_match_from_payload(payload),
+        );
+        object.insert(
+            "style_reuse_policy".to_string(),
+            external_channel_static_page_style_reuse_policy_from_payload(payload),
+        );
+        object.insert(
+            "data_refresh_policy".to_string(),
+            external_channel_static_page_data_refresh_policy_from_payload(payload),
+        );
+        object.insert(
+            "default_template_scope".to_string(),
+            external_channel_static_page_default_template_scope_from_payload(payload),
+        );
+        for key in [
+            "public_url",
+            "generated_artifact_url",
+            "artifact_links",
+            "provisional_existing_artifact",
+            "provisional_existing_artifact_reason",
+        ] {
+            if let Some(value) = payload.get(key) {
+                object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    card
+}
+
 pub(crate) fn external_channel_static_page_pipeline_reply_text(
     codex_auto_publish_enabled: bool,
     template_reference: Option<&Value>,
@@ -493,6 +541,82 @@ mod tests {
         assert_eq!(
             external_channel_static_page_default_template_scope_from_payload(&json!({})),
             json!("dataset_combination")
+        );
+    }
+
+    #[test]
+    fn card_with_template_payload_injects_template_policy_and_selected_urls() {
+        let card = json!({
+            "type": "static_page_progress",
+            "status": "processing",
+            "template_reference_id": "old-template"
+        });
+        let payload = json!({
+            "template_reference": {
+                "id": "template-001",
+                "name": "新百月报模板"
+            },
+            "relaxed_template_match": {
+                "dataset_overlap": true
+            },
+            "artifact_stability": {
+                "style_reuse_policy": "stability-style",
+                "data_refresh_policy": "stability-refresh",
+                "default_template_scope": "stability-scope"
+            },
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/report/index.html",
+            "generated_artifact_url": "https://v3.elepcloud.com/generated-artifacts/report/index.html?focus=overview",
+            "artifact_links": [
+                "https://v3.elepcloud.com/generated-artifacts/report/index.html"
+            ],
+            "provisional_existing_artifact": true,
+            "provisional_existing_artifact_reason": "dataset_overlap"
+        });
+
+        let enriched = external_channel_static_page_card_with_template_payload(card, &payload);
+
+        assert_eq!(enriched["type"], json!("static_page_progress"));
+        assert_eq!(enriched["status"], json!("processing"));
+        assert_eq!(enriched["template_reference_id"], json!("template-001"));
+        assert_eq!(
+            enriched["template_reference"],
+            json!({
+                "id": "template-001",
+                "name": "新百月报模板"
+            })
+        );
+        assert_eq!(enriched["template_match_policy"], json!("dataset_overlap"));
+        assert_eq!(
+            enriched["relaxed_template_match"],
+            json!({"dataset_overlap": true})
+        );
+        assert_eq!(enriched["style_reuse_policy"], json!("stability-style"));
+        assert_eq!(enriched["data_refresh_policy"], json!("stability-refresh"));
+        assert_eq!(enriched["default_template_scope"], json!("stability-scope"));
+        assert_eq!(
+            enriched["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/report/index.html")
+        );
+        assert_eq!(
+            enriched["generated_artifact_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/report/index.html?focus=overview")
+        );
+        assert_eq!(
+            enriched["provisional_existing_artifact_reason"],
+            json!("dataset_overlap")
+        );
+    }
+
+    #[test]
+    fn card_with_template_payload_keeps_non_object_cards_unchanged() {
+        let card = json!("static-page-progress");
+
+        assert_eq!(
+            external_channel_static_page_card_with_template_payload(
+                card.clone(),
+                &json!({"templateReferenceId": "template-001"})
+            ),
+            card
         );
     }
 

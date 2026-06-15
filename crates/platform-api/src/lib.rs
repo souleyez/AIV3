@@ -42870,54 +42870,6 @@ fn external_channel_static_page_download_exports_from_payload(
     json!([])
 }
 
-fn external_channel_static_page_card_with_template_payload(
-    mut card: Value,
-    payload: &Value,
-) -> Value {
-    if let Some(object) = card.as_object_mut() {
-        object.insert(
-            "template_reference_id".to_string(),
-            external_channel_static_page_template_reference_id_from_payload(payload),
-        );
-        object.insert(
-            "template_reference".to_string(),
-            external_channel_static_page_template_reference_from_payload(payload),
-        );
-        object.insert(
-            "template_match_policy".to_string(),
-            external_channel_static_page_template_match_policy_from_payload(payload),
-        );
-        object.insert(
-            "relaxed_template_match".to_string(),
-            external_channel_static_page_relaxed_template_match_from_payload(payload),
-        );
-        object.insert(
-            "style_reuse_policy".to_string(),
-            external_channel_static_page_style_reuse_policy_from_payload(payload),
-        );
-        object.insert(
-            "data_refresh_policy".to_string(),
-            external_channel_static_page_data_refresh_policy_from_payload(payload),
-        );
-        object.insert(
-            "default_template_scope".to_string(),
-            external_channel_static_page_default_template_scope_from_payload(payload),
-        );
-        for key in [
-            "public_url",
-            "generated_artifact_url",
-            "artifact_links",
-            "provisional_existing_artifact",
-            "provisional_existing_artifact_reason",
-        ] {
-            if let Some(value) = payload.get(key) {
-                object.insert(key.to_string(), value.clone());
-            }
-        }
-    }
-    card
-}
-
 pub(crate) fn external_channel_static_page_published_reply(
     conversation_external_id: &str,
     public_url: &str,
