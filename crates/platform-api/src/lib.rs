@@ -513,7 +513,6 @@ use static_page_explicit_sample_support::*;
 use static_page_field_candidate_sample_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_media_sample_support::*;
-use static_page_metric_value_support::*;
 use static_page_module_binding_support::*;
 use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
@@ -69440,43 +69439,6 @@ fn static_page_module_requests_database_schema_overview(
             "dimension",
         ],
     )
-}
-
-fn build_static_page_explicit_metric_points(
-    evidence_items: &[Value],
-    field_path: &str,
-    keywords: &[&str],
-) -> Vec<Value> {
-    evidence_items
-        .iter()
-        .filter(|item| {
-            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
-        })
-        .enumerate()
-        .flat_map(|(evidence_index, item)| {
-            static_page_evidence_value_lines(item)
-                .into_iter()
-                .enumerate()
-                .filter_map(move |(line_index, line)| {
-                    let line_lower = line.to_lowercase();
-                    if !static_page_text_contains_any(&line_lower, keywords) {
-                        return None;
-                    }
-                    let value = static_page_metric_value_from_line(&line)?;
-                    Some(json!({
-                        "label": static_page_metric_label_from_line(&line, item, evidence_index, line_index, keywords),
-                        "value": value,
-                        "kind": "evidence_value",
-                        "fieldPath": field_path,
-                        "evidenceIds": static_page_evidence_ids(item),
-                        "evidenceRef": static_page_evidence_ref(item),
-                        "sectionTitleHints": static_page_evidence_section_title_hints(item),
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .take(6)
-        .collect()
 }
 
 fn push_static_page_field_candidate(

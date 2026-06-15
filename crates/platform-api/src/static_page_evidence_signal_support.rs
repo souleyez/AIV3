@@ -1,4 +1,5 @@
 use crate::assistant_run_text_support::collect_string_list;
+use crate::static_page_metric_value_support::static_page_metric_value_from_line;
 use serde_json::{json, Value};
 
 pub(crate) fn static_page_evidence_value_lines(item: &Value) -> Vec<String> {
@@ -226,6 +227,43 @@ pub(crate) fn static_page_text_contains_any(text: &str, keywords: &[&str]) -> bo
         .any(|keyword| text.contains(&keyword.to_lowercase()))
 }
 
+pub(crate) fn build_static_page_explicit_metric_points(
+    evidence_items: &[Value],
+    field_path: &str,
+    keywords: &[&str],
+) -> Vec<Value> {
+    evidence_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str).unwrap_or_default() == "retrieval_evidence"
+        })
+        .enumerate()
+        .flat_map(|(evidence_index, item)| {
+            static_page_evidence_value_lines(item)
+                .into_iter()
+                .enumerate()
+                .filter_map(move |(line_index, line)| {
+                    let line_lower = line.to_lowercase();
+                    if !static_page_text_contains_any(&line_lower, keywords) {
+                        return None;
+                    }
+                    let value = static_page_metric_value_from_line(&line)?;
+                    Some(json!({
+                        "label": static_page_metric_label_from_line(&line, item, evidence_index, line_index, keywords),
+                        "value": value,
+                        "kind": "evidence_value",
+                        "fieldPath": field_path,
+                        "evidenceIds": static_page_evidence_ids(item),
+                        "evidenceRef": static_page_evidence_ref(item),
+                        "sectionTitleHints": static_page_evidence_section_title_hints(item),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .take(6)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +370,72 @@ mod tests {
             static_page_evidence_ref(&item).pointer("/sectionTitleHints/0"),
             Some(&json!("一"))
         );
+    }
+
+    #[test]
+    fn explicit_metric_points_extract_keyword_lines_with_refs() {
+        let evidence_items = vec![
+            json!({
+                "type": "retrieval_evidence",
+                "retrieval_evidence_id": "ev-1",
+                "dataset_id": "ds-1",
+                "document_id": "doc-1",
+                "document_chunk_id": "chunk-1",
+                "source_locator": "docs/report.xlsx#sheet1",
+                "content_excerpt": "收入, 1,234, 门店A；风险 3",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["经营概览"]
+                    }
+                }
+            }),
+            json!({
+                "type": "retrieval_evidence",
+                "retrieval_evidence_id": "ev-2",
+                "summary": "客流 20"
+            }),
+            json!({
+                "type": "conversation_memory_item",
+                "summary": "收入 999"
+            }),
+        ];
+
+        let points =
+            build_static_page_explicit_metric_points(&evidence_items, "orders.amount", &["收入"]);
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].get("label"), Some(&json!("门店A")));
+        assert_eq!(points[0].get("value"), Some(&json!(1234.0)));
+        assert_eq!(points[0].get("kind"), Some(&json!("evidence_value")));
+        assert_eq!(points[0].get("fieldPath"), Some(&json!("orders.amount")));
+        assert_eq!(points[0].pointer("/evidenceIds/0"), Some(&json!("ev-1")));
+        assert_eq!(
+            points[0].pointer("/evidenceRef/retrievalEvidenceId"),
+            Some(&json!("ev-1"))
+        );
+        assert_eq!(
+            points[0].pointer("/sectionTitleHints/0"),
+            Some(&json!("经营概览"))
+        );
+    }
+
+    #[test]
+    fn explicit_metric_points_cap_at_six_rows() {
+        let evidence_items = (0..8)
+            .map(|index| {
+                json!({
+                    "type": "retrieval_evidence",
+                    "retrieval_evidence_id": format!("ev-{index}"),
+                    "content_excerpt": format!("收入 {}, 门店{index}", index + 1)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let points =
+            build_static_page_explicit_metric_points(&evidence_items, "orders.amount", &["收入"]);
+
+        assert_eq!(points.len(), 6);
+        assert_eq!(points[0].pointer("/evidenceIds/0"), Some(&json!("ev-0")));
+        assert_eq!(points[5].pointer("/evidenceIds/0"), Some(&json!("ev-5")));
     }
 }
