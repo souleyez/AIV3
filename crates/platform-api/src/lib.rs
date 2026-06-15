@@ -208,6 +208,7 @@ mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod document_view_support;
+mod external_action_result_callback_support;
 mod external_aigolf_skill_support;
 mod external_answer_policy_support;
 mod external_artifact_request_support;
@@ -413,6 +414,7 @@ use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
 use document_view_support::*;
+use external_action_result_callback_support::*;
 use external_aigolf_skill_support::*;
 use external_answer_policy_support::*;
 use external_artifact_request_support::*;
@@ -459,11 +461,12 @@ use external_integration_audit_support::*;
 use external_integration_config_summary_support::*;
 use external_integration_dispatch_config_support::*;
 #[cfg(test)]
+use external_integration_summary::action_result_payload_summary as external_action_result_payload_summary;
+#[cfg(test)]
 use external_integration_summary::source_drift_summary as external_source_drift_summary;
 use external_integration_summary::{
     action_lifecycle_summary as external_action_lifecycle_summary,
     action_response_summary as external_action_response_summary,
-    action_result_payload_summary as external_action_result_payload_summary,
     action_run_audit_summary as external_action_run_audit_summary,
     artifact_summary as external_artifact_summary,
     channel_drift_summary as external_channel_drift_summary,
@@ -12693,96 +12696,6 @@ async fn record_external_action_result_callback(
             idempotency_key: request.idempotency_key,
         }),
     ))
-}
-
-fn normalize_external_action_result_status(status: &str) -> std::result::Result<String, ApiError> {
-    let normalized = status.trim().to_ascii_lowercase().replace('-', "_");
-    let status = match normalized.as_str() {
-        "success" | "succeeded" | "complete" | "completed" => "succeeded",
-        "fail" | "failed" | "error" => "failed",
-        "cancelled" | "canceled" => "cancelled",
-        "rejected" => "rejected",
-        "running" | "processing" => "running",
-        "accepted" => "accepted",
-        _ => {
-            return Err(ApiError::bad_request_with_details(
-                "external_action_result_status_invalid",
-                "result callback status must be one of succeeded, failed, cancelled, rejected, running, or accepted"
-                    .to_string(),
-                json!({
-                    "status": status,
-                }),
-            ))
-        }
-    };
-    Ok(status.to_string())
-}
-
-fn external_action_result_failure_kind(status: &str) -> Option<String> {
-    match status {
-        "failed" | "cancelled" | "rejected" => Some(format!("external_action_{status}")),
-        _ => None,
-    }
-}
-
-fn external_action_result_safe_code(code: Option<&str>) -> Option<String> {
-    let code = code?.trim();
-    if code.is_empty() || code.len() > 80 {
-        return None;
-    }
-    code.chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-        .then(|| code.to_string())
-}
-
-fn external_action_result_callback_summary(
-    request: &ExternalActionResultCallbackRequestView,
-    status: &str,
-    external_request_id: Option<&str>,
-    received_at: DateTime<Utc>,
-) -> Value {
-    let mut callback = Map::new();
-    callback.insert("status".to_string(), json!(status));
-    callback.insert(
-        "idempotency_key".to_string(),
-        json!(request.idempotency_key.trim()),
-    );
-    callback.insert("received_at".to_string(), json!(received_at));
-    callback.insert(
-        "message_present".to_string(),
-        json!(request
-            .message
-            .as_ref()
-            .is_some_and(|value| !value.trim().is_empty())),
-    );
-    callback.insert(
-        "result_present".to_string(),
-        json!(request.result.is_some()),
-    );
-    if let Some(external_request_id) = external_request_id {
-        callback.insert(
-            "external_request_id".to_string(),
-            json!(external_request_id),
-        );
-    }
-    if let Some(completed_at) = request.completed_at {
-        callback.insert("completed_at".to_string(), json!(completed_at));
-    }
-    if let Some(code) = external_action_result_safe_code(request.code.as_deref()) {
-        callback.insert("code".to_string(), json!(code));
-    }
-    if let Some(result) = request.result.clone() {
-        callback.insert(
-            "result_summary".to_string(),
-            external_action_result_payload_summary(&result),
-        );
-    }
-
-    json!({
-        "status": format!("external_action_{status}"),
-        "external_callback": Value::Object(callback),
-        "updated_at": received_at,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
