@@ -4,7 +4,12 @@ use contracts::ExternalBotReplyView;
 use serde_json::{json, Value};
 
 use crate::assistant_run_xinbai_report_link_support::XINBAI_PUBLISHED_REPORT_TITLE;
-use crate::external_channel_static_page_card_defaults::external_channel_static_page_report_title_is_generic;
+use crate::external_channel_static_page_card_defaults::{
+    external_channel_static_page_card_insert_if_missing,
+    external_channel_static_page_card_title_missing_or_generic,
+    external_channel_static_page_report_title_is_generic,
+};
+use crate::external_channel_static_page_focus::external_channel_static_page_public_url_with_payload_focus;
 use crate::external_channel_static_page_template_reference_support::{
     external_channel_static_page_template_reference_from_payload,
     external_channel_static_page_template_reference_id_from_payload,
@@ -376,6 +381,102 @@ pub(crate) fn external_channel_static_page_download_exports(
     ])
 }
 
+pub(crate) fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyView) {
+    if let Some(card) = reply.card.as_mut() {
+        external_channel_static_page_enrich_report_card(card);
+    }
+}
+
+pub(crate) fn external_channel_static_page_enrich_report_card(card: &mut Value) {
+    let Some(raw_public_url) = external_channel_public_artifact_url_from_value(card) else {
+        return;
+    };
+    let public_url =
+        external_channel_static_page_public_url_with_payload_focus(&raw_public_url, card);
+    let report_title = external_channel_static_page_report_title(card, &public_url);
+    let data_url = external_channel_static_page_data_url(card, &public_url);
+    let table_data_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_download_exports_from_payload(
+        card,
+        &public_url,
+        data_url.clone(),
+        &report_title,
+    );
+
+    let Some(object) = card.as_object_mut() else {
+        return;
+    };
+    for key in ["title", "report_title", "display_title"] {
+        if external_channel_static_page_card_title_missing_or_generic(object.get(key)) {
+            object.insert(key.to_string(), Value::String(report_title.clone()));
+        }
+    }
+    if public_url != raw_public_url {
+        for key in [
+            "public_url",
+            "generated_artifact_url",
+            "download_url",
+            "html_download_url",
+        ] {
+            if object
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.trim() == raw_public_url)
+                || key == "public_url"
+            {
+                object.insert(key.to_string(), Value::String(public_url.clone()));
+            }
+        }
+        object.insert("artifact_links".to_string(), json!([public_url.clone()]));
+    }
+    external_channel_static_page_card_insert_if_missing(object, "data_url", data_url);
+    external_channel_static_page_card_insert_if_missing(object, "table_data_url", table_data_url);
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "ppt_download_url",
+        ppt_download_url,
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "markdown_download_url",
+        markdown_download_url.clone(),
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "text_download_url",
+        markdown_download_url,
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "download_exports",
+        download_exports,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,6 +756,106 @@ mod tests {
         assert_eq!(
             external_channel_static_page_report_title(&payload, &public_url),
             "DataMax 经营分析报表"
+        );
+    }
+
+    #[test]
+    fn static_page_enrich_report_card_adds_title_focus_and_export_links() {
+        let mut card = json!({
+            "public_url": artifact_url("xinbai-functional-modular-template-20260604/index.html"),
+            "title": "DataMax 静态页",
+            "template_adaptation": {
+                "userIntent": "生成取高机会"
+            }
+        });
+
+        external_channel_static_page_enrich_report_card(&mut card);
+
+        let public_url = card["public_url"].as_str().unwrap_or_default();
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(card["display_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert!(public_url.contains("focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A"));
+        assert_eq!(card["artifact_links"], json!([public_url]));
+        assert_eq!(
+            card["data_url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/data.json"
+            ))
+        );
+        assert_eq!(
+            card["table_data_url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/table-data.csv"
+            ))
+        );
+        assert_eq!(
+            card["ppt_download_url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/report.ppt"
+            ))
+        );
+        assert_eq!(
+            card["markdown_download_url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/report.md"
+            ))
+        );
+        assert_eq!(card["text_download_url"], card["markdown_download_url"]);
+        assert_eq!(card["download_exports"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            card["download_exports"][0]["title"],
+            json!(XINBAI_PUBLISHED_REPORT_TITLE)
+        );
+    }
+
+    #[test]
+    fn static_page_enrich_report_card_preserves_existing_specific_values() {
+        let existing_data_url = artifact_url("reports/custom/data.json");
+        let existing_exports = json!([{"kind": "custom", "url": "custom"}]);
+        let mut card = json!({
+            "public_url": artifact_url("reports/generic/index.html"),
+            "report_title": "专项经营看板",
+            "data_url": existing_data_url,
+            "downloadExports": existing_exports,
+        });
+
+        external_channel_static_page_enrich_report_card(&mut card);
+
+        assert_eq!(card["title"], json!("专项经营看板"));
+        assert_eq!(card["report_title"], json!("专项经营看板"));
+        assert_eq!(card["display_title"], json!("专项经营看板"));
+        assert_eq!(card["data_url"], json!(existing_data_url));
+        assert_eq!(card["download_exports"], existing_exports);
+        assert_eq!(card["table_data_url"], Value::Null);
+    }
+
+    #[test]
+    fn static_page_enrich_reply_card_updates_nested_card_only() {
+        let mut reply = ExternalBotReplyView {
+            target_conversation_external_id: "conv".to_string(),
+            reply_type: contracts::ExternalBotReplyTypeView::ArtifactLink,
+            text: Some("done".to_string()),
+            card: Some(json!({
+                "public_url": artifact_url("xinbai-functional-modular-template-20260604/index.html"),
+                "title": "DataMax 经营分析报表",
+            })),
+            artifact_links: Vec::new(),
+            task_status: Some("static_page_published".to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        };
+
+        external_channel_static_page_enrich_reply_card(&mut reply);
+
+        let card = reply.card.as_ref().expect("card is preserved");
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(
+            card["table_data_url"],
+            json!(artifact_url(
+                "xinbai-functional-modular-template-20260604/table-data.csv"
+            ))
         );
     }
 

@@ -12,6 +12,7 @@ use crate::{
         external_channel_public_artifact_url_from_links_value,
         external_channel_public_artifact_url_from_reply,
         external_channel_public_artifact_url_from_value,
+        external_channel_static_page_enrich_report_card,
         external_channel_text_with_public_artifact_link,
     },
     external_channel_public_card::{
@@ -25,7 +26,6 @@ use crate::{
         external_channel_public_status, external_channel_public_stream_text,
         external_channel_public_text,
     },
-    external_channel_static_page_enrich_report_card,
     external_channel_static_page_focus::{
         external_channel_static_page_customer_ready_text,
         external_channel_static_page_customer_ready_text_for_payload,

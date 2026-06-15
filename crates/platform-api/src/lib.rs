@@ -435,7 +435,6 @@ use external_channel_scope_document_support::*;
 use external_channel_sse_live_sink::*;
 use external_channel_sse_support::*;
 use external_channel_static_page_artifact_reply::*;
-use external_channel_static_page_card_defaults::*;
 use external_channel_static_page_dataset_scope_support::*;
 use external_channel_static_page_event_reply::*;
 use external_channel_static_page_focus::*;
@@ -42655,102 +42654,6 @@ async fn maybe_attach_external_static_page_artifact_to_run(
         .await
         .map_err(ApiError::from_storage)?;
     Ok(())
-}
-
-fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyView) {
-    if let Some(card) = reply.card.as_mut() {
-        external_channel_static_page_enrich_report_card(card);
-    }
-}
-
-fn external_channel_static_page_enrich_report_card(card: &mut Value) {
-    let Some(raw_public_url) = external_channel_public_artifact_url_from_value(card) else {
-        return;
-    };
-    let public_url =
-        external_channel_static_page_public_url_with_payload_focus(&raw_public_url, card);
-    let report_title = external_channel_static_page_report_title(card, &public_url);
-    let data_url = external_channel_static_page_data_url(card, &public_url);
-    let table_data_url = external_channel_static_page_export_url(
-        card,
-        &public_url,
-        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
-        "table-data.csv",
-    );
-    let ppt_download_url = external_channel_static_page_export_url(
-        card,
-        &public_url,
-        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
-        "report.ppt",
-    );
-    let markdown_download_url = external_channel_static_page_export_url(
-        card,
-        &public_url,
-        &[
-            "markdown_download_url",
-            "markdownDownloadUrl",
-            "text_download_url",
-            "textDownloadUrl",
-            "md_url",
-            "mdUrl",
-        ],
-        "report.md",
-    );
-    let download_exports = external_channel_static_page_download_exports_from_payload(
-        card,
-        &public_url,
-        data_url.clone(),
-        &report_title,
-    );
-
-    let Some(object) = card.as_object_mut() else {
-        return;
-    };
-    for key in ["title", "report_title", "display_title"] {
-        if external_channel_static_page_card_title_missing_or_generic(object.get(key)) {
-            object.insert(key.to_string(), Value::String(report_title.clone()));
-        }
-    }
-    if public_url != raw_public_url {
-        for key in [
-            "public_url",
-            "generated_artifact_url",
-            "download_url",
-            "html_download_url",
-        ] {
-            if object
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.trim() == raw_public_url)
-                || key == "public_url"
-            {
-                object.insert(key.to_string(), Value::String(public_url.clone()));
-            }
-        }
-        object.insert("artifact_links".to_string(), json!([public_url.clone()]));
-    }
-    external_channel_static_page_card_insert_if_missing(object, "data_url", data_url);
-    external_channel_static_page_card_insert_if_missing(object, "table_data_url", table_data_url);
-    external_channel_static_page_card_insert_if_missing(
-        object,
-        "ppt_download_url",
-        ppt_download_url,
-    );
-    external_channel_static_page_card_insert_if_missing(
-        object,
-        "markdown_download_url",
-        markdown_download_url.clone(),
-    );
-    external_channel_static_page_card_insert_if_missing(
-        object,
-        "text_download_url",
-        markdown_download_url,
-    );
-    external_channel_static_page_card_insert_if_missing(
-        object,
-        "download_exports",
-        download_exports,
-    );
 }
 
 pub(crate) fn external_channel_static_page_published_reply(
