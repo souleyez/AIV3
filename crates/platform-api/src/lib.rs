@@ -301,6 +301,7 @@ mod retrieval_query_support;
 mod runtime_manifest_support;
 mod sse_support;
 mod static_page_artifact_summary_support;
+mod static_page_conversation_memory_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
@@ -516,6 +517,7 @@ use retrieval_query_support::*;
 use runtime_manifest_support::*;
 use sse_support::*;
 use static_page_artifact_summary_support::*;
+use static_page_conversation_memory_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
@@ -68366,18 +68368,6 @@ async fn interpret_static_page_draft_intent_for_api(
             Ok(fallback)
         }
     }
-}
-
-fn static_page_conversation_memory_refs(run: &AssistantRun) -> Vec<Value> {
-    value_array(
-        run.evidence_state
-            .get("supplied_items")
-            .cloned()
-            .unwrap_or(Value::Null),
-    )
-    .into_iter()
-    .filter(|item| item.get("type").and_then(Value::as_str) == Some("conversation_memory_item"))
-    .collect()
 }
 
 fn validate_static_page_operations(
