@@ -309,6 +309,7 @@ mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
 mod static_page_draft_metadata_support;
+mod static_page_draft_visibility_support;
 mod static_page_dynamic_contract_support;
 mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
@@ -520,6 +521,7 @@ use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_data_source_candidate_support::*;
 use static_page_draft_metadata_support::*;
+use static_page_draft_visibility_support::*;
 use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
@@ -68175,32 +68177,6 @@ async fn load_visible_static_page_draft(
         return Ok(draft);
     }
     Err(static_page_draft_not_found_error(draft_id))
-}
-
-fn static_page_public_template_default_is_manageable(draft: &StaticPageDraft) -> bool {
-    let dataset_artifact_key = static_page_dataset_artifact_key_from_draft_context(draft)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    !static_page_draft_is_template_fallback_baseline(draft)
-        && !static_page_template_draft_is_non_default_noise_baseline(draft)
-        && !static_page_template_draft_is_local_generated_report_instance(draft)
-        && !dataset_artifact_key.contains("template:data-report")
-        && static_page_published_public_url_from_draft(draft).is_some()
-}
-
-fn static_page_public_template_baseline_is_visible(draft: &StaticPageDraft) -> bool {
-    static_page_draft_is_accepted_template_baseline(draft)
-        && static_page_public_template_default_is_manageable(draft)
-}
-
-fn static_page_draft_list_item_is_visible(
-    draft: &StaticPageDraft,
-    current_user_id: Option<UserId>,
-    allow_public_template_baselines: bool,
-) -> bool {
-    static_page_owner_is_visible(draft.owner_user_id, current_user_id)
-        || (allow_public_template_baselines
-            && static_page_public_template_baseline_is_visible(draft))
 }
 
 async fn load_static_page_image_job_or_404(

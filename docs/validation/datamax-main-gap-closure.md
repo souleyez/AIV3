@@ -19951,6 +19951,40 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-15 P5 Static-Page Draft Visibility Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page draft list and public template baseline visibility helpers out of `lib.rs` into `crates/platform-api/src/static_page_draft_visibility_support.rs`;
+  - preserve owner-based visibility, accepted public baseline visibility, default-template manageability, and data-report/fallback/noise/generated-instance exclusions.
+- Code change:
+  - moved `static_page_public_template_default_is_manageable`, `static_page_public_template_baseline_is_visible`, and `static_page_draft_list_item_is_visible`;
+  - added module tests for public baseline visibility without owner access, data-report baseline rejection, template-fallback baseline rejection, and owner-visible draft access;
+  - left route handlers, storage access, auth checks, public response fields, and update safety rules unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_draft_visibility_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page --lib`: passed, 471/471 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- Local web build note:
+  - `npm --prefix apps/web run build` still failed before build execution because local `apps/web/node_modules` lacks `next`;
+  - this inherited local dependency state is not acceptance evidence against this backend-only slice; 8-server Web build should be used if this slice is released.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-15 P5 Static-Page Operation Apply Helper 8-Server Verification
 
 - 8-server post-sync verification:
