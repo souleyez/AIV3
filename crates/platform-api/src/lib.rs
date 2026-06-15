@@ -343,6 +343,7 @@ mod static_page_render_queue_manifest_support;
 mod static_page_report_snapshot;
 mod static_page_revision_artifact_support;
 mod static_page_sample_quality_support;
+mod static_page_stable_key_support;
 mod static_page_structure_signals;
 mod static_page_supplemental_metrics_support;
 mod static_page_template_adaptation_support;
@@ -563,6 +564,7 @@ use static_page_render_queue_manifest_support::*;
 use static_page_report_snapshot::*;
 use static_page_revision_artifact_support::*;
 use static_page_sample_quality_support::*;
+use static_page_stable_key_support::*;
 use static_page_structure_signals::*;
 use static_page_supplemental_metrics_support::*;
 use static_page_template_adaptation_support::*;
@@ -24641,143 +24643,6 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
     Ok(())
 }
 
-fn static_page_stable_key_collect_scope_parts(
-    selected_scope: &Value,
-    source_refs: &Value,
-    connection_id: Option<&str>,
-) -> BTreeSet<String> {
-    let mut parts = BTreeSet::new();
-    if let Some(connection_id) = connection_id.and_then(static_page_stable_key_token) {
-        parts.insert(format!("channel:{connection_id}"));
-    }
-    for key in [
-        "dataset_external_ids",
-        "requested_dataset_external_ids",
-        "available_dataset_external_ids",
-    ] {
-        static_page_stable_key_insert_value(
-            &mut parts,
-            key.trim_end_matches('s'),
-            selected_scope.get(key),
-        );
-    }
-    if let Some(dataset_scope) = selected_scope.get("dataset_document_scope") {
-        for key in ["dataset_external_ids", "requested_dataset_external_ids"] {
-            static_page_stable_key_insert_value(
-                &mut parts,
-                key.trim_end_matches('s'),
-                dataset_scope.get(key),
-            );
-        }
-    }
-
-    let has_dataset_external_scope = parts.iter().any(|part| {
-        part.starts_with("dataset_external_id:")
-            || part.starts_with("requested_dataset_external_id:")
-            || part.starts_with("available_dataset_external_id:")
-    });
-
-    if !has_dataset_external_scope {
-        if let Some(items) = selected_scope
-            .get("canonical_datasets")
-            .and_then(Value::as_array)
-        {
-            for item in items {
-                static_page_stable_key_insert_scope_item_id(
-                    &mut parts,
-                    "canonical_dataset_id",
-                    item,
-                );
-            }
-        }
-    }
-
-    let has_canonical_dataset_scope = parts
-        .iter()
-        .any(|part| part.starts_with("canonical_dataset_id:"));
-    if !has_dataset_external_scope && !has_canonical_dataset_scope {
-        for dataset_id in selected_dataset_ids_from_scope(selected_scope) {
-            parts.insert(format!("dataset_id:{dataset_id}"));
-        }
-    }
-
-    if !parts.iter().any(|part| {
-        part.starts_with("dataset_external_id:")
-            || part.starts_with("requested_dataset_external_id:")
-            || part.starts_with("available_dataset_external_id:")
-            || part.starts_with("canonical_dataset_id:")
-            || part.starts_with("dataset_id:")
-    }) {
-        static_page_stable_key_insert_value(
-            &mut parts,
-            "available_document_external_id",
-            selected_scope.get("available_document_external_ids"),
-        );
-        if let Some(items) = selected_scope.get("documents").and_then(Value::as_array) {
-            for item in items {
-                static_page_stable_key_insert_scope_item_external_id(
-                    &mut parts,
-                    "document_external_id",
-                    item,
-                );
-                static_page_stable_key_insert_scope_item_id(&mut parts, "document_id", item);
-            }
-        }
-    }
-
-    for key in [
-        "database_source_ids",
-        "databaseSourceIds",
-        "database_source_id",
-        "databaseSourceId",
-    ] {
-        static_page_stable_key_insert_value(
-            &mut parts,
-            key.trim_end_matches('s'),
-            source_refs.get(key).or_else(|| selected_scope.get(key)),
-        );
-    }
-    if let Some(recipient_delivery) = source_refs.get("recipient_delivery") {
-        static_page_stable_key_insert_value(
-            &mut parts,
-            "recipient_user",
-            recipient_delivery.get("target_external_user_ids"),
-        );
-        if let Some(role_scope_candidates) = recipient_delivery
-            .get("role_scope_candidates")
-            .and_then(Value::as_array)
-        {
-            for candidate in role_scope_candidates {
-                if let Some(role) = candidate
-                    .get("role")
-                    .and_then(Value::as_str)
-                    .and_then(static_page_stable_key_token)
-                {
-                    parts.insert(format!("recipient_role:{role}"));
-                }
-                if let Some(default_scope) = candidate
-                    .get("default_scope")
-                    .and_then(Value::as_str)
-                    .and_then(static_page_stable_key_token)
-                {
-                    parts.insert(format!("recipient_scope:{default_scope}"));
-                }
-            }
-        }
-        if let Some(provided_mapping) = recipient_delivery
-            .get("provided_mapping")
-            .filter(|value| !value.is_null())
-        {
-            if let Ok(mapping_text) = serde_json::to_string(provided_mapping) {
-                if let Some(token) = static_page_stable_key_token(&mapping_text) {
-                    parts.insert(format!("recipient_mapping:{token}"));
-                }
-            }
-        }
-    }
-    parts
-}
-
 fn external_channel_static_page_template_stability_key(
     message: &ExternalBotMessageView,
     prompt: &str,
@@ -24820,34 +24685,6 @@ fn external_channel_static_page_template_stability_key(
         }
     }
     static_page_template_stability_key_with_default_prompt("template:default", default_prompt)
-}
-
-pub(crate) fn static_page_dataset_artifact_key(
-    selected_scope: &Value,
-    source_refs: &Value,
-    template_stability_key: &str,
-    connection_id: Option<&str>,
-) -> Option<String> {
-    let scope_parts =
-        static_page_stable_key_collect_scope_parts(selected_scope, source_refs, connection_id);
-    let has_material_scope = scope_parts.iter().any(|part| {
-        part.starts_with("dataset_external_id:")
-            || part.starts_with("requested_dataset_external_id:")
-            || part.starts_with("canonical_dataset_id:")
-            || part.starts_with("dataset_id:")
-            || part.starts_with("available_document_external_id:")
-            || part.starts_with("document_external_id:")
-            || part.starts_with("document_id:")
-            || part.starts_with("database_source_id:")
-            || part.starts_with("databaseSourceId:")
-    });
-    if !has_material_scope {
-        return None;
-    }
-    let mut parts = vec!["v3-static-page".to_string()];
-    parts.push(template_stability_key.to_string());
-    parts.extend(scope_parts);
-    Some(parts.join("|"))
 }
 
 fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
