@@ -301,6 +301,7 @@ mod retrieval_query_support;
 mod runtime_manifest_support;
 mod sse_support;
 mod static_page_artifact_summary_support;
+mod static_page_artifact_url_support;
 mod static_page_conversation_memory_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
@@ -519,6 +520,7 @@ use retrieval_query_support::*;
 use runtime_manifest_support::*;
 use sse_support::*;
 use static_page_artifact_summary_support::*;
+use static_page_artifact_url_support::*;
 use static_page_conversation_memory_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
@@ -25682,86 +25684,6 @@ fn static_page_stable_artifact_reuse_reason(prompt: &str) -> &'static str {
     } else {
         "default_dataset_template_reuse"
     }
-}
-
-pub(crate) fn static_page_prompt_generated_artifact_urls(prompt: &str) -> Vec<String> {
-    let prefixes = vec![
-        "https://v3.elepcloud.com/generated-artifacts/".to_string(),
-        format!(
-            "{}/",
-            external_channel_generated_artifact_public_base_url().trim_end_matches('/')
-        ),
-    ];
-    let mut urls = Vec::new();
-    for prefix in prefixes {
-        let mut search_from = 0usize;
-        while let Some(offset) = prompt[search_from..].find(&prefix) {
-            let start = search_from + offset;
-            let raw = &prompt[start..];
-            let end = raw
-                .find(|ch: char| {
-                    ch.is_whitespace()
-                        || matches!(
-                            ch,
-                            '"' | '\''
-                                | '<'
-                                | '>'
-                                | '，'
-                                | '。'
-                                | '、'
-                                | '；'
-                                | '（'
-                                | '）'
-                                | '('
-                                | ')'
-                                | '【'
-                                | '】'
-                                | '['
-                                | ']'
-                        )
-                })
-                .unwrap_or(raw.len());
-            let candidate = raw[..end].trim_end_matches(|ch: char| {
-                matches!(ch, ',' | '.' | ';' | ':' | '，' | '。' | '；')
-            });
-            if let Ok(mut url) = reqwest::Url::parse(candidate) {
-                url.set_query(None);
-                url.set_fragment(None);
-                let normalized = url.as_str().trim_end_matches('/').to_string();
-                if codex_host_fixed_task_public_artifact_url_allowed(&normalized)
-                    && !urls.iter().any(|existing| existing == &normalized)
-                {
-                    urls.push(normalized);
-                }
-            }
-            search_from = start + end.max(prefix.len());
-            if search_from >= prompt.len() {
-                break;
-            }
-        }
-    }
-    urls
-}
-
-pub(crate) fn static_page_artifact_sibling_url(
-    public_url: &str,
-    file_name: &str,
-) -> Option<String> {
-    let mut url = reqwest::Url::parse(public_url).ok()?;
-    url.set_query(None);
-    url.set_fragment(None);
-    let mut segments = url
-        .path_segments()
-        .map(|segments| segments.collect::<Vec<_>>())?;
-    if segments
-        .last()
-        .is_some_and(|segment| segment.eq_ignore_ascii_case("index.html"))
-    {
-        segments.pop();
-    }
-    segments.push(file_name);
-    url.set_path(&format!("/{}", segments.join("/")));
-    Some(url.to_string())
 }
 
 fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
