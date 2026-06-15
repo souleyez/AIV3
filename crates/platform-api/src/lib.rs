@@ -319,6 +319,7 @@ mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
 mod static_page_module_sample_data_support;
+mod static_page_operation_metadata_support;
 mod static_page_payload_support;
 mod static_page_public_template_update_support;
 mod static_page_render_gate_support;
@@ -520,6 +521,7 @@ use static_page_field_candidate_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_module_binding_support::*;
 use static_page_module_sample_data_support::*;
+use static_page_operation_metadata_support::*;
 use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
 use static_page_render_gate_support::*;
@@ -68650,65 +68652,6 @@ fn validate_static_page_operations(
         .map_err(|error| ApiError::bad_request("invalid_static_page_operation", error.to_string()))
 }
 
-fn summarize_static_page_operations(operations: &[Value]) -> String {
-    if operations.is_empty() {
-        return "未追加静态页操作。".to_string();
-    }
-    let mut types = BTreeMap::<String, usize>::new();
-    for operation in operations {
-        if let Some(operation_type) = static_page_operation_type(operation) {
-            *types.entry(operation_type.to_string()).or_default() += 1;
-        }
-    }
-    let labels = types
-        .into_iter()
-        .map(|(operation_type, count)| format!("{operation_type} x{count}"))
-        .collect::<Vec<_>>()
-        .join("，");
-    format!("已追加静态页操作：{labels}。")
-}
-
-fn status_from_static_page_payload(payload: &Value) -> Option<StaticPageDraftStatus> {
-    let status = payload
-        .as_object()
-        .and_then(|object| object.get("status"))
-        .and_then(Value::as_str)
-        .map(str::trim)?;
-    match status {
-        "draft" => Some(StaticPageDraftStatus::Draft),
-        "planning" | "planned" => Some(StaticPageDraftStatus::Planned),
-        "queued" => Some(StaticPageDraftStatus::Queued),
-        "preview_ready" | "previewed" => Some(StaticPageDraftStatus::Previewed),
-        "effect_confirmed" | "confirmed" => Some(StaticPageDraftStatus::Confirmed),
-        "rendering" | "rendered" => Some(StaticPageDraftStatus::Rendered),
-        "archived" => Some(StaticPageDraftStatus::Archived),
-        _ => None,
-    }
-}
-
-fn status_from_static_page_operations(operations: &[Value]) -> Option<StaticPageDraftStatus> {
-    operations.iter().fold(None, |status, operation| {
-        match static_page_operation_type(operation) {
-            Some("queue_image_job") => Some(StaticPageDraftStatus::Queued),
-            Some("mark_preview_ready") => Some(StaticPageDraftStatus::Previewed),
-            Some("confirm_preview") => Some(StaticPageDraftStatus::Confirmed),
-            Some("reset_final_render") => Some(StaticPageDraftStatus::Confirmed),
-            Some("request_final_render") => Some(StaticPageDraftStatus::Rendered),
-            Some(_) => Some(status.unwrap_or(StaticPageDraftStatus::Planned)),
-            None => status,
-        }
-    })
-}
-
-fn static_page_operation_type(operation: &Value) -> Option<&str> {
-    operation
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 fn apply_static_page_operations_to_payload(
     mut payload: Value,
     operations: &[Value],
@@ -69054,15 +68997,6 @@ fn append_static_page_operations_metadata(
         }
     }
     object.insert("lastOperationSummary".to_string(), json!(summary));
-}
-
-fn static_page_operation_module_id(operation: &Value) -> Option<&str> {
-    operation
-        .get("targetModuleId")
-        .or_else(|| operation.get("moduleId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 fn merge_static_page_module(payload: &mut Value, module_id: &str, patch: &Value) {
