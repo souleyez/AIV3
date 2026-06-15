@@ -315,6 +315,7 @@ mod static_page_explicit_sample_support;
 mod static_page_field_candidate_sample_support;
 mod static_page_field_candidate_support;
 mod static_page_handoff_artifact_support;
+mod static_page_image_prompt_payload_support;
 mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
@@ -521,6 +522,7 @@ use static_page_dynamic_contract_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_field_candidate_support::*;
 use static_page_handoff_artifact_support::*;
+use static_page_image_prompt_payload_support::*;
 use static_page_module_binding_support::*;
 use static_page_module_sample_data_support::*;
 use static_page_operation_apply_support::*;
@@ -67749,96 +67751,6 @@ fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> 
     })
 }
 
-fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Option<&str>) -> Value {
-    let payload = &draft.draft_payload;
-    let style_direction =
-        static_page_payload_string(payload, &["styleDirection", "style_direction"])
-            .unwrap_or_else(|| "client-delivery".to_string());
-    let modules = static_page_payload_modules(payload);
-    let visual_spec = static_page_payload_value(payload, &["visualSpec", "visual_spec"])
-        .unwrap_or_else(|| build_static_page_visual_spec(&style_direction));
-    let render_spec = static_page_payload_value(payload, &["renderSpec", "render_spec"])
-        .unwrap_or_else(build_static_page_render_spec);
-    let mobile_order = static_page_payload_mobile_order(payload, &modules);
-    let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-        .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
-    let template_reference = payload
-        .get("templateReference")
-        .or_else(|| payload.get("template_reference"))
-        .or_else(|| payload.pointer("/source/templateReference"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    let template_references = payload
-        .get("designReferences")
-        .or_else(|| payload.get("design_references"))
-        .or_else(|| payload.pointer("/source/templateReferences"))
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    let template_adaptation = payload
-        .get("templateAdaptation")
-        .or_else(|| payload.get("template_adaptation"))
-        .or_else(|| payload.pointer("/source/templateAdaptation"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    let preview_contract =
-        static_page_payload_value(payload, &["previewContract", "preview_contract"])
-            .unwrap_or_else(|| {
-                build_static_page_preview_contract(
-                    &style_direction,
-                    &modules,
-                    &render_spec,
-                    &mobile_order,
-                    None,
-                )
-            });
-    json!({
-        "draft_id": draft.id,
-        "assistant_run_id": draft.assistant_run_id,
-        "title": draft.title,
-        "prompt": prompt.map(str::trim).filter(|value| !value.is_empty()),
-        "promptText": prompt.map(str::trim).filter(|value| !value.is_empty()),
-        "prompt_text": prompt.map(str::trim).filter(|value| !value.is_empty()),
-        "style_direction": style_direction,
-        "visual_spec": visual_spec,
-        "render_spec": render_spec,
-        "data_snapshot": data_snapshot,
-        "template_reference": template_reference,
-        "template_references": template_references,
-        "template_adaptation": template_adaptation,
-        "template_reuse_contract": {
-            "policy": "reuse_generated_template_when_available",
-            "data_rule": "template controls visual structure only; bind current selected_scope data",
-            "image2_rule": "new Image2 is only required when no usable template exists or the user explicitly asks to change style",
-        },
-        "preview_contract": preview_contract,
-        "design_contract": {
-            "contract_source": "StaticPageDraft",
-            "visual_source": "effect image is a preview contract, not final source code",
-            "final_source": "generated effect image visual blueprint + real data_snapshot",
-            "editable_core": "DOM text + SVG/chart components + safe ECharts JSON options",
-        },
-        "image_first_contract": {
-            "role": "requirements_to_image2_then_image_to_html",
-            "rule": "Generate the effect image from requirements first; then infer the visual layout from the image and bind real data_snapshot into HTML.",
-            "fake_data_allowed": false
-        },
-        "selected_scope": draft.selected_scope,
-        "visibility_snapshot": draft.visibility_snapshot,
-        "modules": modules,
-        "mobile_order": mobile_order,
-        "data_bindings": payload.get("data_bindings").cloned().unwrap_or_else(|| json!([])),
-        "queue_copy": "资源正在排队，可以联系商务开通高级用户跳过等待。",
-    })
-}
-
-fn static_page_image_prompt_payload_is_prompt_only(payload: &Value) -> bool {
-    payload
-        .get("promptOnly")
-        .or_else(|| payload.get("prompt_only"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 fn build_static_page_render_queue_manifest(
     draft: &StaticPageDraft,
     image_job: Option<&StaticPageImageJob>,
@@ -67934,7 +67846,7 @@ fn build_static_page_queued_export_package_manifest(
     })
 }
 
-fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> Value {
+pub(crate) fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> Value {
     let evidence_state = payload
         .get("assistant_context")
         .and_then(|context| context.get("evidence_state"));
