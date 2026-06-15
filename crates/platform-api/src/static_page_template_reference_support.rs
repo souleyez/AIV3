@@ -1,10 +1,18 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::static_page_supplemental_metrics_support::build_static_page_supplemental_metrics_summary_from_candidates;
+use crate::static_page_template_adaptation_support::{
+    static_page_template_adaptation_plan, static_page_template_prompt_from_payload,
+};
+use crate::static_page_template_module_support::{
+    static_page_template_apply_adaptation_to_modules, static_page_template_mobile_order,
+    static_page_template_modules,
+};
 use crate::{
     assistant_run_detail_target_count, assistant_run_evidence_supplied_count,
     build_static_page_field_candidates, ensure_json_object,
-    static_page_evidence_section_title_hints, static_page_generated_template_draft_id,
+    refresh_static_page_payload_design_contract, static_page_evidence_section_title_hints,
+    static_page_generated_template_draft_id,
 };
 use domain_model::AssistantRun;
 
@@ -623,6 +631,182 @@ pub(crate) fn apply_static_page_template_reference_value_to_source_refs(
     source_refs
 }
 
+fn json_object_string_missing(object: &Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+}
+
+fn json_object_array_missing_or_empty(object: &Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::is_empty)
+        .unwrap_or(true)
+}
+
+pub(crate) fn apply_static_page_template_reference_to_payload(
+    mut payload: Value,
+    reference: StaticPageTemplateReferenceSpec,
+    allow_module_seed: bool,
+) -> Value {
+    ensure_json_object(&mut payload);
+    let prompt = static_page_template_prompt_from_payload(&payload).map(str::to_string);
+    let prompt = prompt.as_deref();
+    let template_adaptation = static_page_template_adaptation_plan(
+        reference.label,
+        Some(reference.id),
+        prompt,
+        None,
+        None,
+    );
+    let design_reference = static_page_template_design_reference(reference);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("templateReferenceId".to_string(), json!(reference.id));
+        object.insert(
+            "styleDirection".to_string(),
+            json!(reference.style_direction),
+        );
+        object.insert(
+            "style_direction".to_string(),
+            json!(reference.style_direction),
+        );
+        if json_object_string_missing(object, "objective") {
+            object.insert("objective".to_string(), json!(reference.objective));
+        }
+        if json_object_string_missing(object, "audience") {
+            object.insert("audience".to_string(), json!(reference.audience));
+        }
+        if json_object_string_missing(object, "modelSummary") {
+            object.insert(
+                "modelSummary".to_string(),
+                json!(format!(
+                    "已收到模板参考，并已按客户本轮意向调整「{}」的模块标题、字段组织和输出重点；事实内容仍以可见数据集、检索证据和缺失项为准。",
+                    reference.label
+                )),
+            );
+        }
+        object.insert(
+            "templateAdaptation".to_string(),
+            template_adaptation.clone(),
+        );
+
+        if allow_module_seed && json_object_array_missing_or_empty(object, "modules") {
+            let modules = static_page_template_apply_adaptation_to_modules(
+                static_page_template_modules(reference),
+                reference,
+                prompt,
+            );
+            object.insert(
+                "mobileOrder".to_string(),
+                static_page_template_mobile_order(&modules),
+            );
+            object.insert("modules".to_string(), modules);
+        }
+
+        let references = object
+            .entry("designReferences".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        upsert_static_page_template_reference(references, design_reference.clone());
+
+        let source = object
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        ensure_json_object(source);
+        if let Some(source_object) = source.as_object_mut() {
+            source_object.insert("templateAdaptation".to_string(), template_adaptation);
+            let references = source_object
+                .entry("templateReferences".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            upsert_static_page_template_reference(references, design_reference);
+        }
+    }
+    refresh_static_page_payload_design_contract(&mut payload);
+    payload
+}
+
+pub(crate) fn apply_static_page_template_reference_to_source_refs(
+    mut source_refs: Value,
+    reference: StaticPageTemplateReferenceSpec,
+) -> Value {
+    ensure_json_object(&mut source_refs);
+    if let Some(object) = source_refs.as_object_mut() {
+        object.insert("template_reference_id".to_string(), json!(reference.id));
+        let references = object
+            .entry("template_references".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        upsert_static_page_template_reference(
+            references,
+            static_page_template_design_reference(reference),
+        );
+    }
+    source_refs
+}
+
+pub(crate) fn apply_static_page_template_context_to_payload(
+    mut payload: Value,
+    template_reference: Option<&Value>,
+    evidence_summary: &Value,
+    missing_evidence: &Value,
+) -> Value {
+    ensure_json_object(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(template_reference) = template_reference {
+            object.insert("templateReference".to_string(), template_reference.clone());
+            let label = template_reference
+                .get("label")
+                .or_else(|| template_reference.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("模板参考");
+            let reference_id = template_reference
+                .get("templateId")
+                .or_else(|| template_reference.get("template_id"))
+                .or_else(|| template_reference.get("id"))
+                .and_then(Value::as_str);
+            let prompt = static_page_template_prompt_from_payload(&Value::Object(object.clone()))
+                .map(str::to_string);
+            object.insert(
+                "templateAdaptation".to_string(),
+                static_page_template_adaptation_plan(
+                    label,
+                    reference_id,
+                    prompt.as_deref(),
+                    Some(evidence_summary),
+                    Some(missing_evidence),
+                ),
+            );
+        }
+        object.insert(
+            "templateEvidenceSummary".to_string(),
+            evidence_summary.clone(),
+        );
+        object.insert("missingEvidence".to_string(), missing_evidence.clone());
+
+        let template_adaptation_for_source = object.get("templateAdaptation").cloned();
+        let source = object
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        ensure_json_object(source);
+        if let Some(source_object) = source.as_object_mut() {
+            if let Some(template_reference) = template_reference {
+                source_object.insert("templateReference".to_string(), template_reference.clone());
+                if let Some(template_adaptation) = template_adaptation_for_source {
+                    source_object.insert("templateAdaptation".to_string(), template_adaptation);
+                }
+            }
+            source_object.insert(
+                "templateEvidenceSummary".to_string(),
+                evidence_summary.clone(),
+            );
+            source_object.insert("missingEvidence".to_string(), missing_evidence.clone());
+        }
+    }
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -881,6 +1065,147 @@ mod tests {
                     || item["template_id"] == json!("data-report"))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn template_reference_apply_to_payload_seeds_modules_and_design_contract() {
+        let reference = resolve_static_page_template_reference(Some("data-report"))
+            .expect("reference should parse")
+            .expect("reference should resolve");
+
+        let updated = apply_static_page_template_reference_to_payload(
+            json!({
+                "prompt": "生成经营分析报告"
+            }),
+            reference,
+            true,
+        );
+
+        assert_eq!(updated["templateReferenceId"], json!("data-report"));
+        assert_eq!(updated["styleDirection"], json!("data-command"));
+        assert_eq!(updated["style_direction"], json!("data-command"));
+        assert_eq!(updated["objective"], json!(reference.objective));
+        assert_eq!(updated["audience"], json!(reference.audience));
+        assert!(updated["modelSummary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("数据可视化报告")));
+        assert_eq!(
+            updated["templateAdaptation"]["templateReferenceId"],
+            json!("data-report")
+        );
+        assert_eq!(
+            updated["designReferences"][0]["templateId"],
+            json!("data-report")
+        );
+        assert_eq!(
+            updated["source"]["templateReferences"][0]["templateId"],
+            json!("data-report")
+        );
+        assert!(updated["modules"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        assert!(updated["mobileOrder"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        assert_eq!(
+            updated["renderSpec"]["renderer"],
+            json!("static-page-renderer-v1")
+        );
+        assert_eq!(
+            updated["dataSnapshot"]["source"],
+            json!("static_page_draft")
+        );
+    }
+
+    #[test]
+    fn template_reference_apply_to_payload_preserves_existing_copy_and_modules() {
+        let reference = resolve_static_page_template_reference(Some("docs-page"))
+            .expect("reference should parse")
+            .expect("reference should resolve");
+
+        let updated = apply_static_page_template_reference_to_payload(
+            json!({
+                "prompt": "整理接口文档",
+                "objective": "保留目标",
+                "audience": "保留受众",
+                "modelSummary": "保留摘要",
+                "modules": [
+                    { "id": "keep-module", "title": "保留模块" }
+                ]
+            }),
+            reference,
+            true,
+        );
+
+        assert_eq!(updated["objective"], json!("保留目标"));
+        assert_eq!(updated["audience"], json!("保留受众"));
+        assert_eq!(updated["modelSummary"], json!("保留摘要"));
+        assert_eq!(updated["modules"][0]["id"], json!("keep-module"));
+        assert_eq!(updated["mobileOrder"], json!(["keep-module"]));
+        assert_eq!(updated["templateReferenceId"], json!("docs-page"));
+    }
+
+    #[test]
+    fn template_reference_apply_to_source_refs_uses_spec_design_reference() {
+        let reference = resolve_static_page_template_reference(Some("dashboard"))
+            .expect("reference should parse")
+            .expect("reference should resolve");
+
+        let updated = apply_static_page_template_reference_to_source_refs(json!({}), reference);
+
+        assert_eq!(updated["template_reference_id"], json!("dashboard"));
+        assert_eq!(
+            updated["template_references"][0]["templateId"],
+            json!("dashboard")
+        );
+        assert_eq!(
+            updated["template_references"][0]["sourceKind"],
+            json!("template_design_reference")
+        );
+    }
+
+    #[test]
+    fn template_reference_context_to_payload_populates_root_and_source() {
+        let reference = json!({
+            "templateId": "docs-page",
+            "label": "技术文档页"
+        });
+        let evidence_summary = json!({
+            "status": "supplied",
+            "supplied_count": 2
+        });
+        let missing_evidence = json!({
+            "status": "ready",
+            "items": []
+        });
+
+        let updated = apply_static_page_template_context_to_payload(
+            json!({
+                "prompt": "整理接口文档",
+                "source": {}
+            }),
+            Some(&reference),
+            &evidence_summary,
+            &missing_evidence,
+        );
+
+        assert_eq!(updated["templateReference"], reference);
+        assert_eq!(updated["templateEvidenceSummary"], evidence_summary);
+        assert_eq!(updated["missingEvidence"], missing_evidence);
+        assert_eq!(
+            updated["templateAdaptation"]["templateReferenceId"],
+            json!("docs-page")
+        );
+        assert_eq!(updated["source"]["templateReference"], reference);
+        assert_eq!(
+            updated["source"]["templateEvidenceSummary"],
+            evidence_summary
+        );
+        assert_eq!(updated["source"]["missingEvidence"], missing_evidence);
+        assert_eq!(
+            updated["source"]["templateAdaptation"]["templateReferenceId"],
+            json!("docs-page")
         );
     }
 
