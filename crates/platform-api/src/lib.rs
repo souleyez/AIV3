@@ -327,6 +327,7 @@ mod static_page_payload_support;
 mod static_page_public_template_update_support;
 mod static_page_render_gate_support;
 mod static_page_render_output_view_support;
+mod static_page_render_output_workflow_support;
 mod static_page_render_queue_manifest_support;
 mod static_page_report_snapshot;
 mod static_page_sample_quality_support;
@@ -532,6 +533,7 @@ use static_page_payload_support::*;
 use static_page_public_template_update_support::*;
 use static_page_render_gate_support::*;
 use static_page_render_output_view_support::*;
+use static_page_render_output_workflow_support::*;
 use static_page_render_queue_manifest_support::*;
 use static_page_report_snapshot::*;
 use static_page_sample_quality_support::*;
@@ -62026,21 +62028,6 @@ async fn retry_workflow_execution_with_state(
     })
 }
 
-fn static_page_render_output_status_for_workflow(
-    workflow_status: &WorkflowStatus,
-    current_status: &StaticPageRenderOutputStatus,
-) -> StaticPageRenderOutputStatus {
-    match workflow_status {
-        WorkflowStatus::Pending => StaticPageRenderOutputStatus::Queued,
-        WorkflowStatus::Running => StaticPageRenderOutputStatus::Rendering,
-        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => {
-            StaticPageRenderOutputStatus::Failed
-        }
-        WorkflowStatus::Cancelled => StaticPageRenderOutputStatus::Cancelled,
-        WorkflowStatus::Succeeded => current_status.clone(),
-    }
-}
-
 async fn sync_static_page_render_output_for_workflow(
     state: &AppState,
     execution_id: WorkflowExecutionId,
@@ -62092,56 +62079,6 @@ async fn sync_static_page_render_output_for_workflow(
         .await
         .map_err(ApiError::from_storage)?;
     Ok(())
-}
-
-fn merge_static_page_render_output_workflow_manifest(
-    manifest: &Value,
-    execution: &WorkflowExecution,
-) -> Value {
-    let mut object = manifest.as_object().cloned().unwrap_or_default();
-    let manifest_status = match execution.status {
-        WorkflowStatus::Pending => "queued",
-        WorkflowStatus::Running => "rendering",
-        WorkflowStatus::Succeeded => "rendered",
-        WorkflowStatus::Failed | WorkflowStatus::DeadLettered => "failed",
-        WorkflowStatus::Cancelled => "cancelled",
-    };
-    object.insert("status".to_string(), json!(manifest_status));
-    let mut workflow_object = object
-        .get("workflow")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    workflow_object.insert("status".to_string(), json!(execution.status.as_str()));
-    workflow_object.insert("stage".to_string(), json!(execution.stage));
-    workflow_object.insert("executionId".to_string(), json!(execution.id));
-    workflow_object.insert("updatedAt".to_string(), json!(execution.updated_at));
-    workflow_object.insert(
-        "lastError".to_string(),
-        execution
-            .context
-            .get("last_error")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    workflow_object.insert(
-        "retryReason".to_string(),
-        execution
-            .context
-            .get("retry_reason")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    workflow_object.insert(
-        "cancelReason".to_string(),
-        execution
-            .context
-            .get("cancel_reason")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    object.insert("workflow".to_string(), Value::Object(workflow_object));
-    Value::Object(object)
 }
 
 async fn apply_workflow_signal(
@@ -98185,156 +98122,6 @@ retrieve_evidence:
             json!("echarts")
         );
         assert_eq!(artifact.payload["modules"][0]["fallback"], json!(true));
-    }
-
-    #[test]
-    fn static_page_workflow_manifest_merge_preserves_task_and_failure_detail() {
-        let now = Utc::now();
-        let execution = WorkflowExecution {
-            id: WorkflowExecutionId::new(),
-            tenant_id: TenantId::new(),
-            dataset_id: None,
-            report_plan_id: None,
-            kind: WorkflowKind::StaticPageRender,
-            version: "0.1.0".to_string(),
-            stage: "render_static_page:failed".to_string(),
-            status: WorkflowStatus::Failed,
-            attempt: 1,
-            context: json!({
-                "last_error": "renderer failed to produce html"
-            }),
-            created_at: now,
-            updated_at: now,
-        };
-
-        let merged = merge_static_page_render_output_workflow_manifest(
-            &json!({
-                "status": "rendering",
-                "workflow": {
-                    "executionId": execution.id,
-                    "taskId": "task-1"
-                }
-            }),
-            &execution,
-        );
-
-        assert_eq!(merged["status"], json!("failed"));
-        assert_eq!(merged["workflow"]["status"], json!("failed"));
-        assert_eq!(merged["workflow"]["taskId"], json!("task-1"));
-        assert_eq!(
-            merged["workflow"]["lastError"],
-            json!("renderer failed to produce html")
-        );
-    }
-
-    #[test]
-    fn static_page_render_output_status_tracks_retry_and_terminal_workflow_states() {
-        assert_eq!(
-            static_page_render_output_status_for_workflow(
-                &WorkflowStatus::Pending,
-                &StaticPageRenderOutputStatus::Failed,
-            ),
-            StaticPageRenderOutputStatus::Queued
-        );
-        assert_eq!(
-            static_page_render_output_status_for_workflow(
-                &WorkflowStatus::Running,
-                &StaticPageRenderOutputStatus::Queued,
-            ),
-            StaticPageRenderOutputStatus::Rendering
-        );
-        assert_eq!(
-            static_page_render_output_status_for_workflow(
-                &WorkflowStatus::DeadLettered,
-                &StaticPageRenderOutputStatus::Rendering,
-            ),
-            StaticPageRenderOutputStatus::Failed
-        );
-        assert_eq!(
-            static_page_render_output_status_for_workflow(
-                &WorkflowStatus::Succeeded,
-                &StaticPageRenderOutputStatus::Rendered,
-            ),
-            StaticPageRenderOutputStatus::Rendered
-        );
-    }
-
-    #[test]
-    fn static_page_workflow_manifest_merge_preserves_retry_and_dead_letter_detail() {
-        let now = Utc::now();
-        let retry_execution = WorkflowExecution {
-            id: WorkflowExecutionId::new(),
-            tenant_id: TenantId::new(),
-            dataset_id: None,
-            report_plan_id: None,
-            kind: WorkflowKind::StaticPageRender,
-            version: "0.1.0".to_string(),
-            stage: "queued".to_string(),
-            status: WorkflowStatus::Pending,
-            attempt: 2,
-            context: json!({
-                "retry_reason": "manual retry after renderer timeout"
-            }),
-            created_at: now,
-            updated_at: now,
-        };
-
-        let retry_manifest = merge_static_page_render_output_workflow_manifest(
-            &json!({
-                "status": "failed",
-                "workflow": {
-                    "executionId": retry_execution.id,
-                    "taskId": "task-1"
-                }
-            }),
-            &retry_execution,
-        );
-
-        assert_eq!(retry_manifest["status"], json!("queued"));
-        assert_eq!(retry_manifest["workflow"]["status"], json!("pending"));
-        assert_eq!(retry_manifest["workflow"]["stage"], json!("queued"));
-        assert_eq!(retry_manifest["workflow"]["taskId"], json!("task-1"));
-        assert_eq!(
-            retry_manifest["workflow"]["retryReason"],
-            json!("manual retry after renderer timeout")
-        );
-
-        let dead_letter_execution = WorkflowExecution {
-            id: retry_execution.id,
-            tenant_id: retry_execution.tenant_id,
-            dataset_id: None,
-            report_plan_id: None,
-            kind: WorkflowKind::StaticPageRender,
-            version: "0.1.0".to_string(),
-            stage: "dead_lettered".to_string(),
-            status: WorkflowStatus::DeadLettered,
-            attempt: 3,
-            context: json!({
-                "last_error": "renderer exhausted retries"
-            }),
-            created_at: now,
-            updated_at: now,
-        };
-
-        let dead_letter_manifest = merge_static_page_render_output_workflow_manifest(
-            &retry_manifest,
-            &dead_letter_execution,
-        );
-
-        assert_eq!(dead_letter_manifest["status"], json!("failed"));
-        assert_eq!(
-            dead_letter_manifest["workflow"]["status"],
-            json!("dead_lettered")
-        );
-        assert_eq!(
-            dead_letter_manifest["workflow"]["stage"],
-            json!("dead_lettered")
-        );
-        assert_eq!(dead_letter_manifest["workflow"]["taskId"], json!("task-1"));
-        assert_eq!(
-            dead_letter_manifest["workflow"]["lastError"],
-            json!("renderer exhausted retries")
-        );
     }
 
     #[test]
