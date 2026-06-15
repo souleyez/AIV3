@@ -1,5 +1,7 @@
 use serde_json::{json, Value};
 
+use crate::static_page_template_adaptation_support::static_page_template_prompt_contains_any;
+use crate::static_page_template_binding_support::static_page_template_request_needs_store_sales_binding;
 use crate::static_page_template_reference_support::StaticPageTemplateReferenceSpec;
 
 fn static_page_template_data_binding(source_id: &str) -> Value {
@@ -235,6 +237,148 @@ pub(crate) fn static_page_template_mobile_order(modules: &Value) -> Value {
     )
 }
 
+pub(crate) fn static_page_template_adjusted_module_copy(
+    reference: StaticPageTemplateReferenceSpec,
+    module_id: &str,
+    subject: &str,
+    prompt: Option<&str>,
+) -> Option<(String, String)> {
+    let store_take_high = static_page_template_request_needs_store_sales_binding(prompt);
+    let permission_views = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "权限",
+            "角色",
+            "总部",
+            "店总",
+            "分店店总",
+            "recipient",
+            "role",
+            "permission",
+        ],
+    );
+    match reference.id {
+        "dashboard" => match module_id {
+            "hero" => Some((
+                format!("{subject}总览"),
+                format!("按客户本轮意向概括{subject}当前状态、异常等级和最需要关注的判断。"),
+            )),
+            "kpi" => Some((
+                if store_take_high {
+                    "门店取高关键指标".to_string()
+                } else {
+                    "关键状态指标".to_string()
+                },
+                if store_take_high {
+                    "展示门店/区域、销售额、租金、高分成和取高结果等核心指标；缺数时保留待补口径。"
+                        .to_string()
+                } else {
+                    format!("围绕{subject}提炼 3-5 个能判断健康度、效率或风险的指标。")
+                },
+            )),
+            "trend" => Some((
+                if store_take_high {
+                    "近7日经营趋势".to_string()
+                } else {
+                    "运行趋势".to_string()
+                },
+                format!("展示{subject}随时间、阶段或类别变化的方向，优先绑定可见数据。"),
+            )),
+            "risk" => Some((
+                if permission_views {
+                    "权限与风险预警".to_string()
+                } else {
+                    "风险预警".to_string()
+                },
+                if permission_views {
+                    "区分总部和店总可见范围，标注越权风险、缺失字段和需要单独分发的链接。"
+                        .to_string()
+                } else {
+                    format!("把{subject}的阻塞项、异常项和机会点按优先级展示。")
+                },
+            )),
+            "activity" => Some((
+                "后续动作".to_string(),
+                format!("列出{subject}的调整、复核、发布和分发动作。"),
+            )),
+            _ => None,
+        },
+        "docs-page" => match module_id {
+            "hero" => Some((
+                format!("{subject}模板说明"),
+                format!("说明{subject}模板适用对象、输出边界和当前资料完整度。"),
+            )),
+            "scope" => Some((
+                "范围与边界".to_string(),
+                format!("根据客户本轮意向列出{subject}的使用范围、权限边界和不可见内容。"),
+            )),
+            "steps" => Some((
+                "使用流程".to_string(),
+                format!("把{subject}模板的准备、填写、校验、生成和交付步骤拆清楚。"),
+            )),
+            "interfaces" => Some((
+                "字段与数据".to_string(),
+                format!("整理{subject}需要的字段、数据来源、样例行和缺失项。"),
+            )),
+            "checks" => Some((
+                "验收与风险".to_string(),
+                format!("列出{subject}模板交付后的验收标准、风险和待补信息。"),
+            )),
+            _ => None,
+        },
+        _ => match module_id {
+            "hero" => Some((
+                format!("{subject}核心结论"),
+                format!("先给出{subject}最重要的业务判断，并说明来自当前授权数据和证据。"),
+            )),
+            "kpi" => Some((
+                if store_take_high {
+                    "门店取高核心 KPI".to_string()
+                } else {
+                    "关键指标与口径".to_string()
+                },
+                if store_take_high {
+                    "围绕销售额、租金、高分成、取高结果和门店/区域筛选规划指标位；没有真实数值时显示待补口径。".to_string()
+                } else {
+                    format!("围绕{subject}规划 3-5 个关键指标位；没有真实数值时显示待补口径。")
+                },
+            )),
+            "trend" => Some((
+                if store_take_high {
+                    "近7日/周期趋势".to_string()
+                } else {
+                    "趋势与变化".to_string()
+                },
+                format!("展示{subject}随时间、阶段或类别的变化方向，优先绑定当前可见字段。"),
+            )),
+            "comparison" => Some((
+                if store_take_high {
+                    "门店/区域对比".to_string()
+                } else {
+                    "分类对比".to_string()
+                },
+                format!(
+                    "对{subject}的门店、区域、类别、角色或阶段差异做对比；缺少数据时保留补数提示。"
+                ),
+            )),
+            "evidence" => Some((
+                if permission_views {
+                    "权限口径与证据缺口".to_string()
+                } else {
+                    "证据与缺口".to_string()
+                },
+                if permission_views {
+                    "说明总部和分店店总各自可见字段、数据口径、证据来源和仍需补齐的信息。"
+                        .to_string()
+                } else {
+                    format!("列出{subject}的证据来源、当前不可见内容和后续需要补齐的数据。")
+                },
+            )),
+            _ => None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +456,61 @@ mod tests {
             vec!["hero", "kpi", "trend", "comparison", "evidence"]
         );
         assert_eq!(modules[4]["role"], "evidence");
+    }
+
+    #[test]
+    fn static_page_template_module_support_adjusts_take_high_metric_copy() {
+        let copy = static_page_template_adjusted_module_copy(
+            reference("data-report"),
+            "kpi",
+            "新百经营月报",
+            Some("近7日销售按门店和区域切换，重点看租金取高"),
+        )
+        .expect("take-high kpi copy");
+
+        assert_eq!(copy.0, "门店取高核心 KPI");
+        assert!(copy.1.contains("销售额"));
+        assert!(copy.1.contains("门店/区域筛选"));
+    }
+
+    #[test]
+    fn static_page_template_module_support_adjusts_permission_copy() {
+        let copy = static_page_template_adjusted_module_copy(
+            reference("dashboard"),
+            "risk",
+            "门店经营",
+            Some("总部和分店店总权限视角分别展示"),
+        )
+        .expect("permission risk copy");
+
+        assert_eq!(copy.0, "权限与风险预警");
+        assert!(copy.1.contains("总部"));
+        assert!(copy.1.contains("店总"));
+    }
+
+    #[test]
+    fn static_page_template_module_support_adjusts_docs_page_interfaces_copy() {
+        let copy = static_page_template_adjusted_module_copy(
+            reference("docs-page"),
+            "interfaces",
+            "数据库接入",
+            Some("按模板字段输出"),
+        )
+        .expect("docs interfaces copy");
+
+        assert_eq!(copy.0, "字段与数据");
+        assert!(copy.1.contains("数据库接入"));
+        assert!(copy.1.contains("样例行"));
+    }
+
+    #[test]
+    fn static_page_template_module_support_returns_none_for_unknown_module() {
+        assert!(static_page_template_adjusted_module_copy(
+            reference("data-report"),
+            "unknown-module",
+            "经营报表",
+            None,
+        )
+        .is_none());
     }
 }
