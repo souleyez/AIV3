@@ -304,6 +304,7 @@ mod static_page_artifact_summary_support;
 mod static_page_data_quality_artifact_support;
 mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
+mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
 mod static_page_handoff_artifact_support;
 mod static_page_metric_value_support;
@@ -499,6 +500,7 @@ use static_page_artifact_summary_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
+use static_page_evidence_signal_support::*;
 use static_page_explicit_sample_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_metric_value_support::*;
@@ -70270,166 +70272,6 @@ fn build_static_page_explicit_metric_points(
         .collect()
 }
 
-fn static_page_evidence_value_lines(item: &Value) -> Vec<String> {
-    let mut text = String::new();
-    for key in ["content_excerpt", "summary"] {
-        if let Some(value) = item.get(key).and_then(Value::as_str) {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(value);
-        }
-    }
-    text.split(|character| matches!(character, '\n' | '\r' | ';' | '；'))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn static_page_metric_label_from_line(
-    line: &str,
-    item: &Value,
-    evidence_index: usize,
-    line_index: usize,
-    keywords: &[&str],
-) -> String {
-    for part in line.split([',', '，', '|', '\t']) {
-        let candidate = part.trim();
-        if candidate.is_empty() {
-            continue;
-        }
-        let candidate_lower = candidate.to_lowercase();
-        if static_page_text_contains_any(&candidate_lower, keywords) {
-            continue;
-        }
-        if static_page_string_is_numeric_only(candidate) {
-            continue;
-        }
-        return candidate.chars().take(18).collect();
-    }
-
-    if line_index == 0 {
-        static_page_evidence_point_label(item, evidence_index)
-    } else {
-        format!(
-            "{}-{}",
-            static_page_evidence_point_label(item, evidence_index),
-            line_index + 1
-        )
-    }
-}
-
-fn static_page_string_is_numeric_only(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let numeric_chars = trimmed
-        .chars()
-        .filter(|character| {
-            character.is_ascii_digit()
-                || matches!(character, '.' | ',' | '-' | '+' | '%' | ' ' | '万' | '亿')
-        })
-        .count();
-    numeric_chars == trimmed.chars().count()
-}
-
-fn static_page_field_keywords(field_path: &str) -> Vec<&'static str> {
-    let normalized = field_path.to_ascii_lowercase();
-    if normalized.contains("orders.amount") || normalized.contains("revenue") {
-        return vec![
-            "order", "orders", "amount", "revenue", "sales", "gmv", "订单", "金额", "收入",
-        ];
-    }
-    if normalized.contains("orders.count") || normalized.contains("order_count") {
-        return vec!["order", "orders", "count", "volume", "订单", "数量", "单量"];
-    }
-    if normalized.contains("customer") {
-        return vec!["customer", "customers", "client", "客户", "用户"];
-    }
-    if normalized.contains("profit") || normalized.contains("margin") {
-        return vec!["profit", "margin", "gross", "利润", "毛利"];
-    }
-    if normalized.contains("risk") {
-        return vec!["risk", "delay", "warning", "风险", "延期", "预警"];
-    }
-    if normalized.contains("time") || normalized.contains("month") || normalized.contains("date") {
-        return vec![
-            "month", "date", "time", "period", "月份", "日期", "时间", "周期",
-        ];
-    }
-    if normalized.contains("engagement") {
-        return vec![
-            "engagement",
-            "newsletter",
-            "open",
-            "click",
-            "触达",
-            "互动",
-            "打开",
-            "点击",
-        ];
-    }
-    Vec::new()
-}
-
-fn static_page_keyword_signal_score(item: &Value, keywords: &[&str]) -> f64 {
-    let text = static_page_evidence_text(item).to_lowercase();
-    let mut score = keywords
-        .iter()
-        .filter(|keyword| text.contains(&keyword.to_lowercase()))
-        .count() as f64;
-
-    if let Some(term_weights) = item
-        .get("evidence_manifest")
-        .and_then(|manifest| manifest.pointer("/embedding/term_weights"))
-        .and_then(Value::as_object)
-    {
-        for (term, weight) in term_weights {
-            if keywords
-                .iter()
-                .any(|keyword| keyword.eq_ignore_ascii_case(term))
-            {
-                score += weight.as_f64().unwrap_or(0.0).max(0.0);
-            }
-        }
-    }
-
-    if let Some(score_value) = item.get("score").and_then(Value::as_f64) {
-        score += score_value.clamp(0.0, 1.0);
-    } else if let Some(recall_score) = item.get("recall_score").and_then(Value::as_f64) {
-        score += recall_score.clamp(0.0, 1.0);
-    }
-
-    (score * 10.0).round() / 10.0
-}
-
-fn static_page_evidence_point_label(item: &Value, index: usize) -> String {
-    item.get("source_locator")
-        .and_then(Value::as_str)
-        .map(|value| {
-            value
-                .rsplit('/')
-                .next()
-                .unwrap_or(value)
-                .split('#')
-                .next()
-                .unwrap_or(value)
-                .trim()
-                .to_string()
-        })
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            item.get("summary")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.chars().take(18).collect::<String>())
-        })
-        .unwrap_or_else(|| format!("证据{}", index + 1))
-}
-
 fn push_static_page_field_candidate(
     candidates: &mut Vec<Value>,
     seen: &mut BTreeSet<String>,
@@ -70454,71 +70296,6 @@ fn push_static_page_field_candidate(
         return;
     }
     candidates.push(candidate);
-}
-
-fn static_page_evidence_ids(item: &Value) -> Vec<Value> {
-    item.get("retrieval_evidence_id")
-        .cloned()
-        .map(|value| vec![value])
-        .unwrap_or_default()
-}
-
-fn static_page_evidence_ref(item: &Value) -> Value {
-    json!({
-        "retrievalEvidenceId": item.get("retrieval_evidence_id").cloned().unwrap_or(Value::Null),
-        "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-        "documentId": item.get("document_id").cloned().unwrap_or(Value::Null),
-        "documentChunkId": item.get("document_chunk_id").cloned().unwrap_or(Value::Null),
-        "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
-        "sectionTitleHints": static_page_evidence_section_title_hints(item),
-    })
-}
-
-fn static_page_evidence_text(item: &Value) -> String {
-    let mut parts = Vec::new();
-    for key in [
-        "summary",
-        "content_excerpt",
-        "source_locator",
-        "payload_filter_key",
-    ] {
-        if let Some(value) = item.get(key).and_then(Value::as_str) {
-            parts.push(value.to_string());
-        }
-    }
-    parts.extend(static_page_evidence_section_title_hints(item));
-    if let Some(term_weights) = item
-        .get("evidence_manifest")
-        .and_then(|manifest| manifest.pointer("/embedding/term_weights"))
-        .and_then(Value::as_object)
-    {
-        parts.extend(term_weights.keys().cloned());
-    }
-    parts.join(" ")
-}
-
-pub(crate) fn static_page_evidence_section_title_hints(item: &Value) -> Vec<String> {
-    let mut hints = Vec::new();
-    for pointer in [
-        "/evidence_manifest/evidence/section_title_hints",
-        "/evidence_manifest/section_title_hints",
-        "/evidence_manifest/metadata/section_title_hints",
-        "/evidence/section_title_hints",
-        "/section_title_hints",
-        "/metadata/section_title_hints",
-    ] {
-        if let Some(value) = item.pointer(pointer) {
-            collect_string_list(value, &mut hints);
-        }
-    }
-    hints.truncate(6);
-    hints
-}
-
-fn static_page_text_contains_any(text: &str, keywords: &[&str]) -> bool {
-    keywords
-        .iter()
-        .any(|keyword| text.contains(&keyword.to_lowercase()))
 }
 
 async fn load_static_page_draft_or_404(
