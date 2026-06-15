@@ -1,10 +1,14 @@
 use contracts::ExternalBotMessageView;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::external_requested_skills_support::{
     external_requested_skill_argument_string, external_requested_skill_mode,
 };
-use crate::static_page_template_reference_support::infer_static_page_template_reference_id;
+use crate::static_page_template_reference_support::{
+    infer_static_page_template_reference_id, normalize_static_page_template_reference_id,
+    static_page_template_reference_id_from_payload,
+    static_page_template_reference_id_from_source_refs,
+};
 
 pub(crate) fn external_channel_static_page_template_reference_id(
     message: &ExternalBotMessageView,
@@ -52,6 +56,180 @@ pub(crate) fn external_static_page_template_reference_label(reference: &Value) -
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         })
+}
+
+pub(crate) fn external_static_page_template_reference_id(reference: &Value) -> Option<&str> {
+    ["templateId", "template_id", "id"].iter().find_map(|key| {
+        normalize_static_page_template_reference_id(reference.get(*key).and_then(Value::as_str))
+    })
+}
+
+pub(crate) fn external_channel_static_page_template_reference_from_payload(
+    payload: &Value,
+) -> Value {
+    payload
+        .get("template_reference")
+        .or_else(|| payload.get("templateReference"))
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("source_refs")
+                .and_then(|source_refs| {
+                    source_refs
+                        .get("template_reference")
+                        .or_else(|| source_refs.get("templateReference"))
+                })
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("template_references")
+                .or_else(|| payload.get("templateReferences"))
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("source_refs")
+                .and_then(|source_refs| {
+                    source_refs
+                        .get("template_references")
+                        .or_else(|| source_refs.get("templateReferences"))
+                })
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+pub(crate) fn external_channel_static_page_template_reference_id_from_payload(
+    payload: &Value,
+) -> Value {
+    if let Some(value) = static_page_template_reference_id_from_payload(payload).or_else(|| {
+        payload
+            .get("source_refs")
+            .and_then(static_page_template_reference_id_from_source_refs)
+    }) {
+        return Value::String(value.to_string());
+    }
+    let reference = external_channel_static_page_template_reference_from_payload(payload);
+    external_static_page_template_reference_id(&reference)
+        .map(|value| Value::String(value.to_string()))
+        .unwrap_or(Value::Null)
+}
+
+pub(crate) fn external_channel_static_page_payload_or_source_refs_value(
+    payload: &Value,
+    key: &str,
+) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("source_refs")
+                .and_then(|source_refs| source_refs.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+pub(crate) fn external_channel_static_page_relaxed_template_match_from_payload(
+    payload: &Value,
+) -> Value {
+    external_channel_static_page_payload_or_source_refs_value(payload, "relaxed_template_match")
+}
+
+pub(crate) fn external_channel_static_page_template_match_policy_from_payload(
+    payload: &Value,
+) -> Value {
+    let explicit = payload
+        .get("template_match_policy")
+        .or_else(|| payload.get("templateMatchPolicy"))
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("source_refs")
+                .and_then(|source_refs| {
+                    source_refs
+                        .get("template_match_policy")
+                        .or_else(|| source_refs.get("templateMatchPolicy"))
+                })
+                .cloned()
+        });
+    if let Some(value) = explicit {
+        return value;
+    }
+    let relaxed_match = external_channel_static_page_relaxed_template_match_from_payload(payload);
+    if !relaxed_match.is_null() {
+        return json!("dataset_overlap");
+    }
+    if payload.get("status").and_then(Value::as_str) == Some("static_page_stable_artifact_reused") {
+        return json!("exact_dataset_artifact_key");
+    }
+    if !external_channel_static_page_template_reference_id_from_payload(payload).is_null() {
+        return json!("explicit_or_inferred_template");
+    }
+    json!("none")
+}
+
+pub(crate) fn external_channel_static_page_style_reuse_policy_from_payload(
+    payload: &Value,
+) -> Value {
+    external_channel_static_page_payload_or_source_refs_value(payload, "style_reuse_policy")
+        .as_str()
+        .map(|value| json!(value))
+        .or_else(|| {
+            payload
+                .pointer("/artifact_stability/style_reuse_policy")
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .pointer("/source_refs/artifact_stability/style_reuse_policy")
+                .cloned()
+        })
+        .unwrap_or_else(|| json!("reuse_style_unless_explicit_redesign"))
+}
+
+pub(crate) fn external_channel_static_page_data_refresh_policy_from_payload(
+    payload: &Value,
+) -> Value {
+    external_channel_static_page_payload_or_source_refs_value(payload, "data_refresh_policy")
+        .as_str()
+        .map(|value| json!(value))
+        .or_else(|| {
+            payload
+                .pointer("/artifact_stability/data_refresh_policy")
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .pointer("/source_refs/artifact_stability/data_refresh_policy")
+                .cloned()
+        })
+        .unwrap_or_else(|| json!("refresh_data_files_from_dataset_sources"))
+}
+
+pub(crate) fn external_channel_static_page_default_template_scope_from_payload(
+    payload: &Value,
+) -> Value {
+    external_channel_static_page_payload_or_source_refs_value(payload, "default_template_scope")
+        .as_str()
+        .map(|value| json!(value))
+        .or_else(|| {
+            payload
+                .pointer("/artifact_stability/default_template_scope")
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .pointer("/source_refs/artifact_stability/default_template_scope")
+                .cloned()
+        })
+        .unwrap_or_else(|| json!("dataset_combination"))
 }
 
 pub(crate) fn external_channel_static_page_pipeline_reply_text(
@@ -180,6 +358,141 @@ mod tests {
         assert_eq!(
             external_static_page_template_reference_label(&reference),
             Some("经营月报模板".to_string())
+        );
+    }
+
+    #[test]
+    fn template_reference_from_payload_prefers_direct_and_source_refs_values() {
+        let direct_payload = json!({
+            "templateReference": {"id": "direct-template"},
+            "source_refs": {
+                "template_reference": {"id": "source-template"}
+            }
+        });
+
+        assert_eq!(
+            external_channel_static_page_template_reference_from_payload(&direct_payload),
+            json!({"id": "direct-template"})
+        );
+
+        let source_refs_payload = json!({
+            "source_refs": {
+                "templateReferences": [{"id": "source-array-template"}]
+            }
+        });
+
+        assert_eq!(
+            external_channel_static_page_template_reference_from_payload(&source_refs_payload),
+            json!({"id": "source-array-template"})
+        );
+    }
+
+    #[test]
+    fn template_reference_id_from_payload_uses_direct_source_refs_and_reference_objects() {
+        assert_eq!(
+            external_channel_static_page_template_reference_id_from_payload(&json!({
+                "templateReferenceId": " direct-template "
+            })),
+            json!("direct-template")
+        );
+        assert_eq!(
+            external_channel_static_page_template_reference_id_from_payload(&json!({
+                "source_refs": {
+                    "template_reference_id": " source-template "
+                }
+            })),
+            json!("source-template")
+        );
+        assert_eq!(
+            external_channel_static_page_template_reference_id_from_payload(&json!({
+                "template_reference": {
+                    "template_id": " object-template "
+                }
+            })),
+            json!("object-template")
+        );
+        assert_eq!(
+            external_channel_static_page_template_reference_id_from_payload(&json!({})),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn template_match_policy_from_payload_preserves_existing_fallback_order() {
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({
+                "templateMatchPolicy": "strict"
+            })),
+            json!("strict")
+        );
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({
+                "source_refs": {
+                    "template_match_policy": "source-strict"
+                }
+            })),
+            json!("source-strict")
+        );
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({
+                "relaxed_template_match": true
+            })),
+            json!("dataset_overlap")
+        );
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({
+                "status": "static_page_stable_artifact_reused"
+            })),
+            json!("exact_dataset_artifact_key")
+        );
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({
+                "template_reference": {"id": "template-001"}
+            })),
+            json!("explicit_or_inferred_template")
+        );
+        assert_eq!(
+            external_channel_static_page_template_match_policy_from_payload(&json!({})),
+            json!("none")
+        );
+    }
+
+    #[test]
+    fn reuse_refresh_and_scope_policies_preserve_payload_source_refs_and_defaults() {
+        let payload = json!({
+            "source_refs": {
+                "style_reuse_policy": "source-style",
+                "artifact_stability": {
+                    "data_refresh_policy": "source-stability-refresh",
+                    "default_template_scope": "source-stability-scope"
+                }
+            }
+        });
+
+        assert_eq!(
+            external_channel_static_page_style_reuse_policy_from_payload(&payload),
+            json!("source-style")
+        );
+        assert_eq!(
+            external_channel_static_page_data_refresh_policy_from_payload(&payload),
+            json!("source-stability-refresh")
+        );
+        assert_eq!(
+            external_channel_static_page_default_template_scope_from_payload(&payload),
+            json!("source-stability-scope")
+        );
+
+        assert_eq!(
+            external_channel_static_page_style_reuse_policy_from_payload(&json!({})),
+            json!("reuse_style_unless_explicit_redesign")
+        );
+        assert_eq!(
+            external_channel_static_page_data_refresh_policy_from_payload(&json!({})),
+            json!("refresh_data_files_from_dataset_sources")
+        );
+        assert_eq!(
+            external_channel_static_page_default_template_scope_from_payload(&json!({})),
+            json!("dataset_combination")
         );
     }
 
