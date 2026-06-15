@@ -306,6 +306,7 @@ mod static_page_data_quality_gate_support;
 mod static_page_data_snapshot_support;
 mod static_page_evidence_signal_support;
 mod static_page_explicit_sample_support;
+mod static_page_field_candidate_sample_support;
 mod static_page_handoff_artifact_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
@@ -502,6 +503,7 @@ use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_evidence_signal_support::*;
 use static_page_explicit_sample_support::*;
+use static_page_field_candidate_sample_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_metric_value_support::*;
 use static_page_module_binding_support::*;
@@ -69387,59 +69389,6 @@ fn build_static_page_field_candidate_sample_points(
         return Vec::new();
     };
     static_page_field_candidate_sample_points(candidate, field_path)
-}
-
-fn static_page_field_candidate_sample_points(candidate: &Value, field_path: &str) -> Vec<Value> {
-    for key in [
-        "sampleData",
-        "sample_data",
-        "rows",
-        "items",
-        "values",
-        "data",
-        "sampleRows",
-        "sample_rows",
-    ] {
-        let Some(array) = candidate.get(key).and_then(Value::as_array) else {
-            continue;
-        };
-        let points = array
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                static_page_field_candidate_sample_point(item, index, field_path)
-            })
-            .take(12)
-            .collect::<Vec<_>>();
-        if !points.is_empty() {
-            return points;
-        }
-    }
-    Vec::new()
-}
-
-fn static_page_field_candidate_sample_point(
-    item: &Value,
-    index: usize,
-    field_path: &str,
-) -> Option<Value> {
-    let value = static_page_explicit_point_value(item)?;
-    let label = static_page_explicit_point_label(item, index);
-    let mut point = item.as_object().cloned().unwrap_or_default();
-    point
-        .entry("label".to_string())
-        .or_insert_with(|| json!(label));
-    point.insert("value".to_string(), json!(value));
-    point
-        .entry("kind".to_string())
-        .or_insert_with(|| json!("field_candidate_sample"));
-    point
-        .entry("source".to_string())
-        .or_insert_with(|| json!("field_candidate"));
-    point
-        .entry("fieldPath".to_string())
-        .or_insert_with(|| json!(field_path));
-    Some(Value::Object(point))
 }
 
 fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &str) -> Vec<Value> {
