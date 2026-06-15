@@ -24712,3 +24712,41 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
   - no service was restarted during local verification;
   - 120 server was not touched.
+
+## 2026-06-16 P5 HTML Artifact Static-Page Patch Wrapper 8-Server Verification
+
+- 8-server post-sync verification:
+  - local commit `e184c5c3` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `a55dd9b89` to `e184c5c37`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api html_artifact_static_page_patch_support --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page --lib`: passed, 525/525 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT warnings only;
+  - `CC=clang CXX=clang++ cargo build -q -p platform-api --release`: passed;
+  - after restart, `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - first immediate `healthz` check after restart returned connection refused because port 3000 was not listening yet;
+  - delayed recheck confirmed all five services remained `active`;
+  - delayed `healthz` returned status `ok`;
+  - delayed `readyz` returned status `ready`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed;
+  - `npm run smoke:external-report-export -- --self-test`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed;
+  - post-smoke service check confirmed all five restarted services remained `active`;
+  - final `healthz` returned status `ok` and final `readyz` returned status `ready`;
+  - remote `git status -sb` reported `## main...origin/main`;
+  - remote `git rev-parse HEAD` reported `e184c5c37842619c8a291f929aaff7bcc5e2f9d6`.
+- GitHub Actions:
+  - code commit run `27571307135` for `e184c5c3` completed `failure`;
+  - `Rust Minimal` and `No-Credential Smoke` both had `steps=[]`, matching the existing runner/account startup failure pattern.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
