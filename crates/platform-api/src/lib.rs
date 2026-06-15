@@ -242,6 +242,7 @@ mod external_channel_static_page_publish_validation;
 mod external_channel_static_page_publish_visibility;
 mod external_channel_static_page_reply_merge;
 mod external_channel_static_page_report_scope_support;
+mod external_channel_static_page_source_ref_support;
 mod external_channel_static_page_status_source_refs;
 mod external_channel_static_page_template_baseline;
 mod external_channel_static_page_template_reference_support;
@@ -445,6 +446,7 @@ use external_channel_static_page_publish_validation::*;
 use external_channel_static_page_publish_visibility::*;
 use external_channel_static_page_reply_merge::*;
 use external_channel_static_page_report_scope_support::*;
+use external_channel_static_page_source_ref_support::*;
 use external_channel_static_page_status_source_refs::*;
 use external_channel_static_page_template_baseline::*;
 use external_channel_static_page_template_reference_support::*;
@@ -26099,18 +26101,6 @@ pub(crate) async fn publish_static_page_revision_for_current_artifact(
         existing_artifact,
         public_url,
     })
-}
-
-pub(crate) fn external_channel_static_page_source_ref_string(
-    source_refs: &Value,
-    key: &str,
-) -> Option<String> {
-    source_refs
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn external_channel_static_page_source_refs_string_array(
