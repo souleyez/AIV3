@@ -181,6 +181,7 @@ mod assistant_run_model_supply_budget_support;
 mod assistant_run_model_supply_item_support;
 mod assistant_run_prompt_dimension_support;
 mod assistant_run_provider_retry_support;
+mod assistant_run_provider_usage_support;
 mod assistant_run_react_support;
 mod assistant_run_resume_profile_match_support;
 mod assistant_run_resume_profile_support;
@@ -402,6 +403,7 @@ use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
 pub(crate) use assistant_run_prompt_dimension_support::*;
 use assistant_run_provider_retry_support::*;
+use assistant_run_provider_usage_support::*;
 use assistant_run_react_support::*;
 use assistant_run_resume_profile_match_support::*;
 use assistant_run_resume_profile_support::*;
@@ -61299,107 +61301,6 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         "queue_allowed": false,
         "authority": "direct_until_shadow_gate_passes",
     })
-}
-
-fn assistant_run_provider_usage_events(
-    run: &AssistantRun,
-    events: &[AssistantRunEvent],
-) -> Vec<Value> {
-    let mut usage_events = events
-        .iter()
-        .filter_map(|event| {
-            let runtime = event.payload.get("runtime")?;
-            assistant_run_provider_usage_event_from_runtime_manifest(
-                run.id,
-                Some(event.sequence_no),
-                Some(event.event_name.as_str()),
-                runtime,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if usage_events.is_empty() {
-        if let Some(event) = assistant_run_provider_usage_event_from_runtime_manifest(
-            run.id,
-            None,
-            Some("assistant_run.current_runtime"),
-            &run.runtime_manifest,
-        ) {
-            usage_events.push(event);
-        }
-    }
-
-    usage_events
-}
-
-fn assistant_run_provider_usage_event_from_runtime_manifest(
-    run_id: AssistantRunId,
-    sequence_no: Option<i32>,
-    event_name: Option<&str>,
-    runtime: &Value,
-) -> Option<Value> {
-    let provider = runtime.get("provider").and_then(Value::as_str)?;
-    let model = runtime.get("model").and_then(Value::as_str)?;
-    let usage = runtime.get("usage").filter(|value| value.is_object());
-    let provider_failure = runtime
-        .get("provider_failure")
-        .filter(|value| value.is_object());
-
-    Some(json!({
-        "assistant_run_id": run_id.to_string(),
-        "sequence_no": sequence_no,
-        "event_name": event_name,
-        "mode": runtime.get("mode").and_then(Value::as_str),
-        "provider": provider,
-        "model": model,
-        "lane": runtime.get("lane").and_then(Value::as_str),
-        "request_id": runtime.get("request_id").and_then(Value::as_str),
-        "status": if provider_failure.is_some() { "failed" } else { "responded" },
-        "input_tokens": usage
-            .and_then(|usage| usage.get("input_tokens"))
-            .and_then(Value::as_u64),
-        "output_tokens": usage
-            .and_then(|usage| usage.get("output_tokens"))
-            .and_then(Value::as_u64),
-        "total_tokens": usage
-            .and_then(|usage| usage.get("total_tokens"))
-            .and_then(Value::as_u64),
-        "latency_ms": runtime.get("latency_ms").and_then(Value::as_u64),
-        "provider_failure_kind": provider_failure
-            .and_then(|failure| failure.get("kind"))
-            .and_then(Value::as_str),
-    }))
-}
-
-fn assistant_run_provider_usage_summary(events: &[Value]) -> Value {
-    json!({
-        "request_count": events.len(),
-        "failed_request_count": events
-            .iter()
-            .filter(|event| event.get("status").and_then(Value::as_str) == Some("failed"))
-            .count(),
-        "input_tokens": assistant_run_sum_usage_field(events, "input_tokens"),
-        "output_tokens": assistant_run_sum_usage_field(events, "output_tokens"),
-        "total_tokens": assistant_run_sum_usage_field(events, "total_tokens"),
-        "last_request_id": events
-            .iter()
-            .rev()
-            .find_map(|event| event.get("request_id").and_then(Value::as_str))
-    })
-}
-
-fn assistant_run_recent_provider_usage_events(mut events: Vec<Value>, limit: usize) -> Vec<Value> {
-    if events.len() > limit {
-        events = events.split_off(events.len() - limit);
-    }
-    events
-}
-
-fn assistant_run_sum_usage_field(events: &[Value], field: &str) -> u64 {
-    events
-        .iter()
-        .filter_map(|event| event.get(field).and_then(Value::as_u64))
-        .sum()
 }
 
 pub(crate) fn value_array(value: Value) -> Vec<Value> {
