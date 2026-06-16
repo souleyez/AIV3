@@ -79,10 +79,9 @@ use contracts::{
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
     StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
-    StaticPageRenderOutputView, StaticPageTemplateView, SubmitHtmlArtifactEventRequest,
-    SubmitHtmlArtifactEventResponse, TestDatabaseSourceConnectionRequest,
-    TestDatabaseSourceConnectionResponse, ToolDefinitionView, ToolExecutionView,
-    UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
+    StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
+    TestDatabaseSourceConnectionRequest, TestDatabaseSourceConnectionResponse, ToolDefinitionView,
+    ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
     UpdateChatSessionRequest, UpdateChatSessionResponse, UpdateDatasetRequest,
     UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
     UpdateExternalDocumentDatasetResponse, UpdateStaticPageDraftRequest,
@@ -371,6 +370,7 @@ mod static_page_template_prewarm_support;
 mod static_page_template_profile_support;
 mod static_page_template_reference_support;
 mod static_page_template_score_support;
+mod static_page_view_support;
 mod static_page_visual_render_spec_support;
 mod text_normalization;
 mod tool_view_support;
@@ -613,6 +613,7 @@ use static_page_template_prewarm_support::*;
 use static_page_template_profile_support::*;
 use static_page_template_reference_support::*;
 use static_page_template_score_support::*;
+use static_page_view_support::*;
 use static_page_visual_render_spec_support::*;
 use text_normalization::*;
 use tool_view_support::*;
@@ -61309,87 +61310,6 @@ pub(crate) fn value_array(value: Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items,
         _ => Vec::new(),
-    }
-}
-
-fn to_static_page_draft_view(draft: StaticPageDraft) -> StaticPageDraftView {
-    StaticPageDraftView {
-        id: draft.id,
-        assistant_run_id: draft.assistant_run_id,
-        title: draft.title,
-        status: contracts::StaticPageDraftStatusView::from_domain(draft.status),
-        selected_scope: draft.selected_scope,
-        visibility_snapshot: draft.visibility_snapshot,
-        source_refs: draft.source_refs,
-        draft_payload: draft.draft_payload,
-        created_at: draft.created_at,
-        updated_at: draft.updated_at,
-    }
-}
-
-fn to_static_page_template_view(draft: StaticPageDraft) -> Option<StaticPageTemplateView> {
-    let public_url = static_page_published_public_url_from_draft(&draft)?;
-    let preview_url = static_page_template_preview_url_from_draft(&draft);
-    let dataset_artifact_key = static_page_dataset_artifact_key_from_draft_context(&draft);
-    let template_reference =
-        static_page_generated_template_reference_from_draft(&draft, &public_url);
-
-    Some(StaticPageTemplateView {
-        id: static_page_generated_template_reference_id(draft.id),
-        draft_id: draft.id,
-        assistant_run_id: draft.assistant_run_id,
-        title: draft.title,
-        public_url,
-        preview_url,
-        dataset_artifact_key,
-        template_reference,
-        selected_scope: draft.selected_scope,
-        source_refs: draft.source_refs,
-        created_at: draft.created_at,
-        updated_at: draft.updated_at,
-    })
-}
-
-fn to_static_page_image_job_view(job: StaticPageImageJob) -> StaticPageImageJobView {
-    StaticPageImageJobView {
-        id: job.id,
-        draft_id: job.draft_id,
-        assistant_run_id: job.assistant_run_id,
-        status: contracts::StaticPageImageJobStatusView::from_domain(job.status),
-        queue_position: job.queue_position,
-        image_prompt_payload: job.image_prompt_payload,
-        preview_asset_key: job.preview_asset_key,
-        failure_reason: job.failure_reason,
-        confirmed_at: job.confirmed_at,
-        created_at: job.created_at,
-        updated_at: job.updated_at,
-    }
-}
-
-fn to_static_page_render_output_view(
-    output: StaticPageRenderOutput,
-    selected_scope: Option<&Value>,
-) -> StaticPageRenderOutputView {
-    let html_download_url = static_page_html_download_url(selected_scope, &output);
-    let html_preview_url = static_page_html_preview_url(selected_scope, &output);
-    let retryable_error_reason = static_page_render_output_retryable_error_reason(&output);
-    StaticPageRenderOutputView {
-        id: output.id,
-        draft_id: output.draft_id,
-        assistant_run_id: output.assistant_run_id,
-        image_job_id: output.image_job_id,
-        status: contracts::StaticPageRenderOutputStatusView::from_domain(output.status),
-        html: output.html,
-        html_download_url: html_download_url.clone(),
-        html_download_url_camel: html_download_url.clone(),
-        download_url: html_download_url.clone(),
-        download_url_camel: html_download_url,
-        html_preview_url: html_preview_url.clone(),
-        html_preview_url_camel: html_preview_url,
-        retryable_error_reason: retryable_error_reason.clone(),
-        retryable_error_reason_camel: retryable_error_reason,
-        asset_manifest: output.asset_manifest,
-        created_at: output.created_at,
     }
 }
 
