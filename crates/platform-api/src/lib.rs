@@ -163,6 +163,7 @@ mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_context_package_support;
 mod assistant_run_codex_fixed_task_support;
 mod assistant_run_codex_host_validation_support;
+mod assistant_run_codex_model_gateway_gate_support;
 mod assistant_run_codex_model_gateway_support;
 mod assistant_run_codex_observability_support;
 mod assistant_run_codex_promotion_gate_support;
@@ -383,6 +384,7 @@ use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_package_support::*;
 use assistant_run_codex_fixed_task_support::*;
 use assistant_run_codex_host_validation_support::*;
+use assistant_run_codex_model_gateway_gate_support::*;
 use assistant_run_codex_model_gateway_support::*;
 use assistant_run_codex_observability_support::*;
 use assistant_run_codex_promotion_gate_support::*;
@@ -61377,103 +61379,6 @@ fn assistant_run_codex_shadow_event_summary(event: &AssistantRunEvent) -> Value 
             .pointer("/comparison/next_gate")
             .cloned()
             .unwrap_or(Value::Null),
-    })
-}
-
-fn assistant_run_codex_model_gateway_gate_summary(latest: Option<&AssistantRunEvent>) -> Value {
-    let Some(event) = latest else {
-        return json!({
-            "status": "not_run",
-            "ready_for_promotion_review": false,
-            "profile_available": false,
-            "auth_configured": false,
-            "codex_surface_supported": false,
-            "next_step": "run_codex_shadow_diagnostics_with_model_gateway_snapshot",
-        });
-    };
-    let model_gateway = event.payload.get("model_gateway").unwrap_or(&Value::Null);
-    let summary = assistant_run_codex_model_gateway_diagnostics_summary(Some(model_gateway));
-    let profile_available = summary
-        .get("profile_available")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let auth_configured = summary
-        .get("auth_configured")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let codex_surface = summary.get("codex_surface").unwrap_or(&Value::Null);
-    let wire_api = summary
-        .get("wire_api")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let codex_compatible = codex_surface
-        .get("codex_compatible")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| {
-            matches!(
-                wire_api,
-                "codex_compatible_shim" | "codex-compatible-shim" | "codex_shim" | "provider_shim"
-            )
-        });
-    let json_actions_supported = codex_surface
-        .get("json_actions_supported")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| matches!(wire_api, "responses" | "codex_compatible_shim"));
-    let tool_calls_supported = codex_surface
-        .get("tool_calls_supported")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let codex_surface_supported = codex_compatible || json_actions_supported;
-    let status = if !profile_available {
-        "profile_missing"
-    } else if !auth_configured {
-        "auth_not_configured"
-    } else if !codex_surface_supported {
-        "unsupported_codex_surface"
-    } else {
-        "ready"
-    };
-    let next_step = match status {
-        "ready" => "continue_shadow_and_host_gate_review",
-        "profile_missing" => "configure_codex_conversation_model_profile",
-        "auth_not_configured" => "configure_codex_model_profile_auth",
-        "unsupported_codex_surface" => "select_codex_compatible_or_json_action_profile",
-        _ => "inspect_model_gateway_diagnostics",
-    };
-
-    json!({
-        "status": status,
-        "ready_for_promotion_review": status == "ready",
-        "profile_available": profile_available,
-        "profile_source": summary.get("profile_source").cloned().unwrap_or(Value::Null),
-        "profile_status": summary.get("profile_status").cloned().unwrap_or(Value::Null),
-        "profile_id": summary.get("profile_id").cloned().unwrap_or(Value::Null),
-        "provider_id": summary.get("provider_id").cloned().unwrap_or(Value::Null),
-        "model_id": summary.get("model_id").cloned().unwrap_or(Value::Null),
-        "wire_api": summary.get("wire_api").cloned().unwrap_or(Value::Null),
-        "auth_configured": auth_configured,
-        "capabilities": summary
-            .get("capabilities")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-        "capability_manifest": summary
-            .get("capability_manifest")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "codex_surface": {
-            "codex_compatible": codex_compatible,
-            "json_actions_supported": json_actions_supported,
-            "tool_calls_supported": tool_calls_supported,
-            "real_execution_block_reason": codex_surface
-                .get("real_execution_block_reason")
-                .cloned()
-                .unwrap_or(Value::Null),
-        },
-        "direct_execution_authoritative": true,
-        "local_execution_allowed": false,
-        "codex_mutation_allowed": false,
-        "queue_allowed": false,
-        "next_step": next_step,
     })
 }
 
