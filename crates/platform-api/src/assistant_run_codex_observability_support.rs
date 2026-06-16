@@ -1,5 +1,61 @@
 use assistant_runtime::CodexConversationExecutorOutput;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+
+pub(crate) fn assistant_run_codex_execution_trail_entries(
+    output: &CodexConversationExecutorOutput,
+    now: DateTime<Utc>,
+    shadow_comparison: Option<&Value>,
+    transport_policy: Option<&Value>,
+) -> Vec<Value> {
+    vec![json!({
+        "status": "completed",
+        "label": "Codex 执行器诊断",
+        "transport": output.transport.as_str(),
+        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
+        "executor_status": output.status.as_str(),
+        "codex_invoked": output.codex_invoked,
+        "fallback_to_direct": output.fallback_to_direct,
+        "planned_action_types": output.planned_action_types.clone(),
+        "suggested_action": assistant_run_codex_suggested_action_summary(
+            output.suggested_action.as_ref(),
+            shadow_comparison,
+        ),
+        "model_gateway": output.model_gateway.clone(),
+        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
+        "output_schema": output.output_schema.clone(),
+        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
+        "shadow_comparison": shadow_comparison.cloned(),
+        "at": now,
+    })]
+}
+
+pub(crate) fn assistant_run_codex_event_payload(
+    output: &CodexConversationExecutorOutput,
+    shadow_comparison: Option<&Value>,
+    transport_policy: Option<&Value>,
+) -> Value {
+    json!({
+        "transport": output.transport.as_str(),
+        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
+        "status": output.status.as_str(),
+        "codex_invoked": output.codex_invoked,
+        "fallback_to_direct": output.fallback_to_direct,
+        "planned_action_types": output.planned_action_types.clone(),
+        "suggested_action": assistant_run_codex_suggested_action_summary(
+            output.suggested_action.as_ref(),
+            shadow_comparison,
+        ),
+        "model_gateway": output.model_gateway.clone(),
+        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
+        "output_schema": output.output_schema.clone(),
+        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
+        "context_budget": output.context_budget.clone(),
+        "supply_quality": assistant_run_codex_output_supply_quality_summary(output),
+        "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
+        "shadow_comparison": shadow_comparison.cloned(),
+    })
+}
 
 pub(crate) fn assistant_run_codex_provider_shim_observability_from_output(
     output: &CodexConversationExecutorOutput,
@@ -747,6 +803,7 @@ pub(crate) fn assistant_run_codex_provider_shim_observability_summary(
 mod tests {
     use super::*;
     use assistant_runtime::CodexConversationExecutorStatus;
+    use chrono::TimeZone;
     use contracts::{AssistantRunCodexContextBudgetView, AssistantRunExecutorTransportView};
 
     fn codex_executor_output(model_gateway: Value) -> CodexConversationExecutorOutput {
@@ -837,6 +894,158 @@ mod tests {
         );
         assert_eq!(observability["profile"]["auth_env_key_name"], Value::Null);
         assert!(!observability.to_string().contains("MINIMAX_API_KEY"));
+    }
+
+    #[test]
+    fn assistant_run_codex_observability_support_builds_event_payload_without_raw_action_inputs() {
+        let mut output = codex_executor_output(json!({
+            "wire_api": "codex_compatible_shim",
+            "selected_model": {
+                "provider": "minimax",
+                "model": "MiniMax-M2.7"
+            },
+            "auth_configured": true,
+            "profile_id": "minimax-codex-shadow",
+            "capabilities": ["chat", "json_mode", "tool_calling", "codex_compatible"],
+            "capability_manifest": {
+                "codex_compatible": true
+            }
+        }));
+        output.codex_invoked = true;
+        output.fallback_to_direct = false;
+        output.planned_action_types = vec!["submit_html_artifact_event".to_string()];
+        output.suggested_action = Some(json!({
+            "action_type": "submit_html_artifact_event",
+            "title": "生成经营报表",
+            "source": "codex",
+            "confidence": 0.86,
+            "requires_v3_validation": true,
+            "mutation_allowed": false,
+            "queue_allowed": true,
+            "arguments": {
+                "raw_customer_prompt": "should-not-leak"
+            },
+            "input_schema": {
+                "type": "object"
+            }
+        }));
+        output.host_invocation = Some(json!({
+            "kind": "codex_host_invocation",
+            "transport": "codex_exec_schema",
+            "host_required": true,
+            "local_execution_allowed": false,
+            "mutation_allowed": false,
+            "queue_allowed": true,
+            "command_blueprint": {
+                "program": "codex",
+                "args": ["exec", "--json"],
+                "stdin": {"redacted": true},
+                "workspace": "/srv/aiv3/repo"
+            },
+            "model_gateway": {
+                "lane": "codex_conversation",
+                "selected_model": {
+                    "mode": "model_gateway",
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7"
+                },
+                "safety": {
+                    "secrets_redacted": true,
+                    "raw_provider_payloads_allowed": false
+                }
+            },
+            "safety": {
+                "v3_validates_all_actions": true,
+                "direct_database_access_allowed": false,
+                "direct_queue_access_allowed": false,
+                "real_host_validation_required": true
+            }
+        }));
+        output.execution_trail = vec![json!({
+            "kind": "codex_executor.plan_only",
+            "suggested_action": {
+                "action_type": "submit_html_artifact_event",
+                "arguments": {
+                    "raw_customer_prompt": "should-not-leak"
+                },
+                "input_schema": {
+                    "type": "object"
+                }
+            },
+            "supply_quality": {
+                "status": "sufficient",
+                "intent": "static_report",
+                "supplyRequested": true,
+                "selectedDatasetCount": 1,
+                "indexedEvidenceCount": 9,
+                "citationLocatorCount": 3
+            }
+        })];
+
+        let shadow_comparison = json!({
+            "codex": {
+                "suggested_action_type": "submit_html_artifact_event"
+            }
+        });
+        let transport_policy = json!({
+            "requested_transport": "codex_real",
+            "effective_transport": "codex_plan_only",
+            "real_transport_requested": true,
+            "real_transport_feature_gate_enabled": false,
+            "downgraded": true,
+            "downgrade_reason": "feature_gate_disabled",
+            "debug_token": "policy-secret-token"
+        });
+        let now = Utc
+            .with_ymd_and_hms(2026, 6, 16, 8, 30, 0)
+            .single()
+            .expect("fixed timestamp is valid");
+
+        let payload = assistant_run_codex_event_payload(
+            &output,
+            Some(&shadow_comparison),
+            Some(&transport_policy),
+        );
+        let trail = assistant_run_codex_execution_trail_entries(
+            &output,
+            now,
+            Some(&shadow_comparison),
+            Some(&transport_policy),
+        );
+        let serialized =
+            serde_json::to_string(&(payload.clone(), trail.clone())).expect("payload serializes");
+
+        assert_eq!(
+            payload["transport_policy"]["requested_transport"],
+            json!("codex_real")
+        );
+        assert_eq!(
+            payload["transport_policy"]["downgrade_reason"],
+            json!("feature_gate_disabled")
+        );
+        assert_eq!(
+            payload["suggested_action"]["action_type"],
+            json!("submit_html_artifact_event")
+        );
+        assert_eq!(payload["suggested_action"]["has_arguments"], json!(true));
+        assert_eq!(
+            payload["provider_shim_observability"]["profile"]["provider_id"],
+            json!("minimax")
+        );
+        assert_eq!(
+            payload["host_invocation"]["command_blueprint"]["program"],
+            json!("codex")
+        );
+        assert_eq!(payload["supply_quality"]["status"], json!("sufficient"));
+        assert_eq!(
+            payload["execution_trail"][0]["suggested_action"]["has_arguments"],
+            json!(true)
+        );
+        assert_eq!(trail[0]["label"], json!("Codex 执行器诊断"));
+        assert_eq!(trail[0]["executor_status"], json!("shadow_dry_run"));
+        assert_eq!(trail[0]["at"], json!(now));
+        assert!(!serialized.contains("should-not-leak"));
+        assert!(!serialized.contains("policy-secret-token"));
     }
 
     #[test]

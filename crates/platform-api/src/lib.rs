@@ -3,8 +3,7 @@
 mod basic_view_support;
 
 use assistant_runtime::{
-    candidates_to_values, execute_codex_conversation_plan, plan_scope,
-    CodexConversationExecutorOutput, ScopePlannerInput,
+    candidates_to_values, execute_codex_conversation_plan, plan_scope, ScopePlannerInput,
 };
 use auth_email::{
     send_operational_email, send_verification_email, EmailOtpService, OperationalEmailMessage,
@@ -45973,61 +45972,6 @@ fn assistant_run_codex_runtime_selection() -> LlmRuntimeSelection {
         MODEL_LANE_CODEX_CONVERSATION,
         DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL,
     )
-}
-
-fn assistant_run_codex_execution_trail_entries(
-    output: &CodexConversationExecutorOutput,
-    now: DateTime<Utc>,
-    shadow_comparison: Option<&Value>,
-    transport_policy: Option<&Value>,
-) -> Vec<Value> {
-    vec![json!({
-        "status": "completed",
-        "label": "Codex 执行器诊断",
-        "transport": output.transport.as_str(),
-        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
-        "executor_status": output.status.as_str(),
-        "codex_invoked": output.codex_invoked,
-        "fallback_to_direct": output.fallback_to_direct,
-        "planned_action_types": output.planned_action_types.clone(),
-        "suggested_action": assistant_run_codex_suggested_action_summary(
-            output.suggested_action.as_ref(),
-            shadow_comparison,
-        ),
-        "model_gateway": output.model_gateway.clone(),
-        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
-        "output_schema": output.output_schema.clone(),
-        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
-        "shadow_comparison": shadow_comparison.cloned(),
-        "at": now,
-    })]
-}
-
-fn assistant_run_codex_event_payload(
-    output: &CodexConversationExecutorOutput,
-    shadow_comparison: Option<&Value>,
-    transport_policy: Option<&Value>,
-) -> Value {
-    json!({
-        "transport": output.transport.as_str(),
-        "transport_policy": assistant_run_codex_transport_policy_summary(transport_policy),
-        "status": output.status.as_str(),
-        "codex_invoked": output.codex_invoked,
-        "fallback_to_direct": output.fallback_to_direct,
-        "planned_action_types": output.planned_action_types.clone(),
-        "suggested_action": assistant_run_codex_suggested_action_summary(
-            output.suggested_action.as_ref(),
-            shadow_comparison,
-        ),
-        "model_gateway": output.model_gateway.clone(),
-        "provider_shim_observability": assistant_run_codex_provider_shim_observability_from_output(output),
-        "output_schema": output.output_schema.clone(),
-        "host_invocation": assistant_run_codex_host_invocation_summary(output.host_invocation.as_ref()),
-        "context_budget": output.context_budget.clone(),
-        "supply_quality": assistant_run_codex_output_supply_quality_summary(output),
-        "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
-        "shadow_comparison": shadow_comparison.cloned(),
-    })
 }
 
 fn push_unique_string(items: &mut Vec<String>, item: &str) {
