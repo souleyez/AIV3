@@ -214,6 +214,7 @@ mod external_answer_policy_support;
 mod external_artifact_request_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
+mod external_channel_action_prompt_support;
 mod external_channel_attachment_title_support;
 mod external_channel_connection_id_support;
 mod external_channel_conversation_history_support;
@@ -420,6 +421,7 @@ use external_answer_policy_support::*;
 use external_artifact_request_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
+use external_channel_action_prompt_support::*;
 use external_channel_attachment_title_support::*;
 use external_channel_connection_id_support::*;
 use external_channel_conversation_history_support::*;
@@ -12849,104 +12851,6 @@ async fn plan_and_record_external_action_run(
         .map_err(ApiError::from_storage)?;
 
     Ok(Some(ExternalChannelPlanOutcome::Action(plan)))
-}
-
-fn external_channel_prompt_may_need_planned_action(prompt: &str) -> bool {
-    let normalized = prompt.to_ascii_lowercase();
-    let text = prompt.trim();
-    external_channel_text_has_any(
-        &normalized,
-        text,
-        &[
-            "web search",
-            "search web",
-            "latest",
-            "publish",
-            "revoke",
-            "dispatch",
-            "callback",
-            "artifact status",
-            "delivery status",
-            "publish status",
-            "external action status",
-            "external artifact status",
-            "产物状态",
-            "投递状态",
-            "发布状态",
-            "外部动作状态",
-            "外部产物状态",
-            "发布",
-            "撤回",
-            "下线",
-            "派发",
-            "回调",
-            "执行第三方",
-            "执行动作",
-            "业务动作",
-            "发起审批",
-            "提交审批",
-            "创建工单",
-            "联网搜索",
-            "网页搜索",
-            "最新",
-            "实时",
-        ],
-    )
-}
-
-fn external_channel_prompt_allows_external_action(prompt: &str, action_type: &str) -> bool {
-    let normalized = prompt.to_ascii_lowercase();
-    let text = prompt.trim();
-    match action_type {
-        "external_artifact.status" => external_channel_text_has_any(
-            &normalized,
-            text,
-            &[
-                "artifact status",
-                "delivery status",
-                "publish status",
-                "external artifact status",
-                "产物状态",
-                "投递状态",
-                "发布状态",
-                "外部产物状态",
-            ],
-        ),
-        "external_artifact.publish" => {
-            external_channel_text_has_any(&normalized, text, &["publish", "发布", "推送", "投递"])
-        }
-        "external_artifact.revoke" => external_channel_text_has_any(
-            &normalized,
-            text,
-            &["revoke", "撤回", "下线", "取消发布"],
-        ),
-        "external_business_action.invoke" => external_channel_text_has_any(
-            &normalized,
-            text,
-            &[
-                "dispatch",
-                "invoke",
-                "callback",
-                "执行第三方",
-                "执行动作",
-                "业务动作",
-                "发起审批",
-                "提交审批",
-                "创建工单",
-            ],
-        ),
-        _ => false,
-    }
-}
-
-fn external_channel_text_has_any(normalized_ascii: &str, original: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| {
-        if needle.is_ascii() {
-            normalized_ascii.contains(&needle.to_ascii_lowercase())
-        } else {
-            original.contains(needle)
-        }
-    })
 }
 
 async fn record_external_action_run_from_suggestion(
