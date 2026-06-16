@@ -164,6 +164,7 @@ mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_model_gateway_support;
 mod assistant_run_codex_observability_support;
+mod assistant_run_codex_shadow_support;
 mod assistant_run_codex_tool_output_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
@@ -379,6 +380,7 @@ use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_budget_support::*;
 use assistant_run_codex_model_gateway_support::*;
 use assistant_run_codex_observability_support::*;
+use assistant_run_codex_shadow_support::*;
 use assistant_run_codex_tool_output_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
@@ -46026,194 +46028,6 @@ fn assistant_run_codex_event_payload(
         "execution_trail": assistant_run_codex_runtime_execution_trail_summary(&output.execution_trail),
         "shadow_comparison": shadow_comparison.cloned(),
     })
-}
-
-fn assistant_run_codex_shadow_comparison(
-    output: &CodexConversationExecutorOutput,
-    direct_react_enabled: bool,
-    direct_runtime_manifest: &Value,
-    direct_output_artifacts: &[Value],
-    direct_react_events: &[AssistantRunReactEvent],
-    selected_scope: &Value,
-    current_artifact: Option<&Value>,
-) -> Value {
-    let artifact_types: Vec<Value> = direct_output_artifacts
-        .iter()
-        .filter_map(|artifact| artifact.get("type").and_then(Value::as_str))
-        .map(|value| json!(value))
-        .collect();
-    let react_event_names: Vec<Value> = direct_react_events
-        .iter()
-        .map(|event| json!(event.event_name.as_str()))
-        .collect();
-    let direct_action_types =
-        assistant_run_codex_direct_action_types(direct_output_artifacts, direct_react_events);
-    let selected_intent = assistant_run_scope_intent(selected_scope);
-    let static_page_context = selected_intent == "static_page"
-        || current_artifact
-            .map(assistant_run_is_static_page_artifact)
-            .unwrap_or(false)
-        || direct_output_artifacts.iter().any(|artifact| {
-            artifact
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        "static_page_draft" | "static_page_image_job" | "static_page_render_output"
-                    )
-                })
-        });
-    let suggested_action_type = output
-        .suggested_action
-        .as_ref()
-        .and_then(|action| {
-            action
-                .get("action_type")
-                .or_else(|| action.get("actionType"))
-                .or_else(|| action.get("type"))
-        })
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let suggested_action_allowed = suggested_action_type.as_ref().is_none_or(|action_type| {
-        output
-            .planned_action_types
-            .iter()
-            .any(|planned| planned == action_type)
-    });
-    let comparison_status = assistant_run_codex_shadow_comparison_status(
-        &direct_action_types,
-        suggested_action_type.as_deref(),
-        suggested_action_allowed,
-    );
-    let direct_action_values: Vec<Value> = direct_action_types
-        .iter()
-        .map(|value| json!(value))
-        .collect();
-
-    json!({
-        "mode": "shadow_comparison",
-        "authoritative_executor": "direct",
-        "codex_mutation_allowed": false,
-        "codex_queue_allowed": false,
-        "direct_state_authoritative": true,
-        "static_page_flow_preserved": true,
-        "static_page_context": static_page_context,
-        "direct": {
-            "react_enabled": direct_react_enabled,
-            "runtime_mode": direct_runtime_manifest.get("mode").cloned().unwrap_or(Value::Null),
-            "provider": direct_runtime_manifest.get("provider").cloned().unwrap_or(Value::Null),
-            "model": direct_runtime_manifest.get("model").cloned().unwrap_or(Value::Null),
-            "artifact_types": artifact_types,
-            "react_event_names": react_event_names,
-            "action_types": direct_action_values,
-            "selected_intent": selected_intent,
-        },
-        "codex": {
-            "transport": output.transport.as_str(),
-            "status": output.status.as_str(),
-            "codex_invoked": output.codex_invoked,
-            "fallback_to_direct": output.fallback_to_direct,
-            "planned_action_types": output.planned_action_types.clone(),
-            "suggested_action_type": suggested_action_type,
-            "suggested_action_allowed": suggested_action_allowed,
-            "model_gateway": output.model_gateway.clone(),
-        },
-        "comparison": {
-            "status": comparison_status,
-            "codex_has_suggestion": output.suggested_action.is_some(),
-            "actionable": false,
-            "equivalence_scored": output.suggested_action.is_some(),
-            "reason": if suggested_action_allowed {
-                "shadow mode only; direct execution remains authoritative"
-            } else {
-                "codex suggested action is not in DataMax-provided action contracts"
-            },
-            "next_gate": "enable Codex mutation only after repeated matched shadow runs",
-        }
-    })
-}
-
-fn assistant_run_codex_direct_action_types(
-    direct_output_artifacts: &[Value],
-    direct_react_events: &[AssistantRunReactEvent],
-) -> Vec<String> {
-    let mut actions = Vec::new();
-    for artifact in direct_output_artifacts {
-        let Some(kind) = artifact.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        let action = match kind {
-            "static_page_draft" => Some("create_static_page_draft"),
-            "static_page_image_job" => Some("submit_static_page_image_preview"),
-            "static_page_render_output" => Some("render_static_page"),
-            "assistant_message" => Some("final_answer"),
-            "report_draft" => Some("create_report_draft"),
-            _ => None,
-        };
-        if let Some(action) = action {
-            push_unique_string(&mut actions, action);
-        }
-    }
-    for event in direct_react_events {
-        if let Some(action) = assistant_run_action_type_from_event_name(&event.event_name) {
-            push_unique_string(&mut actions, action);
-        }
-    }
-    actions
-}
-
-fn assistant_run_action_type_from_event_name(event_name: &str) -> Option<&'static str> {
-    if event_name.contains("retrieve_evidence") {
-        Some("retrieve_evidence")
-    } else if event_name.contains("read_document_detail") {
-        Some("read_document_detail")
-    } else if event_name.contains("recall_conversation_memory") {
-        Some("recall_conversation_memory")
-    } else if event_name.contains("create_static_page_draft") {
-        Some("create_static_page_draft")
-    } else if event_name.contains("update_static_page_module") {
-        Some("update_static_page_module")
-    } else if event_name.contains("submit_static_page_image_preview") {
-        Some("submit_static_page_image_preview")
-    } else if event_name.contains("render_static_page") {
-        Some("render_static_page")
-    } else if event_name.contains("static_page_revision_publish")
-        || event_name.contains("publish_static_page_revision")
-    {
-        Some("publish_static_page_revision")
-    } else if event_name.contains("create_report_draft") {
-        Some("create_report_draft")
-    } else if event_name.contains("report_choice") {
-        Some("report_choice")
-    } else if event_name.contains("codex_host_task") {
-        Some("codex_host_task")
-    } else {
-        None
-    }
-}
-
-fn assistant_run_codex_shadow_comparison_status(
-    direct_action_types: &[String],
-    suggested_action_type: Option<&str>,
-    suggested_action_allowed: bool,
-) -> &'static str {
-    let Some(suggested_action_type) = suggested_action_type else {
-        return "no_codex_suggestion";
-    };
-    if !suggested_action_allowed {
-        return "invalid_suggestion";
-    }
-    if direct_action_types
-        .iter()
-        .any(|action_type| action_type == suggested_action_type)
-    {
-        "matched"
-    } else if direct_action_types.is_empty() {
-        "codex_only"
-    } else {
-        "diverged"
-    }
 }
 
 fn push_unique_string(items: &mut Vec<String>, item: &str) {
