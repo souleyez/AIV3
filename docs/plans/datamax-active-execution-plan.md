@@ -203,7 +203,8 @@
 | 140 | P5 external static-page template payload policy helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_template_reference_support` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 141 | P5 external static-page template card payload helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_static_page_template_reference_support` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 142 | P5 external static-page export URL helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `external_channel_public_artifact` 模块单测、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/临时文档/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
-| 143 | P5 下一个行为保持小切片 | 待选定。 | #142 远端验证关闭后，从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 143 | P5 assistant-run Codex event payload helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_codex_observability_support` 模块单测、既有 Codex diagnostic payload 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/文档范围/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
+| 144 | P5 下一个行为保持小切片 | 待选定。 | #143 远端验证关闭后，从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
 
 ## 3. P0 发布前固定回归
 
@@ -878,7 +879,7 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 
 ## 10. 当前下一步
 
-1. 默认继续 #160：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
+1. 默认继续 #161：选择下一个 `platform-api` 或主站前端行为保持小切片，先补定向测试，再做拆分和 P0 回归。
 2. 若用户要求发布，再按 P0 code deploy 边界同步 8 服务器；若只是文档同步，则只 fast-forward，不 build、不重启。
 3. 若拿到合法 operator 凭证或运维脱敏回执，优先切到 P1-1 authenticated operator live。
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
