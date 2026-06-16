@@ -9,6 +9,22 @@ use crate::assistant_run_scope_selection_support::{
     assistant_run_scope_recommended_tool_actions, selected_dataset_ids_from_scope,
 };
 
+pub(crate) fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
+    evidence_state
+        .get("supply_quality")
+        .or_else(|| evidence_state.get("supplyQuality"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "status": "unknown",
+                "modelGuidance": [
+                    "supply quality report was not present in this evidence state",
+                    "treat evidence_state.status and supplied_items conservatively"
+                ]
+            })
+        })
+}
+
 pub(crate) fn assistant_run_supply_quality_report(
     selected_scope: &Value,
     supply_requested: bool,
@@ -344,6 +360,45 @@ pub(crate) fn assistant_run_recommended_supply_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_supply_quality_prefers_snake_case_report() {
+        let supply_quality = assistant_run_codex_supply_quality(&json!({
+            "supply_quality": {
+                "status": "grounded",
+                "suppliedItemCount": 3
+            },
+            "supplyQuality": {
+                "status": "partial"
+            }
+        }));
+
+        assert_eq!(supply_quality["status"], json!("grounded"));
+        assert_eq!(supply_quality["suppliedItemCount"], json!(3));
+    }
+
+    #[test]
+    fn codex_supply_quality_accepts_camel_case_and_falls_back() {
+        let camel_case = assistant_run_codex_supply_quality(&json!({
+            "supplyQuality": {
+                "status": "partial",
+                "mediaContextCount": 1
+            }
+        }));
+        let fallback = assistant_run_codex_supply_quality(&json!({
+            "status": "supplied",
+            "supplied_items": []
+        }));
+
+        assert_eq!(camel_case["status"], json!("partial"));
+        assert_eq!(camel_case["mediaContextCount"], json!(1));
+        assert_eq!(fallback["status"], json!("unknown"));
+        let guidance = fallback["modelGuidance"]
+            .as_array()
+            .expect("fallback guidance should be array");
+        assert!(guidance.iter().any(|item| item.as_str()
+            == Some("treat evidence_state.status and supplied_items conservatively")));
+    }
 
     #[test]
     fn supply_quality_report_marks_parse_and_selection_notes() {

@@ -45967,22 +45967,6 @@ fn assistant_run_codex_runtime_selection() -> LlmRuntimeSelection {
     )
 }
 
-fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
-    evidence_state
-        .get("supply_quality")
-        .or_else(|| evidence_state.get("supplyQuality"))
-        .cloned()
-        .unwrap_or_else(|| {
-            json!({
-                "status": "unknown",
-                "modelGuidance": [
-                    "supply quality report was not present in this evidence state",
-                    "treat evidence_state.status and supplied_items conservatively"
-                ]
-            })
-        })
-}
-
 fn assistant_run_codex_tool_output_policy() -> AssistantRunCodexToolOutputPolicyView {
     AssistantRunCodexToolOutputPolicyView {
         max_total_chars: assistant_run_codex_env_usize(
