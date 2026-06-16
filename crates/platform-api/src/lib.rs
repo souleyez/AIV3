@@ -120,7 +120,6 @@ use external_source_connectors::{
     MySqlSourceConfig, MySqlTableMapping,
 };
 use futures_util::{stream, Stream, StreamExt};
-use hmac::{Hmac, Mac};
 use llm_gateway::{
     build_provider_from_env, build_provider_from_profile_env, model_gateway_profile_env_prefix,
     render_runtime_manifest, resolve_runtime_selection_from_env, LlmFinishReason, LlmProviderError,
@@ -208,6 +207,7 @@ mod document_detail_model_facing;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod document_view_support;
+mod external_action_dispatch_transport_support;
 mod external_action_result_callback_support;
 mod external_aigolf_skill_support;
 mod external_answer_policy_support;
@@ -415,6 +415,7 @@ use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
 use document_view_support::*;
+use external_action_dispatch_transport_support::*;
 use external_action_result_callback_support::*;
 use external_aigolf_skill_support::*;
 use external_answer_policy_support::*;
@@ -13359,49 +13360,6 @@ fn external_action_dispatch_payload(record: &ExternalActionDispatchRecord) -> Va
     })
 }
 
-fn external_action_dispatch_headers(
-    connection_id: &str,
-    url: &reqwest::Url,
-    body: &[u8],
-    now: DateTime<Utc>,
-    nonce: &str,
-    auth: &ExternalActionDispatchAuth,
-) -> std::result::Result<reqwest::header::HeaderMap, String> {
-    let timestamp = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let body_sha256 = sha256_hex([body]);
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-    insert_dispatch_header(&mut headers, "x-v3-connection-id", connection_id)?;
-    insert_dispatch_header(&mut headers, "x-v3-timestamp", &timestamp)?;
-    insert_dispatch_header(&mut headers, "x-v3-nonce", nonce)?;
-    insert_dispatch_header(&mut headers, "x-v3-content-sha256", &body_sha256)?;
-    if let Some(token) = auth.bearer_token.as_deref() {
-        let header_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| "invalid_header_value:authorization".to_string())?;
-        headers.insert(reqwest::header::AUTHORIZATION, header_value);
-    }
-    if let Some(secret) = auth.signing_secret.as_deref() {
-        let signature_path = external_action_dispatch_signature_path(url);
-        let canonical = external_action_dispatch_signature_payload(
-            "POST",
-            &signature_path,
-            &timestamp,
-            nonce,
-            &body_sha256,
-        );
-        let signature = external_action_dispatch_signature_hex(secret, &canonical);
-        insert_dispatch_header(
-            &mut headers,
-            "x-v3-signature",
-            &format!("sha256={signature}"),
-        )?;
-    }
-    Ok(headers)
-}
-
 async fn maybe_dispatch_external_channel_outbound_reply(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -13815,78 +13773,6 @@ async fn append_external_channel_outbound_reply_dispatch_event(
         .await
         .map_err(ApiError::from_storage)?;
     Ok(())
-}
-
-fn insert_dispatch_header(
-    headers: &mut reqwest::header::HeaderMap,
-    name: &'static str,
-    value: &str,
-) -> std::result::Result<(), String> {
-    let header_value = reqwest::header::HeaderValue::from_str(value)
-        .map_err(|_| format!("invalid_header_value:{name}"))?;
-    headers.insert(reqwest::header::HeaderName::from_static(name), header_value);
-    Ok(())
-}
-
-fn external_action_dispatch_signature_path(url: &reqwest::Url) -> String {
-    match url.query() {
-        Some(query) => format!("{}?{query}", url.path()),
-        None => url.path().to_string(),
-    }
-}
-
-fn external_action_dispatch_signature_payload(
-    method: &str,
-    path: &str,
-    timestamp: &str,
-    nonce: &str,
-    body_sha256: &str,
-) -> String {
-    format!("{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}")
-}
-
-fn external_action_dispatch_signature_hex(secret: &str, payload: &str) -> String {
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
-    mac.update(payload.as_bytes());
-    bytes_to_lower_hex(mac.finalize().into_bytes().as_slice())
-}
-
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
-}
-
-fn external_action_reqwest_error_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "timeout"
-    } else if error.is_connect() {
-        "connect"
-    } else if error.is_request() {
-        "request"
-    } else if error.is_body() {
-        "body"
-    } else if error.is_decode() {
-        "decode"
-    } else {
-        "unknown"
-    }
-}
-
-fn external_action_response_request_id(response: &Value) -> Option<String> {
-    response
-        .get("external_request_id")
-        .or_else(|| response.get("externalRequestId"))
-        .or_else(|| response.get("request_id"))
-        .or_else(|| response.get("requestId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 async fn ingest_feishu_channel_callback(
