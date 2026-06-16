@@ -31,11 +31,10 @@ use contracts::{
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
-    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
-    AssistantRunCodexContextPackageView, AssistantRunDetailView, AssistantRunEventView,
-    AssistantRunExecutorTransportView, AssistantRunMessageView, AssistantRunView,
-    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
-    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
+    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
+    AssistantRunEventView, AssistantRunExecutorTransportView, AssistantRunMessageView,
+    AssistantRunView, AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse,
+    ChatMessageView, ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
     CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
     CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
     CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
@@ -122,7 +121,7 @@ use llm_gateway::{
     render_runtime_manifest, resolve_runtime_selection_from_env, LlmFinishReason, LlmProviderError,
     LlmProviderFailureKind, LlmRequest, LlmResponse, LlmRuntimeMetadata, LlmRuntimeMode,
     LlmRuntimeSelection, LlmStreamDelta, ModelGatewayPoolConfig, ModelProviderProfile,
-    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
+    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -161,6 +160,7 @@ use zip::ZipArchive;
 mod assistant_run_answer_policy_support;
 mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
+mod assistant_run_codex_context_package_support;
 mod assistant_run_codex_model_gateway_support;
 mod assistant_run_codex_observability_support;
 mod assistant_run_codex_shadow_support;
@@ -375,12 +375,12 @@ mod workflow_task_view_support;
 mod zip_ingest_support;
 
 use assistant_run_answer_policy_support::*;
+#[cfg(test)]
 use assistant_run_codex_action_contract_support::*;
-use assistant_run_codex_context_budget_support::*;
+use assistant_run_codex_context_package_support::*;
 use assistant_run_codex_model_gateway_support::*;
 use assistant_run_codex_observability_support::*;
 use assistant_run_codex_shadow_support::*;
-use assistant_run_codex_tool_output_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_limit_support::*;
@@ -620,7 +620,6 @@ const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
-const DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL: &str = "codex-conversation-placeholder";
 const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
 const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
@@ -45920,58 +45919,6 @@ fn assistant_run_react_scope_allows_tools(
 ) -> bool {
     (assistant_run_scope_intent(selected_scope) != "ordinary_chat" || current_artifact.is_some())
         && !assistant_run_is_plain_ordinary_chat_scope(Some(selected_scope), None, current_artifact)
-}
-
-fn build_assistant_run_codex_context_package(
-    assistant_run_id: AssistantRunId,
-    local_thread_id: Option<&str>,
-    user_prompt: &str,
-    messages: &[AssistantRunMessageView],
-    startup_briefing: &Value,
-    selected_scope: &Value,
-    scope_candidates: &[Value],
-    evidence_state: &Value,
-    current_artifact: Option<&Value>,
-    model_gateway: &Value,
-    executor_transport: AssistantRunExecutorTransportView,
-) -> AssistantRunCodexContextPackageView {
-    let mut package =
-        AssistantRunCodexContextPackageView::new(assistant_run_id, user_prompt.trim());
-    let tool_output_policy = assistant_run_codex_tool_output_policy();
-    let bounded_evidence_state =
-        assistant_run_codex_bounded_evidence_state(evidence_state, &tool_output_policy);
-    package.executor_transport = executor_transport;
-    package.local_thread_id = local_thread_id.map(ToString::to_string);
-    package.messages = messages.to_vec();
-    package.startup_briefing = startup_briefing.clone();
-    package.selected_scope = selected_scope.clone();
-    package.inferred_scope_candidates = scope_candidates.to_vec();
-    package.evidence_state = bounded_evidence_state.clone();
-    package.supply_quality = assistant_run_codex_supply_quality(&bounded_evidence_state);
-    package.model_gateway = model_gateway.clone();
-    package.hidden_memory_candidates =
-        assistant_run_codex_hidden_memory_candidates(&bounded_evidence_state);
-    package.current_artifact = current_artifact.cloned();
-    package.available_actions = assistant_run_codex_action_contracts(selected_scope);
-    package.tool_output_policy = tool_output_policy;
-    package.context_budget = assistant_run_codex_context_budget(
-        user_prompt,
-        messages,
-        startup_briefing,
-        selected_scope,
-        scope_candidates,
-        &bounded_evidence_state,
-        current_artifact,
-    );
-    package
-}
-
-fn assistant_run_codex_runtime_selection() -> LlmRuntimeSelection {
-    resolve_runtime_selection_from_env(
-        "ASSISTANT_RUN_CODEX",
-        MODEL_LANE_CODEX_CONVERSATION,
-        DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL,
-    )
 }
 
 fn push_unique_string(items: &mut Vec<String>, item: &str) {
