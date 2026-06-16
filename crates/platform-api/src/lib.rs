@@ -23,8 +23,6 @@ use axum::{
 };
 use basic_view_support::*;
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
-#[cfg(test)]
-use contracts::HtmlArtifactTemplateIdView;
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
     AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
@@ -32,40 +30,40 @@ use contracts::{
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
-    AssistantRunEventView, AssistantRunExecutorTransportView, AssistantRunMessageView,
-    AssistantRunView, AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse,
-    ChatMessageView, ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
-    CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
-    CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
-    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
-    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
-    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
-    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
-    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
-    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
-    CreateDocumentIngestResponse, CreateExternalChannelConnectionRequest,
-    CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
-    CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
-    CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
-    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
-    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
-    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
-    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
-    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentEnrichmentRunView,
-    DocumentMediaDetailView, DocumentSummary, ExternalActionConfirmationDecisionView,
-    ExternalActionConfirmationRequestView, ExternalActionConfirmationResponseView,
-    ExternalActionResultCallbackRequestView, ExternalActionResultCallbackResponseView,
-    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
-    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
-    ExternalConversationTestView, ExternalConversationTimelineResponse,
-    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
-    ExternalIntegrationActionDispatchConfigRequest, ExternalIntegrationAuditItemView,
-    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
-    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
-    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    AssistantRunExecutorTransportView, AssistantRunMessageView, AuthAuditEventView,
+    AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView,
+    ClaimLocalDataRequest, ClaimLocalDataResponse, CodexHostFixedTaskHumanReviewPolicyView,
+    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
+    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
+    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
+    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
+    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
+    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
+    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
+    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateExternalChannelConnectionRequest, CreateExternalDatabaseSourceRequest,
+    CreateExternalDatabaseSourceResponse, CreateExternalDocumentParseRequest,
+    CreateExternalDocumentParseResponse, CreateExternalSourceSyncRequest,
+    CreateExternalSourceSyncResponse, CreateMemoryDirectoryRefreshResponse,
+    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
+    CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
+    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
+    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
+    DocumentDetailView, DocumentEnrichmentRunView, DocumentMediaDetailView, DocumentSummary,
+    ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
+    ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
+    ExternalActionResultCallbackResponseView, ExternalAttachmentRefView, ExternalBotMessageView,
+    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
+    ExternalChannelPlatformView, ExternalConversationTestView,
+    ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
+    ExternalDocumentParseDocumentView, ExternalIntegrationActionDispatchConfigRequest,
+    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
+    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
+    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
+    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
     InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
     KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
     ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
@@ -92,6 +90,8 @@ use contracts::{
     WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
     WorkflowSignalRequest, WorkflowTaskView,
 };
+#[cfg(test)]
+use contracts::{AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView};
 #[cfg(test)]
 use domain_model::StaticPageRenderOutputId;
 use domain_model::{
@@ -197,6 +197,7 @@ mod assistant_run_supply_dedupe_support;
 mod assistant_run_supply_quality_support;
 mod assistant_run_supply_recovery_support;
 mod assistant_run_text_support;
+mod assistant_run_view_support;
 mod assistant_run_xinbai_report_link_support;
 mod assistant_scope_summary;
 pub mod auth_email;
@@ -419,6 +420,7 @@ use assistant_run_supply_dedupe_support::*;
 use assistant_run_supply_quality_support::*;
 use assistant_run_supply_recovery_support::*;
 pub(crate) use assistant_run_text_support::*;
+use assistant_run_view_support::*;
 use assistant_run_xinbai_report_link_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
@@ -61307,36 +61309,6 @@ pub(crate) fn value_array(value: Value) -> Vec<Value> {
     match value {
         Value::Array(items) => items,
         _ => Vec::new(),
-    }
-}
-
-fn to_assistant_run_view(run: AssistantRun) -> AssistantRunView {
-    AssistantRunView {
-        id: run.id,
-        local_thread_id: run.local_thread_id,
-        user_prompt: run.user_prompt,
-        startup_briefing: run.startup_briefing,
-        selected_scope: run.selected_scope,
-        scope_candidates: value_array(run.scope_candidates),
-        context_policy: run.context_policy,
-        evidence_state: run.evidence_state,
-        service_lane: run.service_lane,
-        execution_trail: value_array(run.execution_trail),
-        output_artifacts: value_array(run.output_artifacts),
-        runtime: run.runtime_manifest,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-    }
-}
-
-fn to_assistant_run_event_view(event: AssistantRunEvent) -> AssistantRunEventView {
-    AssistantRunEventView {
-        id: event.id,
-        run_id: event.run_id,
-        sequence_no: event.sequence_no,
-        event_name: event.event_name,
-        payload: event.payload,
-        created_at: event.created_at,
     }
 }
 
