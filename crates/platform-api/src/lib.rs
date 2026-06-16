@@ -162,6 +162,7 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
 mod assistant_run_answer_policy_support;
+mod assistant_run_codex_model_gateway_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_limit_support;
@@ -372,6 +373,7 @@ mod workflow_task_view_support;
 mod zip_ingest_support;
 
 use assistant_run_answer_policy_support::*;
+use assistant_run_codex_model_gateway_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_limit_support::*;
@@ -45963,69 +45965,6 @@ fn assistant_run_codex_runtime_selection() -> LlmRuntimeSelection {
         MODEL_LANE_CODEX_CONVERSATION,
         DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL,
     )
-}
-
-fn assistant_run_codex_model_gateway_snapshot(runtime: &LlmRuntimeSelection) -> Value {
-    let profile_env_prefix = std::env::var("ASSISTANT_RUN_CODEX_MODEL_PROFILE_ENV")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let profile = profile_env_prefix
-        .as_deref()
-        .and_then(|prefix| ModelProviderProfile::from_env(prefix).ok())
-        .map(|profile| profile.public_manifest());
-    let profile_status = match (&profile_env_prefix, &profile) {
-        (Some(_), Some(_)) => "profile_loaded",
-        (Some(_), None) => "profile_unavailable",
-        (None, _) => "runtime_selection_only",
-    };
-    let profile_source = if profile.is_some() {
-        "model_provider_profile_env"
-    } else {
-        "llm_gateway_runtime_selection"
-    };
-
-    json!({
-        "lane": runtime.lane.as_str(),
-        "selected_model": {
-            "mode": runtime.mode.as_str(),
-            "provider": runtime.provider.as_str(),
-            "model": runtime.model.as_str(),
-        },
-        "profile_source": profile_source,
-        "profile_status": profile_status,
-        "profile_env_prefix": profile_env_prefix,
-        "profile": profile.unwrap_or_else(|| assistant_run_codex_runtime_selection_profile(runtime)),
-        "safety": {
-            "secrets_redacted": true,
-            "raw_provider_payloads_allowed": false,
-            "codex_real_execution_allowed_on_this_host": false,
-            "v3_validates_all_actions": true,
-        }
-    })
-}
-
-fn assistant_run_codex_runtime_selection_profile(runtime: &LlmRuntimeSelection) -> Value {
-    json!({
-        "profile_id": format!("{}:{}", runtime.provider, runtime.model),
-        "provider_id": runtime.provider.as_str(),
-        "model_id": runtime.model.as_str(),
-        "wire_api": if runtime.mode == "placeholder" {
-            "placeholder"
-        } else {
-            "runtime_selection"
-        },
-        "auth": {
-            "env_key_name": Value::Null,
-            "configured": runtime.mode == "placeholder",
-        },
-        "capabilities": [],
-        "redaction": {
-            "redact_provider_errors": true,
-            "redact_request_payloads": true,
-            "redact_response_payloads": true,
-        }
-    })
 }
 
 fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
