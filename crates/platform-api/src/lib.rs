@@ -432,6 +432,10 @@ use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
 #[cfg(test)]
 use external_channel_outbound_reply_dispatch_support::external_channel_outbound_reply_dispatch_summary;
+use external_channel_outbound_reply_dispatch_support::{
+    external_channel_outbound_reply_dispatch_audit_payload,
+    external_channel_outbound_reply_dispatch_payload,
+};
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
 use external_channel_public_citation_support::*;
@@ -13707,48 +13711,6 @@ async fn maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_even
         Utc::now(),
     )
     .await
-}
-
-fn external_channel_outbound_reply_dispatch_payload(
-    response: &ExternalChannelEventResponse,
-    source_event_name: &str,
-) -> Value {
-    json!({
-        "schema": "v3.external_channel.outbound_reply.v1",
-        "event_type": "assistant_reply",
-        "trigger": "async_result_completed",
-        "source_event_name": source_event_name,
-        "assistant_run_id": response.assistant_run_id,
-        "idempotency_key": response.idempotency_key,
-        "conversation_external_id": response.reply.target_conversation_external_id,
-        "reply": response.reply,
-        "artifact_links": response.reply.artifact_links,
-        "task_status": response.reply.task_status,
-        "requires_confirmation": response.reply.requires_confirmation,
-    })
-}
-
-fn external_channel_outbound_reply_dispatch_audit_payload(
-    source_event_name: &str,
-    source_event_hash: &str,
-    connection_id: &str,
-    response: &ExternalChannelEventResponse,
-    dispatch: Value,
-) -> Value {
-    json!({
-        "schema": "v3.external_channel.outbound_reply.dispatch_audit.v1",
-        "source_event_name": source_event_name,
-        "source_event_hash": source_event_hash,
-        "channel_connection_id": connection_id,
-        "assistant_run_id": response.assistant_run_id,
-        "conversation_external_id": response.reply.target_conversation_external_id,
-        "reply_type": response.reply.reply_type,
-        "task_status": response.reply.task_status,
-        "artifact_links": response.reply.artifact_links,
-        "text_present": response.reply.text.as_ref().map(|text| !text.trim().is_empty()).unwrap_or(false),
-        "text_preview": response.reply.text.as_ref().map(|text| truncate_assistant_supply_text(text, 240)).unwrap_or_default(),
-        "dispatch": dispatch,
-    })
 }
 
 async fn append_external_channel_outbound_reply_dispatch_event(

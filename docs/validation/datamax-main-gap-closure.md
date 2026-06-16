@@ -20038,6 +20038,43 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-16 P5 External Channel Outbound Reply Dispatch Payload Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move external-channel outbound reply dispatch payload and audit payload assembly out of `lib.rs` into existing `crates/platform-api/src/external_channel_outbound_reply_dispatch_support.rs`;
+  - keep dispatch orchestration, storage writes, HTTP transport, headers, signing, idempotency, and event append behavior unchanged.
+- Code change:
+  - moved `external_channel_outbound_reply_dispatch_payload` and `external_channel_outbound_reply_dispatch_audit_payload` into `external_channel_outbound_reply_dispatch_support`;
+  - kept `external_channel_outbound_reply_dispatch_summary` test-only import in `lib.rs` and imported payload/audit helpers for runtime use;
+  - added module tests for public reply dispatch payload shape and audit text-preview truncation.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: passed;
+  - `cargo test -q -p platform-api external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing --lib`: passed;
+  - `cargo test -q -p platform-api static_page --lib`: passed, 557/557 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `git diff --check`: passed with line-ending warnings for existing dirty files only.
+- Local web build note:
+  - `npm --prefix apps/web run build` still failed before build execution because local `apps/web/node_modules` lacks `next`;
+  - this local dependency state is inherited and is not acceptance evidence for this backend-only slice; 8-server Web build remains the release build evidence.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-16 P5 External Channel Action Prompt Gate Helper Local Verification
 
 - Purpose:
