@@ -19974,6 +19974,7 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -q -p platform-api static_page --lib`: passed, 557/557 tests;
   - `cargo check -q -p platform-api`: passed;
   - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
   - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
   - `npm run smoke:external-video-ppt -- --self-test`: passed;
   - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
@@ -25652,6 +25653,47 @@ Data-ingestion external fixed-task smoke:
   - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
 - GitHub Actions:
   - DataMax CI run `27582124964` for commit `fbaa51b87ac3454ff191efac02f169042a5841f2` still failed before step execution;
+  - `Rust Minimal` and `No-Credential Smoke` jobs both reported `steps=[]`;
+  - local and 8-server validation above are the acceptance evidence for this slice, not CI.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
+## 2026-06-16 P5 External Action Result Callback Helper 8-Server Verification
+
+- Deployment:
+  - GitHub commit `c6ea732fd19369ad71b820a191c64dc3e96d5fe8` was pushed to `main`;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `cef102d3e` to `c6ea732fd`;
+  - services restarted: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server build and tests:
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api external_action_result_callback_support --lib`: passed, 4/4 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api external_action_result_callback_records_redacted_summary --lib`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api external_action_result_payload_summary --lib`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page --lib`: passed, 557/557 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed, with existing Next/Turbopack warnings only;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `c6ea732fd`.
+- 8-server P0 smoke:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- GitHub Actions:
+  - DataMax CI run `27584172716` for commit `c6ea732fd19369ad71b820a191c64dc3e96d5fe8` still failed before step execution;
   - `Rust Minimal` and `No-Credential Smoke` jobs both reported `steps=[]`;
   - local and 8-server validation above are the acceptance evidence for this slice, not CI.
 - Safety:
