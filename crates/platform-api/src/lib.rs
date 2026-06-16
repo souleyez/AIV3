@@ -166,6 +166,7 @@ mod assistant_run_conversation_memory_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_limit_support;
 mod assistant_run_evidence_state_support;
+mod assistant_run_executor_transport_support;
 mod assistant_run_lexical_query_support;
 mod assistant_run_model_context_support;
 mod assistant_run_model_supply_budget_support;
@@ -375,6 +376,7 @@ use assistant_run_conversation_memory_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_limit_support::*;
 use assistant_run_evidence_state_support::*;
+use assistant_run_executor_transport_support::*;
 use assistant_run_lexical_query_support::*;
 use assistant_run_model_context_support::*;
 use assistant_run_model_supply_budget_support::*;
@@ -45909,141 +45911,6 @@ fn assistant_run_react_scope_allows_tools(
 ) -> bool {
     (assistant_run_scope_intent(selected_scope) != "ordinary_chat" || current_artifact.is_some())
         && !assistant_run_is_plain_ordinary_chat_scope(Some(selected_scope), None, current_artifact)
-}
-
-#[derive(Clone, Debug)]
-struct AssistantRunExecutorTransportSelection {
-    effective_transport: AssistantRunExecutorTransportView,
-    policy: Value,
-}
-
-fn assistant_run_executor_transport_selection_from_env(
-) -> Option<AssistantRunExecutorTransportSelection> {
-    std::env::var("ASSISTANT_RUN_EXECUTOR")
-        .ok()
-        .and_then(|value| {
-            assistant_run_executor_transport_selection_from_value(
-                &value,
-                assistant_run_codex_real_transport_feature_gate_enabled(),
-                assistant_run_codex_real_transport_promotion_review_approved(),
-            )
-        })
-}
-
-fn assistant_run_executor_transport_selection_from_value(
-    value: &str,
-    real_transport_feature_gate_enabled: bool,
-    real_transport_promotion_review_approved: bool,
-) -> Option<AssistantRunExecutorTransportSelection> {
-    let requested_transport = assistant_run_executor_transport_from_value(value)?;
-    let real_transport_requested = assistant_run_executor_transport_is_real(&requested_transport);
-    let real_transport_allowed = !real_transport_requested
-        || (real_transport_feature_gate_enabled && real_transport_promotion_review_approved);
-    let downgraded = real_transport_requested && !real_transport_allowed;
-    let effective_transport = if downgraded {
-        AssistantRunExecutorTransportView::CodexPlanOnly
-    } else {
-        requested_transport.clone()
-    };
-    let downgrade_reason = if real_transport_requested && !real_transport_feature_gate_enabled {
-        json!("real_transport_feature_gate_disabled")
-    } else if real_transport_requested && !real_transport_promotion_review_approved {
-        json!("real_transport_promotion_review_not_approved")
-    } else if downgraded {
-        json!("real_transport_not_allowed")
-    } else {
-        Value::Null
-    };
-    let next_step = if real_transport_requested && !real_transport_feature_gate_enabled {
-        "keep_codex_in_shadow_plan_only_until_promotion_gate_review"
-    } else if real_transport_requested && !real_transport_promotion_review_approved {
-        "review_shadow_and_host_reports_before_enabling_real_transport"
-    } else if real_transport_requested {
-        "assistant_runtime_still_validates_real_transport_before_execution"
-    } else {
-        "run_codex_shadow_transport"
-    };
-
-    Some(AssistantRunExecutorTransportSelection {
-        effective_transport: effective_transport.clone(),
-        policy: json!({
-            "requested_transport": requested_transport.as_str(),
-            "effective_transport": effective_transport.as_str(),
-            "real_transport_requested": real_transport_requested,
-            "real_transport_feature_gate_enabled": real_transport_feature_gate_enabled,
-            "real_transport_promotion_review_approved": real_transport_promotion_review_approved,
-            "downgraded": downgraded,
-            "downgrade_reason": downgrade_reason,
-            "direct_execution_authoritative": true,
-            "codex_mutation_allowed": false,
-            "queue_allowed": false,
-            "manual_feature_gate_required_for_real_transport": real_transport_requested,
-            "promotion_review_required_for_real_transport": real_transport_requested,
-            "host_validation_required_for_real_transport": real_transport_requested,
-            "next_step": next_step,
-        }),
-    })
-}
-
-fn assistant_run_executor_transport_is_real(transport: &AssistantRunExecutorTransportView) -> bool {
-    matches!(
-        transport,
-        AssistantRunExecutorTransportView::CodexExecSchema
-            | AssistantRunExecutorTransportView::CodexSdkThread
-            | AssistantRunExecutorTransportView::CodexAppServer
-            | AssistantRunExecutorTransportView::CodexMcpServer
-    )
-}
-
-fn assistant_run_codex_real_transport_feature_gate_enabled() -> bool {
-    std::env::var("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "enabled" | "on" | "yes"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn assistant_run_codex_real_transport_promotion_review_approved() -> bool {
-    std::env::var("ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "approved" | "enabled" | "on" | "yes"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn assistant_run_executor_transport_from_value(
-    value: &str,
-) -> Option<AssistantRunExecutorTransportView> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" | "direct" => None,
-        "codex" | "codex_dry_run" | "dry_run" | "shadow" | "shadow_dry_run" => {
-            Some(AssistantRunExecutorTransportView::CodexDryRun)
-        }
-        "codex_plan_only" | "plan_only" | "plan" => {
-            Some(AssistantRunExecutorTransportView::CodexPlanOnly)
-        }
-        "codex_exec_schema" | "exec_schema" => {
-            Some(AssistantRunExecutorTransportView::CodexExecSchema)
-        }
-        "codex_sdk_thread" | "sdk_thread" => {
-            Some(AssistantRunExecutorTransportView::CodexSdkThread)
-        }
-        "codex_app_server" | "app_server" => {
-            Some(AssistantRunExecutorTransportView::CodexAppServer)
-        }
-        "codex_mcp_server" | "mcp_server" => {
-            Some(AssistantRunExecutorTransportView::CodexMcpServer)
-        }
-        _ => None,
-    }
 }
 
 fn build_assistant_run_codex_context_package(
