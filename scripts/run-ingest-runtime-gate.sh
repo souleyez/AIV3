@@ -182,7 +182,6 @@ trailer << /Root 1 0 R >>
 path = Path(tempfile.gettempdir()) / "aiv3-paddleocr-gate-smoke.pdf"
 path.write_bytes(pdf)
 pipeline = PPStructureV3(
-    ocr_version="PP-OCRv6",
     text_detection_model_name="PP-OCRv6_medium_det",
     text_recognition_model_name="PP-OCRv6_medium_rec",
     use_formula_recognition=False,

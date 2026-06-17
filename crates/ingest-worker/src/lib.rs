@@ -1614,7 +1614,8 @@ try:
         "use_chart_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_CHART_RECOGNITION", False),
         "use_seal_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_SEAL_RECOGNITION", False),
     }
-    ocr_version = env_str("DOCUMENT_PADDLEOCR_OCR_VERSION", "PP-OCRv6")
+    ocr_family = env_str("DOCUMENT_PADDLEOCR_OCR_FAMILY", "PP-OCRv6")
+    ocr_version = env_str("DOCUMENT_PADDLEOCR_OCR_VERSION")
     if ocr_version:
         paddleocr_config["ocr_version"] = ocr_version
     text_detection_model_name = env_str("DOCUMENT_PADDLEOCR_TEXT_DETECTION_MODEL_NAME", "PP-OCRv6_medium_det")
@@ -1663,7 +1664,7 @@ try:
         "blocks": blocks,
         "errors": errors,
         "config": paddleocr_config,
-        "ocr_family": ocr_version,
+        "ocr_family": ocr_family,
         "text_detection_model_name": text_detection_model_name,
         "text_recognition_model_name": text_recognition_model_name,
         "max_pages": max_pages,
@@ -1678,7 +1679,7 @@ except Exception as exc:
         "blocks": blocks,
         "errors": errors,
         "config": globals().get("paddleocr_config", {}),
-        "ocr_family": globals().get("ocr_version", None),
+        "ocr_family": globals().get("ocr_family", None),
         "text_detection_model_name": globals().get("text_detection_model_name", None),
         "text_recognition_model_name": globals().get("text_recognition_model_name", None),
         "max_pages": max_pages,
