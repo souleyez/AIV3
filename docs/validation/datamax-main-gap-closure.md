@@ -20007,6 +20007,34 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-17 P4 V3 Client Artifact Pipeline 8-Server Verification
+
+- Deployment:
+  - GitHub commit `773b7edba` was pushed to `main`;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `cc8b89b8e` to `773b7edba`;
+  - pre-existing remote local edits were preserved in `apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`, `apps/web/app/globals.css`, and `apps/web/app/v3-landing/page.js`;
+  - two stale historical cargo monitor shells were stopped because they matched their own `pgrep` patterns and interfered with build detection.
+- 8-server build:
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api -p ingest-worker -p retrieval-worker -p report-planner-worker --release`: completed after the SSH session closed; release binaries were updated at `2026-06-17 18:51-18:53 CST`.
+- 8-server service checks:
+  - restarted services: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-report-planner-worker.service`;
+  - `systemctl is-active` for those five services: all active;
+  - `http://127.0.0.1:3000/healthz`: `200`, `status=ok`;
+  - `http://127.0.0.1:3000/v1/client-artifacts?limit=1`: `401`, `client_artifact_token_required`, proving the route is deployed and no longer `404`;
+  - `https://v3.elepcloud.com/v1/client-artifacts?limit=1`: `401`, `client_artifact_token_required`, proving the public V3 front door reaches the new route.
+- Cross-repo smoke:
+  - from `codex-web`, `npm run v3-agent-terminal:artifact-smoke -- --preflight --base-url https://v3.elepcloud.com --pretty`: passed with `ok=true`, `api_reachable=true`, run id `20260617105438`;
+  - public `/healthz` and `/readyz` still return the web shell through the V3 front door, so the preflight records `health_good=false` and `ready_good=false`; this is existing routing behavior and did not block API reachability.
+- Remaining controlled-live gate:
+  - real `--execute --ack-controlled-live` still requires a valid V3 user session and/or controlled upload credential;
+  - no credential value was printed or recorded.
+- Safety:
+  - V3 remains the authority for config packages, artifact records, publication, task cards, datasets, and asset libraries;
+  - `codex-web` was only used as the client-side smoke harness and was not given V3 data ownership;
+  - no third-party public API contract, source database sync, object cleanup, P2 real backfill, customer data write, raw provider payload, database URL, bearer, cookie, token, object locator, object key, content hash, document body, or raw Authorization value was recorded;
+  - 120 server was not touched.
+
 ## 2026-06-17 P4 Client Artifact Large File Object Storage Local Verification
 
 - Purpose:
