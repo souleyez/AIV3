@@ -30,6 +30,7 @@ use client_artifact_storage_support::{
     prepare_client_artifact_file_storage, read_client_artifact_file_storage,
     ClientArtifactFileStorageRecord,
 };
+use client_config_package_support::*;
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
     AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
@@ -106,7 +107,7 @@ use contracts::{
     UpdateStaticPageDraftResponse, UpsertAssetLibraryDatasetMembershipRequest,
     V3ClientArtifactManifestView, V3ClientArtifactUploadConfigView, VerifyEmailAuthRequest,
     VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
-    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView, V3_CLIENT_CONFIG_SCHEMA,
+    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 #[cfg(test)]
 use contracts::{
@@ -237,6 +238,7 @@ mod chat_session_turn_manifest_support;
 mod client_artifact_contract_support;
 mod client_artifact_publish_support;
 mod client_artifact_storage_support;
+mod client_config_package_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
 mod dataset_output_model_facing;
@@ -4486,32 +4488,21 @@ async fn create_client_config_package(
 
     let artifact_upload = request
         .artifact_upload
-        .unwrap_or(V3ClientArtifactUploadConfigView {
-            mode: "session_token".to_string(),
-            endpoint: "/v1/client-artifacts".to_string(),
-        });
+        .clone()
+        .unwrap_or_else(default_client_artifact_upload_config);
     validate_client_artifact_upload_config(&artifact_upload)?;
 
-    let tenant_ref =
-        trim_optional(request.tenant_id).unwrap_or_else(|| state.tenant_id.to_string());
-    let user_ref = trim_optional(request.user_id).unwrap_or_else(|| user.id.to_string());
+    let tenant_ref = client_config_ref_or_default(request.tenant_id.as_deref(), state.tenant_id);
+    let user_ref = client_config_ref_or_default(request.user_id.as_deref(), user.id);
     let client_id = request.client_id.trim().to_string();
     let package_id = format!("v3cp_{}", Uuid::new_v4().simple());
-    let mut payload = json!({
-        "schema": V3_CLIENT_CONFIG_SCHEMA,
-        "tenant_id": tenant_ref,
-        "user_id": user_ref,
-        "client_id": client_id,
-        "v3_base_url": request.v3_base_url.trim(),
-        "asset_library_ids": request.asset_library_ids,
-        "dataset_ids": request.dataset_ids,
-        "skill_packs": request.skill_packs,
-        "artifact_upload": artifact_upload,
-        "expires_at": request.expires_at,
-    });
-    if !request.metadata.is_null() {
-        payload["metadata"] = request.metadata;
-    }
+    let payload = build_client_config_package_payload(
+        &request,
+        &tenant_ref,
+        &user_ref,
+        &client_id,
+        artifact_upload,
+    );
 
     sqlx::query(
         r#"

@@ -20423,6 +20423,25 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-17 P5 Client Config Package Helper Split Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep config-package auth, dataset/asset-library scope validation, persistence, and response contracts in place while moving pure payload/defaulting logic out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/client_config_package_support.rs`;
+  - moved default artifact-upload config, tenant/user reference normalization, and client config package payload construction into the helper module;
+  - added module tests for default upload config, trimmed/fallback refs, stable payload construction, and null metadata omission.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 19/19 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-17 P4 Client Artifact Joint Smoke Harness Local Verification
 
 - Purpose:
