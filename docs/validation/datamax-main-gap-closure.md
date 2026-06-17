@@ -14287,6 +14287,56 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted during local verification;
   - 120 server was not touched.
 
+## 2026-06-17 P4 Asset Library Scope Resolver Local Verification
+
+- Purpose:
+  - start the enterprise asset library / asset space implementation with the lowest-risk scope resolver slice;
+  - prove that an asset library can aggregate multiple datasets without bypassing the current user's dataset authorization;
+  - keep third-party public contracts unchanged while `asset_library_external_ids` remains a future optional field.
+- Code change:
+  - added `crates/platform-api/src/asset_library_scope_support.rs`;
+  - added `resolve_asset_library_dataset_scope`, which returns only the intersection of asset-library member datasets and authorized dataset IDs;
+  - added tests for 3-member/2-authorized scope, duplicate memberships ordered by priority, and no-expansion when a user has datasets not in the asset library;
+  - registered the module in `crates/platform-api/src/lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_scope --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no database migration, source database write, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Library Migration And Contracts Local Verification
+
+- Purpose:
+  - continue the enterprise asset library / asset space implementation with schema and wire-contract foundations;
+  - support asset libraries composed of multiple datasets, future collections, asset items, dataset asset memberships, and asset profiles;
+  - keep API exposure and third-party public fields unchanged until the platform API slice is reviewed.
+- Code change:
+  - added `crates/storage/migrations/0015_asset_libraries.sql`;
+  - migration defines `enterprise_asset_libraries`, `asset_library_dataset_memberships`, `asset_collections`, `asset_items`, `dataset_asset_memberships`, and `asset_profiles`;
+  - added contracts `AssetLibraryView`, `AssetLibraryDatasetMembershipView`, and `AssetLibraryScopeSummaryView`;
+  - added contracts test verifying snake_case wire shape, authorized `dataset_ids`, membership metadata, and denied-dataset count without exposing denied dataset IDs.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p contracts asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library_scope --lib`: passed, 3/3 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, production schema application, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - the migration file was added but not executed against any production database;
+  - no source database write, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 
 ## 2026-06-14 P5 External Document Metadata/Key Support 8-Server Verification
 
@@ -19955,6 +20005,631 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Client Artifact Large File Object Storage Local Verification
+
+- Purpose:
+  - continue the Codex client enterprise-configurator integration plan by adding a server-owned large-file storage path for uploaded client artifacts;
+  - keep existing client artifact API shape stable while preventing larger files from requiring every payload to remain in the Postgres `bytea` column.
+- Code change:
+  - added `client_artifact_storage_support` with DB/filesystem storage selection, filesystem locator validation, write helper, and read helper;
+  - updated `POST /v1/client-artifacts` to keep small files in DB by default and, only when `V3_CLIENT_ARTIFACT_OBJECT_DIR` is configured, write files above the DB threshold to a V3-managed filesystem object directory;
+  - updated download and published HTML preview paths to read through the same storage record abstraction;
+  - updated `0016_v3_client_artifacts.sql` so `v3_client_artifact_files` has `storage_kind`, `object_locator`, nullable `bytes`, and payload constraints, with `alter table if exists` compatibility for local databases that already ran the older draft migration.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_storage --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api v3_client_artifact --lib`: passed, 9/9 tests;
+  - `cargo test -q -p storage migrations_include_v3_client_artifact_schema --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, or customer-visible task-card field was changed;
+  - filesystem object locators are internal only and were not exposed through contracts, task cards, validation text, or API responses;
+  - no production schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, service restart, GitHub push, or 8-server deployment was performed in this local slice;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Multimodal Asset Profile Adapter Local Verification
+
+- Purpose:
+  - close the P4 asset-library gap where document profiles were written from parse/index flows but image, video, and presentation assets still lacked dedicated profile attributes;
+  - keep the existing third-party contract unchanged while improving the internal asset profile that can later drive gallery filtering, report planning, and static-page material selection.
+- Local code changes:
+  - `document_asset_profile_attributes` now applies multimodal adapters after the common document/profile fields are built;
+  - image profiles extract compact VLM semantics such as `visual_summary`, `document_kind`, OCR text, topic tags, table-like signals, entities, and field candidates;
+  - video profiles extract compact media signals such as transcript segment count, scene count, keyframe OCR count, transcript summary, scene summaries, and provider evidence;
+  - presentation profiles build ordered outline, slide count estimate, and slide text samples from chunk section hints and chunk text;
+  - VLM payload lookup now supports both direct `vlm.payload` metadata and nested `parse_metadata.vlm.payload` metadata.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p storage document_asset_profile --lib`: passed, 3/3 tests;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 5/5 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p ingest-worker`: passed;
+  - `cargo check -q -p retrieval-worker`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, run id `20260617070630-self-test`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no production deploy, service restart, live task, source database write, schema migration, source sync, object cleanup, static-page generation, or P2/P4 real write was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, or full source text was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Gallery Filtering in Main Workspace Local Verification
+
+- Purpose:
+  - let operators inspect and filter the compact asset profile hints already returned by the selected asset library scope summary;
+  - avoid adding any new polling, long-running resource usage, or public third-party contract field.
+- Local code changes:
+  - `asset-library-view-model` now normalizes asset profile hint aliases into `assetId`, `title`, `assetKind`, `profileKind`, `summary`, `nounTerms`, `facets`, and `searchText`;
+  - new helpers expose asset kind options and local filtering by query/type;
+  - `WorkspaceDirectoryPanel` shows a compact asset profile gallery only when an asset library is selected and the current scope has hints;
+  - filtering is entirely client-side over the already-loaded scope-summary payload and capped to 8 displayed hints;
+  - responsive CSS keeps the filter controls single-column on narrow screens.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 6/6 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation and Turbopack NFT trace warnings only;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no production deploy, service restart, live task, source database write, schema migration, source sync, object cleanup, static-page generation, or P2/P4 real write was performed;
+  - no credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, full source text, or raw provider payload was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Multimodal Asset Profile Fixture Smoke Local Verification
+
+- Purpose:
+  - add a repeatable local smoke for the P4 asset-library multimodal profile path after image/PPT/video adapters, static-page template context, report planner AST, and main workspace gallery filtering were wired;
+  - distinguish real local file evidence from metadata-only regressions so later verification does not overstate video coverage.
+- Code change:
+  - added `scripts/smoke/multimodal-asset-profile-fixtures.mjs`;
+  - added `npm run smoke:multimodal-asset-profile-fixtures`;
+  - smoke collects existing V3 public PNG files, optional generated PPTX/manifest evidence, and optional video files from known fixture paths;
+  - smoke now generates or reuses a tiny local MP4 fixture under `target/multimodal-asset-profile-fixtures/fixtures/` when `ffmpeg` is available;
+  - when no local/generated video fixture exists, the video profile hint is still explicitly marked `metadata_only` and the receipt records `video_real_file_available=false`;
+  - `--require-real-video` turns video evidence into a hard gate and fails if no real MP4 fixture is available;
+  - smoke validates image/presentation/video profile hints through `normalizeAssetLibraryScope`, `assetProfileKindOptions`, and `filterAssetProfileHints` without calling live services.
+- Local verification:
+  - `npm run smoke:multimodal-asset-profile-fixtures -- --self-test --pretty`: passed, `imageFiles=3`, `presentationRealFile=true`, `videoRealFile=true`;
+  - `npm run smoke:multimodal-asset-profile-fixtures -- --self-test --require-real-video --pretty`: passed, `imageFiles=3`, `presentationRealFile=true`, `videoRealFile=true`;
+  - `node --check scripts/smoke/multimodal-asset-profile-fixtures.mjs`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 6/6 tests with the existing module-type warning only;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p storage document_asset_profile --lib`: passed, 3/3 tests;
+  - `cargo test -q -p report-planner-worker`: passed, 6/6 tests;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - latest receipts include `target/multimodal-asset-profile-fixtures/multimodal-asset-profile-fixtures-20260617T101906121Z-28344.json` and `target/multimodal-asset-profile-fixtures/multimodal-asset-profile-fixtures-20260617T101906121Z-32212.json`.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - generated MP4 evidence is local-only under `target/`; no production deploy, service restart, live task, source database write, schema migration, source sync, object cleanup, static-page generation, or P2/P4 real write was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, full source text, or Authorization value was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Client Artifact Private Publish Local Verification
+
+- Purpose:
+  - continue the Codex client enterprise-configurator integration plan by closing the minimal V3-owned publish endpoint in the client-artifact contract;
+  - preserve the boundary that client upload tokens can upload artifacts but cannot bypass V3 user-controlled publication.
+- Code change:
+  - added `PublishClientArtifactResponse` to contracts;
+  - added `POST /v1/client-artifacts/{artifact_id}/publish`;
+  - the publish endpoint requires an authenticated V3 user session via `require_asset_library_user_session`;
+  - owned artifacts are protected by `ensure_owner_managed_resource`; ownerless upload-token artifacts remain tenant-scoped for V3 operators;
+  - publish updates `v3_client_artifacts.status` to `published`;
+  - publish writes `manifest.metadata.v3_publish` with `status=published_private`, `mode=enterprise_private_download`, `public_url=null`, and `html_inline_preview=false`;
+  - task cards now show published client artifacts as `V3 已发布` with the publish stage complete, but still do not mark HTML files as inline-openable.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api v3_client_artifact --lib`: passed, 6/6 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no anonymous public artifact URL, HTML inline preview, source database write, production deploy, service restart, live task, source sync, object cleanup, or static-page generation was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, full source text, or Authorization value was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Client Artifact Sandbox HTML Preview Local Verification
+
+- Purpose:
+  - continue the Codex client enterprise-configurator integration plan by allowing V3 users to open published client HTML artifacts without creating an anonymous public URL;
+  - keep preview safer than raw download by using a conservative sanitizer and an empty-sandbox iframe wrapper.
+- Code change:
+  - added `GET /v1/client-artifacts/{artifact_id}/files/{file_index}/preview`;
+  - preview requires a V3 user session and rejects upload-token-only access;
+  - preview requires artifact `status=published`;
+  - preview only accepts HTML files by role, content type, or filename;
+  - preview rejects non-UTF-8 HTML and files larger than 5 MiB;
+  - sanitizer strips script, iframe, object, embed, form, link, meta, base, event attributes, `srcdoc`, unsafe URL attributes, and CSS `url()`/`@import` hooks;
+  - preview response wraps sanitized HTML in an empty `sandbox` iframe with `referrerpolicy=no-referrer`;
+  - the API response includes CSP and referrer-policy headers;
+  - Next `/api/v3` proxy now forwards `content-security-policy` and `referrer-policy`;
+  - `ClientArtifactFileRecordView` now includes optional `preview_url`;
+  - task cards open `preview_url` for published client HTML and keep non-published HTML as download-only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api v3_client_artifact --lib`: passed, 9/9 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --check apps/web/app/lib/platform-api.js`: passed.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no anonymous public artifact URL, source database write, production deploy, service restart, live task, source sync, object cleanup, or static-page generation was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, full source text, or Authorization value was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Summary in Report Planner AST Local Verification
+
+- Purpose:
+  - make report planning consume the same compact asset profile signal now available to assistant-run and static-page template planning;
+  - keep report planning resilient when asset profile tables are unavailable or empty.
+- Local code changes:
+  - `report-planner-worker` now loads dataset-linked `asset_items` and `asset_profiles` for `plan.dataset_id` before building the report AST;
+  - the AST top level now includes `asset_profile_summary`;
+  - when profiles exist, the module list includes `asset_materials` after `scope_summary` or `global_filters`;
+  - the summary keeps only compact safe fields: asset id, title, asset kind, source kind, profile kind, summary, noun terms, and facets;
+  - asset profile loading failures are logged and downgraded to an empty summary so report planning can still proceed.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p report-planner-worker report_ast_includes_asset_profile_summary_module_when_available`: passed;
+  - `cargo test -q -p report-planner-worker report_asset_profile_summary_keeps_compact_safe_fields`: passed;
+  - `cargo test -q -p report-planner-worker`: passed, 6/6 tests;
+  - `cargo check -q -p report-planner-worker`: passed;
+  - `cargo test -q -p platform-api static_page_template --lib`: passed, 99/99 tests.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no production deploy, service restart, live task, source database write, schema migration, source sync, object cleanup, static-page generation, or P2/P4 real write was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, or full source text was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Summary in Static-Page Template Context Local Verification
+
+- Purpose:
+  - make the asset profile hints already written into assistant-run supply visible to static-page template planning instead of leaving them as generic supplied items only;
+  - let static-page planning use compact asset understanding for material/theme selection while still requiring retrieval evidence, source detail, database rows, or media context for exact claims.
+- Local code changes:
+  - `static_page_template_evidence_summary` now includes `asset_profile_summary`;
+  - the summary exposes compact planning fields only: total count, asset kind counts, profile kind counts, primary terms, and up to 8 compact hints;
+  - hint entries include only `asset_id`, `title`, `asset_kind`, `profile_kind`, `summary`, `noun_terms`, and `facets`;
+  - model guidance explicitly says asset profiles can guide page planning but must not be cited as exact source evidence.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api evidence_summary_surfaces_asset_profiles_for_page_planning --lib`: passed;
+  - `cargo test -q -p platform-api missing_evidence_requires_chart_rows_or_document_headings --lib`: passed;
+  - `cargo test -q -p platform-api static_page_template --lib`: passed, 99/99 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public third-party API, URL, auth method, required request field, or response field was changed;
+  - no production deploy, service restart, live task, source database write, schema migration, source sync, object cleanup, static-page generation, or P2/P4 real write was performed;
+  - no raw provider payload, credential, bearer, cookie, provider key, database URL, object key, local object path, customer row, document title, content hash, or full source text was recorded;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Document Asset Profile Sync Local Verification
+
+- Purpose:
+  - continue P4 enterprise asset library work by making imported and parsed documents materialize as reusable asset items and asset profiles;
+  - keep the asset library model compatible with document, image, presentation, and video assets without exposing new third-party request fields yet.
+- Code change:
+  - added `asset_items_source_unique_idx` so one source document maps to one reusable asset item per tenant;
+  - added `PgAssetItemRepository::sync_document_asset_profile`, which upserts the document asset item, dataset asset membership, and an asset profile derived from document metadata and parsed chunks;
+  - document registration, manual ingest creation, ZIP child/parent document creation, ingest-worker extraction completion, and retrieval-worker indexing completion now call the sync helper;
+  - asset profile kind is selected from content type: `document_parse`, `image_semantic`, `presentation_outline`, or `video_summary`;
+  - sync failures are logged as warnings and do not block upload, parse, index, retrieval, or answer flows.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 3/3 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p ingest-worker`: passed;
+  - `cargo check -q -p retrieval-worker`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no third-party public API field, URL, auth method, required request field, or response contract was changed;
+  - no production backfill, object cleanup, source sync, static-page generation, live model call, or 8-server deployment was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, content hash, full document body, or raw Authorization value was recorded;
+  - profile sync is best-effort and cannot turn a successful upload/parse/index operation into a user-visible failure;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Hints In Assistant-Run Supply Local Verification
+
+- Purpose:
+  - make the newly written asset profiles useful to normal question/report/static-page assistant runs without adding a new third-party request field;
+  - use current selected datasets as the permission boundary for profile hints.
+- Code change:
+  - `build_assistant_run_evidence_state` now loads dataset-linked asset profiles for each already-authorized selected dataset and appends compact `asset_profile_hint` supplied items;
+  - `asset_profile_hint` includes title, asset kind, source kind, profile kind, summary, noun terms, facets, and model guidance only;
+  - model context compaction now has an `asset_profile` bucket with a separate quota, so profile hints cannot be crowded out by database or retrieval items;
+  - supply quality now reports `assetProfileHintCount` and tells the model these hints are for asset/term selection, not exact source citation;
+  - answer-quality supply source classification recognizes `asset_profile_hint`.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed and now asserts the synced document profile enters assistant-run `supplied_items`;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 3/3 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p ingest-worker`: passed;
+  - `cargo check -q -p retrieval-worker`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party API field, URL, auth method, required request field, existing response field, or production data mapping was changed;
+  - no profile raw attributes, object key, local path, provider payload, credential, bearer, cookie, database URL, raw customer row, full document body, content hash, or Authorization value was added to model context or recorded here;
+  - no source database write, schema migration execution, production backfill, object cleanup, source sync, static-page generation, live model call, deployment, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Library Main UI Local Verification
+
+- Purpose:
+  - complete DataMax P4 asset-library Task 5 by exposing the asset library and dataset relationship in the main workspace UI;
+  - keep the first UI slice limited to asset-library creation, listing, scope summary, and dataset membership toggles, without introducing gallery or third-party public contract changes.
+- Code change:
+  - added `apps/web/app/lib/asset-library-view-model.js` and tests for normalizing asset-library list/scope payloads and checking dataset membership;
+  - updated `HomePageClient` to load asset libraries only for logged-in main-site users, silently clear asset-library state when the session is missing or expired, and call the new `/api/v3/asset-libraries` proxy routes;
+  - updated the dataset workspace panel with an asset-library card that can create an asset library, select one, view visible/denied scope counts, and add or remove datasets from the selected asset library;
+  - kept the existing dataset list and document list behavior intact.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 3/3 tests, with the existing module-type warning only;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests, with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Client Artifact Public Sandbox HTML Publish Local Verification
+
+- Purpose:
+  - continue the Codex client enterprise-configurator integration plan by letting a V3 user publish a client-uploaded HTML artifact to an anonymous generated-artifact URL;
+  - keep the existing private `POST /v1/client-artifacts/{artifact_id}/publish` behavior stable and put public publication behind a separate endpoint.
+- Code change:
+  - added `POST /v1/client-artifacts/{artifact_id}/publish-public`;
+  - public publication requires a V3 user session and requires the artifact to already be `published`;
+  - the endpoint selects the primary HTML file, reads it through the existing client artifact storage abstraction, sanitizes active content, writes a DataMax-owned sandbox wrapper into the generated-artifacts directory, registers a `html_artifacts` record, and writes `manifest.metadata.v3_public_html.public_url`;
+  - `ClientArtifactFileRecordView` now has optional `public_url`, and task cards prefer `public_url` before private `preview_url`;
+  - added explicit `client_artifact` / `client_artifact_html` HTML artifact contract variants.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api v3_client_artifact --lib`: passed, 12/12 tests;
+  - `cargo test -q -p contracts html_artifact --lib`: passed, 5/5 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --check apps/web/app/lib/artifact-task-cards.js`: passed.
+- Safety:
+  - no third-party public `/events` URL, auth method, required request field, or existing third-party response field was changed;
+  - public publication does not expose original uploaded HTML bytes, DB payload, filesystem locator, local object path, raw provider payload, source database row, credential, bearer, cookie, or provider key;
+  - public HTML is a sanitized sandbox wrapper, not raw/unsandboxed client HTML;
+  - no production schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, service restart, GitHub push, or 8-server deployment was performed in this local slice;
+  - 120 server was not touched.
+
+## 2026-06-17 P5 Client Artifact Publish Helper Split Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving `platform-api` splitting while staying on the active Codex client enterprise-configurator path;
+  - move client artifact download/preview/public URL, HTML sandbox, sanitizer, private/public manifest markers, and public HTML artifact manifest helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - wired `lib.rs` to use the helper module while keeping the existing `/v1/client-artifacts` routes, auth checks, storage reads, and response contracts unchanged;
+  - added module tests for HTML active-content sanitization, public publish manifest URL lookup, and client-artifact HTML artifact contract construction.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api v3_client_artifact --lib`: passed, 12/12 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Contract Helper Split Local Verification
+
+- Purpose:
+  - continue the same behavior-preserving Codex client artifact cleanup by isolating upload/manifest validation from `lib.rs`;
+  - keep the existing config package and client artifact upload/publication route behavior unchanged.
+- Code change:
+  - added `crates/platform-api/src/client_artifact_contract_support.rs`;
+  - moved client artifact upload config validation, manifest validation, multipart file order validation, safe filename validation, uploaded file descriptor, and file count/size constants out of `lib.rs`;
+  - added module tests for valid manifest acceptance, invalid upload mode rejection, multipart filename/order mismatch, and unsafe filename rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 19/19 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P4 Client Artifact Joint Smoke Harness Local Verification
+
+- Purpose:
+  - make the V3/codex-web client artifact joint milestone executable instead of leaving it as a manual checklist;
+  - provide deterministic self-test coverage now and a controlled live `--execute --ack-controlled-live` path for later V3 session/codex-web configurator validation.
+- Code change:
+  - added `scripts/smoke/v3-client-artifact-joint-smoke.mjs`;
+  - added `npm run smoke:v3-client-artifact-joint`;
+  - smoke modes:
+    - `--self-test`: validates config package request shape, `enterprise-codex-client` artifact manifest shape, public HTML task-card normalization, and receipt writing without network calls;
+    - `--preflight`: checks `/healthz` and `/readyz`;
+    - `--execute --ack-controlled-live`: creates a config package, simulates client upload of `index.html` and `report.md`, private publishes the artifact, public-publishes the HTML sandbox page, and verifies task-card normalization;
+  - fixed task-card primary file priority so `client_html` is selected before `report.md`.
+- Local verification:
+  - `npm run smoke:v3-client-artifact-joint -- --self-test --pretty`: passed, receipt written under `target/v3-client-artifact-joint-smoke/`;
+  - `npm run smoke:v3-client-artifact-joint -- --self-test --pretty --run-id fixed-primary`: passed and selected `index.html` as `primary_file_id`;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --check scripts/smoke/v3-client-artifact-joint-smoke.mjs`: passed.
+- Safety:
+  - self-test did not call V3, create server records, generate public artifacts, mutate production data, restart services, push GitHub, deploy 8-server, or touch 120 server;
+  - execute mode requires explicit `--ack-controlled-live`;
+  - receipts intentionally omit cookies, bearer tokens, provider keys, database URLs, source rows, filesystem locators, raw object paths, and customer content;
+  - this does not change third-party public `/events` contracts.
+
+## 2026-06-17 P4 V3/codex-web Boundary Contract Sync Check Local Verification
+
+- Purpose:
+  - keep the V3 canonical Codex client boundary contract and the `codex-web` mirror document byte-identical after the client artifact upload/publish path was expanded;
+  - provide a cheap local drift check before either repository changes V3-facing config, dataset, asset-library, upload, publish, or task-card semantics.
+- Code/document change:
+  - copied `docs/integrations/v3-codex-client-boundary-contract.md` to `C:\Users\soulzyn\Desktop\codex-web\docs\v3-codex-client-boundary-contract.md`;
+  - added `scripts/smoke/v3-codex-client-boundary-sync.mjs`;
+  - added `npm run smoke:v3-codex-client-boundary-sync`;
+  - the smoke is read-only by default and compares file size/hash/content, writing only a local receipt.
+- Local verification:
+  - `npm run smoke:v3-codex-client-boundary-sync -- --pretty`: passed, `ok=true`, `in_sync=true`;
+  - `npm run smoke:v3-codex-client-boundary-sync -- --self-test --pretty`: passed, `ok=true`;
+  - `node --check scripts/smoke/v3-codex-client-boundary-sync.mjs`: passed;
+  - `git -C C:\Users\soulzyn\Desktop\codex-web status --short -- docs/v3-codex-client-boundary-contract.md`: reported the expected modified mirror doc.
+- Safety:
+  - the smoke does not call V3, `codex-web`, external providers, production databases, or customer endpoints;
+  - receipt data is limited to relative paths, sizes, hashes, sync status, and first-difference line metadata;
+  - no credential, bearer, cookie, provider key, database URL, raw source row, customer content, filesystem object locator, raw object path, or provider payload was recorded;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, service, GitHub state, 8-server deployment, or 120 server state was changed.
+
+## 2026-06-17 P4 Fashion Asset Library Preset Local Verification
+
+- Purpose:
+  - complete DataMax P4 asset-library Task 6 by adding a fashion-design sample configuration without hardcoding fashion-specific behavior into core asset-library APIs or storage;
+  - keep the sample as a UI/view-model preset that fills draft values only after an operator clicks it.
+- Code change:
+  - added `ASSET_LIBRARY_PRESETS`, `assetLibraryPresetById`, `applyAssetLibraryPresetToDraft`, and `buildAssetLibraryCreatePayload` to `apps/web/app/lib/asset-library-view-model.js`;
+  - the `fashion_design` preset fills name, domain, description, and metadata with recommended collection labels;
+  - `HomePageClient` now builds asset-library create payloads through the view-model helper and keeps generic creation behavior for non-preset drafts;
+  - `WorkspaceDirectoryPanel` exposes a "服装设计样例" button that only fills the draft; it does not create the asset library or attach datasets automatically.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests, with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Multimodal Asset Item/Profile Base Local Verification
+
+- Purpose:
+  - complete the first DataMax P4 Task 7 slice by exposing the already-migrated `asset_items`, `dataset_asset_memberships`, and `asset_profiles` tables to Rust storage and safe wire contracts;
+  - keep this as an internal base layer only, without adding public routes, third-party fields, gallery UI, import writes, or production data changes.
+- Code change:
+  - added storage records and inputs for `AssetItemRecord`, `NewAssetItem`, `DatasetAssetMembershipRecord`, `NewDatasetAssetMembership`, `AssetProfileRecord`, and `NewAssetProfile`;
+  - added `PgStorage::asset_items()` and `PgAssetItemRepository` with create/get/list-by-asset-library/upsert-dataset-membership/list-dataset-memberships/upsert-profile/list-profiles methods;
+  - added row mappers for asset item, dataset-asset membership, and asset profile records;
+  - extended migration assertions to cover asset item external-id uniqueness, dataset-asset membership primary key, asset profile uniqueness, source index, and profile attribute GIN index;
+  - added contracts for `AssetItemView`, `DatasetAssetMembershipView`, `AssetProfileView`, and `AssetItemScopeSummaryView`, with a multimodal image profile wire-shape test.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests, with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration execution, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Supply Summary Helper Local Verification
+
+- Purpose:
+  - add a pure staged helper for turning `asset_profiles.attributes` into compact model supply hints before wiring asset profiles into live retrieval/report context;
+  - prevent future asset-library supply from dumping large raw JSON, object keys, or multimodal extraction payloads directly into prompts.
+- Code change:
+  - added `crates/platform-api/src/asset_profile_supply_support.rs`;
+  - added `AssetProfileSupplyInput` and `AssetProfileSupplyHint` internal structures;
+  - added `build_asset_profile_supply_hints`, which extracts bounded `summary`, `noun_terms`, and `facets` from profile attributes;
+  - covered image semantic profiles, video summary profiles, presentation outline profiles, and invalid/empty profile rejection;
+  - registered the module as a staged helper; it is not yet wired into production supply paths.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration execution, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Profile Hints In Asset-Library Scope Summary Local Verification
+
+- Purpose:
+  - wire compact asset profile hints into the main-site protected asset-library scope summary;
+  - keep asset supply permission-conservative by returning only assets that are both in the asset library and attached to datasets visible to the current user;
+  - keep third-party public `/events` contracts unchanged.
+- Code change:
+  - extended `AssetLibraryScopeSummaryView` with default-empty `assets` and `asset_profile_hints` plus `asset_count` and `asset_profile_hint_count`;
+  - added `AssetProfileSupplyHintView` as the compact wire shape for profile-derived supply hints;
+  - updated `get_asset_library_scope_summary` to load at most 100 asset-library assets, keep only assets whose dataset memberships intersect the authorized dataset scope, load profiles, and build compact supply hints;
+  - added platform mapping helpers for `AssetItemRecord` and profile hint conversion;
+  - updated the main workspace asset-library view model and card metrics so the UI can show visible asset and profile-hint counts.
+- Access behavior:
+  - hidden dataset memberships remain represented only by aggregate denied counts;
+  - assets linked only to hidden datasets are omitted from `assets` and `asset_profile_hints`;
+  - profile hints do not expose raw profile attributes or object keys.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 test;
+  - `cargo test -q -p contracts asset --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests, including visible/hidden asset profile supply pruning;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 4/4 tests, with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party URL, auth method, required request field, existing third-party response field, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration execution, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P4 Asset Library Platform API Local Verification
+
+- Purpose:
+  - continue the enterprise asset library / asset space plan after the local scope resolver, migration, and contracts slice;
+  - add the main-site platform API for creating asset libraries, attaching/removing datasets, and reading an access-pruned scope summary;
+  - keep third-party public `/events` contracts unchanged; `asset_library_external_ids` is still not exposed.
+- Code change:
+  - registered `0015_asset_libraries.sql` in storage migrations and test table metadata;
+  - added `PgAssetLibraryRepository` with create/list/get/upsert membership/remove membership/list membership methods;
+  - added contracts for `CreateAssetLibraryRequest`, list/create/membership/remove responses, and scope summary response;
+  - added platform routes:
+    - `GET /v1/asset-libraries`;
+    - `POST /v1/asset-libraries`;
+    - `POST /v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}`;
+    - `DELETE /v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}`;
+    - `GET /v1/asset-libraries/{asset_library_id}/scope-summary`.
+- Access behavior:
+  - all asset library management routes require a valid main-site auth session;
+  - dataset attach/remove still goes through existing dataset visibility and owner checks;
+  - scope summary returns only visible dataset summaries and visible membership rows;
+  - hidden asset-library dataset memberships are represented only by aggregate `denied_dataset_count`, not by hidden dataset IDs.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p contracts`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p storage asset_library --lib`: passed, 1/1 tests;
+  - `cargo test -q -p contracts asset_library --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 4/4 tests;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack NFT trace warning only;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `codexConcurrency=2`, `maxRunning=2`;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no third-party public request field, URL, token, auth method, or existing response field was changed;
+  - no source database write, production migration, source sync, P2 backfill, object cleanup, static-page generation, production prewarm, deployment, service restart, or 120-server action was performed in this local slice.
+
+## 2026-06-17 P3 Main Artifact Task Card Workspace Local Verification
+
+- Purpose:
+  - close the local implementation slice for plan item `#153 P3 主站产物任务卡工作台`;
+  - unify report plans, published reports, static-page drafts, HTML artifacts, Codex customer tasks, and Codex customer artifacts into one main-site task-card view model;
+  - keep the current main-site static-page/report card visual style and avoid changing third-party public contracts.
+- Code change:
+  - added `apps/web/app/lib/artifact-task-cards.js` with stable task-card fields, status mapping, file candidates, source refs, and draft/render/workflow/url dedupe keys;
+  - added `apps/web/app/lib/artifact-task-cards.test.mjs`;
+  - changed `apps/web/app/components/InsightPanel.js` to render unified task cards in the existing `right-results-card` / `generated-project-card` style;
+  - wired card selection, open, file selection, retry/cancel buttons, and continue-edit behavior to existing main-site handlers;
+  - added selected-card-only lightweight refresh for queued/running/retrying/needs_review cards, without high-frequency background polling;
+  - deduped task-card file candidates by URL/path so the same published `index.html` is not repeated inside one card.
+- Local verification:
+  - base HEAD before this local slice: `cc8b89b8`;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `codexConcurrency=2`, `maxRunning=2`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `prewarmCustomerVisibilityOk=true`, `customerVisiblePrewarmLeakCount=0`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`, `p95LatencyMs=118`;
+  - `npm run smoke:main-assistant-streaming -- --self-test`: not supported by this script, exited with `unknown argument: --self-test`; live streaming smoke was intentionally not run without credentials/window confirmation;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
   - 120 server was not touched.
 
 ## 2026-06-16 P5 Static-Page View Helper Local Verification

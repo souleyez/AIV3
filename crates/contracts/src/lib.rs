@@ -29,6 +29,172 @@ pub struct ApiErrorResponse {
     pub details: Option<Value>,
 }
 
+pub const V3_CLIENT_CONFIG_SCHEMA: &str = "v3.codex_client_config.v1";
+pub const V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA: &str = "v3.client_artifact_manifest.v1";
+pub const V3_CLIENT_ARTIFACT_SOURCE: &str = "enterprise-codex-client";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct V3ClientArtifactUploadConfigView {
+    pub mode: String,
+    pub endpoint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateClientConfigPackageRequest {
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    pub client_id: String,
+    pub v3_base_url: String,
+    #[serde(default)]
+    pub asset_library_ids: Vec<String>,
+    #[serde(default)]
+    pub dataset_ids: Vec<String>,
+    #[serde(default)]
+    pub skill_packs: Vec<String>,
+    #[serde(default)]
+    pub artifact_upload: Option<V3ClientArtifactUploadConfigView>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientConfigPackageView {
+    pub package_id: String,
+    pub tenant_id: String,
+    pub user_id: String,
+    pub client_id: String,
+    pub v3_base_url: String,
+    #[serde(default)]
+    pub asset_library_ids: Vec<String>,
+    #[serde(default)]
+    pub dataset_ids: Vec<String>,
+    #[serde(default)]
+    pub skill_packs: Vec<String>,
+    pub artifact_upload: V3ClientArtifactUploadConfigView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub config_package: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateClientConfigPackageResponse {
+    pub package: ClientConfigPackageView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct V3ClientArtifactManifestFileView {
+    pub filename: String,
+    pub content_type: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct V3ClientArtifactEvidenceRefView {
+    pub kind: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct V3ClientArtifactManifestView {
+    pub schema: String,
+    pub source: String,
+    pub tenant_id: String,
+    pub user_id: String,
+    pub client_id: String,
+    pub task_id: String,
+    #[serde(default)]
+    pub asset_library_ids: Vec<String>,
+    #[serde(default)]
+    pub dataset_ids: Vec<String>,
+    pub title: String,
+    pub artifact_type: String,
+    #[serde(default)]
+    pub files: Vec<V3ClientArtifactManifestFileView>,
+    #[serde(default)]
+    pub evidence_refs: Vec<V3ClientArtifactEvidenceRefView>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientArtifactFileRecordView {
+    pub file_index: i32,
+    pub filename: String,
+    pub content_type: String,
+    pub role: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub download_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientArtifactView {
+    pub artifact_id: String,
+    pub tenant_id: String,
+    pub user_id: String,
+    pub client_id: String,
+    pub task_id: String,
+    pub title: String,
+    pub artifact_type: String,
+    pub status: String,
+    #[serde(default)]
+    pub dataset_ids: Vec<String>,
+    #[serde(default)]
+    pub asset_library_ids: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<ClientArtifactFileRecordView>,
+    pub manifest: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateClientArtifactResponse {
+    pub artifact: ClientArtifactView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttachClientArtifactToDatasetRequest {
+    pub dataset_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttachClientArtifactToDatasetResponse {
+    pub artifact: ClientArtifactView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttachClientArtifactToAssetLibraryRequest {
+    pub asset_library_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttachClientArtifactToAssetLibraryResponse {
+    pub artifact: ClientArtifactView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublishClientArtifactResponse {
+    pub artifact: ClientArtifactView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublishClientArtifactPublicHtmlResponse {
+    pub artifact: ClientArtifactView,
+    pub html_artifact: HtmlArtifactManifestView,
+    pub public_url: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelGatewayPresetView {
     pub preset_id: String,
@@ -2089,6 +2255,7 @@ pub enum HtmlArtifactSourceTypeView {
     CodeReview,
     VideoExtraction,
     ExternalIntegration,
+    ClientArtifact,
     Manual,
 }
 
@@ -2104,6 +2271,7 @@ pub enum HtmlArtifactTemplateIdView {
     WechatVideoLoginHandoff,
     ResumeProjectDeliveryMatrix,
     ThirdPartyHandoffDocument,
+    ClientArtifactHtml,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3147,6 +3315,178 @@ pub struct DatasetSummary {
     pub document_understanding_strategies: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_warning: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetLibraryView {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub name: String,
+    pub domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub visibility: String,
+    #[serde(default)]
+    pub metadata: Value,
+    #[serde(default)]
+    pub dataset_count: usize,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetLibraryDatasetMembershipView {
+    pub asset_library_id: String,
+    pub dataset_id: DatasetId,
+    pub role: String,
+    pub priority: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetLibraryScopeSummaryView {
+    pub asset_library: AssetLibraryView,
+    #[serde(default)]
+    pub memberships: Vec<AssetLibraryDatasetMembershipView>,
+    #[serde(default)]
+    pub datasets: Vec<DatasetSummary>,
+    #[serde(default)]
+    pub dataset_ids: Vec<DatasetId>,
+    #[serde(default)]
+    pub assets: Vec<AssetItemView>,
+    #[serde(default)]
+    pub asset_profile_hints: Vec<AssetProfileSupplyHintView>,
+    pub denied_dataset_count: usize,
+    pub membership_count: usize,
+    pub authorized_dataset_count: usize,
+    pub asset_count: usize,
+    pub asset_profile_hint_count: usize,
+    pub scope_policy: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateAssetLibraryRequest {
+    #[serde(default)]
+    pub external_id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateAssetLibraryResponse {
+    pub asset_library: AssetLibraryView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ListAssetLibrariesResponse {
+    #[serde(default)]
+    pub asset_libraries: Vec<AssetLibraryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpsertAssetLibraryDatasetMembershipRequest {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetLibraryDatasetMembershipResponse {
+    pub asset_library: AssetLibraryView,
+    pub membership: AssetLibraryDatasetMembershipView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoveAssetLibraryDatasetMembershipResponse {
+    pub asset_library: AssetLibraryView,
+    pub dataset_id: DatasetId,
+    pub removed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetLibraryScopeSummaryResponse {
+    pub summary: AssetLibraryScopeSummaryView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetItemView {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub title: String,
+    pub asset_kind: String,
+    pub source_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_key: Option<String>,
+    #[serde(default)]
+    pub metadata: Value,
+    #[serde(default)]
+    pub profile_count: usize,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DatasetAssetMembershipView {
+    pub dataset_id: DatasetId,
+    pub asset_id: String,
+    pub membership_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetProfileView {
+    pub id: String,
+    pub asset_id: String,
+    pub profile_kind: String,
+    pub profile_version: String,
+    #[serde(default)]
+    pub attributes: Value,
+    pub embedding_status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetItemScopeSummaryView {
+    pub asset: AssetItemView,
+    #[serde(default)]
+    pub dataset_memberships: Vec<DatasetAssetMembershipView>,
+    #[serde(default)]
+    pub profiles: Vec<AssetProfileView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetProfileSupplyHintView {
+    pub asset_id: String,
+    pub title: String,
+    pub asset_kind: String,
+    pub source_kind: String,
+    pub profile_kind: String,
+    pub summary: String,
+    #[serde(default)]
+    pub noun_terms: Vec<String>,
+    #[serde(default)]
+    pub facets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -6803,6 +7143,191 @@ mod tests {
         assert_eq!(request.event_type, "html_artifact.action_intent");
         assert_eq!(request.payload["action"], json!("submit"));
         assert!(request.local_thread_id.is_none());
+    }
+
+    #[test]
+    fn asset_library_scope_summary_uses_dataset_authorized_wire_shape() {
+        let asset_library_id = "asset-library-fashion-main".to_string();
+        let dataset_id = DatasetId::new();
+        let created_at = Utc::now();
+        let view = AssetLibraryScopeSummaryView {
+            asset_library: AssetLibraryView {
+                id: asset_library_id.clone(),
+                external_id: Some("fashion-design-main".to_string()),
+                name: "服装设计资产库".to_string(),
+                domain: "fashion_design".to_string(),
+                description: Some("服装设计资料、图库和产物".to_string()),
+                visibility: "private".to_string(),
+                metadata: json!({
+                    "sampleDomain": "fashion_design"
+                }),
+                dataset_count: 1,
+                created_at,
+                updated_at: created_at,
+            },
+            memberships: vec![AssetLibraryDatasetMembershipView {
+                asset_library_id: asset_library_id.clone(),
+                dataset_id,
+                role: "member".to_string(),
+                priority: 10,
+                created_at,
+            }],
+            datasets: vec![DatasetSummary {
+                id: dataset_id,
+                key: "fashion-design-docs".to_string(),
+                title: "服装设计资料".to_string(),
+                lifecycle: DatasetLifecycle::Active,
+                visibility: DatasetVisibility::Private,
+                secret_binding_ids: vec![],
+                document_count: Some(3),
+                documents_count: Some(3),
+                estimated_word_count: None,
+                parse_status_summary: None,
+                content_type_summary: Some("image,docx".to_string()),
+                latest_upload: None,
+                document_title_hints: vec![],
+                material_hints: vec![],
+                noun_term_hints: vec![],
+                section_title_hints: vec![],
+                document_understanding_strategies: vec![],
+                access_warning: None,
+            }],
+            dataset_ids: vec![dataset_id],
+            assets: vec![],
+            asset_profile_hints: vec![],
+            denied_dataset_count: 1,
+            membership_count: 2,
+            authorized_dataset_count: 1,
+            asset_count: 0,
+            asset_profile_hint_count: 0,
+            scope_policy: "asset_library_memberships_intersect_authorized_datasets".to_string(),
+        };
+
+        let encoded = serde_json::to_value(&view).expect("scope summary should serialize");
+
+        assert_eq!(
+            encoded["asset_library"]["external_id"],
+            json!("fashion-design-main")
+        );
+        assert_eq!(encoded["asset_library"]["domain"], json!("fashion_design"));
+        assert_eq!(
+            encoded["memberships"][0]["asset_library_id"],
+            json!(asset_library_id)
+        );
+        assert_eq!(encoded["dataset_ids"], json!([dataset_id.to_string()]));
+        assert_eq!(encoded["assets"], json!([]));
+        assert_eq!(encoded["asset_profile_hints"], json!([]));
+        assert_eq!(encoded["denied_dataset_count"], json!(1));
+        assert_eq!(encoded["asset_count"], json!(0));
+        assert_eq!(encoded["asset_profile_hint_count"], json!(0));
+        assert!(encoded.get("denied_dataset_ids").is_none());
+
+        let decoded: AssetLibraryScopeSummaryView =
+            serde_json::from_value(encoded).expect("scope summary should deserialize");
+        assert_eq!(
+            decoded.asset_library.external_id.as_deref(),
+            Some("fashion-design-main")
+        );
+        assert_eq!(decoded.dataset_ids, vec![dataset_id]);
+        assert_eq!(decoded.denied_dataset_count, 1);
+        assert_eq!(decoded.membership_count, 2);
+        assert_eq!(decoded.asset_count, 0);
+    }
+
+    #[test]
+    fn asset_item_scope_summary_uses_multimodal_profile_wire_shape() {
+        let dataset_id = DatasetId::new();
+        let created_at = Utc::now();
+        let asset_id = "asset-fashion-image-1".to_string();
+        let view = AssetItemScopeSummaryView {
+            asset: AssetItemView {
+                id: asset_id.clone(),
+                asset_library_id: Some("asset-library-fashion-main".to_string()),
+                collection_id: Some("collection-inspiration".to_string()),
+                external_id: Some("image-ext-1".to_string()),
+                title: "春夏连衣裙灵感图".to_string(),
+                asset_kind: "image".to_string(),
+                source_kind: "upload".to_string(),
+                source_id: Some("upload-batch-1".to_string()),
+                content_type: Some("image/png".to_string()),
+                object_key: Some("assets/fashion/image-1.png".to_string()),
+                metadata: json!({
+                    "origin": "fashion_gallery"
+                }),
+                profile_count: 1,
+                created_at,
+                updated_at: created_at,
+            },
+            dataset_memberships: vec![DatasetAssetMembershipView {
+                dataset_id,
+                asset_id: asset_id.clone(),
+                membership_kind: "curated".to_string(),
+                expires_at: None,
+                created_at,
+            }],
+            profiles: vec![AssetProfileView {
+                id: "profile-1".to_string(),
+                asset_id: asset_id.clone(),
+                profile_kind: "image_semantic".to_string(),
+                profile_version: "v1".to_string(),
+                attributes: json!({
+                    "category": "dress",
+                    "season": "spring_summer",
+                    "colors": ["green", "white"],
+                    "noun_terms": ["连衣裙", "泡泡袖", "碎花"]
+                }),
+                embedding_status: "queued".to_string(),
+                created_at,
+                updated_at: created_at,
+            }],
+        };
+
+        let encoded = serde_json::to_value(&view).expect("asset scope should serialize");
+
+        assert_eq!(encoded["asset"]["asset_kind"], json!("image"));
+        assert_eq!(encoded["asset"]["source_kind"], json!("upload"));
+        assert_eq!(
+            encoded["dataset_memberships"][0]["dataset_id"],
+            json!(dataset_id.to_string())
+        );
+        assert_eq!(
+            encoded["profiles"][0]["attributes"]["noun_terms"],
+            json!(["连衣裙", "泡泡袖", "碎花"])
+        );
+        assert_eq!(encoded["profiles"][0]["embedding_status"], json!("queued"));
+
+        let decoded: AssetItemScopeSummaryView =
+            serde_json::from_value(encoded).expect("asset scope should deserialize");
+        assert_eq!(decoded.asset.asset_kind, "image");
+        assert_eq!(decoded.profiles[0].profile_kind, "image_semantic");
+        assert_eq!(decoded.dataset_memberships[0].dataset_id, dataset_id);
+    }
+
+    #[test]
+    fn asset_profile_supply_hint_uses_compact_wire_shape() {
+        let view = AssetProfileSupplyHintView {
+            asset_id: "asset-1".to_string(),
+            title: "春夏连衣裙灵感图".to_string(),
+            asset_kind: "image".to_string(),
+            source_kind: "upload".to_string(),
+            profile_kind: "image_semantic".to_string(),
+            summary: "品类: 连衣裙；颜色: 绿色、白色".to_string(),
+            noun_terms: vec!["连衣裙".to_string(), "绿色".to_string()],
+            facets: vec!["品类: 连衣裙".to_string(), "颜色: 绿色、白色".to_string()],
+        };
+
+        let encoded = serde_json::to_value(&view).expect("supply hint should serialize");
+
+        assert_eq!(encoded["asset_id"], json!("asset-1"));
+        assert_eq!(encoded["summary"], json!("品类: 连衣裙；颜色: 绿色、白色"));
+        assert_eq!(encoded["noun_terms"], json!(["连衣裙", "绿色"]));
+        assert!(encoded.get("attributes").is_none());
+        assert!(encoded.get("object_key").is_none());
+
+        let decoded: AssetProfileSupplyHintView =
+            serde_json::from_value(encoded).expect("supply hint should deserialize");
+        assert_eq!(decoded.asset_kind, "image");
+        assert_eq!(decoded.facets.len(), 2);
     }
 
     #[test]

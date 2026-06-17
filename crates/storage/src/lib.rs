@@ -113,6 +113,18 @@ pub const RETRIEVAL_LEXICAL_INDEX_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0014_retrieval_lexical_index.sql"),
 };
 
+pub const ASSET_LIBRARIES_SCHEMA: Migration = Migration {
+    version: "0015",
+    description: "enterprise asset libraries",
+    sql: include_str!("../migrations/0015_asset_libraries.sql"),
+};
+
+pub const V3_CLIENT_ARTIFACTS_SCHEMA: Migration = Migration {
+    version: "0016",
+    description: "v3 client config packages and uploaded artifacts",
+    sql: include_str!("../migrations/0016_v3_client_artifacts.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -127,6 +139,8 @@ pub const MIGRATIONS: &[Migration] = &[
     DOCUMENT_FACT_INDEX_SCHEMA,
     DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA,
     RETRIEVAL_LEXICAL_INDEX_SCHEMA,
+    ASSET_LIBRARIES_SCHEMA,
+    V3_CLIENT_ARTIFACTS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -185,6 +199,15 @@ pub const TABLES: &[&str] = &[
     "report_modules",
     "published_reports",
     "published_report_versions",
+    "enterprise_asset_libraries",
+    "asset_library_dataset_memberships",
+    "asset_collections",
+    "asset_items",
+    "dataset_asset_memberships",
+    "asset_profiles",
+    "v3_client_config_packages",
+    "v3_client_artifacts",
+    "v3_client_artifact_files",
 ];
 
 pub const DEFAULT_LOCAL_DATABASE_URL: &str =
@@ -200,6 +223,126 @@ pub struct NewDataset {
     pub title: String,
     pub description: Option<String>,
     pub owner_user_id: Option<UserId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetLibraryRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub external_id: Option<String>,
+    pub name: String,
+    pub domain: String,
+    pub description: Option<String>,
+    pub visibility: String,
+    pub metadata: Value,
+    pub dataset_count: usize,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetLibrary {
+    pub external_id: Option<String>,
+    pub name: String,
+    pub domain: String,
+    pub description: Option<String>,
+    pub visibility: String,
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetLibraryDatasetMembershipRecord {
+    pub tenant_id: TenantId,
+    pub asset_library_id: Uuid,
+    pub dataset_id: DatasetId,
+    pub role: String,
+    pub priority: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetLibraryDatasetMembership {
+    pub dataset_id: DatasetId,
+    pub role: String,
+    pub priority: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetItemRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub asset_library_id: Option<Uuid>,
+    pub collection_id: Option<Uuid>,
+    pub external_id: Option<String>,
+    pub title: String,
+    pub asset_kind: String,
+    pub source_kind: String,
+    pub source_id: Option<String>,
+    pub content_type: Option<String>,
+    pub object_key: Option<String>,
+    pub metadata: Value,
+    pub profile_count: usize,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetItem {
+    pub asset_library_id: Option<Uuid>,
+    pub collection_id: Option<Uuid>,
+    pub external_id: Option<String>,
+    pub title: String,
+    pub asset_kind: String,
+    pub source_kind: String,
+    pub source_id: Option<String>,
+    pub content_type: Option<String>,
+    pub object_key: Option<String>,
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct DatasetAssetMembershipRecord {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub asset_id: Uuid,
+    pub membership_kind: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewDatasetAssetMembership {
+    pub dataset_id: DatasetId,
+    pub membership_kind: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetProfileRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub asset_id: Uuid,
+    pub profile_kind: String,
+    pub profile_version: String,
+    pub attributes: Value,
+    pub embedding_status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetProfile {
+    pub profile_kind: String,
+    pub profile_version: String,
+    pub attributes: Value,
+    pub embedding_status: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SyncedDocumentAssetProfile {
+    pub asset: AssetItemRecord,
+    pub dataset_membership: DatasetAssetMembershipRecord,
+    pub profile: AssetProfileRecord,
 }
 
 #[derive(Clone, Debug)]
@@ -880,6 +1023,18 @@ impl PgStorage {
         }
     }
 
+    pub fn asset_libraries(&self) -> PgAssetLibraryRepository {
+        PgAssetLibraryRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn asset_items(&self) -> PgAssetItemRepository {
+        PgAssetItemRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
     pub fn documents(&self) -> PgDocumentRepository {
         PgDocumentRepository {
             pool: self.pool.clone(),
@@ -1115,6 +1270,16 @@ pub struct PgDatasetRepository {
     pool: PgPool,
 }
 
+#[derive(Clone)]
+pub struct PgAssetLibraryRepository {
+    pool: PgPool,
+}
+
+#[derive(Clone)]
+pub struct PgAssetItemRepository {
+    pool: PgPool,
+}
+
 impl PgDatasetRepository {
     pub async fn create(&self, tenant_id: TenantId, new_dataset: NewDataset) -> Result<Dataset> {
         self.create_with_metadata(tenant_id, new_dataset, Value::Null)
@@ -1296,6 +1461,592 @@ impl PgDatasetRepository {
         .await?;
 
         row.as_ref().map(map_dataset_row).transpose()
+    }
+}
+
+impl PgAssetLibraryRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_asset_library: NewAssetLibrary,
+    ) -> Result<AssetLibraryRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into enterprise_asset_libraries (
+                tenant_id,
+                external_id,
+                name,
+                domain,
+                description,
+                visibility,
+                metadata
+            )
+            values ($1, $2, $3, $4, $5, $6, $7)
+            returning id, tenant_id, external_id, name, domain, description, visibility, metadata,
+                      0::bigint as dataset_count, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_asset_library.external_id)
+        .bind(new_asset_library.name)
+        .bind(new_asset_library.domain)
+        .bind(new_asset_library.description)
+        .bind(new_asset_library.visibility)
+        .bind(new_asset_library.metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_asset_library_row(&row)
+    }
+
+    pub async fn list_by_tenant(&self, tenant_id: TenantId) -> Result<Vec<AssetLibraryRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select l.id,
+                   l.tenant_id,
+                   l.external_id,
+                   l.name,
+                   l.domain,
+                   l.description,
+                   l.visibility,
+                   l.metadata,
+                   (
+                       select count(*)
+                       from asset_library_dataset_memberships m
+                       where m.tenant_id = l.tenant_id
+                         and m.asset_library_id = l.id
+                   )::bigint as dataset_count,
+                   l.created_at,
+                   l.updated_at
+            from enterprise_asset_libraries l
+            where l.tenant_id = $1
+            order by l.created_at desc, l.name asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_asset_library_row).collect()
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        asset_library_id: Uuid,
+    ) -> Result<Option<AssetLibraryRecord>> {
+        let row = sqlx::query(
+            r#"
+            select l.id,
+                   l.tenant_id,
+                   l.external_id,
+                   l.name,
+                   l.domain,
+                   l.description,
+                   l.visibility,
+                   l.metadata,
+                   (
+                       select count(*)
+                       from asset_library_dataset_memberships m
+                       where m.tenant_id = l.tenant_id
+                         and m.asset_library_id = l.id
+                   )::bigint as dataset_count,
+                   l.created_at,
+                   l.updated_at
+            from enterprise_asset_libraries l
+            where l.tenant_id = $1 and l.id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_library_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_asset_library_row).transpose()
+    }
+
+    pub async fn upsert_dataset_membership(
+        &self,
+        tenant_id: TenantId,
+        asset_library_id: Uuid,
+        new_membership: NewAssetLibraryDatasetMembership,
+    ) -> Result<AssetLibraryDatasetMembershipRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into asset_library_dataset_memberships (
+                tenant_id,
+                asset_library_id,
+                dataset_id,
+                role,
+                priority
+            )
+            values ($1, $2, $3, $4, $5)
+            on conflict (tenant_id, asset_library_id, dataset_id) do update
+            set role = excluded.role,
+                priority = excluded.priority
+            returning tenant_id, asset_library_id, dataset_id, role, priority, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_library_id)
+        .bind(new_membership.dataset_id.0)
+        .bind(new_membership.role)
+        .bind(new_membership.priority)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(map_asset_library_dataset_membership_row(&row))
+    }
+
+    pub async fn remove_dataset_membership(
+        &self,
+        tenant_id: TenantId,
+        asset_library_id: Uuid,
+        dataset_id: DatasetId,
+    ) -> Result<Option<AssetLibraryDatasetMembershipRecord>> {
+        let row = sqlx::query(
+            r#"
+            delete from asset_library_dataset_memberships
+            where tenant_id = $1 and asset_library_id = $2 and dataset_id = $3
+            returning tenant_id, asset_library_id, dataset_id, role, priority, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_library_id)
+        .bind(dataset_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(map_asset_library_dataset_membership_row))
+    }
+
+    pub async fn list_dataset_memberships(
+        &self,
+        tenant_id: TenantId,
+        asset_library_id: Uuid,
+    ) -> Result<Vec<AssetLibraryDatasetMembershipRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select tenant_id, asset_library_id, dataset_id, role, priority, created_at
+            from asset_library_dataset_memberships
+            where tenant_id = $1 and asset_library_id = $2
+            order by priority asc, created_at asc, dataset_id asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_library_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(map_asset_library_dataset_membership_row)
+            .collect())
+    }
+}
+
+impl PgAssetItemRepository {
+    pub async fn create(
+        &self,
+        tenant_id: TenantId,
+        new_asset: NewAssetItem,
+    ) -> Result<AssetItemRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into asset_items (
+                tenant_id,
+                asset_library_id,
+                collection_id,
+                external_id,
+                title,
+                asset_kind,
+                source_kind,
+                source_id,
+                content_type,
+                object_key,
+                metadata
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            returning id, tenant_id, asset_library_id, collection_id, external_id, title,
+                      asset_kind, source_kind, source_id, content_type, object_key, metadata,
+                      0::bigint as profile_count, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_asset.asset_library_id)
+        .bind(new_asset.collection_id)
+        .bind(new_asset.external_id)
+        .bind(new_asset.title)
+        .bind(new_asset.asset_kind)
+        .bind(new_asset.source_kind)
+        .bind(new_asset.source_id)
+        .bind(new_asset.content_type)
+        .bind(new_asset.object_key)
+        .bind(new_asset.metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_asset_item_row(&row)
+    }
+
+    pub async fn upsert_by_source(
+        &self,
+        tenant_id: TenantId,
+        new_asset: NewAssetItem,
+    ) -> Result<AssetItemRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into asset_items (
+                tenant_id,
+                asset_library_id,
+                collection_id,
+                external_id,
+                title,
+                asset_kind,
+                source_kind,
+                source_id,
+                content_type,
+                object_key,
+                metadata
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            on conflict (tenant_id, source_kind, source_id) where source_id is not null do update
+            set asset_library_id = coalesce(excluded.asset_library_id, asset_items.asset_library_id),
+                collection_id = coalesce(excluded.collection_id, asset_items.collection_id),
+                external_id = coalesce(excluded.external_id, asset_items.external_id),
+                title = excluded.title,
+                asset_kind = excluded.asset_kind,
+                content_type = excluded.content_type,
+                object_key = excluded.object_key,
+                metadata = excluded.metadata,
+                updated_at = now()
+            returning id, tenant_id, asset_library_id, collection_id, external_id, title,
+                      asset_kind, source_kind, source_id, content_type, object_key, metadata,
+                      (
+                          select count(*)
+                          from asset_profiles p
+                          where p.tenant_id = asset_items.tenant_id
+                            and p.asset_id = asset_items.id
+                      )::bigint as profile_count,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_asset.asset_library_id)
+        .bind(new_asset.collection_id)
+        .bind(new_asset.external_id)
+        .bind(new_asset.title)
+        .bind(new_asset.asset_kind)
+        .bind(new_asset.source_kind)
+        .bind(new_asset.source_id)
+        .bind(new_asset.content_type)
+        .bind(new_asset.object_key)
+        .bind(new_asset.metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_asset_item_row(&row)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+    ) -> Result<Option<AssetItemRecord>> {
+        let row = sqlx::query(
+            r#"
+            select a.id,
+                   a.tenant_id,
+                   a.asset_library_id,
+                   a.collection_id,
+                   a.external_id,
+                   a.title,
+                   a.asset_kind,
+                   a.source_kind,
+                   a.source_id,
+                   a.content_type,
+                   a.object_key,
+                   a.metadata,
+                   (
+                       select count(*)
+                       from asset_profiles p
+                       where p.tenant_id = a.tenant_id
+                         and p.asset_id = a.id
+                   )::bigint as profile_count,
+                   a.created_at,
+                   a.updated_at
+            from asset_items a
+            where a.tenant_id = $1 and a.id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_asset_item_row).transpose()
+    }
+
+    pub async fn list_by_asset_library(
+        &self,
+        tenant_id: TenantId,
+        asset_library_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<AssetItemRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select a.id,
+                   a.tenant_id,
+                   a.asset_library_id,
+                   a.collection_id,
+                   a.external_id,
+                   a.title,
+                   a.asset_kind,
+                   a.source_kind,
+                   a.source_id,
+                   a.content_type,
+                   a.object_key,
+                   a.metadata,
+                   (
+                       select count(*)
+                       from asset_profiles p
+                       where p.tenant_id = a.tenant_id
+                         and p.asset_id = a.id
+                   )::bigint as profile_count,
+                   a.created_at,
+                   a.updated_at
+            from asset_items a
+            where a.tenant_id = $1 and a.asset_library_id = $2
+            order by a.created_at desc, a.title asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_library_id)
+        .bind(limit.min(500) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_asset_item_row).collect()
+    }
+
+    pub async fn list_by_dataset_ids(
+        &self,
+        tenant_id: TenantId,
+        dataset_ids: &[DatasetId],
+        limit: usize,
+    ) -> Result<Vec<AssetItemRecord>> {
+        if dataset_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let dataset_ids = dataset_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            select distinct on (a.id)
+                   a.id,
+                   a.tenant_id,
+                   a.asset_library_id,
+                   a.collection_id,
+                   a.external_id,
+                   a.title,
+                   a.asset_kind,
+                   a.source_kind,
+                   a.source_id,
+                   a.content_type,
+                   a.object_key,
+                   a.metadata,
+                   (
+                       select count(*)
+                       from asset_profiles p
+                       where p.tenant_id = a.tenant_id
+                         and p.asset_id = a.id
+                   )::bigint as profile_count,
+                   a.created_at,
+                   a.updated_at
+            from asset_items a
+            join dataset_asset_memberships m
+              on m.tenant_id = a.tenant_id
+             and m.asset_id = a.id
+            where a.tenant_id = $1
+              and m.dataset_id = any($2)
+            order by a.id, a.created_at desc, a.title asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_ids)
+        .bind(limit.min(500) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_asset_item_row).collect()
+    }
+
+    pub async fn upsert_dataset_membership(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+        new_membership: NewDatasetAssetMembership,
+    ) -> Result<DatasetAssetMembershipRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into dataset_asset_memberships (
+                tenant_id,
+                dataset_id,
+                asset_id,
+                membership_kind,
+                expires_at
+            )
+            values ($1, $2, $3, $4, $5)
+            on conflict (tenant_id, dataset_id, asset_id) do update
+            set membership_kind = excluded.membership_kind,
+                expires_at = excluded.expires_at
+            returning tenant_id, dataset_id, asset_id, membership_kind, expires_at, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_membership.dataset_id.0)
+        .bind(asset_id)
+        .bind(new_membership.membership_kind)
+        .bind(new_membership.expires_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(map_dataset_asset_membership_row(&row))
+    }
+
+    pub async fn list_dataset_memberships(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+    ) -> Result<Vec<DatasetAssetMembershipRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select tenant_id, dataset_id, asset_id, membership_kind, expires_at, created_at
+            from dataset_asset_memberships
+            where tenant_id = $1 and asset_id = $2
+            order by created_at asc, dataset_id asc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_dataset_asset_membership_row).collect())
+    }
+
+    pub async fn upsert_profile(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+        new_profile: NewAssetProfile,
+    ) -> Result<AssetProfileRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into asset_profiles (
+                tenant_id,
+                asset_id,
+                profile_kind,
+                profile_version,
+                attributes,
+                embedding_status
+            )
+            values ($1, $2, $3, $4, $5, $6)
+            on conflict (tenant_id, asset_id, profile_kind, profile_version) do update
+            set attributes = excluded.attributes,
+                embedding_status = excluded.embedding_status,
+                updated_at = now()
+            returning id, tenant_id, asset_id, profile_kind, profile_version, attributes,
+                      embedding_status, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .bind(new_profile.profile_kind)
+        .bind(new_profile.profile_version)
+        .bind(new_profile.attributes)
+        .bind(new_profile.embedding_status)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(map_asset_profile_row(&row))
+    }
+
+    pub async fn list_profiles(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+    ) -> Result<Vec<AssetProfileRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, asset_id, profile_kind, profile_version, attributes,
+                   embedding_status, created_at, updated_at
+            from asset_profiles
+            where tenant_id = $1 and asset_id = $2
+            order by profile_kind asc, profile_version desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_profile_row).collect())
+    }
+
+    pub async fn sync_document_asset_profile(
+        &self,
+        tenant_id: TenantId,
+        document: &Document,
+        chunks: &[DocumentChunk],
+    ) -> Result<SyncedDocumentAssetProfile> {
+        let asset = self
+            .upsert_by_source(
+                tenant_id,
+                NewAssetItem {
+                    asset_library_id: None,
+                    collection_id: None,
+                    external_id: Some(format!("document:{}", document.id.0)),
+                    title: document.title.clone(),
+                    asset_kind: document_asset_kind(document),
+                    source_kind: "document".to_string(),
+                    source_id: Some(document.id.0.to_string()),
+                    content_type: Some(document.content_type.clone()),
+                    object_key: Some(document.object_key.clone()),
+                    metadata: document_asset_metadata(document),
+                },
+            )
+            .await?;
+        let dataset_membership = self
+            .upsert_dataset_membership(
+                tenant_id,
+                asset.id,
+                NewDatasetAssetMembership {
+                    dataset_id: document.dataset_id,
+                    membership_kind: "source_document".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await?;
+        let profile = self
+            .upsert_profile(
+                tenant_id,
+                asset.id,
+                NewAssetProfile {
+                    profile_kind: document_asset_profile_kind(document),
+                    profile_version: "v1".to_string(),
+                    attributes: document_asset_profile_attributes(document, chunks),
+                    embedding_status: "not_requested".to_string(),
+                },
+            )
+            .await?;
+
+        Ok(SyncedDocumentAssetProfile {
+            asset,
+            dataset_membership,
+            profile,
+        })
     }
 }
 
@@ -7322,6 +8073,769 @@ fn map_model_gateway_profile_row(row: &sqlx::postgres::PgRow) -> Result<ModelGat
     })
 }
 
+fn map_asset_library_row(row: &sqlx::postgres::PgRow) -> Result<AssetLibraryRecord> {
+    let dataset_count = row.get::<i64, _>("dataset_count").max(0) as usize;
+
+    Ok(AssetLibraryRecord {
+        id: row.get::<Uuid, _>("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        external_id: row.get("external_id"),
+        name: row.get("name"),
+        domain: row.get("domain"),
+        description: row.get("description"),
+        visibility: row.get("visibility"),
+        metadata: row.get("metadata"),
+        dataset_count,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_asset_library_dataset_membership_row(
+    row: &sqlx::postgres::PgRow,
+) -> AssetLibraryDatasetMembershipRecord {
+    AssetLibraryDatasetMembershipRecord {
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        asset_library_id: row.get::<Uuid, _>("asset_library_id"),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        role: row.get("role"),
+        priority: row.get("priority"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn map_asset_item_row(row: &sqlx::postgres::PgRow) -> Result<AssetItemRecord> {
+    let profile_count = row.get::<i64, _>("profile_count").max(0) as usize;
+
+    Ok(AssetItemRecord {
+        id: row.get::<Uuid, _>("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        asset_library_id: row.get("asset_library_id"),
+        collection_id: row.get("collection_id"),
+        external_id: row.get("external_id"),
+        title: row.get("title"),
+        asset_kind: row.get("asset_kind"),
+        source_kind: row.get("source_kind"),
+        source_id: row.get("source_id"),
+        content_type: row.get("content_type"),
+        object_key: row.get("object_key"),
+        metadata: row.get("metadata"),
+        profile_count,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_dataset_asset_membership_row(row: &sqlx::postgres::PgRow) -> DatasetAssetMembershipRecord {
+    DatasetAssetMembershipRecord {
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        asset_id: row.get("asset_id"),
+        membership_kind: row.get("membership_kind"),
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn map_asset_profile_row(row: &sqlx::postgres::PgRow) -> AssetProfileRecord {
+    AssetProfileRecord {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        asset_id: row.get("asset_id"),
+        profile_kind: row.get("profile_kind"),
+        profile_version: row.get("profile_version"),
+        attributes: row.get("attributes"),
+        embedding_status: row.get("embedding_status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn document_asset_kind(document: &Document) -> String {
+    let content_type = normalized_content_type(&document.content_type);
+    let title = document.title.to_ascii_lowercase();
+    if content_type.starts_with("image/") {
+        "image".to_string()
+    } else if content_type.starts_with("video/") {
+        "video".to_string()
+    } else if content_type.contains("presentation")
+        || content_type.contains("powerpoint")
+        || title.ends_with(".ppt")
+        || title.ends_with(".pptx")
+    {
+        "presentation".to_string()
+    } else {
+        "document".to_string()
+    }
+}
+
+fn document_asset_profile_kind(document: &Document) -> String {
+    match document_asset_kind(document).as_str() {
+        "image" => "image_semantic".to_string(),
+        "video" => "video_summary".to_string(),
+        "presentation" => "presentation_outline".to_string(),
+        _ => "document_parse".to_string(),
+    }
+}
+
+fn document_asset_metadata(document: &Document) -> Value {
+    let mut metadata = Map::new();
+    metadata.insert(
+        "document_id".to_string(),
+        Value::String(document.id.0.to_string()),
+    );
+    metadata.insert(
+        "dataset_id".to_string(),
+        Value::String(document.dataset_id.0.to_string()),
+    );
+    metadata.insert(
+        "content_type".to_string(),
+        Value::String(document.content_type.clone()),
+    );
+    metadata.insert(
+        "lifecycle".to_string(),
+        Value::String(document.lifecycle.as_str().to_string()),
+    );
+    Value::Object(metadata)
+}
+
+fn document_asset_profile_attributes(document: &Document, chunks: &[DocumentChunk]) -> Value {
+    let mut attributes = Map::new();
+    attributes.insert("title".to_string(), Value::String(document.title.clone()));
+    attributes.insert(
+        "content_type".to_string(),
+        Value::String(document.content_type.clone()),
+    );
+    attributes.insert(
+        "lifecycle".to_string(),
+        Value::String(document.lifecycle.as_str().to_string()),
+    );
+    attributes.insert(
+        "chunk_count".to_string(),
+        Value::Number(serde_json::Number::from(chunks.len() as u64)),
+    );
+    attributes.insert(
+        "token_count".to_string(),
+        Value::Number(serde_json::Number::from(
+            chunks
+                .iter()
+                .map(|chunk| chunk.token_count.max(0) as u64)
+                .sum::<u64>(),
+        )),
+    );
+
+    let document_metadata = Value::Object(Map::from_iter(document.metadata.clone()));
+    for key in ["parse_status", "parse_quality_status", "parse_method"] {
+        if let Some(value) = compact_metadata_string(&document_metadata, key) {
+            attributes.insert(key.to_string(), Value::String(value));
+        }
+    }
+    if let Some(media) = document_metadata
+        .get("parse_metadata")
+        .and_then(|value| value.get("media"))
+        .or_else(|| document_metadata.get("media"))
+        .cloned()
+    {
+        attributes.insert("media".to_string(), compact_metadata_value(media, 2000));
+    }
+    apply_document_multimodal_profile_attributes(
+        &mut attributes,
+        document_asset_kind(document).as_str(),
+        &document_metadata,
+        chunks,
+    );
+    if let Some(summary) = document_profile_summary(&document_metadata, chunks) {
+        attributes.insert("summary".to_string(), Value::String(summary));
+    }
+    let noun_terms = document_profile_noun_terms(&document_metadata, chunks);
+    if !noun_terms.is_empty() {
+        attributes.insert(
+            "noun_terms".to_string(),
+            Value::Array(noun_terms.into_iter().map(Value::String).collect()),
+        );
+    }
+
+    Value::Object(attributes)
+}
+
+fn document_profile_summary(document_metadata: &Value, chunks: &[DocumentChunk]) -> Option<String> {
+    for path in [
+        &["summary"][..],
+        &["description"][..],
+        &["caption"][..],
+        &["vlm", "payload", "summary"][..],
+        &["vlm", "payload", "visualSummary"][..],
+        &["parse_metadata", "vlm", "payload", "summary"][..],
+        &["parse_metadata", "vlm", "payload", "visualSummary"][..],
+        &["parse_metadata", "summary"][..],
+        &["parse_metadata", "media", "summary"][..],
+        &["media", "summary"][..],
+        &["media", "transcript_summary"][..],
+    ] {
+        if let Some(value) = metadata_path_string(document_metadata, path) {
+            return Some(limit_chars(&value, 600));
+        }
+    }
+    let summary = chunks
+        .iter()
+        .take(3)
+        .map(|chunk| normalize_inline_text(&chunk.content))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if summary.is_empty() {
+        None
+    } else {
+        Some(limit_chars(&summary, 600))
+    }
+}
+
+fn document_profile_noun_terms(document_metadata: &Value, chunks: &[DocumentChunk]) -> Vec<String> {
+    let mut terms = BTreeSet::new();
+    for key in [
+        "noun_terms",
+        "nounTermHints",
+        "material_hints",
+        "materialHints",
+        "section_title_hints",
+        "sectionTitleHints",
+        "document_title_hints",
+        "documentTitleHints",
+        "keywords",
+        "tags",
+        "topicTags",
+    ] {
+        collect_profile_terms(document_metadata.get(key), &mut terms);
+    }
+    for path in [
+        &["vlm", "payload", "topicTags"][..],
+        &["parse_metadata", "vlm", "payload", "topicTags"][..],
+        &["vlm", "payload", "tableLikeSignals"][..],
+        &["parse_metadata", "vlm", "payload", "tableLikeSignals"][..],
+    ] {
+        collect_profile_terms(metadata_path_value(document_metadata, path), &mut terms);
+    }
+    if let Some(payload) = document_vlm_payload_metadata(document_metadata) {
+        collect_profile_object_texts(
+            payload.get("entities"),
+            &["name", "text", "type"],
+            &mut terms,
+        );
+        collect_profile_object_texts(
+            payload.get("fieldCandidates"),
+            &["key", "evidenceText"],
+            &mut terms,
+        );
+    }
+    if let Some(media) = document_profile_media_metadata(document_metadata, chunks) {
+        collect_profile_object_texts(
+            media.get("transcript_segments"),
+            &["text", "summary"],
+            &mut terms,
+        );
+        collect_profile_object_texts(media.get("scenes"), &["summary", "label"], &mut terms);
+        collect_profile_object_texts(
+            media.get("keyframe_ocr_snippets"),
+            &["text", "content"],
+            &mut terms,
+        );
+    }
+    for chunk in chunks.iter().take(8) {
+        let chunk_metadata = Value::Object(Map::from_iter(chunk.metadata.clone()));
+        for key in [
+            "noun_terms",
+            "nounTermHints",
+            "keywords",
+            "tags",
+            "section_title",
+            "section_title_hints",
+            "sectionTitleHints",
+        ] {
+            collect_profile_terms(chunk_metadata.get(key), &mut terms);
+        }
+    }
+    terms.into_iter().take(48).collect()
+}
+
+fn apply_document_multimodal_profile_attributes(
+    attributes: &mut Map<String, Value>,
+    asset_kind: &str,
+    document_metadata: &Value,
+    chunks: &[DocumentChunk],
+) {
+    match asset_kind {
+        "image" => apply_image_profile_attributes(attributes, document_metadata, chunks),
+        "video" => apply_video_profile_attributes(attributes, document_metadata, chunks),
+        "presentation" => apply_presentation_profile_attributes(attributes, chunks),
+        _ => {}
+    }
+}
+
+fn apply_image_profile_attributes(
+    attributes: &mut Map<String, Value>,
+    document_metadata: &Value,
+    chunks: &[DocumentChunk],
+) {
+    let Some(payload) = document_vlm_payload_metadata(document_metadata) else {
+        if let Some(ocr_text) = document_chunk_text_sample(chunks, 600) {
+            attributes.insert("ocr_text".to_string(), Value::String(ocr_text));
+        }
+        return;
+    };
+
+    insert_metadata_path_string(
+        attributes,
+        "visual_summary",
+        payload,
+        &["visualSummary"],
+        600,
+    );
+    insert_metadata_path_string(attributes, "document_kind", payload, &["documentKind"], 120);
+    insert_metadata_path_string(attributes, "layout_type", payload, &["layoutType"], 120);
+    insert_metadata_path_string(attributes, "risk_level", payload, &["riskLevel"], 80);
+    insert_metadata_path_string(attributes, "ocr_text", payload, &["transcribedText"], 1000);
+    if let Some(value) = payload.get("chartOrTableDetected").and_then(Value::as_bool) {
+        attributes.insert("chart_or_table_detected".to_string(), Value::Bool(value));
+    }
+    if let Some(tags) = compact_string_array(payload.get("topicTags"), 16, 80) {
+        attributes.insert("tags".to_string(), tags);
+    }
+    if let Some(signals) = compact_string_array(payload.get("tableLikeSignals"), 12, 120) {
+        attributes.insert("table_like_signals".to_string(), signals);
+    }
+    if let Some(entities) =
+        compact_object_text_rows(payload.get("entities"), &["name", "text", "type"], 12, 120)
+    {
+        attributes.insert("entities".to_string(), entities);
+    }
+    if let Some(fields) = compact_object_text_rows(
+        payload.get("fieldCandidates"),
+        &["key", "value", "source", "evidenceText"],
+        12,
+        120,
+    ) {
+        attributes.insert("field_candidates".to_string(), fields);
+    }
+}
+
+fn apply_video_profile_attributes(
+    attributes: &mut Map<String, Value>,
+    document_metadata: &Value,
+    chunks: &[DocumentChunk],
+) {
+    let Some(media) = document_profile_media_metadata(document_metadata, chunks) else {
+        return;
+    };
+    insert_metadata_path_string(attributes, "media_kind", &media, &["kind"], 80);
+    insert_metadata_path_string(
+        attributes,
+        "media_parse_status",
+        &media,
+        &["parse_status"],
+        80,
+    );
+    for (target_key, media_key) in [
+        ("transcript_segment_count", "transcript_segments"),
+        ("scene_count", "scenes"),
+        ("keyframe_ocr_snippet_count", "keyframe_ocr_snippets"),
+    ] {
+        attributes.insert(
+            target_key.to_string(),
+            Value::Number(serde_json::Number::from(
+                media_array_len(&media, media_key) as u64
+            )),
+        );
+    }
+    if let Some(summary) = compact_object_text_join(
+        media.get("transcript_segments"),
+        &["text", "summary"],
+        4,
+        800,
+    ) {
+        attributes.insert("transcript_summary".to_string(), Value::String(summary));
+    }
+    if let Some(ocr_text) = compact_object_text_join(
+        media.get("keyframe_ocr_snippets"),
+        &["text", "content"],
+        6,
+        800,
+    ) {
+        attributes.insert("ocr_text".to_string(), Value::String(ocr_text));
+    }
+    if let Some(scene_summaries) =
+        compact_object_text_rows(media.get("scenes"), &["summary", "label"], 8, 160)
+    {
+        attributes.insert("scene_summaries".to_string(), scene_summaries);
+    }
+    if let Some(provider_evidence) = compact_object_text_rows(
+        media
+            .get("provider_evidence")
+            .or_else(|| media.get("provider_capabilities")),
+        &["capability", "status", "detail"],
+        8,
+        160,
+    ) {
+        attributes.insert("provider_evidence".to_string(), provider_evidence);
+    }
+}
+
+fn apply_presentation_profile_attributes(
+    attributes: &mut Map<String, Value>,
+    chunks: &[DocumentChunk],
+) {
+    let outline = presentation_outline_from_chunks(chunks, 16);
+    if !outline.is_empty() {
+        attributes.insert(
+            "outline".to_string(),
+            Value::Array(outline.iter().cloned().map(Value::String).collect()),
+        );
+        attributes.insert(
+            "slide_count_estimate".to_string(),
+            Value::Number(serde_json::Number::from(outline.len() as u64)),
+        );
+    }
+    let samples = chunks
+        .iter()
+        .take(8)
+        .map(|chunk| normalize_inline_text(&chunk.content))
+        .filter(|text| !text.is_empty())
+        .map(|text| limit_chars(&text, 260))
+        .collect::<Vec<_>>();
+    if !samples.is_empty() {
+        attributes.insert(
+            "slide_text_samples".to_string(),
+            Value::Array(samples.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+fn collect_profile_terms(value: Option<&Value>, terms: &mut BTreeSet<String>) {
+    match value {
+        Some(Value::String(text)) => {
+            let text = normalize_inline_text(text);
+            if !text.is_empty() {
+                terms.insert(limit_chars(&text, 80));
+            }
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    let text = normalize_inline_text(text);
+                    if !text.is_empty() {
+                        terms.insert(limit_chars(&text, 80));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_profile_object_texts(
+    value: Option<&Value>,
+    keys: &[&str],
+    terms: &mut BTreeSet<String>,
+) {
+    match value {
+        Some(Value::Array(items)) => {
+            for item in items.iter().take(16) {
+                for key in keys {
+                    collect_profile_terms(item.get(*key), terms);
+                }
+            }
+        }
+        Some(Value::Object(object)) => {
+            for item in object.values().take(16) {
+                if item.is_object() {
+                    for key in keys {
+                        collect_profile_terms(item.get(*key), terms);
+                    }
+                } else {
+                    collect_profile_terms(Some(item), terms);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn document_vlm_payload_metadata(document_metadata: &Value) -> Option<&Value> {
+    document_metadata
+        .pointer("/vlm/payload")
+        .or_else(|| document_metadata.pointer("/parse_metadata/vlm/payload"))
+}
+
+fn document_profile_media_metadata(
+    document_metadata: &Value,
+    chunks: &[DocumentChunk],
+) -> Option<Value> {
+    document_metadata
+        .pointer("/parse_metadata/media")
+        .or_else(|| document_metadata.get("media"))
+        .cloned()
+        .or_else(|| {
+            chunks.iter().find_map(|chunk| {
+                let chunk_metadata = Value::Object(Map::from_iter(chunk.metadata.clone()));
+                chunk_metadata
+                    .pointer("/parse_metadata/media")
+                    .or_else(|| chunk_metadata.get("media"))
+                    .cloned()
+            })
+        })
+}
+
+fn insert_metadata_path_string(
+    attributes: &mut Map<String, Value>,
+    target_key: &str,
+    value: &Value,
+    path: &[&str],
+    max_chars: usize,
+) {
+    if let Some(text) = metadata_path_string(value, path) {
+        attributes.insert(
+            target_key.to_string(),
+            Value::String(limit_chars(&text, max_chars)),
+        );
+    }
+}
+
+fn document_chunk_text_sample(chunks: &[DocumentChunk], max_chars: usize) -> Option<String> {
+    let text = chunks
+        .iter()
+        .take(4)
+        .map(|chunk| normalize_inline_text(&chunk.content))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then(|| limit_chars(&text, max_chars))
+}
+
+fn compact_string_array(value: Option<&Value>, limit: usize, max_chars: usize) -> Option<Value> {
+    let values = match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(normalize_inline_text)
+            .filter(|text| !text.is_empty())
+            .map(|text| limit_chars(&text, max_chars))
+            .take(limit)
+            .collect::<Vec<_>>(),
+        Some(Value::String(text)) => {
+            let text = normalize_inline_text(text);
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![limit_chars(&text, max_chars)]
+            }
+        }
+        _ => Vec::new(),
+    };
+    (!values.is_empty()).then(|| Value::Array(values.into_iter().map(Value::String).collect()))
+}
+
+fn compact_object_text_rows(
+    value: Option<&Value>,
+    keys: &[&str],
+    limit: usize,
+    max_chars: usize,
+) -> Option<Value> {
+    let mut rows = Vec::new();
+    match value {
+        Some(Value::Array(items)) => {
+            for item in items.iter().take(limit) {
+                if let Some(row) = compact_object_text_row(item, keys, max_chars) {
+                    rows.push(row);
+                }
+            }
+        }
+        Some(Value::Object(object)) => {
+            for (key, item) in object.iter().take(limit) {
+                if let Some(mut row) = compact_object_text_row(item, keys, max_chars) {
+                    if let Some(row_object) = row.as_object_mut() {
+                        row_object
+                            .entry("key".to_string())
+                            .or_insert_with(|| Value::String(limit_chars(key, max_chars)));
+                    }
+                    rows.push(row);
+                }
+            }
+        }
+        _ => {}
+    }
+    (!rows.is_empty()).then(|| Value::Array(rows))
+}
+
+fn compact_object_text_row(value: &Value, keys: &[&str], max_chars: usize) -> Option<Value> {
+    let object = value.as_object()?;
+    let mut row = Map::new();
+    for key in keys {
+        if let Some(text) = object
+            .get(*key)
+            .and_then(compact_metadata_scalar_text)
+            .map(|text| limit_chars(&text, max_chars))
+            .filter(|text| !text.is_empty())
+        {
+            row.insert((*key).to_string(), Value::String(text));
+        }
+    }
+    (!row.is_empty()).then(|| Value::Object(row))
+}
+
+fn compact_metadata_scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let text = normalize_inline_text(text);
+            (!text.is_empty()).then_some(text)
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn compact_object_text_join(
+    value: Option<&Value>,
+    keys: &[&str],
+    limit: usize,
+    max_chars: usize,
+) -> Option<String> {
+    let texts = value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(limit)
+        .filter_map(|item| keys.iter().find_map(|key| item.get(*key)))
+        .filter_map(compact_metadata_scalar_text)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    let text = texts.join("\n");
+    (!text.is_empty()).then(|| limit_chars(&text, max_chars))
+}
+
+fn media_array_len(media: &Value, key: &str) -> usize {
+    media.get(key).and_then(Value::as_array).map_or(0, Vec::len)
+}
+
+fn presentation_outline_from_chunks(chunks: &[DocumentChunk], limit: usize) -> Vec<String> {
+    let mut outline = Vec::new();
+    for chunk in chunks.iter().take(32) {
+        let metadata = Value::Object(Map::from_iter(chunk.metadata.clone()));
+        for key in ["section_title", "sectionTitle"] {
+            push_profile_terms(metadata.get(key), &mut outline, limit);
+        }
+        for key in ["section_title_hints", "sectionTitleHints"] {
+            push_profile_terms(metadata.get(key), &mut outline, limit);
+        }
+        if outline.len() < limit {
+            if let Some(line) = chunk
+                .content
+                .lines()
+                .map(normalize_inline_text)
+                .find(|line| !line.is_empty())
+            {
+                push_unique_profile_term(&mut outline, limit_chars(&line, 100), limit);
+            }
+        }
+    }
+    outline
+}
+
+fn push_profile_terms(value: Option<&Value>, target: &mut Vec<String>, limit: usize) {
+    match value {
+        Some(Value::String(text)) => {
+            push_unique_profile_term(
+                target,
+                limit_chars(&normalize_inline_text(text), 100),
+                limit,
+            );
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    push_unique_profile_term(
+                        target,
+                        limit_chars(&normalize_inline_text(text), 100),
+                        limit,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_profile_term(target: &mut Vec<String>, value: String, limit: usize) {
+    if value.is_empty() || target.len() >= limit || target.iter().any(|existing| existing == &value)
+    {
+        return;
+    }
+    target.push(value);
+}
+
+fn compact_metadata_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(normalize_inline_text)
+        .filter(|text| !text.is_empty())
+}
+
+fn metadata_path_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+fn metadata_path_string(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(normalize_inline_text)
+        .filter(|text| !text.is_empty())
+}
+
+fn compact_metadata_value(value: Value, max_chars: usize) -> Value {
+    match value {
+        Value::String(text) => Value::String(limit_chars(&normalize_inline_text(&text), max_chars)),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .take(20)
+                .map(|item| compact_metadata_value(item, max_chars / 2))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .take(20)
+                .map(|(key, value)| (key, compact_metadata_value(value, max_chars / 2)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn normalized_content_type(content_type: &str) -> String {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn normalize_inline_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn limit_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 fn map_secret_binding_row(row: &sqlx::postgres::PgRow) -> Result<SecretBinding> {
     let scope_level = row.get::<String, _>("scope_level");
 
@@ -8668,6 +10182,275 @@ mod tests {
     }
 
     #[test]
+    fn migrations_include_enterprise_asset_library_schema() {
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.version == "0015"
+                && migration.description == "enterprise asset libraries"));
+        for table in [
+            "enterprise_asset_libraries",
+            "asset_library_dataset_memberships",
+            "asset_collections",
+            "asset_items",
+            "dataset_asset_memberships",
+            "asset_profiles",
+        ] {
+            assert!(TABLES.contains(&table));
+            assert!(ASSET_LIBRARIES_SCHEMA
+                .sql
+                .contains(&format!("create table if not exists {table}")));
+        }
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("primary key (tenant_id, asset_library_id, dataset_id)"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("asset_library_dataset_memberships_priority_idx"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("unique (tenant_id, asset_library_id, external_id)"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("primary key (tenant_id, dataset_id, asset_id)"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("unique (tenant_id, asset_id, profile_kind, profile_version)"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("asset_items_source_idx"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("asset_items_source_unique_idx"));
+        assert!(ASSET_LIBRARIES_SCHEMA
+            .sql
+            .contains("asset_profiles_attributes_gin_idx"));
+    }
+
+    #[test]
+    fn migrations_include_v3_client_artifact_schema() {
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.version == "0016"
+                && migration.description == "v3 client config packages and uploaded artifacts"));
+        for table in [
+            "v3_client_config_packages",
+            "v3_client_artifacts",
+            "v3_client_artifact_files",
+        ] {
+            assert!(TABLES.contains(&table));
+            assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+                .sql
+                .contains(&format!("create table if not exists {table}")));
+        }
+        assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+            .sql
+            .contains("v3_client_artifacts_dataset_ids"));
+        assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+            .sql
+            .contains("unique (artifact_id, file_index)"));
+        assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+            .sql
+            .contains("storage_kind text not null default 'database'"));
+        assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+            .sql
+            .contains("v3_client_artifact_files_storage_kind_chk"));
+        assert!(V3_CLIENT_ARTIFACTS_SCHEMA
+            .sql
+            .contains("v3_client_artifact_files_storage_payload_chk"));
+    }
+
+    #[test]
+    fn image_document_asset_profile_extracts_vlm_semantics() {
+        let document = test_profile_document(
+            "充值记录.png",
+            "image/png",
+            json!({
+                "vlm": {
+                    "payload": {
+                        "summary": "充值记录截图，包含订单号、支付方式和状态。",
+                        "visualSummary": "后台充值记录表格截图。",
+                        "documentKind": "order_screenshot",
+                        "layoutType": "table",
+                        "topicTags": ["充值记录", "订单号", "支付宝"],
+                        "riskLevel": "low",
+                        "chartOrTableDetected": true,
+                        "tableLikeSignals": ["多列表格", "状态标签"],
+                        "transcribedText": "订单号 A1778730534 支付宝 成功",
+                        "entities": [{
+                            "name": "支付宝",
+                            "type": "payment_method"
+                        }],
+                        "fieldCandidates": [{
+                            "key": "订单号",
+                            "value": "A1778730534",
+                            "source": "vlm",
+                            "evidenceText": "订单号 A1778730534"
+                        }]
+                    }
+                }
+            }),
+        );
+
+        let attributes = document_asset_profile_attributes(&document, &[]);
+
+        assert_eq!(
+            attributes["summary"],
+            json!("充值记录截图，包含订单号、支付方式和状态。")
+        );
+        assert_eq!(
+            attributes["visual_summary"],
+            json!("后台充值记录表格截图。")
+        );
+        assert_eq!(attributes["document_kind"], json!("order_screenshot"));
+        assert_eq!(attributes["layout_type"], json!("table"));
+        assert_eq!(attributes["chart_or_table_detected"], json!(true));
+        assert_eq!(
+            attributes["ocr_text"],
+            json!("订单号 A1778730534 支付宝 成功")
+        );
+        assert_eq!(attributes["tags"], json!(["充值记录", "订单号", "支付宝"]));
+        assert_eq!(attributes["entities"][0]["name"], json!("支付宝"));
+        assert_eq!(attributes["field_candidates"][0]["key"], json!("订单号"));
+        assert!(attributes["noun_terms"]
+            .as_array()
+            .expect("noun terms should be array")
+            .iter()
+            .any(|term| term == "支付宝"));
+    }
+
+    #[test]
+    fn video_document_asset_profile_extracts_media_signals() {
+        let document = test_profile_document("门店巡检.mp4", "video/mp4", json!({}));
+        let chunk = test_profile_chunk(
+            "Media file: 门店巡检.mp4",
+            json!({
+                "media": {
+                    "kind": "video",
+                    "parse_status": "enriched_partial",
+                    "transcript_segments": [
+                        {"start_seconds": 1.0, "end_seconds": 4.0, "text": "这里是夏季女装陈列区。", "source": "asr"},
+                        {"start_seconds": 5.0, "end_seconds": 7.0, "text": "导购正在介绍促销活动。", "source": "asr"}
+                    ],
+                    "scenes": [{
+                        "representative_seconds": 3.0,
+                        "summary": "镜头扫过女装陈列货架",
+                        "source": "scene-detector"
+                    }],
+                    "keyframe_ocr_snippets": [{
+                        "timestamp_seconds": 3.5,
+                        "text": "夏季女装 满减活动",
+                        "source": "keyframe-ocr"
+                    }],
+                    "provider_evidence": [{
+                        "capability": "keyframe_image_vlm",
+                        "status": "supported",
+                        "detail": "可复用图片 VLM"
+                    }]
+                }
+            }),
+        );
+
+        let attributes = document_asset_profile_attributes(&document, &[chunk]);
+
+        assert_eq!(attributes["media_kind"], json!("video"));
+        assert_eq!(attributes["media_parse_status"], json!("enriched_partial"));
+        assert_eq!(attributes["transcript_segment_count"], json!(2));
+        assert_eq!(attributes["scene_count"], json!(1));
+        assert_eq!(attributes["keyframe_ocr_snippet_count"], json!(1));
+        assert!(attributes["transcript_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("夏季女装陈列区"));
+        assert_eq!(attributes["ocr_text"], json!("夏季女装 满减活动"));
+        assert_eq!(
+            attributes["scene_summaries"][0]["summary"],
+            json!("镜头扫过女装陈列货架")
+        );
+        assert!(attributes["noun_terms"]
+            .as_array()
+            .expect("noun terms should be array")
+            .iter()
+            .any(|term| term == "镜头扫过女装陈列货架"));
+    }
+
+    #[test]
+    fn presentation_document_asset_profile_builds_outline_from_chunks() {
+        let document = test_profile_document(
+            "经营复盘.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            json!({}),
+        );
+        let chunks = vec![
+            test_profile_chunk(
+                "销售趋势\n一月到三月销售持续改善",
+                json!({"section_title_hints": ["销售趋势"]}),
+            ),
+            test_profile_chunk(
+                "库存风险\n部分门店库存周转偏慢",
+                json!({"section_title_hints": ["库存风险"]}),
+            ),
+        ];
+
+        let attributes = document_asset_profile_attributes(&document, &chunks);
+
+        assert_eq!(attributes["outline"], json!(["销售趋势", "库存风险"]));
+        assert_eq!(attributes["slide_count_estimate"], json!(2));
+        assert_eq!(
+            attributes["slide_text_samples"].as_array().unwrap().len(),
+            2
+        );
+        assert!(attributes["noun_terms"]
+            .as_array()
+            .expect("noun terms should be array")
+            .iter()
+            .any(|term| term == "销售趋势"));
+    }
+
+    fn test_profile_document(title: &str, content_type: &str, metadata: Value) -> Document {
+        let now = Utc::now();
+        Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: title.to_string(),
+            object_key: format!("test/{title}"),
+            content_type: content_type.to_string(),
+            lifecycle: DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: value_object_btree(metadata),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn test_profile_chunk(content: &str, metadata: Value) -> DocumentChunk {
+        let now = Utc::now();
+        DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            document_id: DocumentId::new(),
+            chunk_index: 0,
+            content: content.to_string(),
+            token_count: content.split_whitespace().count() as i32,
+            state: DocumentChunkState::Extracted,
+            metadata: value_object_btree(metadata),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn value_object_btree(value: Value) -> BTreeMap<String, Value> {
+        value
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
     fn retrieval_evidence_upsert_populates_lexical_columns() {
         assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("search_terms"));
         assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("search_tsv"));
@@ -8695,7 +10478,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013", "0014"
+                "0012", "0013", "0014", "0015", "0016"
             ]
         );
         assert!(MIGRATIONS

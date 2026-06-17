@@ -26,6 +26,14 @@ import {
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
 import {
+  applyAssetLibraryPresetToDraft,
+  assetLibraryContainsDataset,
+  buildAssetLibraryCreatePayload,
+  normalizeAssetLibraries,
+  normalizeAssetLibraryScope,
+  selectedAssetLibraryView,
+} from './lib/asset-library-view-model';
+import {
   ASSISTANT_STREAM_PLACEHOLDER_TEXT,
   assistantRunFinalMessageContent,
   assistantRunStreamMessageContent,
@@ -223,11 +231,14 @@ function wait(ms) {
 export default function HomePageClient() {
   const [activePage, setActivePage] = useState('home');
   const [datasets, setDatasets] = useState([]);
+  const [assetLibraries, setAssetLibraries] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [reportPlans, setReportPlans] = useState([]);
   const [publishedReports, setPublishedReports] = useState([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState(null);
   const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
+  const [selectedAssetLibraryId, setSelectedAssetLibraryId] = useState('');
+  const [assetLibraryScope, setAssetLibraryScope] = useState(null);
   const [selectedReportPlanId, setSelectedReportPlanId] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [outputs, setOutputs] = useState([]);
@@ -245,6 +256,7 @@ export default function HomePageClient() {
   const [localChatStorageReady, setLocalChatStorageReady] = useState(false);
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '', secret: '' });
+  const [assetLibraryDraft, setAssetLibraryDraft] = useState({ name: '', domain: 'general', description: '', metadata: {} });
   const [localSecretDraft, setLocalSecretDraft] = useState('');
   const [activeSecretCount, setActiveSecretCount] = useState(0);
   const [accountEmailDraft, setAccountEmailDraft] = useState('');
@@ -266,6 +278,9 @@ export default function HomePageClient() {
   const [documentDetailLoading, setDocumentDetailLoading] = useState(false);
   const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
+  const [creatingAssetLibrary, setCreatingAssetLibrary] = useState(false);
+  const [assetLibraryLoading, setAssetLibraryLoading] = useState(false);
+  const [assetLibraryActionBusy, setAssetLibraryActionBusy] = useState('');
   const [resolvingSecret, setResolvingSecret] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -287,6 +302,7 @@ export default function HomePageClient() {
   const [assistantRunProgress, setAssistantRunProgress] = useState(null);
   const [codexCustomerTasks, setCodexCustomerTasks] = useState([]);
   const [codexCustomerArtifacts, setCodexCustomerArtifacts] = useState([]);
+  const [clientArtifacts, setClientArtifacts] = useState([]);
   const [documentSearch, setDocumentSearch] = useState('');
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [selectedDocumentDetail, setSelectedDocumentDetail] = useState(null);
@@ -305,6 +321,10 @@ export default function HomePageClient() {
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
     [datasets, selectedDatasetId],
+  );
+  const selectedAssetLibrary = useMemo(
+    () => selectedAssetLibraryView(assetLibraries, selectedAssetLibraryId),
+    [assetLibraries, selectedAssetLibraryId],
   );
   const selectedDatasets = useMemo(
     () => selectedDatasetIds
@@ -797,6 +817,21 @@ export default function HomePageClient() {
     }
   }
 
+  async function refreshClientArtifacts(options = {}) {
+    const { silent = true } = options;
+    try {
+      const artifacts = await fetchJson('/api/v3/client-artifacts?limit=50');
+      setClientArtifacts(Array.isArray(artifacts) ? artifacts : []);
+      if (!silent) {
+        setBanner(artifacts?.length ? `已刷新 ${artifacts.length} 个客户端产物。` : '当前账号还没有客户端上传产物。');
+      }
+    } catch (artifactError) {
+      if (!silent) {
+        setBanner(`客户端产物暂不可用：${artifactError instanceof Error ? artifactError.message : '请求失败'}。`);
+      }
+    }
+  }
+
   async function refreshBackendStaticPageDraft(backendDraftId, options = {}) {
     const { silent = true } = options;
     if (!backendDraftId) {
@@ -1092,6 +1127,7 @@ export default function HomePageClient() {
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshStaticPageDraftShelf({ silent: true }),
         refreshHtmlArtifacts({ silent: true }),
+        refreshClientArtifacts({ silent: true }),
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '验证码登录失败');
@@ -1132,6 +1168,7 @@ export default function HomePageClient() {
         refreshCatalog({ preferredDatasetId: selectedDatasetId, silent: true }),
         refreshStaticPageDraftShelf({ silent: true }),
         refreshHtmlArtifacts({ silent: true }),
+        refreshClientArtifacts({ silent: true }),
       ]);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : '邮箱密钥登录失败');
@@ -1284,6 +1321,75 @@ export default function HomePageClient() {
     } finally {
       if (!silent) {
         setBootstrapping(false);
+      }
+    }
+  }
+
+  function assetLibraryAuthRequired(error) {
+    return error?.status === 401 || error?.code === 'auth_session_required';
+  }
+
+  async function refreshAssetLibraries(options = {}) {
+    const { preferredAssetLibraryId = '', silent = false } = options;
+    if (!silent) {
+      setAssetLibraryLoading(true);
+    }
+    try {
+      const response = await fetchJson('/api/v3/asset-libraries');
+      const nextLibraries = normalizeAssetLibraries(response);
+      startTransition(() => {
+        setAssetLibraries(nextLibraries);
+        setSelectedAssetLibraryId((current) => {
+          if (current && nextLibraries.some((item) => item.id === current)) return current;
+          if (preferredAssetLibraryId && nextLibraries.some((item) => item.id === preferredAssetLibraryId)) {
+            return preferredAssetLibraryId;
+          }
+          return nextLibraries[0]?.id || '';
+        });
+      });
+      setError('');
+      return nextLibraries;
+    } catch (loadError) {
+      if (assetLibraryAuthRequired(loadError)) {
+        setAssetLibraries([]);
+        setSelectedAssetLibraryId('');
+        setAssetLibraryScope(null);
+        return [];
+      }
+      setError(loadError instanceof Error ? loadError.message : '资产库加载失败');
+      return [];
+    } finally {
+      if (!silent) {
+        setAssetLibraryLoading(false);
+      }
+    }
+  }
+
+  async function refreshAssetLibraryScope(assetLibraryId, options = {}) {
+    const { silent = false } = options;
+    if (!assetLibraryId) {
+      setAssetLibraryScope(null);
+      return null;
+    }
+    if (!silent) {
+      setAssetLibraryLoading(true);
+    }
+    try {
+      const response = await fetchJson(`/api/v3/asset-libraries/${assetLibraryId}/scope-summary`);
+      const nextScope = normalizeAssetLibraryScope(response);
+      setAssetLibraryScope(nextScope);
+      setError('');
+      return nextScope;
+    } catch (loadError) {
+      if (assetLibraryAuthRequired(loadError)) {
+        setAssetLibraryScope(null);
+        return null;
+      }
+      setError(loadError instanceof Error ? loadError.message : '资产库范围加载失败');
+      return null;
+    } finally {
+      if (!silent) {
+        setAssetLibraryLoading(false);
       }
     }
   }
@@ -1589,6 +1695,72 @@ export default function HomePageClient() {
       setError(createError instanceof Error ? createError.message : '创建数据集失败');
     } finally {
       setCreatingDataset(false);
+    }
+  }
+
+  async function handleCreateAssetLibrary() {
+    const payload = buildAssetLibraryCreatePayload(assetLibraryDraft);
+    const name = payload.name;
+    if (!authSession.user) {
+      setError('请先登录主系统后再创建企业资产库。');
+      return;
+    }
+    if (!name) {
+      setError('请输入资产库名称。');
+      return;
+    }
+
+    setCreatingAssetLibrary(true);
+    setError('');
+    try {
+      const response = await fetchJson('/api/v3/asset-libraries', {
+        method: 'POST',
+        body: payload,
+      });
+      const created = response?.asset_library || response?.assetLibrary;
+      setAssetLibraryDraft({ name: '', domain: 'general', description: '', metadata: {} });
+      setBanner(`已创建资产库 ${created?.name || name}。`);
+      await refreshAssetLibraries({
+        preferredAssetLibraryId: created?.id || '',
+        silent: true,
+      });
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : '创建资产库失败');
+    } finally {
+      setCreatingAssetLibrary(false);
+    }
+  }
+
+  async function handleToggleAssetLibraryDataset(datasetId) {
+    if (!selectedAssetLibraryId || !datasetId) {
+      return false;
+    }
+    const exists = assetLibraryContainsDataset(assetLibraryScope, datasetId);
+    const dataset = datasets.find((item) => item.id === datasetId);
+    const datasetLabel = dataset?.title || dataset?.key || '数据集';
+    setAssetLibraryActionBusy(`${selectedAssetLibraryId}:${datasetId}`);
+    setError('');
+    try {
+      await fetchJson(
+        `/api/v3/asset-libraries/${selectedAssetLibraryId}/datasets/${datasetId}`,
+        {
+          method: exists ? 'DELETE' : 'POST',
+          ...(exists ? {} : { body: { role: 'member', priority: 100 } }),
+        },
+      );
+      await Promise.all([
+        refreshAssetLibraries({ preferredAssetLibraryId: selectedAssetLibraryId, silent: true }),
+        refreshAssetLibraryScope(selectedAssetLibraryId, { silent: true }),
+      ]);
+      setBanner(exists
+        ? `已将 ${datasetLabel} 从资产库移出。`
+        : `已将 ${datasetLabel} 加入资产库。`);
+      return true;
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '资产库数据集关系更新失败');
+      return false;
+    } finally {
+      setAssetLibraryActionBusy('');
     }
   }
 
@@ -3204,6 +3376,24 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    if (!authSession.user?.id) {
+      setAssetLibraries([]);
+      setSelectedAssetLibraryId('');
+      setAssetLibraryScope(null);
+      return;
+    }
+    refreshAssetLibraries({ silent: true });
+  }, [authSession.user?.id]);
+
+  useEffect(() => {
+    if (!selectedAssetLibraryId) {
+      setAssetLibraryScope(null);
+      return;
+    }
+    refreshAssetLibraryScope(selectedAssetLibraryId, { silent: true });
+  }, [selectedAssetLibraryId]);
+
+  useEffect(() => {
     const cachedEmail = readLocalAccountEmail();
     if (cachedEmail) {
       setAccountEmailDraft(cachedEmail);
@@ -3214,6 +3404,7 @@ export default function HomePageClient() {
   useEffect(() => {
     refreshStaticPageDraftShelf({ silent: true });
     refreshHtmlArtifacts({ silent: true });
+    refreshClientArtifacts({ silent: true });
   }, []);
 
   useEffect(() => {
@@ -3425,6 +3616,7 @@ export default function HomePageClient() {
     const timer = window.setInterval(() => {
       refreshStaticPageDraftShelf({ silent: true });
       refreshHtmlArtifacts({ silent: true });
+      refreshClientArtifacts({ silent: true });
     }, STATIC_PAGE_SHELF_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
@@ -3900,13 +4092,34 @@ export default function HomePageClient() {
     assistantRunProgress,
     codexCustomerTasks,
     codexCustomerArtifacts,
+    clientArtifacts,
     htmlArtifacts,
     activeHtmlArtifactId,
     onSelectHtmlArtifact: handleSelectHtmlArtifact,
+    onRefreshHtmlArtifacts: () => Promise.all([
+      refreshHtmlArtifacts({ silent: true }),
+      refreshClientArtifacts({ silent: true }),
+    ]),
   };
   const directoryPanelProps = {
     activePage,
     datasets,
+    assetLibraries,
+    selectedAssetLibraryId,
+    selectedAssetLibrary,
+    assetLibraryScope,
+    assetLibraryDraft,
+    creatingAssetLibrary,
+    assetLibraryLoading,
+    assetLibraryActionBusy,
+    onSelectAssetLibrary: setSelectedAssetLibraryId,
+    onAssetLibraryDraftChange: (field, value) =>
+      setAssetLibraryDraft((current) => ({ ...current, [field]: value })),
+    onApplyAssetLibraryPreset: (presetId) =>
+      setAssetLibraryDraft((current) => applyAssetLibraryPresetToDraft(current, presetId)),
+    onCreateAssetLibrary: handleCreateAssetLibrary,
+    onToggleAssetLibraryDataset: handleToggleAssetLibraryDataset,
+    onRefreshAssetLibraries: () => refreshAssetLibraries({ silent: false }),
     selectedDatasetId,
     selectedDatasetIds,
     onSelectDataset: sidebarProps.onSelectDataset,

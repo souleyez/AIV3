@@ -2,10 +2,10 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    assistant_run_model_supply_item_for_context, ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT,
-    ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT,
-    ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT,
-    ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT,
+    assistant_run_model_supply_item_for_context, ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT,
+    ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT,
+    ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT,
+    ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT,
     ASSISTANT_RUN_MODEL_CONTEXT_STRUCTURED_FACT_LIMIT,
     ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT,
 };
@@ -18,6 +18,7 @@ pub(crate) fn assistant_run_model_budgeted_supply_items(items: &[Value]) -> (Vec
         "retrieval",
         "database",
         "memory",
+        "asset_profile",
         "other",
     ];
     let mut selected_indices = BTreeSet::new();
@@ -62,6 +63,7 @@ pub(crate) fn assistant_run_model_budgeted_supply_items(items: &[Value]) -> (Vec
             "retrieval": ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT,
             "database": ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT,
             "memory": ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT,
+            "asset_profile": ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT,
             "other": ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT,
         },
         "included_by_type": included_by_type,
@@ -81,6 +83,7 @@ fn assistant_run_model_supply_bucket(item: &Value) -> &'static str {
             "database"
         }
         Some("conversation_memory_item") => "memory",
+        Some("asset_profile_hint") => "asset_profile",
         Some("retrieval_evidence" | "search_evidence") => "retrieval",
         _ => "other",
     }
@@ -94,6 +97,7 @@ fn assistant_run_model_supply_bucket_limit(bucket: &str) -> usize {
         "retrieval" => ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT,
         "database" => ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT,
         "memory" => ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT,
+        "asset_profile" => ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT,
         _ => ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT,
     }
 }
@@ -187,6 +191,41 @@ mod tests {
         assert_eq!(
             budget["bucket_limits"]["other"],
             json!(ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT)
+        );
+    }
+
+    #[test]
+    fn budget_keeps_asset_profile_hints_in_their_own_bucket() {
+        let mut items = Vec::new();
+        for index in 0..8 {
+            items.push(item("asset_profile_hint", index));
+        }
+        for index in 0..8 {
+            items.push(item("retrieval_evidence", index));
+        }
+
+        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let asset_profile_count = model_items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_profile_hint"))
+            .count();
+        let retrieval_count = model_items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("retrieval_evidence"))
+            .count();
+
+        assert_eq!(
+            asset_profile_count,
+            ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT
+        );
+        assert_eq!(retrieval_count, ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT);
+        assert_eq!(
+            budget["included_by_type"]["asset_profile_hint"],
+            json!(ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT)
+        );
+        assert_eq!(
+            budget["bucket_limits"]["asset_profile"],
+            json!(ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT)
         );
     }
 }

@@ -168,7 +168,7 @@ async fn process_uploaded_document_task(
             auto_reparse_decision(&document, &parse_status, parse_quality_status.as_deref())
         };
         let chunks = build_document_chunks(dataset_id, document_id, &outcome);
-        storage
+        let extracted_chunks = storage
             .document_chunks()
             .replace_for_document(task.tenant_id, document_id, &chunks)
             .await?;
@@ -281,6 +281,20 @@ async fn process_uploaded_document_task(
                 Utc::now(),
             )
             .await?;
+        if let Err(error) = storage
+            .asset_items()
+            .sync_document_asset_profile(task.tenant_id, &updated_document, &extracted_chunks)
+            .await
+        {
+            tracing::warn!(
+                error = ?error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                document_id = %updated_document.id,
+                dataset_id = %updated_document.dataset_id,
+                "document asset profile sync failed after ingest extraction; workflow will continue"
+            );
+        }
         let fact_index_task = enqueue_post_ingest_fact_index_task(
             storage,
             event_bus,

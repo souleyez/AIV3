@@ -1,4 +1,5 @@
 use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::static_page_supplemental_metrics_support::build_static_page_supplemental_metrics_summary_from_candidates;
 use crate::static_page_template_adaptation_support::{
@@ -12,7 +13,7 @@ use crate::{
     assistant_run_detail_target_count, assistant_run_evidence_supplied_count,
     build_static_page_field_candidates, ensure_json_object,
     refresh_static_page_payload_design_contract, static_page_evidence_section_title_hints,
-    static_page_generated_template_draft_id,
+    static_page_generated_template_draft_id, truncate_assistant_supply_text,
 };
 use domain_model::AssistantRun;
 
@@ -442,7 +443,125 @@ pub(crate) fn static_page_template_evidence_summary(evidence_state: &Value) -> V
             .cloned()
             .unwrap_or(Value::Null),
         "supplemental_metrics": build_static_page_supplemental_metrics_summary(evidence_state),
+        "asset_profile_summary": build_static_page_asset_profile_summary(evidence_state),
     })
+}
+
+fn build_static_page_asset_profile_summary(evidence_state: &Value) -> Value {
+    const HINT_LIMIT: usize = 8;
+    const TERM_LIMIT: usize = 16;
+    const FACET_LIMIT: usize = 8;
+
+    let Some(items) = evidence_state
+        .get("supplied_items")
+        .or_else(|| evidence_state.get("suppliedItems"))
+        .and_then(Value::as_array)
+    else {
+        return json!({
+            "count": 0,
+            "hints": [],
+            "primary_terms": [],
+            "kind_counts": {},
+            "profile_kind_counts": {},
+            "model_guidance": [
+                "asset profiles are not available for this run",
+            ],
+        });
+    };
+
+    let mut count = 0usize;
+    let mut hints = Vec::new();
+    let mut primary_terms = Vec::new();
+    let mut seen_terms = BTreeSet::new();
+    let mut kind_counts = BTreeMap::<String, usize>::new();
+    let mut profile_kind_counts = BTreeMap::<String, usize>::new();
+
+    for item in items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_profile_hint"))
+    {
+        count += 1;
+
+        let asset_kind = static_page_asset_profile_item_text(item, &["asset_kind", "assetKind"])
+            .unwrap_or_else(|| "unknown".to_string());
+        *kind_counts.entry(asset_kind.clone()).or_insert(0) += 1;
+
+        let profile_kind =
+            static_page_asset_profile_item_text(item, &["profile_kind", "profileKind"])
+                .unwrap_or_else(|| "unknown".to_string());
+        *profile_kind_counts.entry(profile_kind.clone()).or_insert(0) += 1;
+
+        let noun_terms = static_page_asset_profile_text_array(
+            item.get("noun_terms").or_else(|| item.get("nounTerms")),
+            TERM_LIMIT,
+            80,
+        );
+        for term in &noun_terms {
+            if seen_terms.insert(term.clone()) && primary_terms.len() < TERM_LIMIT {
+                primary_terms.push(term.clone());
+            }
+        }
+
+        if hints.len() < HINT_LIMIT {
+            hints.push(json!({
+                "asset_id": static_page_asset_profile_item_text(item, &["asset_id", "assetId"]),
+                "title": static_page_asset_profile_item_text(item, &["title"]),
+                "asset_kind": asset_kind,
+                "profile_kind": profile_kind,
+                "summary": static_page_asset_profile_item_text(item, &["summary"]),
+                "noun_terms": noun_terms,
+                "facets": static_page_asset_profile_text_array(item.get("facets"), FACET_LIMIT, 120),
+            }));
+        }
+    }
+
+    json!({
+        "count": count,
+        "hints": hints,
+        "primary_terms": primary_terms,
+        "kind_counts": static_page_count_map_value(kind_counts),
+        "profile_kind_counts": static_page_count_map_value(profile_kind_counts),
+        "model_guidance": [
+            "use asset_profile_summary to choose relevant images, slides, videos, documents, and visual terms for page planning",
+            "asset profile hints are compact understanding signals; do not cite them as exact source evidence",
+            "when exact facts, numbers, quotations, or timestamps are needed, rely on retrieval evidence, source details, database rows, or media context",
+        ],
+    })
+}
+
+fn static_page_asset_profile_item_text(item: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| item.get(*key).and_then(Value::as_str))
+        .map(|value| truncate_assistant_supply_text(value, 240))
+        .filter(|value| !value.is_empty())
+}
+
+fn static_page_asset_profile_text_array(
+    value: Option<&Value>,
+    limit: usize,
+    max_chars: usize,
+) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|value| truncate_assistant_supply_text(value, max_chars))
+                .filter(|value| !value.is_empty())
+                .take(limit)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn static_page_count_map_value(counts: BTreeMap<String, usize>) -> Value {
+    Value::Object(
+        counts
+            .into_iter()
+            .map(|(key, count)| (key, json!(count)))
+            .collect::<Map<String, Value>>(),
+    )
 }
 
 fn build_static_page_supplemental_metrics_summary(evidence_state: &Value) -> Value {
@@ -1029,6 +1148,64 @@ mod tests {
 
         assert_eq!(ready_docs["status"], json!("ready"));
         assert!(ready_docs["items"].as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn evidence_summary_surfaces_asset_profiles_for_page_planning() {
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "asset_profile_hint",
+                    "asset_id": "asset-image-1",
+                    "title": "夏季连衣裙图",
+                    "asset_kind": "image",
+                    "profile_kind": "image_semantic",
+                    "summary": "蓝色夏季连衣裙，适合主视觉。",
+                    "noun_terms": ["连衣裙", "蓝色", "夏季"],
+                    "facets": ["品类: 连衣裙", "颜色: 蓝色"],
+                    "raw_provider_payload": {"object_key": "must-not-leak"}
+                },
+                {
+                    "type": "asset_profile_hint",
+                    "asset_id": "asset-video-1",
+                    "title": "发布会视频",
+                    "asset_kind": "video",
+                    "profile_kind": "video_summary",
+                    "summary": "视频包含门店陈列讲解。",
+                    "noun_terms": ["门店", "陈列"]
+                }
+            ]
+        });
+
+        let summary = static_page_template_evidence_summary(&evidence_state);
+        let asset_summary = &summary["asset_profile_summary"];
+
+        assert_eq!(asset_summary["count"], json!(2));
+        assert_eq!(asset_summary["kind_counts"]["image"], json!(1));
+        assert_eq!(asset_summary["kind_counts"]["video"], json!(1));
+        assert_eq!(
+            asset_summary["profile_kind_counts"]["image_semantic"],
+            json!(1)
+        );
+        assert!(asset_summary["primary_terms"]
+            .as_array()
+            .is_some_and(|terms| terms.iter().any(|term| term == "连衣裙")));
+        assert_eq!(
+            asset_summary["hints"][0]["asset_id"],
+            json!("asset-image-1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["summary"],
+            json!("蓝色夏季连衣裙，适合主视觉。")
+        );
+        assert!(asset_summary["hints"][0]
+            .get("raw_provider_payload")
+            .is_none());
+        assert!(asset_summary["model_guidance"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item
+                == "asset profile hints are compact understanding signals; do not cite them as exact source evidence")));
     }
 
     #[test]

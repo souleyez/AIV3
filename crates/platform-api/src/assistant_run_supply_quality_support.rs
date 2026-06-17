@@ -63,6 +63,10 @@ pub(crate) fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
         .count();
+    let asset_profile_hint_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_profile_hint"))
+        .count();
     let document_parse_status_count = supplied_items
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
@@ -134,6 +138,9 @@ pub(crate) fn assistant_run_supply_quality_report(
     if spreadsheet_row_analysis_count > 0 {
         notes.push("spreadsheet_row_analysis_available");
     }
+    if asset_profile_hint_count > 0 {
+        notes.push("asset_profile_hints_available");
+    }
     if document_parse_status_count > 0 {
         notes.push("document_parse_status_available");
     }
@@ -179,6 +186,7 @@ pub(crate) fn assistant_run_supply_quality_report(
         "datasetEntityScanCount": dataset_entity_scan_count,
         "datasetFactSnapshotCount": dataset_fact_snapshot_count,
         "spreadsheetRowAnalysisCount": spreadsheet_row_analysis_count,
+        "assetProfileHintCount": asset_profile_hint_count,
         "documentParseStatusCount": document_parse_status_count,
         "documentNotReadyCount": document_not_ready_count,
         "documentFailedCount": document_failed_count,
@@ -196,6 +204,7 @@ pub(crate) fn assistant_run_supply_quality_report(
             "when dataset_entity_scan contains company_count and company_rows, use those as the authoritative company statistics and do not extend the list from candidate_terms",
             "when dataset_entity_scan contains scanned_document_count, use it as the total scanned document count and do not sum company_rows.document_count as total documents",
             "when spreadsheet_row_analysis is present, use its rows as the deterministic computed table for attendance, work-hour, absence, and date/time row questions",
+            "when asset_profile_hint is present, treat it as compact asset understanding for choosing relevant assets and terms; do not cite it as exact source evidence",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "fallback_visible_document_chunks_used means indexed retrieval was expanded with visible document chunks; do not describe that as parser-not-ready unless document_parse_status or low_text_document_evidence says so",
             "when fallback_reason is weak_indexed_evidence_expansion, use those expanded chunks before saying the document did not directly mention the requested flow",
@@ -418,6 +427,10 @@ mod tests {
                     "type": "document_parse_status",
                     "not_ready_document_count": 1
                 }),
+                json!({
+                    "type": "asset_profile_hint",
+                    "summary": "资产画像"
+                }),
             ],
             &[json!({"id": "dataset-1"})],
             &[],
@@ -428,6 +441,7 @@ mod tests {
 
         assert_eq!(report["status"], json!("partial"));
         assert_eq!(report["documentNotReadyCount"], json!(1));
+        assert_eq!(report["assetProfileHintCount"], json!(1));
         assert_eq!(report["citationLocators"], json!(["facts#1"]));
         let notes = report["notes"].as_array().expect("notes should be array");
         assert!(notes.iter().any(|note| {
@@ -439,6 +453,9 @@ mod tests {
         assert!(notes
             .iter()
             .any(|note| note.as_str() == Some("document_parse_status_available")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("asset_profile_hints_available")));
     }
 
     #[test]

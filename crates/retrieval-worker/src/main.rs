@@ -304,6 +304,20 @@ async fn process_task(
                 indexed_at,
             )
             .await?;
+        if let Err(error) = storage
+            .asset_items()
+            .sync_document_asset_profile(task.tenant_id, &updated_document, &indexed_chunks)
+            .await
+        {
+            tracing::warn!(
+                error = ?error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                document_id = %updated_document.id,
+                dataset_id = %updated_document.dataset_id,
+                "document asset profile sync failed after retrieval indexing; workflow will continue"
+            );
+        }
         let signal_output = json!({
             "document_id": updated_document.id,
             "dataset_id": updated_document.dataset_id,
@@ -947,7 +961,7 @@ async fn index_external_document(
             indexed_at,
         )
         .await?;
-    storage
+    let updated_document = storage
         .documents()
         .update_state(
             task.tenant_id,
@@ -968,6 +982,20 @@ async fn index_external_document(
             indexed_at,
         )
         .await?;
+    if let Err(error) = storage
+        .asset_items()
+        .sync_document_asset_profile(task.tenant_id, &updated_document, &indexed_chunks)
+        .await
+    {
+        tracing::warn!(
+            error = ?error,
+            task_id = %task.id,
+            execution_id = %task.execution_id,
+            document_id = %updated_document.id,
+            dataset_id = %updated_document.dataset_id,
+            "external document asset profile sync failed after retrieval indexing; workflow will continue"
+        );
+    }
 
     Ok(ExternalIndexedDocumentSummary {
         document_id,

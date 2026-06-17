@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect, useMemo } from 'react';
+
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import { buildArtifactTaskCards } from '../lib/artifact-task-cards';
 import {
   buildStaticPageFinalRenderPayload,
   staticPageFinalRenderBlockReason,
@@ -1604,6 +1607,137 @@ function ReportShelfCard({
   );
 }
 
+function taskCardWorkflowExecutionId(card) {
+  return card?.detail?.workflowExecutionId
+    || (Array.isArray(card?.sourceRefs)
+      ? card.sourceRefs.find((ref) => ref?.kind === 'workflow_execution')?.id
+      : '')
+    || '';
+}
+
+function taskCardPrimaryFile(card) {
+  return (Array.isArray(card?.files) ? card.files : []).find((file) => file.id === card?.primaryFileId)
+    || (Array.isArray(card?.files) ? card.files : [])[0]
+    || null;
+}
+
+function taskCardDetailLine(card) {
+  const reason = card?.detail?.retryableReason || card?.detail?.nextAction || '';
+  return reason || card?.summary || '任务状态会随后台结果更新。';
+}
+
+function ArtifactTaskCard({
+  card,
+  active,
+  onSelect,
+  onOpen,
+  onEdit,
+  onSelectFile,
+  onRetry,
+  onCancel,
+}) {
+  const files = Array.isArray(card?.files) ? card.files : [];
+  const visibleFiles = files.slice(0, 6);
+  const stages = Array.isArray(card?.detail?.stages) ? card.detail.stages : [];
+  const workflowExecutionId = taskCardWorkflowExecutionId(card);
+  return (
+    <article className={`generated-project-card artifact-task-card ${active ? 'active' : ''}`.trim()}>
+      <button type="button" className="generated-project-main" onClick={onSelect}>
+        <div className="generated-project-title-row">
+          <strong>{truncateText(card.title, 38)}</strong>
+          <time dateTime={card.updatedAt || undefined}>{card.updatedAt ? formatRelativeTime(card.updatedAt) : '刚刚'}</time>
+        </div>
+        <div className="generated-project-brief-row">
+          <span>{truncateText(card.summary, 64)}</span>
+          <em>{card.phase ? `${card.phase} · ${card.statusLabel}` : card.statusLabel}</em>
+        </div>
+        {active && stages.length ? (
+          <div className="codex-artifact-file-list">
+            {stages.map((stage) => (
+              <span key={stage.key || stage.label} title={`${stage.label}：${formatSnakeCaseLabel(stage.status)}`}>
+                {truncateText(`${stage.label} · ${formatSnakeCaseLabel(stage.status)}`, 24)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {active && card.sourceRefs?.length ? (
+          <div className="codex-artifact-file-list">
+            {card.sourceRefs.slice(0, 4).map((ref) => (
+              <span key={`${ref.kind}:${ref.id}`} title={ref.id}>
+                {truncateText(ref.label || ref.kind, 18)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </button>
+      {active ? (
+        <div className="generated-project-actions" aria-label="任务卡操作">
+          <button type="button" className="ghost-btn compact-action-btn" onClick={onSelect}>
+            打开详情
+          </button>
+          {card.canOpen ? (
+            <button type="button" className="primary-btn compact-action-btn" onClick={onOpen}>
+              打开产物
+            </button>
+          ) : null}
+          {card.canEdit ? (
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onEdit}>
+              继续编辑
+            </button>
+          ) : null}
+          {visibleFiles.map((file) => (
+            file.kind === 'html' || file.kind === 'static_page' ? (
+              <button
+                key={file.id}
+                type="button"
+                className="ghost-btn compact-action-btn"
+                title={file.url || file.path || file.label}
+                onClick={() => onSelectFile?.(file)}
+              >
+                {truncateText(file.label || '文件', 16)}
+              </button>
+            ) : file.url ? (
+              <a
+                key={file.id}
+                className="ghost-btn compact-action-btn artifact-download-link"
+                href={file.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={file.url || file.path || file.label}
+              >
+                {truncateText(file.label || '文件', 16)}
+              </a>
+            ) : (
+              <button
+                key={file.id}
+                type="button"
+                className="ghost-btn compact-action-btn"
+                disabled
+                title={file.path || file.label}
+              >
+                {truncateText(file.label || '文件', 16)}
+              </button>
+            )
+          ))}
+          {card.canRetry && workflowExecutionId ? (
+            <button type="button" className="ghost-btn compact-action-btn" onClick={() => onRetry?.(workflowExecutionId)}>
+              重试
+            </button>
+          ) : null}
+          {card.canCancel && workflowExecutionId ? (
+            <button type="button" className="ghost-btn compact-action-btn danger-action" onClick={() => onCancel?.(workflowExecutionId)}>
+              取消
+            </button>
+          ) : null}
+          <button type="button" className="ghost-btn compact-action-btn" disabled title={taskCardDetailLine(card)}>
+            {truncateText(taskCardDetailLine(card), 18)}
+          </button>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export default function InsightPanel({
   dataset,
   sessions,
@@ -1630,6 +1764,8 @@ export default function InsightPanel({
   onPublishReport,
   onRetryWorkflowExecution,
   onCancelWorkflowExecution,
+  onRefreshReportDetail,
+  onRefreshReports,
   staticPageDraft,
   staticPageDrafts = [],
   onSelectStaticPageDraft,
@@ -1639,23 +1775,155 @@ export default function InsightPanel({
   onCancelDefaultStaticPageTemplate,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
+  onRefreshStaticPageDrafts,
   staticPageEditorOpen = false,
   assistantRunProgress,
   showExecutionObservability = false,
   codexCustomerTasks = [],
   codexCustomerArtifacts = [],
+  clientArtifacts = [],
   htmlArtifacts = [],
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
+  onRefreshHtmlArtifacts,
 }) {
-  const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports, staticPageDrafts);
-  const resultCount = reportShelfItems.length;
-  const fallbackDatasetLabel = dataset?.title || dataset?.name || '';
-  const activeReportShelfItem = reportShelfItems.find((item) => (
-    (item.plan?.id && item.plan.id === selectedReportPlanId)
-    || (item.draft?.id && item.draft.id === staticPageDraft?.id)
-  ));
-  const activeReportShelfTitle = activeReportShelfItem ? reportShelfTitle(activeReportShelfItem, fallbackDatasetLabel) : '';
+  const artifactTaskCards = useMemo(() => buildArtifactTaskCards({
+    reportPlans,
+    publishedReports,
+    staticPageDrafts,
+    htmlArtifacts,
+    codexCustomerTasks,
+    codexCustomerArtifacts,
+    clientArtifacts,
+  }), [
+    reportPlans,
+    publishedReports,
+    staticPageDrafts,
+    htmlArtifacts,
+    codexCustomerTasks,
+    codexCustomerArtifacts,
+    clientArtifacts,
+  ]);
+  const resultCount = artifactTaskCards.length;
+  const isTaskCardActive = (card) => {
+    const raw = card?.raw || {};
+    const draft = raw.staticPageDraft;
+    const htmlArtifact = raw.htmlArtifact;
+    const plan = raw.reportPlan;
+    if (plan?.id && plan.id === selectedReportPlanId) return true;
+    if (draft?.id && staticPageDraft?.id && draft.id === staticPageDraft.id) return true;
+    if (draft?.backendDraftId && staticPageDraft?.backendDraftId && draft.backendDraftId === staticPageDraft.backendDraftId) return true;
+    if (htmlArtifact && activeHtmlArtifactId && (htmlArtifact.id || htmlArtifact.artifact_id) === activeHtmlArtifactId) return true;
+    return false;
+  };
+  const activeTaskCard = artifactTaskCards.find(isTaskCardActive) || null;
+  const activeTaskCardTitle = activeTaskCard?.title || '';
+
+  const selectTaskCard = (card) => {
+    const raw = card?.raw || {};
+    const draft = raw.staticPageDraft;
+    const htmlArtifact = raw.htmlArtifact;
+    const reportPlan = raw.reportPlan;
+    const publishedReport = raw.publishedReport;
+    if (reportPlan?.id) {
+      onSelectReportPlan?.(reportPlan.id);
+      return;
+    }
+    if (draft?.id) {
+      onSelectStaticPageDraft?.(draft.id);
+      return;
+    }
+    if (htmlArtifact && (htmlArtifact.id || htmlArtifact.artifact_id)) {
+      onSelectHtmlArtifact?.(htmlArtifact.id || htmlArtifact.artifact_id);
+      return;
+    }
+    if (publishedReport) {
+      const reportId = publishedReport.id || publishedReport.report_id || publishedReport.reportId || card.id;
+      onSelectPublishedReport?.(reportId, card.title);
+    }
+  };
+
+  const openTaskCard = (card) => {
+    selectTaskCard(card);
+    const raw = card?.raw || {};
+    const draft = raw.staticPageDraft;
+    const htmlArtifact = raw.htmlArtifact;
+    if (draft?.id) {
+      if (card.status === 'published') {
+        onPreviewStaticPageDraft?.(draft.id);
+      } else {
+        onSelectStaticPageDraft?.(draft.id);
+      }
+      return;
+    }
+    if (htmlArtifact && (htmlArtifact.id || htmlArtifact.artifact_id)) {
+      onSelectHtmlArtifact?.(htmlArtifact.id || htmlArtifact.artifact_id);
+      return;
+    }
+    const file = taskCardPrimaryFile(card);
+    if (file?.url && typeof window !== 'undefined') {
+      window.open(file.url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const editTaskCard = (card) => {
+    selectTaskCard(card);
+    const raw = card?.raw || {};
+    const draft = raw.staticPageDraft;
+    const htmlArtifact = raw.htmlArtifact;
+    if (draft?.id) {
+      if (card.status === 'published') {
+        onPreviewStaticPageDraft?.(draft.id);
+      } else {
+        onSelectStaticPageDraft?.(draft.id);
+      }
+      return;
+    }
+    if (htmlArtifact && (htmlArtifact.id || htmlArtifact.artifact_id)) {
+      onSelectHtmlArtifact?.(htmlArtifact.id || htmlArtifact.artifact_id);
+    }
+  };
+
+  const selectTaskFile = (card, file) => {
+    if (!file) return;
+    const raw = card?.raw || {};
+    if (file.kind === 'html' || file.kind === 'static_page') {
+      if (raw.staticPageDraft?.id) {
+        onPreviewStaticPageDraft?.(raw.staticPageDraft.id);
+        return;
+      }
+      if (raw.htmlArtifact && (raw.htmlArtifact.id || raw.htmlArtifact.artifact_id)) {
+        onSelectHtmlArtifact?.(raw.htmlArtifact.id || raw.htmlArtifact.artifact_id);
+        return;
+      }
+    }
+    if (file.url && typeof window !== 'undefined') {
+      window.open(file.url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  useEffect(() => {
+    if (!activeTaskCard || !['queued', 'running', 'retrying', 'needs_review'].includes(activeTaskCard.status)) {
+      return undefined;
+    }
+    const refreshTimer = window.setTimeout(() => {
+      onRefreshStaticPageDrafts?.();
+      onRefreshHtmlArtifacts?.();
+      onRefreshReports?.();
+      if (selectedReportPlanId) {
+        onRefreshReportDetail?.();
+      }
+    }, 15000);
+    return () => window.clearTimeout(refreshTimer);
+  }, [
+    activeTaskCard?.id,
+    activeTaskCard?.status,
+    selectedReportPlanId,
+    onRefreshStaticPageDrafts,
+    onRefreshHtmlArtifacts,
+    onRefreshReports,
+    onRefreshReportDetail,
+  ]);
 
   return (
     <aside className="insight-panel">
@@ -1663,43 +1931,23 @@ export default function InsightPanel({
 
       {resultCount ? (
         <section className="card insight-card right-results-card">
-          {activeReportShelfTitle ? (
+          {activeTaskCardTitle ? (
             <div className="report-shelf-selected-note">
-              已选中「{truncateText(activeReportShelfTitle, 30)}」报表，可以告诉我你想怎么调整这个报表。
+              已选中「{truncateText(activeTaskCardTitle, 30)}」任务，可以告诉我你想怎么调整这个报表或产物。
             </div>
           ) : null}
           <div className="generated-project-list">
-            {reportShelfItems.map((item) => (
-              <ReportShelfCard
-                key={item.id}
-                item={item}
-                datasetLabel={fallbackDatasetLabel}
-                active={Boolean(
-                  (item.plan?.id && item.plan.id === selectedReportPlanId)
-                    || (item.draft?.id && item.draft.id === staticPageDraft?.id),
-                )}
-                onSelect={
-                  item.plan?.id
-                    ? () => onSelectReportPlan?.(item.plan.id)
-                    : item.draft?.id
-                      ? () => onSelectStaticPageDraft?.(item.draft.id)
-                      : item.published
-                        ? () => onSelectPublishedReport?.(
-                          item.published.id || item.published.report_id || item.published.reportId || item.id,
-                          reportShelfTitle(item, fallbackDatasetLabel),
-                        )
-                        : undefined
-                }
-                onOpen={
-                  item.draft?.id
-                    ? () => onOpenStaticPageDraft?.(item.draft.id)
-                    : reportShelfUrl(item)
-                      ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
-                      : undefined
-                }
-                onSetDefault={item.draft?.id ? () => onSetDefaultStaticPageTemplate?.(item.draft.id) : undefined}
-                onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
-                onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
+            {artifactTaskCards.map((card) => (
+              <ArtifactTaskCard
+                key={card.id}
+                card={card}
+                active={isTaskCardActive(card)}
+                onSelect={() => selectTaskCard(card)}
+                onOpen={() => openTaskCard(card)}
+                onEdit={() => editTaskCard(card)}
+                onSelectFile={(file) => selectTaskFile(card, file)}
+                onRetry={onRetryWorkflowExecution}
+                onCancel={onCancelWorkflowExecution}
               />
             ))}
           </div>

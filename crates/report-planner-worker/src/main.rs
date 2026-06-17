@@ -2,7 +2,11 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use serde_json::{json, Value};
-use storage::{NewReportPlanAstVersion, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use std::collections::{BTreeMap, BTreeSet};
+use storage::{
+    AssetItemRecord, AssetProfileRecord, NewReportPlanAstVersion, PgStorage,
+    DEFAULT_LOCAL_DATABASE_URL,
+};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
@@ -93,7 +97,20 @@ async fn process_task(
         .await?
         .ok_or_else(|| anyhow!("report plan {} not found", report_plan_id))?;
 
-    let ast = build_report_ast(&report_plan);
+    let asset_profile_summary =
+        match load_report_plan_asset_profile_summary(storage, &report_plan).await {
+            Ok(summary) => summary,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    report_plan_id = %report_plan.id,
+                    dataset_id = %report_plan.dataset_id,
+                    "report planner skipped asset profile summary after storage failure"
+                );
+                empty_report_asset_profile_summary()
+            }
+        };
+    let ast = build_report_ast_with_asset_profile_summary(&report_plan, asset_profile_summary);
 
     let process_result: Result<()> = async {
         let ast_version = storage
@@ -222,7 +239,15 @@ impl ReportPlanFocus {
     }
 }
 
+#[cfg(test)]
 fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
+    build_report_ast_with_asset_profile_summary(plan, empty_report_asset_profile_summary())
+}
+
+fn build_report_ast_with_asset_profile_summary(
+    plan: &domain_model::ReportPlan,
+    asset_profile_summary: Value,
+) -> Value {
     let focus = infer_report_plan_focus(plan);
     let modules = match focus {
         ReportPlanFocus::XinbaiOperations
@@ -230,6 +255,7 @@ fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
         | ReportPlanFocus::XinbaiRisk => build_xinbai_modules(focus),
         ReportPlanFocus::GeneralDatasetReport => build_general_dataset_modules(),
     };
+    let modules = apply_asset_profile_summary_to_report_modules(modules, &asset_profile_summary);
 
     json!({
         "schema_version": "0.2.0",
@@ -243,6 +269,7 @@ fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
         "theme_key": plan.theme_key,
         "focus_key": focus.as_str(),
         "template_candidate": focus.template_candidate(),
+        "asset_profile_summary": asset_profile_summary,
         "layout_policy": {
             "default_time_grain": if focus.is_xinbai() { "month" } else { "source_scope" },
             "mobile_first": focus.is_xinbai(),
@@ -268,6 +295,300 @@ fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
         ],
         "modules": modules
     })
+}
+
+async fn load_report_plan_asset_profile_summary(
+    storage: &PgStorage,
+    plan: &domain_model::ReportPlan,
+) -> Result<Value> {
+    const ASSET_LIMIT: usize = 24;
+
+    let assets = storage
+        .asset_items()
+        .list_by_dataset_ids(plan.tenant_id, &[plan.dataset_id], ASSET_LIMIT)
+        .await?;
+    if assets.is_empty() {
+        return Ok(empty_report_asset_profile_summary());
+    }
+
+    let mut hints = Vec::new();
+    for asset in assets {
+        let profiles = storage
+            .asset_items()
+            .list_profiles(plan.tenant_id, asset.id)
+            .await?;
+        for profile in profiles {
+            if let Some(hint) = report_asset_profile_hint(&asset, &profile) {
+                hints.push(hint);
+            }
+        }
+    }
+
+    Ok(build_report_asset_profile_summary(hints))
+}
+
+fn apply_asset_profile_summary_to_report_modules(
+    mut modules: Vec<Value>,
+    asset_profile_summary: &Value,
+) -> Vec<Value> {
+    if !asset_profile_summary_has_hints(asset_profile_summary) {
+        return modules;
+    }
+
+    let module = json!({
+        "kind": "asset_materials",
+        "title": "资产素材与主题线索",
+        "binding_slot": "assets.profile_summary",
+        "purpose": "根据当前数据集的图片、视频、PPT、文档资产画像，为报告选择可用素材、视觉主题和需进一步核验的证据入口。",
+        "asset_profile_summary": asset_profile_summary,
+        "evidence_policy": "profile_hints_are_planning_signals_not_citations"
+    });
+
+    let insert_at = modules
+        .iter()
+        .position(|item| item.get("kind").and_then(Value::as_str) == Some("scope_summary"))
+        .map(|index| index + 1)
+        .or_else(|| {
+            modules
+                .iter()
+                .position(|item| item.get("kind").and_then(Value::as_str) == Some("global_filters"))
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+    modules.insert(insert_at, module);
+    modules
+}
+
+fn asset_profile_summary_has_hints(summary: &Value) -> bool {
+    summary
+        .get("count")
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count > 0)
+}
+
+fn empty_report_asset_profile_summary() -> Value {
+    json!({
+        "count": 0,
+        "hints": [],
+        "primary_terms": [],
+        "kind_counts": {},
+        "profile_kind_counts": {},
+        "planning_policy": [
+            "asset profiles are optional planning signals",
+            "do not cite asset profile hints as exact source evidence"
+        ]
+    })
+}
+
+fn report_asset_profile_hint(
+    asset: &AssetItemRecord,
+    profile: &AssetProfileRecord,
+) -> Option<Value> {
+    if !profile.attributes.is_object() {
+        return None;
+    }
+    let summary = report_asset_profile_summary_text(&profile.attributes)
+        .unwrap_or_else(|| compact_report_text(&asset.title, 240));
+    if summary.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "asset_id": asset.id,
+        "title": compact_report_text(&asset.title, 160),
+        "asset_kind": compact_report_text(&asset.asset_kind, 80),
+        "source_kind": compact_report_text(&asset.source_kind, 80),
+        "profile_kind": compact_report_text(&profile.profile_kind, 80),
+        "summary": summary,
+        "noun_terms": report_asset_profile_terms(&profile.attributes),
+        "facets": report_asset_profile_facets(&profile.attributes),
+    }))
+}
+
+fn build_report_asset_profile_summary(hints: Vec<Value>) -> Value {
+    const HINT_LIMIT: usize = 8;
+    const TERM_LIMIT: usize = 16;
+
+    let mut compact_hints = Vec::new();
+    let mut primary_terms = Vec::new();
+    let mut seen_terms = BTreeSet::new();
+    let mut kind_counts = BTreeMap::<String, usize>::new();
+    let mut profile_kind_counts = BTreeMap::<String, usize>::new();
+
+    for hint in &hints {
+        let asset_kind = hint
+            .get("asset_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        *kind_counts.entry(asset_kind).or_insert(0) += 1;
+
+        let profile_kind = hint
+            .get("profile_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        *profile_kind_counts.entry(profile_kind).or_insert(0) += 1;
+
+        if let Some(terms) = hint.get("noun_terms").and_then(Value::as_array) {
+            for term in terms.iter().filter_map(Value::as_str) {
+                if seen_terms.insert(term.to_string()) && primary_terms.len() < TERM_LIMIT {
+                    primary_terms.push(term.to_string());
+                }
+            }
+        }
+
+        if compact_hints.len() < HINT_LIMIT {
+            compact_hints.push(json!({
+                "asset_id": hint.get("asset_id").cloned().unwrap_or(Value::Null),
+                "title": hint.get("title").cloned().unwrap_or(Value::Null),
+                "asset_kind": hint.get("asset_kind").cloned().unwrap_or(Value::Null),
+                "source_kind": hint.get("source_kind").cloned().unwrap_or(Value::Null),
+                "profile_kind": hint.get("profile_kind").cloned().unwrap_or(Value::Null),
+                "summary": hint.get("summary").cloned().unwrap_or(Value::Null),
+                "noun_terms": hint.get("noun_terms").cloned().unwrap_or_else(|| json!([])),
+                "facets": hint.get("facets").cloned().unwrap_or_else(|| json!([])),
+            }));
+        }
+    }
+
+    json!({
+        "count": hints.len(),
+        "hints": compact_hints,
+        "primary_terms": primary_terms,
+        "kind_counts": kind_counts,
+        "profile_kind_counts": profile_kind_counts,
+        "planning_policy": [
+            "use asset profiles to choose report material sections, visual themes, and follow-up evidence reads",
+            "asset profiles are compact planning signals and are not citable exact source evidence",
+            "exact numbers, quotations, source wording, and media timestamps still require retrieval evidence, source detail, database rows, or media context"
+        ]
+    })
+}
+
+fn report_asset_profile_summary_text(attributes: &Value) -> Option<String> {
+    [
+        "summary",
+        "visual_summary",
+        "visualSummary",
+        "description",
+        "caption",
+        "ocr_text",
+        "ocrText",
+        "transcript_summary",
+        "transcriptSummary",
+    ]
+    .iter()
+    .find_map(|key| attributes.get(*key).and_then(Value::as_str))
+    .map(|value| compact_report_text(value, 240))
+    .filter(|value| !value.is_empty())
+}
+
+fn report_asset_profile_terms(attributes: &Value) -> Vec<String> {
+    const TERM_LIMIT: usize = 16;
+    let mut terms = BTreeSet::new();
+    for key in [
+        "noun_terms",
+        "nounTermHints",
+        "tags",
+        "topicTags",
+        "keywords",
+        "entities",
+        "field_candidates",
+        "fieldCandidates",
+        "table_like_signals",
+        "tableLikeSignals",
+        "outline",
+        "scene_summaries",
+        "sceneSummaries",
+    ] {
+        collect_report_asset_profile_terms(attributes.get(key), &mut terms, TERM_LIMIT);
+        if terms.len() >= TERM_LIMIT {
+            break;
+        }
+    }
+    terms.into_iter().take(TERM_LIMIT).collect()
+}
+
+fn collect_report_asset_profile_terms(
+    value: Option<&Value>,
+    terms: &mut BTreeSet<String>,
+    limit: usize,
+) {
+    if terms.len() >= limit {
+        return;
+    }
+    match value {
+        Some(Value::String(text)) => {
+            let text = compact_report_text(text, 80);
+            if !text.is_empty() {
+                terms.insert(text);
+            }
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                collect_report_asset_profile_terms(Some(item), terms, limit);
+                if terms.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Some(Value::Object(object)) => {
+            for key in ["name", "label", "text", "title", "field", "type", "value"] {
+                if let Some(text) = object.get(key).and_then(Value::as_str) {
+                    let text = compact_report_text(text, 80);
+                    if !text.is_empty() {
+                        terms.insert(text);
+                    }
+                }
+                if terms.len() >= limit {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn report_asset_profile_facets(attributes: &Value) -> Vec<String> {
+    let mut facets = Vec::new();
+    for (label, key) in [
+        ("文档类型", "document_kind"),
+        ("版式", "layout_type"),
+        ("风险", "risk_level"),
+        ("状态", "media_parse_status"),
+        ("幻灯片数", "slide_count_estimate"),
+        ("字幕段数", "transcript_segment_count"),
+        ("场景数", "scene_count"),
+        ("关键帧 OCR", "keyframe_ocr_count"),
+    ] {
+        if let Some(text) = report_profile_scalar_text(attributes.get(key)) {
+            facets.push(format!("{label}: {text}"));
+        }
+        if facets.len() >= 8 {
+            break;
+        }
+    }
+    facets
+}
+
+fn report_profile_scalar_text(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => Some(compact_report_text(text, 80)),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::Bool(flag)) => Some(flag.to_string()),
+        _ => None,
+    }
+    .filter(|text| !text.is_empty())
+}
+
+fn compact_report_text(value: &str, max_chars: usize) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 fn infer_report_plan_focus(plan: &domain_model::ReportPlan) -> ReportPlanFocus {
@@ -662,6 +983,69 @@ mod tests {
         assert!(kinds.contains(&"evidence_table"));
         assert!(!serialized.to_lowercase().contains("placeholder"));
         assert!(!serialized.to_lowercase().contains("skeleton"));
+    }
+
+    #[test]
+    fn report_ast_includes_asset_profile_summary_module_when_available() {
+        let plan = sample_plan("服装图库分析", "按图库主题生成商品报告", "default");
+        let asset_summary = json!({
+            "count": 2,
+            "hints": [{
+                "asset_id": "asset-1",
+                "title": "蓝色连衣裙",
+                "asset_kind": "image",
+                "profile_kind": "image_semantic",
+                "summary": "蓝色夏季连衣裙主视觉",
+                "noun_terms": ["连衣裙", "蓝色"],
+                "facets": ["文档类型: image"]
+            }],
+            "primary_terms": ["连衣裙", "蓝色"],
+            "kind_counts": {"image": 1, "presentation": 1},
+            "profile_kind_counts": {"image_semantic": 1, "presentation_outline": 1}
+        });
+
+        let ast = build_report_ast_with_asset_profile_summary(&plan, asset_summary);
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["asset_profile_summary"]["count"], json!(2));
+        assert_eq!(kinds[0], "scope_summary");
+        assert_eq!(kinds[1], "asset_materials");
+        assert_eq!(
+            ast["modules"][1]["binding_slot"],
+            json!("assets.profile_summary")
+        );
+        assert_eq!(
+            ast["modules"][1]["evidence_policy"],
+            json!("profile_hints_are_planning_signals_not_citations")
+        );
+    }
+
+    #[test]
+    fn report_asset_profile_summary_keeps_compact_safe_fields() {
+        let summary = build_report_asset_profile_summary(vec![json!({
+            "asset_id": "asset-raw",
+            "title": "发布会视频",
+            "asset_kind": "video",
+            "source_kind": "document",
+            "profile_kind": "video_summary",
+            "summary": "视频包含门店陈列讲解。",
+            "noun_terms": ["门店", "陈列"],
+            "facets": ["场景数: 3"],
+            "raw_provider_payload": {"object_key": "must-not-leak"}
+        })]);
+
+        assert_eq!(summary["count"], json!(1));
+        assert_eq!(summary["kind_counts"]["video"], json!(1));
+        assert_eq!(summary["profile_kind_counts"]["video_summary"], json!(1));
+        assert_eq!(
+            summary["hints"][0]["summary"],
+            json!("视频包含门店陈列讲解。")
+        );
+        assert!(summary["hints"][0].get("raw_provider_payload").is_none());
+        assert!(summary["planning_policy"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item
+                == "asset profiles are compact planning signals and are not citable exact source evidence")));
     }
 }
 

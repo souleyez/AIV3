@@ -52,8 +52,11 @@
 | P2 | 异步深解析和事实用途分类 | 多类型 summary-only dry-run 已覆盖；真实写入仍关闭。 | 继续用新失败样例或新类型扩样；不重复跑已覆盖类型。 | fact 类型均归入 `report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 或 `review_required`；未知类型进 review；未经确认不写库、不入队。 |
 | P2 | fingerprint、对象治理和重复文档 | inventory、repair plan、filesystem preflight 已是只读计划；缺真实 backfill/清理确认。 | 仅在用户确认后准备 operator-reviewed manifest、回滚说明和小批量执行方案。 | 真实 hash/backfill/对象清理前有 reviewed manifest；执行结果只记录聚合计数和原因分布；不输出对象 key、hash、标题或正文。 |
 | P3 | 新百默认报表模板和第三方触发 | 默认模板、focus、导出字段和链接去重 smoke 已稳定。 | 继续用真实客户问题做 targeted smoke；发现 focus 错位时只改模板/focus 判断，不改公开接口。 | 取高、经营状况、风险识别、低活跃、销售缺口、助推门店均能前置正确模块；解释型问题不误触发；链接只出现一次且结构字段可识别。 |
+| P3 | 主站产物任务卡工作台 | 本地开发完成，待收版部署。已补 `artifactTaskCard` 归一化、右侧任务卡 UI、选中文件/继续编辑入口和选中任务轻量刷新。 | 发版前按 P0 执行 8 服务器 Web build 与 smoke；部署后用主站真实静态页/HTML 产物人工点选回归。 | 主站产物列表升级为任务卡；任务卡能持续展示 queued/running/retrying/published/failed；点击卡片进入任务详情；成功文件可选择为当前编辑对象；在任务页可继续对已选产物发起修改；普通问答和第三方公开契约不受影响。 |
 | P3 | 数据集模板复用与低负载预热 | 模板复用、客户不可见 prewarm candidate、worker 低负载 requeue、local render/publish 路径和 observability self-test 已具备；生产默认仍保持关闭。 | 只有在 reviewed 低负载窗口显式启用 `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` 后才跑 live；常规发版继续跑 observability self-test 和未授权 guard。 | 相同或有交集的数据集组合和相同 `default_prompt` 优先复用已有模板；低负载预热不重复生成、不影响在线问答、不产生用户可见噪声；观测回执明确 `waitingForLowLoadCount`、`customerVisiblePrewarmLeakCount=0`、`prewarmCustomerVisibilityOk=true`。 |
 | P4 | 数据接入与 CC/Codex 模式 | staging analysis 存在；生产同步必须人工确认。 | 保持“先分析、出 staging_plan、落目标数据集”的闭环；确认前不写生产。 | 无目标数据集时拒绝生产同步；有目标数据集时只输出分析和 `staging_plan`；confirm 前不创建/更新生产数据集或 schema。 |
+| P4 | 企业资产库/资产空间 | Task 1-14 本地完成。已新增资产库 scope resolver、`0015_asset_libraries.sql` 基础表、`AssetLibraryView`/membership/scope summary contracts、主站登录态保护的平台 API、主站数据集页资产库关系 UI、服装设计资产库样例 preset、通用 `asset_items`/`dataset_asset_memberships`/`asset_profiles` storage/contracts 底座、asset profile 供料摘要 helper、可见资产画像摘要 scope summary；文档注册/ZIP/ingest worker/retrieval worker 会同步 document asset/profile；assistant-run 供料会读取已选数据集的 `asset_profile_hint`；图片/PPT/视频专用画像 adapter 已能从 VLM/media/chunk metadata 抽取安全压缩字段；静态页模板证据摘要和 report-planner AST 已显式输出 `asset_profile_summary`；主站资产库卡片已支持画像 hints 本地筛选/展示；本地多模态 fixture smoke 已覆盖真实 PNG/PPTX/manifest，并可生成真实 MP4 视频 fixture 强制验证 `videoRealFile=true`。 | 下一步做主站人工点选 smoke 和发版前 8 服务器验证；第三方 `asset_library_external_ids` 仍不加入公开契约。 | 一个企业可创建“服装设计资产库”等资产空间；资产库可挂多个数据集；scope summary 只返回当前用户可见数据集，隐藏数据集只保留 denied 计数；主站可在数据集页创建资产库、查看可见/无权限计数、挂接/移除数据集，并显示可见资产/画像摘要计数；样例 preset 只填充 name/domain/description/metadata，不改变核心逻辑；通用资产项可承载图片、视频、PPT、文档、产物的画像与 embedding 状态；文档上传/解析/索引会按 source 去重写入资产画像；图片 profile 提取 VLM summary、OCR、tags、entities、field candidates，视频 profile 提取 transcript/scenes/keyframe OCR，PPT profile 提取 outline 和 slide samples；assistant-run 会把当前已选数据集的画像作为 `asset_profile_hint` 低成本供料，但模型规则明确不能把它当作原文引用；profile 供料摘要会先提取 summary、名词项和 facets，避免把大 JSON/对象路径直接塞给模型；静态页模板上下文和报表规划 AST 会把画像整理成 count、kind_counts、primary_terms 和 compact hints 供页面规划、报表素材/主题规划使用；主站图库筛选只在选中资产库的已加载 scope 内本地过滤，不增加常驻资源；问答/报表/图库后续可按资产库范围聚合；数据集仍可单独授权和查询；不同企业/第三方资产默认隔离。 |
+| P4 | Codex 客户端企业配置器 | 部分本地完成。`codex-web` 已有 orchestrator、runtime target、项目工作区、下载/产物区和企业终端下载镜像；V3 已具备 client config package、client artifact multipart upload、文件下载、数据集/资产库挂接、任务卡展示、企业内私有 publish 登记、published HTML 沙箱预览、较大文件 filesystem object 双轨存储、公开沙箱 HTML 发布和 joint smoke harness。 | 下一步拿 V3 用户 session 与 `codex-web` 配置器做真实 execute smoke；raw/unsandboxed 公开 HTML 是否开放需单独评审。 | 客户员工可下载配置器，一键绑定企业 V3；只拿到临时授权的数据集/资产库/skill；本地产物可回写 V3 企业产物表并进入任务卡；V3 不承担本地执行算力；所有回写可审计、可撤销、可复用。 |
 | P5 | 工程治理和复杂文件拆分 | `platform-api` 与主站前端已持续小切片拆分；仍是当前可独立推进主线。 | 无 P1 凭证、无 P2/P4 写入确认、无新客户失败样例时，继续 P5 行为保持切片。 | 每个切片有定向测试、`cargo fmt --check`/`cargo check`/Web build/P0 smoke；提交可单独回退；不改变第三方公开契约。 |
 | CI | GitHub Actions | job 启动前失败，`steps=[]`，本地和 8 服务器验证可替代但不能声称 CI 通过；120 服务器现有 self-hosted runner 绑定 `souleyez/aigolf-ops-platform`，不覆盖 `souleyez/AIV3` 的 DataMax CI。 | 账号额度/runner 恢复后重跑 DataMax CI；若要使用 120，需要另行注册或迁移 AIV3 self-hosted runner 并调整 workflow。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
 
@@ -213,7 +216,613 @@
 | 150 | P5 assistant-run provider usage helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_provider_usage_support` 模块单测、既有 provider usage/diagnostics 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/文档范围/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 151 | P5 assistant-run view helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `assistant_run_view_support` 模块单测、既有 assistant-run/view 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/文档范围/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
 | 152 | P5 static-page view helper 拆分 | 已完成行为保持拆分、提交 GitHub、部署 8 服务器并通过 P0 验证。 | 已写回远端验证；作为当前已关闭基线。 | `static_page_view_support` 模块单测、既有 static-page render output/download/generated template reference 回归、`static_page` 广义回归、`cargo check`、8 服务器 Web build、release build、第三方报表/导出/文档范围/视频 PPT、静态页 5 路、Cloudflare fallback、prewarm observability self-test、前端 Node 回归、服务 active 和 health/ready 均通过；不改变第三方公开契约。 |
-| 153 | P5 下一个行为保持小切片 | 待选定。 | #152 远端验证关闭后，从 `platform-api` 或主站前端中选择下一个低风险 helper/UI 子模块，先补定向测试，再拆分。 | 定向测试、`cargo fmt --check`、`cargo check`、Web build、P0 smoke、本地或 8 服务器按发布范围验证通过；提交可单独回退；不改变第三方公开契约。 |
+| 153 | P3 主站产物任务卡工作台 | 本地开发完成，待收版部署。 | 部署前复核 dirty worktree，确认是否一起收其他线程改动；8 服务器部署后做主站真实任务卡点选 smoke。 | Node 测试、主站流式/本地会话回归、Web build、P0 smoke 通过；任务卡能持续推进、打开详情、选择成功文件、继续编辑；不改变第三方公开契约。 |
+| 154 | P4 asset library scope resolver 纯函数 | 本地完成。 | 后续按 2.4 Task 2/3 继续做 membership migration 和 contracts view；生产写入和第三方字段变更前必须再次确认。 | `cargo fmt --check`、`cargo test -q -p platform-api asset_library_scope --lib`、`cargo check -q -p platform-api`、`npm run smoke:external-scoped-document-chat -- --self-test` 通过；不改变第三方公开契约。 |
+| 155 | P4 asset library migration/contracts | 本地完成。 | 后续按 2.4 Task 4 做平台 API；API 命名、权限策略和生产写入前再确认。 | `cargo fmt --check`、`cargo test -q -p contracts asset_library --lib`、`cargo test -q -p platform-api asset_library_scope --lib`、`cargo check -q -p storage`、`cargo check -q -p platform-api`、`npm run smoke:external-scoped-document-chat -- --self-test` 通过；不改变第三方公开契约。 |
+| 156 | P4 asset library platform API | 本地完成。 | 后续按 2.4 Task 5 做主站 UI；第三方 `asset_library_external_ids` 不在本轮加入公开契约，生产迁移/上线前仍需收版部署。 | 新增 `GET/POST /v1/asset-libraries`、`POST/DELETE /v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}`、`GET /v1/asset-libraries/{asset_library_id}/scope-summary`；管理动作要求主站登录态；scope summary 只暴露当前用户可见数据集，隐藏 membership 只计数；`cargo test -q -p storage asset_library --lib`、`cargo test -q -p contracts asset_library --lib`、`cargo test -q -p platform-api asset_library --lib` 已通过；不改变第三方公开契约。 |
+| 157 | P4 asset library main UI | 本地完成。 | 后续按 2.4 Task 6/7 做服装设计样例配置和多模态 asset item/profile/embedding；上线前仍需收版部署和主站人工点选 smoke。 | 主站数据集页新增资产库卡片；登录用户可创建资产库、刷新列表、查看 scope summary 计数、把数据集加入/移出资产库；未登录时静默为空，不影响普通数据集/文档目录；`node --test apps/web/app/lib/asset-library-view-model.test.mjs`、`node --test apps/web/app/lib/artifact-task-cards.test.mjs`、`npm --prefix apps/web run build` 已通过；不改变第三方公开契约。 |
+| 158 | P4 fashion asset library preset | 本地完成。 | 后续按 2.4 Task 7 做通用多模态 asset item/profile/embedding；上线前仍需主站人工点选 smoke。 | 新增 `ASSET_LIBRARY_PRESETS` 和 `buildAssetLibraryCreatePayload`；主站资产库表单提供“服装设计样例”一键填充，创建时保存 description 与 metadata；preset 不自动创建、不自动挂接数据集、不改变核心资产库逻辑；`node --test apps/web/app/lib/asset-library-view-model.test.mjs`、`npm --prefix apps/web run build` 已通过；不改变第三方公开契约。 |
+| 159 | P4 multimodal asset item/profile base | 本地完成。 | 后续做导入/解析链路适配：图片/PPT/视频/文档解析后写 `asset_profiles`，资产库 scope 供料能读取 profile 摘要；上线前仍需主站人工点选 smoke。 | storage 新增 `AssetItemRecord`、`DatasetAssetMembershipRecord`、`AssetProfileRecord` 及 create/list/upsert 方法；contracts 新增 `AssetItemView`、`DatasetAssetMembershipView`、`AssetProfileView`、`AssetItemScopeSummaryView`；migration 断言覆盖 asset item source/profile/dataset membership 关键约束；`cargo fmt --check`、`cargo test -q -p storage asset_library --lib`、`cargo test -q -p contracts asset --lib`、`cargo check -q -p storage/contracts/platform-api` 已通过；不改变第三方公开契约。 |
+| 160 | P4 asset profile supply summary helper | 本地完成。 | 后续把 helper 接入资产库 scope 供料调用点，并在导入/解析链路写入 image/video/presentation/document profiles。 | 新增 `asset_profile_supply_support` staged helper，可从 profile attributes 提取 summary、noun_terms、facets 并限制输出长度/数量；覆盖图片、视频、PPT 和空 profile 场景；`cargo fmt --check`、`cargo test -q -p platform-api asset_profile_supply --lib`、`cargo check -q -p platform-api` 已通过；不改变第三方公开契约。 |
+| 161 | P4 asset profile hints in asset-library scope summary | 本地完成。 | 后续接导入/解析链路写入 profiles，并让问答/报表上下文读取 scope summary 的 `asset_profile_hints`。 | `GET /v1/asset-libraries/{asset_library_id}/scope-summary` 现在返回 `assets`、`asset_profile_hints`、`asset_count`、`asset_profile_hint_count`；只包含同时属于该资产库且挂到当前可见数据集的资产，隐藏数据集资产不会进入供料；主站资产库卡片显示可见资产/画像摘要计数；`cargo fmt --check`、`cargo test -q -p contracts asset --lib`、`cargo test -q -p platform-api asset_library --lib`、`cargo test -q -p platform-api asset_profile_supply --lib`、Web build 和第三方 P0 smoke 已通过；不改变第三方公开契约。 |
+| 162 | P4 document parse profiles written from ingest/retrieval | 本地完成。 | 后续让图库/报表/静态页规划明确消费资产画像。 | `asset_items_source_unique_idx` 防止同一文档重复生成资产；文档注册、手动解析、ZIP 子文档/父文档、ingest worker 抽取完成、retrieval worker 索引完成都会调用 `sync_document_asset_profile`，写入 dataset membership 和 `document_parse`/`image_semantic`/`presentation_outline`/`video_summary` profile；同步失败只告警，不阻断上传、解析、索引和问答；`cargo fmt --check`、storage/contracts/platform-api/ingest-worker/retrieval-worker 定向测试与 check、Web build、第三方 P0 smoke 已通过；不改变第三方公开契约。 |
+| 163 | P4 asset profile hints in assistant-run supply | 本地完成。 | 后续让图库/报表/静态页规划明确消费资产画像。 | assistant-run 供料构造会从当前已选且已授权数据集读取 dataset-linked assets 的 profiles，追加 `asset_profile_hint` 供料；模型上下文给该类型独立 bucket quota，只保留安全字段，供料质量报告新增 `assetProfileHintCount` 和 guidance；测试覆盖 profile 从 ingest 同步后进入 evidence_state、budget bucket、model context compact、supply quality；不改变第三方公开契约。 |
+| 164 | P4 multimodal asset profile adapters | 本地完成。 | 后续让图库/报表规划显式消费资产画像，并补真实图片/PPT/视频样例回归。 | 图片 profile 提取 VLM summary/visualSummary/topicTags/entities/fieldCandidates/transcribedText；视频 profile 提取 transcript/scenes/keyframe OCR/provider evidence；PPT profile 提取 outline/slide_count_estimate/slide_text_samples；所有字段安全压缩，不写 raw provider payload；storage 定向测试、platform-api/worker checks、Web build、第三方 P0 smoke 通过；不改变第三方公开契约。 |
+| 165 | P4 asset profile summary in static-page template context | 本地完成。 | 后续做 8 服务器验证。 | `static_page_template_evidence_summary` 新增 `asset_profile_summary`，包含画像数量、类型计数、profile kind 计数、primary terms 和最多 8 条 compact hints；模板规划可用它选择相关图片、幻灯片、视频、文档和视觉关键词；测试覆盖不透传 raw provider payload；`cargo fmt --check`、`cargo test -q -p platform-api static_page_template --lib`、`cargo check -q -p platform-api` 通过；不改变第三方公开契约。 |
+| 166 | P4 asset profile summary in report planner AST | 本地完成。 | 后续做 8 服务器验证。 | `report-planner-worker` 在生成 AST 前按 `plan.dataset_id` 读取 `asset_items`/`asset_profiles`，失败时降级为空摘要不阻断规划；AST 顶层新增 `asset_profile_summary`，有画像时插入 `asset_materials` 模块；summary 只保留资产 id/title/kind/profile kind/summary/noun terms/facets，不透传 raw provider payload/object key；`cargo fmt --check`、`cargo test -q -p report-planner-worker`、`cargo check -q -p report-planner-worker`、`cargo test -q -p platform-api static_page_template --lib` 通过；不改变第三方公开契约。 |
+| 167 | P4 asset profile gallery filtering in main workspace | 本地完成。 | 后续做 8 服务器主站人工点选。 | `asset-library-view-model` 新增 `normalizeAssetProfileHint`、`assetProfileKindOptions`、`filterAssetProfileHints`；主站资产库卡片在选中资产库后展示画像筛选输入、类型筛选和最多 8 条 compact hint；筛选只使用当前 scope-summary 已加载数据，不新增常驻轮询或公开接口字段；`node --test apps/web/app/lib/asset-library-view-model.test.mjs`、`npm --prefix apps/web run build` 通过；不改变第三方公开契约。 |
+| 168 | P4 multimodal asset profile fixture smoke | 本地完成。 | 后续做 8 服务器主站人工点选/发布前验证。 | `npm run smoke:multimodal-asset-profile-fixtures -- --self-test` 会在 `target/` 下生成或复用一个小型 MP4 fixture；`--require-real-video` 可强制验证 `videoRealFile=true`；smoke 使用现有公开 PNG、生成 PPTX 和 artifact manifest 作为真实文件证据，验证 image/presentation/video 三类 `asset_profile_hint` 可被主站 view-model normalize/filter 正确处理，receipt 写入 `target/multimodal-asset-profile-fixtures/`；不改变第三方公开契约。 |
+| 169 | P4 client artifact private publish | 本地完成。 | 后续补 HTML inline preview 安全发布管线和真实 joint smoke。 | 新增 `POST /v1/client-artifacts/{artifact_id}/publish`，要求 V3 用户 session，不接受客户端上传 token 直接发布；publish 将 artifact `status` 置为 `published` 并写入 `manifest.metadata.v3_publish`，其中 `public_url=null`、`html_inline_preview=false`，避免绕过安全发布；主站任务卡对已发布客户端产物显示发布阶段完成但仍不把 HTML 标为可公开打开；`cargo fmt --check`、`cargo test -q -p platform-api v3_client_artifact --lib`、`cargo check -q -p platform-api`、`cargo check -q -p contracts`、`node --test apps/web/app/lib/artifact-task-cards.test.mjs` 通过；不改变第三方公开契约。 |
+| 170 | P4 client artifact sandbox HTML preview | 本地完成。 | 后续补匿名/公开 HTML 发布和真实 joint smoke。 | 新增 `GET /v1/client-artifacts/{artifact_id}/files/{file_index}/preview`，只允许 V3 用户 session 访问、只允许已 published 的 HTML 文件；预览前移除脚本、iframe/object/embed/form、link/meta/base、事件属性、危险 URL 属性和 CSS `url()`，再用空 sandbox iframe 包装；`ClientArtifactFileRecordView` 对 published HTML 暴露 `preview_url`；主站任务卡优先打开 `/api/v3/.../preview`，并转发 CSP/referrer-policy；`cargo fmt --check`、`cargo test -q -p platform-api v3_client_artifact --lib`、`cargo check -q -p platform-api`、`cargo check -q -p contracts`、`node --test apps/web/app/lib/artifact-task-cards.test.mjs`、`node --check apps/web/app/lib/platform-api.js` 通过；不改变第三方公开契约。 |
+| 171 | P4 client artifact large file object storage | 本地完成。 | 后续做真实 joint smoke；上线前在目标环境配置 `V3_CLIENT_ARTIFACT_OBJECT_DIR` 后再验证大文件上传/下载。 | `v3_client_artifact_files` 新增 `storage_kind` 和 `object_locator`，`bytes` 改为可空并加 payload 约束；默认未配置对象目录时仍全部走 DB；配置 `V3_CLIENT_ARTIFACT_OBJECT_DIR` 后超过阈值的文件写入 V3 管理的 filesystem object 目录；下载和 HTML preview 统一从 storage record 读取；API 响应、任务卡、文档和 validation 不暴露 locator；`cargo fmt --check`、`cargo test -q -p platform-api client_artifact_storage --lib`、`cargo test -q -p storage migrations_include_v3_client_artifact_schema --lib` 通过；不改变第三方公开契约。 |
+| 172 | P4 client artifact public sandbox HTML publish | 本地完成。 | 后续做真实 joint smoke；raw/unsandboxed 公开 HTML 是否开放需单独安全评审。 | 新增 `POST /v1/client-artifacts/{artifact_id}/publish-public`，要求 V3 用户 session 且 artifact 已 private `published`；选中 primary HTML，复用 preview sanitizer，写入 generated-artifacts 下的 DataMax-owned sandbox wrapper，登记 `html_artifacts`，并在 client artifact manifest 写入 `metadata.v3_public_html.public_url`；`ClientArtifactFileRecordView` 对已公开文件返回 `public_url`；主站任务卡优先打开 `public_url`，没有时退回 private preview；不暴露原始 HTML bytes、DB payload、filesystem locator 或本地对象路径；不改变第三方公开契约。 |
+| 173 | P4 client artifact joint smoke harness | 本地完成。 | 后续用真实 V3 用户 session 和 `codex-web` 配置器跑 `--execute --ack-controlled-live`；self-test 不能替代生产验收。 | 新增 `npm run smoke:v3-client-artifact-joint`，支持 `--self-test`、`--preflight`、`--execute --ack-controlled-live`；execute 会创建 config package、模拟客户端读取、上传 `index.html`/`report.md` manifest、private publish、public sandbox publish，并验证主站 task-card 归一化；receipt 不记录 cookie、bearer、对象 locator、raw object path、provider key、数据库行或客户内容；不改变第三方公开契约。 |
+| 174 | P4 codex-web boundary contract sync check | 本地完成。 | 后续 codex-web 线程有 V3-facing 字段变更时，先更新 V3 canonical 文档并重新同步/检查。 | `docs/integrations/v3-codex-client-boundary-contract.md` 已同步到 `C:\Users\soulzyn\Desktop\codex-web\docs\v3-codex-client-boundary-contract.md`；新增 `npm run smoke:v3-codex-client-boundary-sync` 只读检查，验证 V3 canonical 与 codex-web mirror byte-identical；检查 receipt 只记录相对路径、大小、hash 和首个差异行，不记录 token、客户数据、对象路径或 provider payload。 |
+| 175 | P5 client artifact publish helper 拆分 | 本地完成。 | 后续继续 P5 行为保持切片，或在用户要求发版时与 P0 一起部署验证。 | 新增 `client_artifact_publish_support`，把客户端产物 download/preview/public URL、HTML sandbox、HTML sanitizer、private/public publish manifest 和 public HTML artifact manifest helper 从 `lib.rs` 拆出；handler 和公开 API 路由保持不变；`cargo fmt --check`、`cargo test -q -p platform-api client_artifact_publish_support --lib`、`cargo test -q -p platform-api v3_client_artifact --lib`、`cargo check -q -p platform-api` 通过；不改变第三方公开契约。 |
+| 176 | P5 client artifact contract helper 拆分 | 本地完成。 | 后续继续 P5 行为保持切片，或在用户要求发版时与 P0 一起部署验证。 | 新增 `client_artifact_contract_support`，把客户端产物上传配置、manifest、multipart 文件顺序、文件名安全和文件数量/大小限制从 `lib.rs` 拆出；handler 和公开 API 路由保持不变；`cargo fmt --check`、`cargo test -q -p platform-api client_artifact_contract_support --lib`、`cargo test -q -p platform-api client_artifact --lib`、`cargo check -q -p platform-api`、`git diff --check` 通过；不改变第三方公开契约。 |
+
+## 2.3 主站产物任务卡工作台升级计划
+
+**Goal:** 将 V3 主站右侧产物列表升级为任务卡工作台：用户发布任务后，任务详情在同一任务卡内持续推进直到拿到结果；点击任务卡进入详情，选择成功文件作为当前编辑对象，并在任务页面继续修改。
+
+**Architecture:** 不新建一套产物系统。前端先把 `reportPlans`、`publishedReports`、`staticPageDrafts`、`htmlArtifacts`、`codexCustomerTasks`、`codexCustomerArtifacts` 归一化为统一 `artifactTaskCard` view model；后端现有 assistant-run、workflow task、static-page view、HTML artifact view 继续作为事实来源。UI 复用当前静态页/报表卡片样式：`right-results-card`、`generated-project-card`、`report-shelf-card`、`generated-project-actions`，只扩展状态、详情和文件选择能力。
+
+**Tech Stack:** Next.js `apps/web`、React state/view model、现有 HTML artifact API、static page draft/report shelf helpers、Node test、P0 smoke。
+
+### Task 1: 统一任务卡 View Model
+
+**Files:**
+- Create: `apps/web/app/lib/artifact-task-cards.js`
+- Create: `apps/web/app/lib/artifact-task-cards.test.mjs`
+- Reuse: `apps/web/app/lib/html-artifact-utils.js`
+- Reuse: `apps/web/app/lib/codex-customer-artifacts.js`
+
+**Steps:**
+1. 写失败测试：把 running static page draft、published HTML artifact、Codex running task、Codex finished artifact 归一化成同一数组。
+2. 定义稳定字段：
+   - `id`
+   - `kind`
+   - `title`
+   - `status`
+   - `statusLabel`
+   - `phase`
+   - `updatedAt`
+   - `summary`
+   - `detail`
+   - `sourceRefs`
+   - `files[]`
+   - `primaryFileId`
+   - `canOpen`
+   - `canEdit`
+   - `canRetry`
+   - `canCancel`
+   - `raw`
+3. 状态映射必须覆盖：`queued`、`running`、`retrying`、`needs_review`、`published`、`completed`、`failed`、`cancelled`。
+4. 去重规则：同一 `draft_id/render_output_id/artifact_id/workflow_execution_id` 只显示一张主任务卡，文件作为卡内候选，不重复刷屏。
+
+**Validation:**
+
+```bash
+node --test apps/web/app/lib/artifact-task-cards.test.mjs
+```
+
+### Task 2: 任务卡详情和持续进度
+
+**Files:**
+- Modify: `apps/web/app/HomePageClient.js`
+- Modify: `apps/web/app/components/InsightPanel.js`
+- Modify: `apps/web/app/lib/artifact-task-cards.js`
+- Test: `apps/web/app/lib/artifact-task-cards.test.mjs`
+
+**Steps:**
+1. 保留现有 `refreshHtmlArtifacts()`、`refreshStaticPageDraftShelf()`、report refresh 入口。
+2. 当任务卡处于 `queued/running/retrying/needs_review`，详情打开时继续轻量刷新；页面未打开时不启动常驻高频轮询。
+3. 任务详情显示阶段轨迹：计划、数据补充、Image2 设计、HTML 生成、发布、文件就绪。
+4. 失败不只显示终止状态；保留 retryable reason、最近事件摘要和下一步动作。
+5. 不改变第三方 `/events` 或公开接口响应字段。
+
+**Validation:**
+
+```bash
+node --test apps/web/app/lib/artifact-task-cards.test.mjs
+node --test apps/web/app/lib/assistant-run-progress.test.mjs
+node --test apps/web/app/lib/local-chat-sessions.test.mjs
+```
+
+### Task 3: 成功文件选择和继续编辑
+
+**Files:**
+- Modify: `apps/web/app/HomePageClient.js`
+- Modify: `apps/web/app/components/InsightPanel.js`
+- Modify: `apps/web/app/lib/artifact-task-cards.js`
+- Reuse: `handleSelectHtmlArtifact`
+- Reuse: `handleApplyStaticPageOperation`
+
+**Steps:**
+1. 任务卡详情中列出成功文件：`index.html`、`report.ppt`、`report.md`、`table-data.csv`、ZIP、截图/预览图。
+2. 用户点击文件时，把该文件设为当前编辑对象；HTML/静态页优先进入页面编辑，PPT/MD/CSV 进入预览/下载。
+3. 对已发布静态页，继续编辑必须走现有 `修改报表`/`generated_static_page_edit` 严格触发链路，复用 existing artifact，不默认重新设计。
+4. 如果用户明确“重新设计/换风格/重做”，再进入重新设计链路。
+
+**Validation:**
+
+```bash
+node --test apps/web/app/lib/artifact-task-cards.test.mjs
+npm run smoke:static-page-5way -- --self-test
+```
+
+### Task 4: 首页视觉保持当前静态页样式
+
+**Files:**
+- Modify: `apps/web/app/components/InsightPanel.js`
+- Modify: `apps/web/app/globals.css`
+
+**UI Rules:**
+1. 首页右侧任务卡继续使用当前静态页卡片视觉：
+   - `right-results-card`
+   - `generated-project-list`
+   - `generated-project-card`
+   - `report-shelf-card`
+   - `generated-project-title-row`
+   - `generated-project-brief-row`
+   - `generated-project-actions`
+2. 不新增营销页式 hero、浮层大卡、全新配色体系或单独任务中心皮肤。
+3. 任务卡可增加状态条、文件 chips、进度摘要，但字号、圆角、深色背景、按钮密度和当前静态页列表保持一致。
+4. PC 和移动端都不能出现文本溢出、卡片互相挤压或文件按钮换行错乱。
+
+**Validation:**
+
+```bash
+npm run build
+```
+
+### Task 5: 回归和发版边界
+
+**Files:**
+- Validate: `scripts/smoke/static-page-5way.mjs`
+- Validate: `scripts/smoke/external-report-focus.mjs`
+- Validate: `scripts/smoke/external-report-export.mjs`
+- Validate: `scripts/smoke/external-scoped-document-chat.mjs`
+- Record: `docs/validation/datamax-main-gap-closure.md`
+
+**Commands:**
+
+```bash
+node --test apps/web/app/lib/artifact-task-cards.test.mjs
+node --test apps/web/app/lib/assistant-run-progress.test.mjs
+node --test apps/web/app/lib/local-chat-sessions.test.mjs
+npm run smoke:static-page-5way -- --self-test
+npm run smoke:external-report-focus -- --self-test
+npm run smoke:external-report-export -- --self-test
+npm run smoke:external-scoped-document-chat -- --self-test
+```
+
+**Close Criteria:**
+
+- 发布任务后不再只出现静态链接或裸状态文本，而是进入任务卡持续推进。
+- 任务成功后，用户能在卡内看到可选成功文件。
+- 点击成功 HTML/静态页文件可以进入页面查看/编辑。
+- 对话中“修改报表”能基于当前选中的任务产物继续修改。
+- 首页视觉与当前静态页/报表产物列表保持一致。
+- 没有新增第三方公开字段、必填字段或 API URL。
+
+## 2.4 企业资产库/资产空间升级计划
+
+**Goal:** 将 V3 从“多个孤立数据集”升级为“企业资产库/资产空间 + 多数据集视图”的组织模型。对一个企业来说，资产库是长期可复用的业务资产空间，多个数据集、文档、数据库、图片、视频、报表产物和行业 skill 都可以挂到同一个资产库下。
+
+**Architecture:** 数据集继续作为权限、查询和临时工作范围；资产库作为企业级组织层。资产库不复制数据，只通过 membership 关联已有数据集和资产项。服装设计能力以“服装设计资产库”为第一个行业样例：灵感图、设计稿、款式文档、供应链表、营销产物、成品页面都进入同一资产空间，但仍可按数据集、集合、权限和任务场景裁剪供料。
+
+**Tech Stack:** PostgreSQL membership tables、Rust `platform-api` scope resolver、existing dataset APIs、future multimodal asset APIs、Next.js admin/workspace UI、third-party channel scope contracts。
+
+### Data Model Direction
+
+优先使用通用命名，避免把服装设计写死到核心表：
+
+```text
+enterprise_asset_libraries
+asset_library_dataset_memberships
+asset_collections
+asset_items
+dataset_asset_memberships
+asset_profiles
+```
+
+建议字段：
+
+```text
+enterprise_asset_libraries:
+  id, tenant_id, external_id, name, domain, description, visibility, created_at, updated_at
+
+asset_library_dataset_memberships:
+  tenant_id, asset_library_id, dataset_id, role, priority, created_at
+
+asset_collections:
+  id, tenant_id, asset_library_id, parent_collection_id, external_id, name, collection_type
+
+dataset_asset_memberships:
+  tenant_id, dataset_id, asset_id, membership_kind, expires_at, created_at
+```
+
+关系约束：
+
+1. 企业资产库属于一个 tenant。
+2. 一个资产库可挂多个数据集。
+3. 一个数据集可被多个资产库引用，但默认 UI 推荐一个主资产库。
+4. 一个资产项可属于多个数据集和多个 collection，不复制原始文件。
+5. 资产库 scope 查询 = 该资产库下所有已授权数据集 + 直接挂接资产 + 当前用户权限裁剪。
+
+### Fashion Design Asset Library Example
+
+服装设计资产库可以包含：
+
+1. `灵感图库数据集`：设计图、款式参考、色彩/面料图。
+2. `设计稿数据集`：AI 生图结果、人工筛选图、版本记录。
+3. `款式文档数据集`：款式说明、工艺单、尺码表、BOM。
+4. `供应链数据集`：面料、辅料、工厂、报价、交期。
+5. `营销产物数据集`：详情页、小红书文案、公众号图文、视频脚本。
+6. `报表产物数据集`：选款分析、成本分析、上新计划、销售反馈。
+
+用户可以问：
+
+```text
+这个资产库里按春夏连衣裙分类，找出适合小红书首发的款式。
+```
+
+系统实际执行：
+
+```text
+asset_library_scope
+-> resolve linked datasets
+-> collect image profiles + documents + database facts + generated artifacts
+-> rank evidence by user intent
+-> answer / generate report / create static page
+```
+
+### API And Scope Rules
+
+主站：
+
+```text
+GET  /v1/asset-libraries
+POST /v1/asset-libraries
+POST /v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}
+DELETE /v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}
+GET  /v1/asset-libraries/{asset_library_id}/scope-summary
+```
+
+第三方后续可选字段，不作为当前公开契约立即变更：
+
+```json
+{
+  "asset_library_external_ids": ["fashion-design-main"],
+  "dataset_external_ids": ["design-images", "supply-chain", "marketing-assets"]
+}
+```
+
+规则：
+
+1. `dataset_external_ids` 仍是最稳定的第三方范围字段。
+2. `asset_library_external_ids` 是更高层的企业资产空间字段，后续加前必须更新文档并做兼容测试。
+3. 如果两者同时传，实际范围取交集或按明确策略裁剪，不能意外扩大到全企业。
+4. 资产库可作为模型上下文摘要，但供料必须落回具体数据集/文档/资产证据。
+
+### UI Direction
+
+主站/管理台应显示：
+
+1. 企业资产库列表。
+2. 每个资产库下的数据集分组。
+3. 数据集来源类型：文档、数据库、图片资产、视频、产物。
+4. 资产库级搜索/问答入口。
+5. 资产库级报表/静态页生成入口。
+6. 服装设计类资产库可显示图库筛选：品类、季节、风格、颜色、面料、工艺、状态。
+
+UI 风格：
+
+- 资产库页面可以是管理视图。
+- 主站首页仍保持当前静态页/报表卡片风格。
+- 不把资产库做成营销落地页。
+
+### Implementation Tasks
+
+1. 写 scope resolver 纯函数测试：资产库挂 3 个数据集，用户只授权其中 2 个，只返回 2 个数据集的 scope。
+2. 增加 asset library membership migration。
+3. 增加 domain/contracts view：`AssetLibraryView`、`AssetLibraryScopeSummaryView`。
+4. 增加平台 API：创建资产库、挂/移除数据集、读取 scope summary。
+5. 主站 UI 先只显示资产库与数据集关系，不先做大图库。
+6. 把服装设计作为样例配置，不写死核心逻辑。
+7. 后续接入多模态 asset item/profile/embedding。
+
+### Validation
+
+```bash
+cargo test -p platform-api asset_library_scope --lib
+cargo test -p contracts asset_library --lib
+node --test apps/web/app/lib/asset-library-view.test.mjs
+npm run smoke:external-scoped-document-chat -- --self-test
+```
+
+### Close Criteria
+
+- 企业可拥有一个或多个资产库。
+- 一个资产库可由多个数据集组成。
+- 资产库查询不会绕过数据集权限。
+- 问答、报表和静态页可选择资产库作为高层范围。
+- 服装设计能力可以作为资产库行业能力挂载，而不是独立项目孤岛。
+- 第三方接口没有被静默改动。
+
+## 2.5 Codex 客户端企业配置器统合计划
+
+**Goal:** 将 `codex-web` 里的 Codex 客户端/配置器能力统合为 V3 企业边缘执行体系。客户员工在本地使用 Codex 处理业务，方便连接企业数据集和资产库，并把确认后的文件、页面、报表、脚本和分析结果回写到 V3 企业产物表。
+
+**Architecture:** V3 是企业数据和产物权威中心；Codex 客户端是本地边缘执行器。V3 下发临时任务包、授权范围、数据集/资产库引用和 skill 配置；客户端在员工机器执行；结果以结构化 manifest + 文件包上传回 V3。V3 负责产物存储、解析、归档、审计、发布和任务卡持续展示，不把长期数据库密码、全量数据集或原始 provider token 下发给客户端。
+
+**Source Capabilities From `codex-web`:**
+
+1. `codex-web` orchestrator：`/api/codex/orchestrator/v1/tasks`、runtime target、durable lease、`retry_wait`、artifact validation。
+2. `codex-web` artifact/download zone：`/api/codex/artifacts`、`/api/codex/downloads`、本机上传脚本。
+3. Project workspace：项目工作区、GitHub sync、任务产物收集。
+4. Runtime target：local、cloudflare、bridge、relay agent。
+5. Download mirror：`https://v3.elepcloud.com/downloads/codex/` 已有企业终端包和校验清单。
+
+### Target Flow
+
+```text
+V3 企业用户
+-> 选择资产库 / 数据集 / 任务
+-> V3 生成 client task package
+-> Codex 企业客户端本地执行
+-> 客户确认或自动打包结果
+-> 上传 result manifest + files
+-> V3 解析、入企业产物表、关联数据集/资产库
+-> 主站任务卡展示并可继续编辑/发布
+```
+
+### Client Configuration Package
+
+配置器不应只是下载 Codex，而应生成企业配置包：
+
+```json
+{
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "v3_base_url": "https://v3.elepcloud.com",
+  "client_id": "device-001",
+  "asset_library_ids": ["fashion-design-main"],
+  "dataset_ids": ["design-images", "supply-chain"],
+  "skill_packs": ["fashion-design", "static-page-edit"],
+  "artifact_upload": {
+    "mode": "presigned_or_session_token",
+    "endpoint": "/v1/client-artifacts"
+  },
+  "expires_at": "2026-06-17T18:00:00Z"
+}
+```
+
+规则：
+
+1. 配置包只给短期 token 或设备绑定 token，不给长期万能 token。
+2. 数据集/资产库只给引用和可查询范围，不默认下发全量原始数据。
+3. 本地文件默认留在本地，只有用户选择作为产物/证据时上传。
+4. skill pack 可以下发模板、提示词、schema 和工具说明，但不包含生产密钥。
+
+### V3 Required APIs
+
+新增或规划以下 V3 后端能力：
+
+```text
+POST /v1/client-config-packages
+GET  /v1/client-config-packages/{package_id}
+POST /v1/client-artifacts
+GET  /v1/client-artifacts/{artifact_id}
+POST /v1/client-artifacts/{artifact_id}/publish
+POST /v1/client-artifacts/{artifact_id}/attach-to-dataset
+POST /v1/client-artifacts/{artifact_id}/attach-to-asset-library
+```
+
+第一版可以只做：
+
+1. 管理台生成配置包。
+2. 客户端上传产物 manifest + 文件。
+3. V3 把产物挂到当前数据集/资产库。
+4. 主站任务卡展示产物并支持继续编辑。
+
+### Artifact Manifest Contract
+
+客户端回写必须有机器可读 manifest：
+
+```json
+{
+  "source": "enterprise-codex-client",
+  "tenant_id": "tenant-001",
+  "user_id": "user-001",
+  "client_id": "device-001",
+  "task_id": "client-task-001",
+  "asset_library_id": "fashion-design-main",
+  "dataset_ids": ["design-images"],
+  "title": "春夏连衣裙选款分析",
+  "artifact_type": "static_page",
+  "files": [
+    {
+      "filename": "index.html",
+      "content_type": "text/html",
+      "role": "primary_html"
+    },
+    {
+      "filename": "report.md",
+      "content_type": "text/markdown",
+      "role": "source_summary"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "kind": "dataset",
+      "id": "design-images"
+    }
+  ],
+  "created_at": "2026-06-17T12:00:00Z"
+}
+```
+
+V3 接收后：
+
+1. 保存原文件。
+2. 生成 `generated_artifact` / `html_artifact` / `dataset_output` 记录。
+3. 对 HTML/MD/PPT/CSV 做解析和安全校验。
+4. 关联到数据集、资产库和任务卡。
+5. 可选发布为公开链接或企业内链接。
+
+### Resource Model
+
+这是理想方向，但不是“V3 完全零资源”：
+
+V3 可以少消耗：
+
+- 长时间推理。
+- 本地文件处理。
+- 浏览器自动化。
+- Office/PPT/HTML 大产物生成。
+- 复杂多步骤 Codex 执行。
+
+V3 仍必须承担：
+
+- 用户、设备和租户鉴权。
+- 数据集/资产库权限裁剪。
+- 临时任务包生成。
+- 产物接收、病毒/类型/大小校验。
+- 解析入库、检索索引、产物发布。
+- 审计、撤销、版本和任务卡展示。
+
+所以它的价值不是完全省资源，而是把 V3 从“执行所有重活”变成“企业控制平面 + 资产和产物中心”。这更适合企业规模化使用。
+
+### Security Boundaries
+
+必须禁止：
+
+1. 客户端拿长期数据库密码。
+2. 客户端直接拿全企业数据集。
+3. 客户端直接写生产数据库。
+4. 客户端绕过 V3 产物审核发布。
+5. 客户端上传无 manifest 的散文件。
+6. 客户端把个人本地文件自动同步到 V3。
+
+必须支持：
+
+1. 设备绑定和撤销。
+2. 配置包过期。
+3. 每次任务独立 scope。
+4. 产物上传限额。
+5. 文件类型和大小限制。
+6. 产物版本化。
+7. 审计记录：谁、在哪台设备、基于哪个数据集/资产库、生成了什么。
+
+### Recommended Development Order
+
+1. V3 侧先定义 `client_artifact` manifest 和上传接口。
+2. 主站任务卡支持显示 `enterprise-codex-client` 来源产物。
+3. 配置器只做最小配置：V3 地址、设备 ID、短期 token、默认资产库/数据集。
+4. 支持员工本地生成文件后手动上传到 V3。
+5. 再支持客户端自动从 V3 拉任务包并回写结果。
+6. 最后接节点池调度、Mac mini 阵列和空闲算力回流。
+
+### Close Criteria
+
+- 员工可以安装企业 Codex 客户端并绑定 V3 企业账号。
+- 员工只能看到授权的数据集和资产库。
+- 员工本地产出的 HTML/PPT/MD/CSV/ZIP 可以回写到 V3。
+- 回写产物进入企业产物表和主站任务卡。
+- 用户可以在 V3 继续编辑、发布、归档或撤销该产物。
+- V3 不承担本地 Codex 执行算力，但保留权限、审计、解析和发布权威。
+
+## 2.6 V3 / codex-web 跨线程协调规则
+
+**Goal:** 防止 V3 线程和 `codex-web` 线程重复实现数据集、资产库、产物表、发布和执行器能力。
+
+**Canonical Boundary Doc:**
+
+```text
+docs/integrations/v3-codex-client-boundary-contract.md
+```
+
+已同步给 `codex-web` 工作副本：
+
+```text
+C:\Users\soulzyn\Desktop\codex-web\docs\v3-codex-client-boundary-contract.md
+```
+
+### Ownership Rules
+
+V3 线程负责：
+
+1. 企业账号、用户、权限、设备绑定和撤销。
+2. 数据集、资产库、资产库-数据集 membership。
+3. `client_config_package` 契约和服务端生成。
+4. `client_artifact_manifest` 契约和接收接口。
+5. 企业产物表、产物解析、任务卡、继续编辑、发布和撤销。
+6. 第三方公开接口和主站文档。
+
+`codex-web` 线程负责：
+
+1. Codex 客户端配置器读取 V3 配置包。
+2. 本地/Cloudflare runtime、bridge、orchestrator、lease、retry_wait 和临时 artifact capture。
+3. 本地任务执行、项目工作区、下载区和运行目标。
+4. 按 V3 契约生成 manifest 并上传文件。
+5. 客户端安装包和配置器内部逻辑。
+
+### Hard Boundaries
+
+`codex-web` 不做：
+
+1. V3 企业数据集权限模型。
+2. V3 企业资产库模型。
+3. V3 企业产物表。
+4. V3 报表/静态页最终发布权威。
+5. 第三方 V3 公开 API 字段变更。
+
+V3 不做：
+
+1. Codex runtime/bridge/orchestrator 内部实现。
+2. Cloudflare workstation 内部实现。
+3. 本地客户端安装器内部逻辑。
+4. 客户端本地项目工作区/GitHub sync 内部实现。
+
+### Change Control
+
+1. 涉及 V3 字段、认证、权限、数据集/资产库 scope、产物上传和发布语义，先改 `docs/integrations/v3-codex-client-boundary-contract.md`。
+2. `codex-web` 线程只能按该契约实现，不自行新增 V3-facing 必填字段。
+3. `codex-web` 如确实需要新增字段，先在文档中提出 optional 字段，V3 线程确认后再开发。
+4. 两边都不得把 self-test 当生产验收。
+5. 两边都不得在日志或文档记录长期 token、数据库密码、provider key、客户原文或对象路径。
+
+### First Joint Milestone
+
+只做最小闭环：
+
+```text
+V3 生成测试配置包
+-> codex-web/客户端读取配置包
+-> 本地生成 index.html + report.md
+-> 上传 manifest + files 到 V3
+-> V3 创建 enterprise artifact
+-> V3 任务卡展示 completed
+-> 用户点击并发起“修改报表”
+```
+
+暂不做：
+
+1. Mac mini 阵列调度。
+2. 自动拉取长期任务。
+3. 多节点负载回流。
+4. 第三方公开字段扩展。
+5. 全量数据集下载。
+
+### Validation
+
+V3 侧：
+
+```bash
+cargo test -p platform-api client_artifact --lib
+node --test apps/web/app/lib/artifact-task-cards.test.mjs
+npm run smoke:v3-client-artifact-joint -- --self-test
+npm run smoke:v3-codex-client-boundary-sync
+npm run smoke:external-scoped-document-chat -- --self-test
+```
+
+`codex-web` 侧：
+
+```bash
+npm test -- --runInBand
+node scripts/upload-codex-artifact.mjs --dry-run --file <sample-output>
+```
+
+最终联调验收：
+
+```text
+V3 task card shows source=enterprise-codex-client artifact
+V3 artifact is attached to expected dataset/asset library
+V3 can open artifact and continue editing
+No duplicate dataset/asset-library/artifact authority exists in codex-web
+```
 
 ## 3. P0 发布前固定回归
 

@@ -20,6 +20,7 @@ pub(crate) fn assistant_run_model_supply_item_for_context(item: &Value) -> Value
         Some("database_aggregate") => assistant_run_model_database_aggregate_item(item),
         Some("spreadsheet_row_analysis") => assistant_run_model_spreadsheet_row_analysis_item(item),
         Some("conversation_memory_item") => assistant_run_model_conversation_memory_item(item),
+        Some("asset_profile_hint") => assistant_run_model_asset_profile_hint_item(item),
         _ => assistant_run_model_compact_json_value(
             item,
             ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
@@ -262,6 +263,27 @@ fn assistant_run_model_spreadsheet_row_analysis_item(item: &Value) -> Value {
     })
 }
 
+fn assistant_run_model_asset_profile_hint_item(item: &Value) -> Value {
+    json!({
+        "type": "asset_profile_hint",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "asset_id": item.get("asset_id").cloned().unwrap_or(Value::Null),
+        "title": item.get("title").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "asset_kind": item.get("asset_kind").cloned().unwrap_or(Value::Null),
+        "source_kind": item.get("source_kind").cloned().unwrap_or(Value::Null),
+        "profile_kind": item.get("profile_kind").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "noun_terms": item.get("noun_terms").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 24)).unwrap_or(Value::Null),
+        "facets": item.get("facets").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 12)).unwrap_or(Value::Null),
+        "model_guidance": item.get("model_guidance").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 4)).unwrap_or_else(|| json!([
+            "This is a compact asset profile hint, not direct source evidence.",
+            "Use retrieval evidence or read_document_detail for exact claims."
+        ])),
+    })
+}
+
 pub(crate) fn assistant_run_model_conversation_memory_item(item: &Value) -> Value {
     json!({
         "type": "conversation_memory_item",
@@ -413,5 +435,33 @@ mod tests {
             model_item["source_message_refs"].as_array().unwrap().len(),
             8
         );
+    }
+
+    #[test]
+    fn asset_profile_hint_keeps_compact_safe_fields_only() {
+        let item = json!({
+            "type": "asset_profile_hint",
+            "source": "asset_profile",
+            "dataset_id": "dataset-1",
+            "asset_id": "asset-1",
+            "title": "门店陈列视频",
+            "asset_kind": "video",
+            "profile_kind": "video_summary",
+            "summary": "夏季女装陈列和导购讲解",
+            "noun_terms": ["女装", "陈列", "导购"],
+            "facets": ["场景: 门店"],
+            "attributes": {
+                "raw_provider_payload": "must not enter model context"
+            }
+        });
+
+        let model_item = assistant_run_model_supply_item_for_context(&item);
+        let serialized = serde_json::to_string(&model_item).unwrap();
+
+        assert_eq!(model_item["type"], json!("asset_profile_hint"));
+        assert_eq!(model_item["summary"], json!("夏季女装陈列和导购讲解"));
+        assert_eq!(model_item["noun_terms"][0], json!("女装"));
+        assert!(!serialized.contains("raw_provider_payload"));
+        assert!(!serialized.contains("must not enter model context"));
     }
 }

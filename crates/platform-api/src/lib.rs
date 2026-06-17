@@ -15,7 +15,7 @@ use auth_scope::{
 };
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -23,58 +23,76 @@ use axum::{
 };
 use basic_view_support::*;
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
+use client_artifact_contract_support::*;
+use client_artifact_publish_support::*;
+use client_artifact_storage_support::{
+    client_artifact_database_file_bytes_limit_from_env, client_artifact_object_root_from_env,
+    prepare_client_artifact_file_storage, read_client_artifact_file_storage,
+    ClientArtifactFileStorageRecord,
+};
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
     AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
-    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssistantRunDetailView,
-    AssistantRunExecutorTransportView, AssistantRunMessageView, AuthAuditEventView,
-    AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView,
-    ClaimLocalDataRequest, ClaimLocalDataResponse, CodexHostFixedTaskHumanReviewPolicyView,
+    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssetItemView,
+    AssetLibraryDatasetMembershipResponse, AssetLibraryDatasetMembershipView,
+    AssetLibraryScopeSummaryResponse, AssetLibraryScopeSummaryView, AssetLibraryView,
+    AssetProfileSupplyHintView, AssistantRunDetailView, AssistantRunExecutorTransportView,
+    AssistantRunMessageView, AttachClientArtifactToAssetLibraryRequest,
+    AttachClientArtifactToAssetLibraryResponse, AttachClientArtifactToDatasetRequest,
+    AttachClientArtifactToDatasetResponse, AuthAuditEventView, AuthSessionResponse,
+    BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
+    ClaimLocalDataResponse, ClientArtifactFileRecordView, ClientArtifactView,
+    ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
     CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
     CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
     CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
     ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
     ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
-    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
-    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
-    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
-    CreateExternalChannelConnectionRequest, CreateExternalDatabaseSourceRequest,
-    CreateExternalDatabaseSourceResponse, CreateExternalDocumentParseRequest,
-    CreateExternalDocumentParseResponse, CreateExternalSourceSyncRequest,
-    CreateExternalSourceSyncResponse, CreateMemoryDirectoryRefreshResponse,
-    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
-    CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
-    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
-    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentEnrichmentRunView, DocumentMediaDetailView, DocumentSummary,
-    ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
-    ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
-    ExternalActionResultCallbackResponseView, ExternalAttachmentRefView, ExternalBotMessageView,
-    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
-    ExternalChannelPlatformView, ExternalConversationTestView,
-    ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
-    ExternalDocumentParseDocumentView, ExternalIntegrationActionDispatchConfigRequest,
-    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
-    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
-    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
-    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    CreateAssetLibraryRequest, CreateAssetLibraryResponse, CreateAssistantRunRequest,
+    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
+    CreateClientArtifactResponse, CreateClientConfigPackageRequest,
+    CreateClientConfigPackageResponse, CreateConversationMemoryItemRequest,
+    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
+    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
+    CreateDocumentIngestResponse, CreateExternalChannelConnectionRequest,
+    CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
+    CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
+    CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
+    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
+    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
+    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
+    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
+    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentEnrichmentRunView,
+    DocumentMediaDetailView, DocumentSummary, ExternalActionConfirmationDecisionView,
+    ExternalActionConfirmationRequestView, ExternalActionConfirmationResponseView,
+    ExternalActionResultCallbackRequestView, ExternalActionResultCallbackResponseView,
+    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
+    ExternalConversationTestView, ExternalConversationTimelineResponse,
+    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
+    ExternalIntegrationActionDispatchConfigRequest, ExternalIntegrationAuditItemView,
+    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
+    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
+    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
     InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
-    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
-    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
-    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
-    ModelGatewayProviderStatusView, ModelGatewayRuntimeStatusView, ModelGatewayStatusView,
-    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
-    ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
+    KeyRotateResponse, ListAssetLibrariesResponse, ListExternalConversationTestsResponse,
+    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
+    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
+    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
+    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
+    ModelGatewayRuntimeStatusView, ModelGatewayStatusView, PlanReportRequest,
+    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse,
+    PublishClientArtifactPublicHtmlResponse, PublishClientArtifactResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportView, RegisterDocumentRequest,
-    RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    RegisterDocumentResponse, RemoveAssetLibraryDatasetMembershipResponse,
+    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -85,12 +103,16 @@ use contracts::{
     UpdateChatSessionRequest, UpdateChatSessionResponse, UpdateDatasetRequest,
     UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
     UpdateExternalDocumentDatasetResponse, UpdateStaticPageDraftRequest,
-    UpdateStaticPageDraftResponse, VerifyEmailAuthRequest, VerifyEmailAuthResponse,
-    WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView, WorkflowRuntimeInspectView,
-    WorkflowSignalRequest, WorkflowTaskView,
+    UpdateStaticPageDraftResponse, UpsertAssetLibraryDatasetMembershipRequest,
+    V3ClientArtifactManifestView, V3ClientArtifactUploadConfigView, VerifyEmailAuthRequest,
+    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
+    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView, V3_CLIENT_CONFIG_SCHEMA,
 };
 #[cfg(test)]
-use contracts::{AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView};
+use contracts::{
+    AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView,
+    V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA, V3_CLIENT_ARTIFACT_SOURCE,
+};
 #[cfg(test)]
 use domain_model::StaticPageRenderOutputId;
 use domain_model::{
@@ -144,18 +166,24 @@ use std::{
 #[cfg(test)]
 use storage::NewModelGatewayProfile;
 use storage::{
-    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssistantRun,
-    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
-    NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
-    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
-    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    AssetItemRecord, AssetLibraryDatasetMembershipRecord, AssetLibraryRecord, AssetProfileRecord,
+    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssetLibrary,
+    NewAssetLibraryDatasetMembership, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
+    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
+    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
+    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
+    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
+    NewWorkflowTask, PgStorage,
 };
+#[cfg(test)]
+use storage::{NewAssetItem, NewAssetProfile, NewDatasetAssetMembership};
 use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod asset_library_scope_support;
+mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
 mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
@@ -206,6 +234,9 @@ mod chat_session_manifest_view_support;
 mod chat_session_model_facing;
 mod chat_session_titles;
 mod chat_session_turn_manifest_support;
+mod client_artifact_contract_support;
+mod client_artifact_publish_support;
+mod client_artifact_storage_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
 mod dataset_output_model_facing;
@@ -684,6 +715,7 @@ const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
+const ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
@@ -695,6 +727,7 @@ const ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT: usize = 2;
 const ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT: usize = 8;
 const ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT: usize = 6;
 const ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT: usize = 4;
+const ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT: usize = 2;
 const ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT: usize = 520;
 const ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT: usize = 1200;
@@ -812,6 +845,11 @@ struct HtmlArtifactListQuery {
 struct HtmlArtifactFileQuery {
     local_thread_id: Option<String>,
     assistant_run_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientArtifactsQuery {
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,6 +987,59 @@ pub fn router(
             axum::routing::post(claim_local_data),
         )
         .route("/v1/datasets", get(list_datasets).post(create_dataset))
+        .route(
+            "/v1/asset-libraries",
+            get(list_asset_libraries).post(create_asset_library),
+        )
+        .route(
+            "/v1/client-config-packages",
+            axum::routing::post(create_client_config_package),
+        )
+        .route(
+            "/v1/client-config-packages/{package_id}",
+            get(get_client_config_package),
+        )
+        .route(
+            "/v1/client-artifacts",
+            get(list_client_artifacts).post(create_client_artifact),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}",
+            get(get_client_artifact),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/files/{file_index}",
+            get(download_client_artifact_file),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/files/{file_index}/preview",
+            get(preview_client_artifact_html_file),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/attach-to-dataset",
+            axum::routing::post(attach_client_artifact_to_dataset),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/attach-to-asset-library",
+            axum::routing::post(attach_client_artifact_to_asset_library),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/publish",
+            axum::routing::post(publish_client_artifact),
+        )
+        .route(
+            "/v1/client-artifacts/{artifact_id}/publish-public",
+            axum::routing::post(publish_client_artifact_public_html),
+        )
+        .route(
+            "/v1/asset-libraries/{asset_library_id}/scope-summary",
+            get(get_asset_library_scope_summary),
+        )
+        .route(
+            "/v1/asset-libraries/{asset_library_id}/datasets/{dataset_id}",
+            axum::routing::post(upsert_asset_library_dataset_membership)
+                .delete(remove_asset_library_dataset_membership),
+        )
         .route(
             "/v1/datasets/{dataset_id}",
             axum::routing::patch(update_dataset),
@@ -4301,6 +4392,1460 @@ async fn create_dataset(
         StatusCode::CREATED,
         Json(dataset_summary(dataset, access_warning)),
     ))
+}
+
+async fn require_asset_library_user_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<User, ApiError> {
+    let Some((user, _session)) = current_auth_session(state, headers).await? else {
+        return Err(ApiError::unauthorized(
+            "auth_session_required",
+            "请先登录主系统后再管理企业资产库".to_string(),
+        ));
+    };
+    Ok(user)
+}
+
+async fn list_asset_libraries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<ListAssetLibrariesResponse>, ApiError> {
+    let _user = require_asset_library_user_session(&state, &headers).await?;
+    let asset_libraries = state
+        .storage
+        .asset_libraries()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .map(asset_library_view)
+        .collect();
+
+    Ok(Json(ListAssetLibrariesResponse { asset_libraries }))
+}
+
+async fn create_asset_library(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAssetLibraryRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateAssetLibraryResponse>), ApiError> {
+    let _user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("name", &request.name)?;
+    let domain = trim_optional(request.domain).unwrap_or_else(|| "general".to_string());
+    let visibility =
+        normalize_asset_library_visibility(request.visibility.as_deref().unwrap_or("private"))?;
+    let metadata = normalize_asset_library_metadata(request.metadata)?;
+
+    let asset_library = state
+        .storage
+        .asset_libraries()
+        .create(
+            state.tenant_id,
+            NewAssetLibrary {
+                external_id: trim_optional(request.external_id),
+                name: request.name.trim().to_string(),
+                domain,
+                description: trim_optional(request.description),
+                visibility,
+                metadata,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateAssetLibraryResponse {
+            asset_library: asset_library_view(asset_library),
+        }),
+    ))
+}
+
+const V3_CLIENT_ARTIFACT_UPLOAD_TOKEN_ENV: &str = "V3_CLIENT_ARTIFACT_TOKEN";
+
+async fn create_client_config_package(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateClientConfigPackageRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateClientConfigPackageResponse>), ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("client_id", &request.client_id)?;
+    validate_required("v3_base_url", &request.v3_base_url)?;
+    validate_v3_client_ref_list("dataset_ids", &request.dataset_ids)?;
+    validate_v3_client_ref_list("asset_library_ids", &request.asset_library_ids)?;
+    validate_v3_client_ref_list("skill_packs", &request.skill_packs)?;
+    validate_v3_client_scope_refs(
+        &state,
+        &headers,
+        Some(user.id),
+        &request.dataset_ids,
+        &request.asset_library_ids,
+    )
+    .await?;
+
+    let artifact_upload = request
+        .artifact_upload
+        .unwrap_or(V3ClientArtifactUploadConfigView {
+            mode: "session_token".to_string(),
+            endpoint: "/v1/client-artifacts".to_string(),
+        });
+    validate_client_artifact_upload_config(&artifact_upload)?;
+
+    let tenant_ref =
+        trim_optional(request.tenant_id).unwrap_or_else(|| state.tenant_id.to_string());
+    let user_ref = trim_optional(request.user_id).unwrap_or_else(|| user.id.to_string());
+    let client_id = request.client_id.trim().to_string();
+    let package_id = format!("v3cp_{}", Uuid::new_v4().simple());
+    let mut payload = json!({
+        "schema": V3_CLIENT_CONFIG_SCHEMA,
+        "tenant_id": tenant_ref,
+        "user_id": user_ref,
+        "client_id": client_id,
+        "v3_base_url": request.v3_base_url.trim(),
+        "asset_library_ids": request.asset_library_ids,
+        "dataset_ids": request.dataset_ids,
+        "skill_packs": request.skill_packs,
+        "artifact_upload": artifact_upload,
+        "expires_at": request.expires_at,
+    });
+    if !request.metadata.is_null() {
+        payload["metadata"] = request.metadata;
+    }
+
+    sqlx::query(
+        r#"
+        insert into v3_client_config_packages (
+            package_id, tenant_id, owner_user_id, tenant_ref, user_ref,
+            client_id, package_payload, expires_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(&package_id)
+    .bind(state.tenant_id.0)
+    .bind(user.id.0)
+    .bind(payload["tenant_id"].as_str().unwrap_or_default())
+    .bind(payload["user_id"].as_str().unwrap_or_default())
+    .bind(&client_id)
+    .bind(&payload)
+    .bind(request.expires_at)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+
+    let package = load_client_config_package_view(&state, &package_id).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateClientConfigPackageResponse { package }),
+    ))
+}
+
+async fn get_client_config_package(
+    State(state): State<AppState>,
+    Path(package_id): Path<String>,
+) -> std::result::Result<Json<ClientConfigPackageView>, ApiError> {
+    Ok(Json(
+        load_client_config_package_view(&state, &package_id).await?,
+    ))
+}
+
+async fn list_client_artifacts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ClientArtifactsQuery>,
+) -> std::result::Result<Json<Vec<ClientArtifactView>>, ApiError> {
+    require_client_artifact_upload_authorization(&state, &headers).await?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let rows = sqlx::query(
+        r#"
+        select artifact_id
+        from v3_client_artifacts
+        where tenant_id = $1
+        order by created_at desc
+        limit $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(limit)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+    let mut artifacts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let artifact_id: String = row.get("artifact_id");
+        artifacts.push(load_client_artifact_view(&state, &artifact_id).await?);
+    }
+    Ok(Json(artifacts))
+}
+
+async fn create_client_artifact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> std::result::Result<(StatusCode, Json<CreateClientArtifactResponse>), ApiError> {
+    let auth_user = require_client_artifact_upload_authorization(&state, &headers).await?;
+    let mut manifest = None;
+    let mut files = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request("invalid_multipart", error.to_string()))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "manifest" => {
+                let text = field.text().await.map_err(|error| {
+                    ApiError::bad_request("invalid_manifest", error.to_string())
+                })?;
+                let parsed = serde_json::from_str::<V3ClientArtifactManifestView>(&text).map_err(
+                    |error| {
+                        ApiError::bad_request(
+                            "invalid_manifest",
+                            format!(
+                                "manifest must be v3.client_artifact_manifest.v1 JSON: {error}"
+                            ),
+                        )
+                    },
+                )?;
+                manifest = Some(parsed);
+            }
+            "files" => {
+                if files.len() >= V3_CLIENT_ARTIFACT_MAX_FILES {
+                    return Err(ApiError::bad_request(
+                        "too_many_artifact_files",
+                        format!("at most {V3_CLIENT_ARTIFACT_MAX_FILES} files are allowed"),
+                    ));
+                }
+                let filename = field.file_name().unwrap_or_default().to_string();
+                let bytes = field.bytes().await.map_err(|error| {
+                    ApiError::bad_request("invalid_artifact_file", error.to_string())
+                })?;
+                if bytes.len() > V3_CLIENT_ARTIFACT_MAX_FILE_BYTES {
+                    return Err(ApiError::bad_request(
+                        "artifact_file_too_large",
+                        format!("artifact file {filename} exceeds {V3_CLIENT_ARTIFACT_MAX_FILE_BYTES} bytes"),
+                    ));
+                }
+                files.push(UploadedClientArtifactFile { filename, bytes });
+            }
+            _ => {}
+        }
+    }
+
+    let manifest = manifest.ok_or_else(|| {
+        ApiError::bad_request(
+            "manifest_required",
+            "multipart field manifest is required".to_string(),
+        )
+    })?;
+    validate_client_artifact_manifest(&manifest)?;
+    validate_v3_client_scope_refs(
+        &state,
+        &headers,
+        auth_user.as_ref().map(|user| user.id),
+        &manifest.dataset_ids,
+        &manifest.asset_library_ids,
+    )
+    .await?;
+    validate_client_artifact_files_match_manifest(&manifest, &files)?;
+
+    let artifact_id = format!("v3ca_{}", Uuid::new_v4().simple());
+    let manifest_value = serde_json::to_value(&manifest)
+        .map_err(|error| ApiError::internal("manifest_encode_failed", error.to_string()))?;
+    let mut tx = state
+        .storage
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| ApiError::from_storage(error.into()))?;
+    let row = sqlx::query(
+        r#"
+        insert into v3_client_artifacts (
+            artifact_id, tenant_id, owner_user_id, tenant_ref, user_ref,
+            client_id, task_id, title, artifact_type, status, manifest,
+            dataset_ids, asset_library_ids
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'received', $10, $11, $12)
+        returning id
+        "#,
+    )
+    .bind(&artifact_id)
+    .bind(state.tenant_id.0)
+    .bind(auth_user.as_ref().map(|user| user.id.0))
+    .bind(manifest.tenant_id.trim())
+    .bind(manifest.user_id.trim())
+    .bind(manifest.client_id.trim())
+    .bind(manifest.task_id.trim())
+    .bind(manifest.title.trim())
+    .bind(manifest.artifact_type.trim())
+    .bind(&manifest_value)
+    .bind(&manifest.dataset_ids)
+    .bind(&manifest.asset_library_ids)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+    let artifact_db_id = row.get::<Uuid, _>("id");
+    let client_artifact_object_root = client_artifact_object_root_from_env();
+    let client_artifact_database_file_bytes_limit =
+        client_artifact_database_file_bytes_limit_from_env();
+
+    for (index, descriptor) in manifest.files.iter().enumerate() {
+        let file = &files[index];
+        let mut hasher = Sha256::new();
+        hasher.update(file.bytes.as_ref());
+        let sha256 = format!("{:x}", hasher.finalize());
+        let storage = prepare_client_artifact_file_storage(
+            client_artifact_object_root.as_deref(),
+            client_artifact_database_file_bytes_limit,
+            state.tenant_id.0,
+            &artifact_id,
+            index as i32,
+            &sha256,
+            file.bytes.as_ref(),
+        )?;
+        sqlx::query(
+            r#"
+            insert into v3_client_artifact_files (
+                artifact_id, file_index, filename, content_type, role,
+                size_bytes, sha256, storage_kind, object_locator, bytes
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(artifact_db_id)
+        .bind(index as i32)
+        .bind(descriptor.filename.trim())
+        .bind(descriptor.content_type.trim())
+        .bind(descriptor.role.trim())
+        .bind(file.bytes.len() as i64)
+        .bind(sha256)
+        .bind(storage.storage_kind)
+        .bind(storage.object_locator)
+        .bind(storage.database_bytes)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| ApiError::from_storage(error.into()))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|error| ApiError::from_storage(error.into()))?;
+    let artifact = load_client_artifact_view(&state, &artifact_id).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateClientArtifactResponse { artifact }),
+    ))
+}
+
+async fn get_client_artifact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+) -> std::result::Result<Json<ClientArtifactView>, ApiError> {
+    require_client_artifact_upload_authorization(&state, &headers).await?;
+    Ok(Json(load_client_artifact_view(&state, &artifact_id).await?))
+}
+
+async fn download_client_artifact_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((artifact_id, file_index)): Path<(String, i32)>,
+) -> std::result::Result<Response, ApiError> {
+    require_client_artifact_upload_authorization(&state, &headers).await?;
+    validate_required("artifact_id", &artifact_id)?;
+    if file_index < 0 {
+        return Err(ApiError::bad_request(
+            "invalid_client_artifact_file_index",
+            "file_index must be non-negative".to_string(),
+        ));
+    }
+    let row = sqlx::query(
+        r#"
+        select f.filename, f.content_type, f.storage_kind, f.object_locator, f.bytes
+        from v3_client_artifact_files f
+        join v3_client_artifacts a on a.id = f.artifact_id
+        where a.tenant_id = $1 and a.artifact_id = $2 and f.file_index = $3
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(artifact_id.trim())
+    .bind(file_index)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_artifact_file_not_found",
+            format!("client artifact file {artifact_id}/{file_index} was not found"),
+        )
+    })?;
+    let filename: String = row.get("filename");
+    let content_type: String = row.get("content_type");
+    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
+        storage_kind: row.get("storage_kind"),
+        object_locator: row.get("object_locator"),
+        database_bytes: row.get("bytes"),
+    })?;
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename.replace('"', "")),
+        );
+    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
+        builder = builder.header(header::CONTENT_LENGTH, length);
+    }
+    builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| {
+            ApiError::internal(
+                "client_artifact_download_response_failed",
+                format!("failed to build client artifact download response: {error}"),
+            )
+        })
+}
+
+async fn preview_client_artifact_html_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((artifact_id, file_index)): Path<(String, i32)>,
+) -> std::result::Result<Response, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("artifact_id", &artifact_id)?;
+    if file_index < 0 {
+        return Err(ApiError::bad_request(
+            "invalid_client_artifact_file_index",
+            "file_index must be non-negative".to_string(),
+        ));
+    }
+    let row = sqlx::query(
+        r#"
+        select a.owner_user_id, a.status, a.title,
+               f.filename, f.content_type, f.role, f.size_bytes,
+               f.storage_kind, f.object_locator, f.bytes
+        from v3_client_artifact_files f
+        join v3_client_artifacts a on a.id = f.artifact_id
+        where a.tenant_id = $1 and a.artifact_id = $2 and f.file_index = $3
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(artifact_id.trim())
+    .bind(file_index)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_artifact_file_not_found",
+            format!("client artifact file {artifact_id}/{file_index} was not found"),
+        )
+    })?;
+    let owner_user_id = row.get::<Option<Uuid>, _>("owner_user_id").map(UserId);
+    ensure_owner_managed_resource(
+        "client_artifact",
+        artifact_id.trim().to_string(),
+        owner_user_id,
+        Some(user.id),
+    )?;
+    let status: String = row.get("status");
+    if status != "published" {
+        return Err(ApiError::bad_request(
+            "client_artifact_not_published",
+            "client artifact must be published before HTML preview is available".to_string(),
+        ));
+    }
+    let filename: String = row.get("filename");
+    let content_type: String = row.get("content_type");
+    let role: String = row.get("role");
+    if !client_artifact_file_is_html(&filename, &content_type, &role) {
+        return Err(ApiError::bad_request(
+            "client_artifact_preview_not_html",
+            "only HTML client artifact files can be previewed inline".to_string(),
+        ));
+    }
+    let size_bytes: i64 = row.get("size_bytes");
+    if size_bytes > V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES as i64 {
+        return Err(ApiError::bad_request(
+            "client_artifact_preview_too_large",
+            format!("HTML preview is limited to {V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES} bytes"),
+        ));
+    }
+    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
+        storage_kind: row.get("storage_kind"),
+        object_locator: row.get("object_locator"),
+        database_bytes: row.get("bytes"),
+    })?;
+    let html = String::from_utf8(bytes).map_err(|_| {
+        ApiError::bad_request(
+            "client_artifact_html_not_utf8",
+            "HTML preview requires UTF-8 encoded content".to_string(),
+        )
+    })?;
+    let sanitized = sanitize_client_artifact_preview_html(&html);
+    client_artifact_html_preview_response(&row.get::<String, _>("title"), &filename, &sanitized)
+}
+
+async fn attach_client_artifact_to_dataset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+    Json(request): Json<AttachClientArtifactToDatasetRequest>,
+) -> std::result::Result<Json<AttachClientArtifactToDatasetResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("dataset_id", &request.dataset_id)?;
+    let dataset_id = request.dataset_id.trim().to_string();
+    validate_v3_client_ref_list("dataset_ids", std::slice::from_ref(&dataset_id))?;
+    validate_v3_client_scope_refs(
+        &state,
+        &headers,
+        Some(user.id),
+        std::slice::from_ref(&dataset_id),
+        &[],
+    )
+    .await?;
+    append_client_artifact_ref(&state, &artifact_id, "dataset_ids", &dataset_id).await?;
+    Ok(Json(AttachClientArtifactToDatasetResponse {
+        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+    }))
+}
+
+async fn attach_client_artifact_to_asset_library(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+    Json(request): Json<AttachClientArtifactToAssetLibraryRequest>,
+) -> std::result::Result<Json<AttachClientArtifactToAssetLibraryResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("asset_library_id", &request.asset_library_id)?;
+    let asset_library_id = request.asset_library_id.trim().to_string();
+    validate_v3_client_ref_list("asset_library_ids", std::slice::from_ref(&asset_library_id))?;
+    validate_v3_client_scope_refs(
+        &state,
+        &headers,
+        Some(user.id),
+        &[],
+        std::slice::from_ref(&asset_library_id),
+    )
+    .await?;
+    append_client_artifact_ref(&state, &artifact_id, "asset_library_ids", &asset_library_id)
+        .await?;
+    Ok(Json(AttachClientArtifactToAssetLibraryResponse {
+        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+    }))
+}
+
+async fn publish_client_artifact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+) -> std::result::Result<Json<PublishClientArtifactResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("artifact_id", &artifact_id)?;
+    let artifact_id = artifact_id.trim().to_string();
+    let row = sqlx::query(
+        r#"
+        select owner_user_id, manifest
+        from v3_client_artifacts
+        where tenant_id = $1 and artifact_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&artifact_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_artifact_not_found",
+            format!("client artifact {artifact_id} was not found"),
+        )
+    })?;
+    let owner_user_id = row.get::<Option<Uuid>, _>("owner_user_id").map(UserId);
+    ensure_owner_managed_resource(
+        "client_artifact",
+        artifact_id.clone(),
+        owner_user_id,
+        Some(user.id),
+    )?;
+    let manifest = mark_client_artifact_manifest_published(row.get("manifest"), Utc::now())?;
+    let result = sqlx::query(
+        r#"
+        update v3_client_artifacts
+        set status = 'published', manifest = $3, updated_at = now()
+        where tenant_id = $1 and artifact_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&artifact_id)
+    .bind(&manifest)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found(
+            "client_artifact_not_found",
+            format!("client artifact {artifact_id} was not found"),
+        ));
+    }
+
+    Ok(Json(PublishClientArtifactResponse {
+        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+    }))
+}
+
+async fn publish_client_artifact_public_html(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(artifact_id): Path<String>,
+) -> std::result::Result<Json<PublishClientArtifactPublicHtmlResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    validate_required("artifact_id", &artifact_id)?;
+    let artifact_id = artifact_id.trim().to_string();
+    let artifact_row = sqlx::query(
+        r#"
+        select id, owner_user_id, status, title, manifest, dataset_ids, asset_library_ids
+        from v3_client_artifacts
+        where tenant_id = $1 and artifact_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&artifact_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_artifact_not_found",
+            format!("client artifact {artifact_id} was not found"),
+        )
+    })?;
+    let owner_user_id = artifact_row
+        .get::<Option<Uuid>, _>("owner_user_id")
+        .map(UserId);
+    ensure_owner_managed_resource(
+        "client_artifact",
+        artifact_id.clone(),
+        owner_user_id,
+        Some(user.id),
+    )?;
+    let status: String = artifact_row.get("status");
+    if status != "published" {
+        return Err(ApiError::bad_request(
+            "client_artifact_not_published",
+            "client artifact must be privately published before public HTML publication is available"
+                .to_string(),
+        ));
+    }
+
+    let artifact_db_id = artifact_row.get::<Uuid, _>("id");
+    let file_rows = sqlx::query(
+        r#"
+        select file_index, filename, content_type, role, size_bytes,
+               storage_kind, object_locator, bytes
+        from v3_client_artifact_files
+        where artifact_id = $1
+        order by case when role = 'primary_html' then 0 else 1 end, file_index asc
+        "#,
+    )
+    .bind(artifact_db_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+    let file_row = file_rows
+        .into_iter()
+        .find(|row| {
+            client_artifact_file_is_html(
+                &row.get::<String, _>("filename"),
+                &row.get::<String, _>("content_type"),
+                &row.get::<String, _>("role"),
+            )
+        })
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "client_artifact_public_html_not_found",
+                "client artifact does not contain an HTML file that can be published".to_string(),
+            )
+        })?;
+    let file_index: i32 = file_row.get("file_index");
+    let filename: String = file_row.get("filename");
+    let content_type: String = file_row.get("content_type");
+    let role: String = file_row.get("role");
+    let size_bytes: i64 = file_row.get("size_bytes");
+    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
+        storage_kind: file_row.get("storage_kind"),
+        object_locator: file_row.get("object_locator"),
+        database_bytes: file_row.get("bytes"),
+    })?;
+    let html = String::from_utf8(bytes).map_err(|_| {
+        ApiError::bad_request(
+            "client_artifact_html_not_utf8",
+            "public HTML publication requires UTF-8 encoded content".to_string(),
+        )
+    })?;
+    let sanitized = sanitize_client_artifact_preview_html(&html);
+    let title: String = artifact_row.get("title");
+    let public_html = client_artifact_sandboxed_html_document(&title, &filename, &sanitized);
+    let relative_dir = client_artifact_public_html_relative_dir(&artifact_id, file_index)?;
+    let artifact_dir = external_channel_generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        ApiError::internal(
+            "client_artifact_public_publish_failed",
+            format!("failed to create public client artifact directory: {error}"),
+        )
+    })?;
+    fs::write(artifact_dir.join("index.html"), public_html).map_err(|error| {
+        ApiError::internal(
+            "client_artifact_public_publish_failed",
+            format!("failed to write public client artifact HTML: {error}"),
+        )
+    })?;
+    let public_url = external_channel_generated_artifact_public_url(&relative_dir);
+    let published_at = Utc::now();
+    let dataset_ids: Vec<String> = artifact_row.get("dataset_ids");
+    let asset_library_ids: Vec<String> = artifact_row.get("asset_library_ids");
+    let html_artifact = client_artifact_public_html_artifact_manifest(
+        &artifact_id,
+        &title,
+        file_index,
+        &filename,
+        &content_type,
+        &role,
+        size_bytes,
+        &public_url,
+        &dataset_ids,
+        &asset_library_ids,
+        published_at,
+    );
+    let html_artifact_value = serde_json::to_value(&html_artifact).map_err(|error| {
+        ApiError::internal(
+            "html_artifact_serialize_failed",
+            format!("failed to serialize client artifact HTML manifest: {error}"),
+        )
+    })?;
+    state
+        .storage
+        .html_artifacts()
+        .upsert(
+            state.tenant_id,
+            &NewHtmlArtifact {
+                id: html_artifact.id.clone(),
+                owner_user_id: Some(user.id),
+                assistant_run_id: None,
+                local_thread_id: None,
+                source_type: html_artifact_serialized_variant(&html_artifact.source_type),
+                template_id: html_artifact_serialized_variant(&html_artifact.template_id),
+                interaction_mode: html_artifact_serialized_variant(&html_artifact.interaction_mode),
+                manifest: html_artifact_value,
+                created_at: html_artifact.created_at,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let manifest = mark_client_artifact_manifest_public_html_published(
+        artifact_row.get("manifest"),
+        file_index,
+        &public_url,
+        &html_artifact.id,
+        published_at,
+    )?;
+    sqlx::query(
+        r#"
+        update v3_client_artifacts
+        set manifest = $3, updated_at = now()
+        where tenant_id = $1 and artifact_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&artifact_id)
+    .bind(&manifest)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+
+    Ok(Json(PublishClientArtifactPublicHtmlResponse {
+        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+        html_artifact,
+        public_url,
+    }))
+}
+
+async fn upsert_asset_library_dataset_membership(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((asset_library_id, dataset_id)): Path<(String, String)>,
+    Json(request): Json<UpsertAssetLibraryDatasetMembershipRequest>,
+) -> std::result::Result<Json<AssetLibraryDatasetMembershipResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
+    let dataset_id = parse_dataset_id(&dataset_id)?;
+    let asset_library = load_asset_library(&state, asset_library_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        Some(user.id),
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        Some(user.id),
+    )?;
+    let role = trim_optional(request.role).unwrap_or_else(|| "member".to_string());
+    validate_required("role", &role)?;
+    let priority = request.priority.unwrap_or(100);
+
+    let membership = state
+        .storage
+        .asset_libraries()
+        .upsert_dataset_membership(
+            state.tenant_id,
+            asset_library_id,
+            NewAssetLibraryDatasetMembership {
+                dataset_id,
+                role,
+                priority,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let asset_library = state
+        .storage
+        .asset_libraries()
+        .get_by_id(state.tenant_id, asset_library.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .unwrap_or(asset_library);
+
+    Ok(Json(AssetLibraryDatasetMembershipResponse {
+        asset_library: asset_library_view(asset_library),
+        membership: asset_library_membership_view(membership),
+    }))
+}
+
+async fn remove_asset_library_dataset_membership(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((asset_library_id, dataset_id)): Path<(String, String)>,
+) -> std::result::Result<Json<RemoveAssetLibraryDatasetMembershipResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
+    let dataset_id = parse_dataset_id(&dataset_id)?;
+    let asset_library = load_asset_library(&state, asset_library_id).await?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        Some(user.id),
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        Some(user.id),
+    )?;
+
+    let removed = state
+        .storage
+        .asset_libraries()
+        .remove_dataset_membership(state.tenant_id, asset_library_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .is_some();
+    let asset_library = state
+        .storage
+        .asset_libraries()
+        .get_by_id(state.tenant_id, asset_library.id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .unwrap_or(asset_library);
+
+    Ok(Json(RemoveAssetLibraryDatasetMembershipResponse {
+        asset_library: asset_library_view(asset_library),
+        dataset_id,
+        removed,
+    }))
+}
+
+async fn get_asset_library_scope_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(asset_library_id): Path<String>,
+) -> std::result::Result<Json<AssetLibraryScopeSummaryResponse>, ApiError> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let asset_library = load_asset_library(&state, asset_library_id).await?;
+    let memberships = state
+        .storage
+        .asset_libraries()
+        .list_dataset_memberships(state.tenant_id, asset_library_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let visible_datasets = filter_visible_datasets(
+        state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .map_err(ApiError::from_storage)?,
+        &active_secret_binding_ids,
+        Some(user.id),
+        local_thread_id.as_deref(),
+    )
+    .into_iter()
+    .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
+    .collect::<Vec<_>>();
+    let visible_dataset_ids = visible_datasets
+        .iter()
+        .map(|dataset| dataset.id)
+        .collect::<Vec<_>>();
+    let scope_memberships = memberships
+        .iter()
+        .map(
+            |membership| asset_library_scope_support::AssetLibraryDatasetMembership {
+                dataset_id: membership.dataset_id,
+                role: membership.role.clone(),
+                priority: membership.priority,
+            },
+        )
+        .collect::<Vec<_>>();
+    let scope = asset_library_scope_support::resolve_asset_library_dataset_scope(
+        &scope_memberships,
+        &visible_dataset_ids,
+    );
+    let authorized_dataset_ids = scope.dataset_ids.iter().copied().collect::<BTreeSet<_>>();
+    let visible_memberships = memberships
+        .into_iter()
+        .filter(|membership| authorized_dataset_ids.contains(&membership.dataset_id))
+        .map(asset_library_membership_view)
+        .collect::<Vec<_>>();
+    let datasets = visible_datasets
+        .into_iter()
+        .filter(|dataset| authorized_dataset_ids.contains(&dataset.id))
+        .map(|dataset| dataset_summary(dataset, None))
+        .collect::<Vec<_>>();
+    let (assets, asset_profile_hints) = load_asset_library_authorized_asset_supply(
+        &state,
+        asset_library_id,
+        &authorized_dataset_ids,
+    )
+    .await?;
+    let asset_count = assets.len();
+    let asset_profile_hint_count = asset_profile_hints.len();
+
+    Ok(Json(AssetLibraryScopeSummaryResponse {
+        summary: AssetLibraryScopeSummaryView {
+            asset_library: asset_library_view(asset_library),
+            memberships: visible_memberships,
+            datasets,
+            dataset_ids: scope.dataset_ids,
+            assets,
+            asset_profile_hints,
+            denied_dataset_count: scope.denied_dataset_ids.len(),
+            membership_count: scope.membership_count,
+            authorized_dataset_count: authorized_dataset_ids.len(),
+            asset_count,
+            asset_profile_hint_count,
+            scope_policy: "asset_library_memberships_intersect_authorized_datasets".to_string(),
+        },
+    }))
+}
+
+async fn load_asset_library_authorized_asset_supply(
+    state: &AppState,
+    asset_library_id: Uuid,
+    authorized_dataset_ids: &BTreeSet<DatasetId>,
+) -> std::result::Result<(Vec<AssetItemView>, Vec<AssetProfileSupplyHintView>), ApiError> {
+    if authorized_dataset_ids.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+
+    let mut asset_views = Vec::new();
+    let mut profile_inputs = Vec::new();
+    let direct_assets = state
+        .storage
+        .asset_items()
+        .list_by_asset_library(state.tenant_id, asset_library_id, 100)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let dataset_assets = state
+        .storage
+        .asset_items()
+        .list_by_dataset_ids(
+            state.tenant_id,
+            &authorized_dataset_ids.iter().copied().collect::<Vec<_>>(),
+            100,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut assets_by_id = BTreeMap::new();
+    for asset in direct_assets.into_iter().chain(dataset_assets.into_iter()) {
+        assets_by_id.entry(asset.id).or_insert(asset);
+    }
+
+    for asset in assets_by_id.into_values().take(100) {
+        let dataset_memberships = state
+            .storage
+            .asset_items()
+            .list_dataset_memberships(state.tenant_id, asset.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        if !dataset_memberships
+            .iter()
+            .any(|membership| authorized_dataset_ids.contains(&membership.dataset_id))
+        {
+            continue;
+        }
+
+        let profiles = state
+            .storage
+            .asset_items()
+            .list_profiles(state.tenant_id, asset.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        profile_inputs.extend(asset_profile_supply_inputs(&asset, &profiles));
+        asset_views.push(asset_item_view(asset));
+    }
+    let asset_profile_hints =
+        asset_profile_supply_support::build_asset_profile_supply_hints(&profile_inputs, 100)
+            .into_iter()
+            .map(asset_profile_supply_hint_view)
+            .collect::<Vec<_>>();
+
+    Ok((asset_views, asset_profile_hints))
+}
+
+async fn load_asset_library(
+    state: &AppState,
+    asset_library_id: Uuid,
+) -> std::result::Result<AssetLibraryRecord, ApiError> {
+    state
+        .storage
+        .asset_libraries()
+        .get_by_id(state.tenant_id, asset_library_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| asset_library_not_found_error(asset_library_id))
+}
+
+async fn load_client_config_package_view(
+    state: &AppState,
+    package_id: &str,
+) -> std::result::Result<ClientConfigPackageView, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select package_id, tenant_ref, user_ref, client_id, package_payload, expires_at, created_at
+        from v3_client_config_packages
+        where tenant_id = $1 and package_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(package_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_config_package_not_found",
+            format!("client config package {package_id} was not found"),
+        )
+    })?;
+    let payload = row.get::<Value, _>("package_payload");
+    let artifact_upload = serde_json::from_value::<V3ClientArtifactUploadConfigView>(
+        payload.get("artifact_upload").cloned().unwrap_or_else(
+            || json!({"mode": "session_token", "endpoint": "/v1/client-artifacts"}),
+        ),
+    )
+    .map_err(|error| {
+        ApiError::internal("client_config_package_decode_failed", error.to_string())
+    })?;
+
+    Ok(ClientConfigPackageView {
+        package_id: row.get("package_id"),
+        tenant_id: row.get("tenant_ref"),
+        user_id: row.get("user_ref"),
+        client_id: row.get("client_id"),
+        v3_base_url: payload
+            .get("v3_base_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        asset_library_ids: value_string_vec(payload.get("asset_library_ids")),
+        dataset_ids: value_string_vec(payload.get("dataset_ids")),
+        skill_packs: value_string_vec(payload.get("skill_packs")),
+        artifact_upload,
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+        config_package: payload,
+    })
+}
+
+async fn load_client_artifact_view(
+    state: &AppState,
+    artifact_id: &str,
+) -> std::result::Result<ClientArtifactView, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select id, artifact_id, tenant_ref, user_ref, client_id, task_id, title,
+               artifact_type, status, manifest, dataset_ids, asset_library_ids,
+               created_at, updated_at
+        from v3_client_artifacts
+        where tenant_id = $1 and artifact_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(artifact_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "client_artifact_not_found",
+            format!("client artifact {artifact_id} was not found"),
+        )
+    })?;
+    let artifact_db_id = row.get::<Uuid, _>("id");
+    let file_rows = sqlx::query(
+        r#"
+        select file_index, filename, content_type, role, size_bytes, sha256
+        from v3_client_artifact_files
+        where artifact_id = $1
+        order by file_index asc
+        "#,
+    )
+    .bind(artifact_db_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+    let artifact_status: String = row.get("status");
+    let manifest_value: Value = row.get("manifest");
+    let files = file_rows
+        .into_iter()
+        .map(|row| ClientArtifactFileRecordView {
+            file_index: row.get::<i32, _>("file_index"),
+            filename: row.get::<String, _>("filename"),
+            content_type: row.get::<String, _>("content_type"),
+            role: row.get::<String, _>("role"),
+            size_bytes: row.get("size_bytes"),
+            sha256: row.get("sha256"),
+            download_url: client_artifact_file_download_url(
+                artifact_id,
+                row.get::<i32, _>("file_index"),
+            ),
+            preview_url: client_artifact_file_preview_url(
+                artifact_id,
+                row.get::<i32, _>("file_index"),
+                &row.get::<String, _>("filename"),
+                &row.get::<String, _>("content_type"),
+                &row.get::<String, _>("role"),
+                &artifact_status,
+            ),
+            public_url: client_artifact_file_public_url(
+                &manifest_value,
+                row.get::<i32, _>("file_index"),
+            ),
+        })
+        .collect();
+
+    Ok(ClientArtifactView {
+        artifact_id: row.get("artifact_id"),
+        tenant_id: row.get("tenant_ref"),
+        user_id: row.get("user_ref"),
+        client_id: row.get("client_id"),
+        task_id: row.get("task_id"),
+        title: row.get("title"),
+        artifact_type: row.get("artifact_type"),
+        status: artifact_status,
+        dataset_ids: row.get("dataset_ids"),
+        asset_library_ids: row.get("asset_library_ids"),
+        files,
+        manifest: manifest_value,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+async fn require_client_artifact_upload_authorization(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<Option<User>, ApiError> {
+    if let Some((user, _session)) = current_auth_session(state, headers).await? {
+        return Ok(Some(user));
+    }
+    let Some(expected) = std::env::var(V3_CLIENT_ARTIFACT_UPLOAD_TOKEN_ENV)
+        .ok()
+        .and_then(|value| trim_optional(Some(value)))
+    else {
+        return Err(ApiError::unauthorized(
+            "client_artifact_token_required",
+            "client artifact upload requires a V3 session or upload token".to_string(),
+        ));
+    };
+    let Some(actual) = bearer_token(headers) else {
+        return Err(ApiError::unauthorized(
+            "client_artifact_token_required",
+            "client artifact upload token is required".to_string(),
+        ));
+    };
+    if actual != expected {
+        return Err(ApiError::unauthorized(
+            "invalid_client_artifact_token",
+            "client artifact upload token is invalid".to_string(),
+        ));
+    }
+    Ok(None)
+}
+
+async fn append_client_artifact_ref(
+    state: &AppState,
+    artifact_id: &str,
+    field: &'static str,
+    value: &str,
+) -> std::result::Result<(), ApiError> {
+    let sql = match field {
+        "dataset_ids" => {
+            r#"
+            update v3_client_artifacts
+            set dataset_ids = case
+                    when $3 = any(dataset_ids) then dataset_ids
+                    else array_append(dataset_ids, $3)
+                end,
+                updated_at = now()
+            where tenant_id = $1 and artifact_id = $2
+            "#
+        }
+        "asset_library_ids" => {
+            r#"
+            update v3_client_artifacts
+            set asset_library_ids = case
+                    when $3 = any(asset_library_ids) then asset_library_ids
+                    else array_append(asset_library_ids, $3)
+                end,
+                updated_at = now()
+            where tenant_id = $1 and artifact_id = $2
+            "#
+        }
+        _ => {
+            return Err(ApiError::internal(
+                "invalid_client_artifact_ref_field",
+                format!("unsupported client artifact ref field {field}"),
+            ))
+        }
+    };
+    let result = sqlx::query(sql)
+        .bind(state.tenant_id.0)
+        .bind(artifact_id)
+        .bind(value)
+        .execute(state.storage.pool())
+        .await
+        .map_err(|error| ApiError::from_storage(error.into()))?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found(
+            "client_artifact_not_found",
+            format!("client artifact {artifact_id} was not found"),
+        ));
+    }
+    Ok(())
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    raw.strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+async fn validate_v3_client_scope_refs(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: Option<UserId>,
+    dataset_ids: &[String],
+    asset_library_ids: &[String],
+) -> std::result::Result<(), ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(headers)?;
+    let local_thread_id = local_thread_id_from_headers(headers);
+    for dataset_ref in dataset_ids {
+        if let Ok(dataset_uuid) = Uuid::parse_str(dataset_ref.trim()) {
+            let dataset_id = DatasetId(dataset_uuid);
+            load_visible_dataset_for_user_with_local_scope(
+                state,
+                dataset_id,
+                &active_secret_binding_ids,
+                current_user_id,
+                local_thread_id.as_deref(),
+            )
+            .await?;
+        }
+    }
+    for asset_library_ref in asset_library_ids {
+        if let Ok(asset_library_id) = Uuid::parse_str(asset_library_ref.trim()) {
+            load_asset_library(state, asset_library_id).await?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_v3_client_ref_list(
+    field: &'static str,
+    values: &[String],
+) -> std::result::Result<(), ApiError> {
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        validate_required(field, trimmed)?;
+        if !seen.insert(trimmed.to_string()) {
+            return Err(ApiError::bad_request(
+                "duplicate_client_scope_ref",
+                format!("{field} contains duplicate value {trimmed}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn value_string_vec(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_asset_library_id(raw: &str) -> std::result::Result<Uuid, ApiError> {
+    Uuid::parse_str(raw).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_asset_library_id",
+            format!("{raw} is not a valid UUID"),
+        )
+    })
+}
+
+fn asset_library_not_found_error(asset_library_id: Uuid) -> ApiError {
+    ApiError::not_found(
+        "asset_library_not_found",
+        format!("asset library {asset_library_id} was not found"),
+    )
+}
+
+fn normalize_asset_library_visibility(raw: &str) -> std::result::Result<String, ApiError> {
+    let visibility = raw.trim().to_ascii_lowercase();
+    validate_required("visibility", &visibility)?;
+    match visibility.as_str() {
+        "private" | "internal" | "public" => Ok(visibility),
+        _ => Err(ApiError::bad_request(
+            "invalid_asset_library_visibility",
+            "visibility must be private, internal, or public".to_string(),
+        )),
+    }
+}
+
+fn normalize_asset_library_metadata(metadata: Value) -> std::result::Result<Value, ApiError> {
+    if metadata.is_null() {
+        return Ok(json!({}));
+    }
+    if metadata.is_object() {
+        return Ok(metadata);
+    }
+    Err(ApiError::bad_request(
+        "invalid_asset_library_metadata",
+        "metadata must be a JSON object".to_string(),
+    ))
+}
+
+fn asset_library_view(asset_library: AssetLibraryRecord) -> AssetLibraryView {
+    AssetLibraryView {
+        id: asset_library.id.to_string(),
+        external_id: asset_library.external_id,
+        name: asset_library.name,
+        domain: asset_library.domain,
+        description: asset_library.description,
+        visibility: asset_library.visibility,
+        metadata: asset_library.metadata,
+        dataset_count: asset_library.dataset_count,
+        created_at: asset_library.created_at,
+        updated_at: asset_library.updated_at,
+    }
+}
+
+fn asset_library_membership_view(
+    membership: AssetLibraryDatasetMembershipRecord,
+) -> AssetLibraryDatasetMembershipView {
+    AssetLibraryDatasetMembershipView {
+        asset_library_id: membership.asset_library_id.to_string(),
+        dataset_id: membership.dataset_id,
+        role: membership.role,
+        priority: membership.priority,
+        created_at: membership.created_at,
+    }
+}
+
+fn asset_item_view(asset: AssetItemRecord) -> AssetItemView {
+    AssetItemView {
+        id: asset.id.to_string(),
+        asset_library_id: asset.asset_library_id.map(|id| id.to_string()),
+        collection_id: asset.collection_id.map(|id| id.to_string()),
+        external_id: asset.external_id,
+        title: asset.title,
+        asset_kind: asset.asset_kind,
+        source_kind: asset.source_kind,
+        source_id: asset.source_id,
+        content_type: asset.content_type,
+        object_key: asset.object_key,
+        metadata: asset.metadata,
+        profile_count: asset.profile_count,
+        created_at: asset.created_at,
+        updated_at: asset.updated_at,
+    }
+}
+
+fn asset_profile_supply_inputs(
+    asset: &AssetItemRecord,
+    profiles: &[AssetProfileRecord],
+) -> Vec<asset_profile_supply_support::AssetProfileSupplyInput> {
+    profiles
+        .iter()
+        .map(
+            |profile| asset_profile_supply_support::AssetProfileSupplyInput {
+                asset_id: asset.id.to_string(),
+                title: asset.title.clone(),
+                asset_kind: asset.asset_kind.clone(),
+                source_kind: asset.source_kind.clone(),
+                profile_kind: profile.profile_kind.clone(),
+                attributes: profile.attributes.clone(),
+            },
+        )
+        .collect()
+}
+
+fn asset_profile_supply_hint_view(
+    hint: asset_profile_supply_support::AssetProfileSupplyHint,
+) -> AssetProfileSupplyHintView {
+    AssetProfileSupplyHintView {
+        asset_id: hint.asset_id,
+        title: hint.title,
+        asset_kind: hint.asset_kind,
+        source_kind: hint.source_kind,
+        profile_kind: hint.profile_kind,
+        summary: hint.summary,
+        noun_terms: hint.noun_terms,
+        facets: hint.facets,
+    }
 }
 
 async fn update_dataset(
@@ -33909,6 +35454,10 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         .and_then(|quality| quality.get("datasetFactSnapshotCount"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let asset_profile_hint_count = supply_quality
+        .and_then(|quality| quality.get("assetProfileHintCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let document_not_ready_count = supply_quality
         .and_then(|quality| quality.get("documentNotReadyCount"))
         .and_then(Value::as_u64)
@@ -33926,7 +35475,7 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
             "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
         ),
         format!(
-            "供料质量：{supply_quality_status}；来源定位 {citation_locator_count} 个；库级事实快照 {dataset_fact_snapshot_count} 个；媒体上下文 {media_context_count} 个。"
+            "供料质量：{supply_quality_status}；来源定位 {citation_locator_count} 个；库级事实快照 {dataset_fact_snapshot_count} 个；媒体上下文 {media_context_count} 个；资产画像提示 {asset_profile_hint_count} 个。"
         ),
         "供料只作为可引用上下文；最终正文由模型自行组织。涉及供料里的数据、指标、文档事实或产物状态时不要编造；普通常识、解释和建议可以使用模型通用知识，并区分供料事实与通用判断。detail_targets 只代表建议细读目标，不是引用依据。".to_string(),
     ];
@@ -35060,6 +36609,40 @@ fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
     }
     if let Some(document_id) = document_id {
         parts.push(format!("document_id={document_id}"));
+    }
+    if item_type == "asset_profile_hint" {
+        if let Some(title) = item
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!(
+                "标题={}",
+                truncate_assistant_supply_text(title, ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT)
+            ));
+        }
+        if let Some(asset_kind) = item
+            .get("asset_kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("资产={asset_kind}"));
+        }
+        let noun_terms = item
+            .get("noun_terms")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .take(6)
+            .collect::<Vec<_>>();
+        if !noun_terms.is_empty() {
+            parts.push(format!("名词={}", noun_terms.join("、")));
+        }
     }
     if let Some(media) = assistant_run_model_media_brief(item) {
         parts.push(media);
@@ -42699,6 +44282,8 @@ fn assistant_run_answer_quality_case_supply_sources(evidence_state: &Value) -> V
         ("spreadsheet_row_analysis_count", "spreadsheet_row_analysis"),
         ("mediaContextCount", "media_context"),
         ("media_context_count", "media_context"),
+        ("assetProfileHintCount", "asset_profile_hint"),
+        ("asset_profile_hint_count", "asset_profile_hint"),
     ] {
         if supply_quality
             .get(field)
@@ -46438,6 +48023,10 @@ async fn build_assistant_run_evidence_state(
         .await?;
         supplied_items.extend(spreadsheet_row_analysis_items);
 
+        let asset_profile_hint_items =
+            build_assistant_run_asset_profile_hint_supply(state, &dataset).await?;
+        supplied_items.extend(asset_profile_hint_items);
+
         let evidences = if retrieval_search_backend() == RetrievalSearchBackend::PostgresLexical
             && !allow_selected_documents_without_acl_snapshot
         {
@@ -46630,6 +48219,66 @@ async fn build_assistant_run_evidence_state(
         "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
     }))
+}
+
+async fn build_assistant_run_asset_profile_hint_supply(
+    state: &AppState,
+    dataset: &Dataset,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let assets = state
+        .storage
+        .asset_items()
+        .list_by_dataset_ids(
+            state.tenant_id,
+            &[dataset.id],
+            ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut profile_inputs = Vec::new();
+    for asset in assets {
+        let profiles = state
+            .storage
+            .asset_items()
+            .list_profiles(state.tenant_id, asset.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        profile_inputs.extend(asset_profile_supply_inputs(&asset, &profiles));
+    }
+
+    Ok(
+        asset_profile_supply_support::build_asset_profile_supply_hints(
+            &profile_inputs,
+            ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
+        )
+        .into_iter()
+        .map(|hint| {
+            json!({
+                "type": "asset_profile_hint",
+                "source": "asset_profile",
+                "dataset_id": dataset.id,
+                "dataset_key": dataset.key.clone(),
+                "asset_id": hint.asset_id,
+                "title": hint.title,
+                "asset_kind": hint.asset_kind,
+                "source_kind": hint.source_kind,
+                "profile_kind": hint.profile_kind,
+                "summary": hint.summary,
+                "noun_terms": hint.noun_terms,
+                "facets": hint.facets,
+                "model_guidance": [
+                    "This is a compact asset profile hint generated from parsed assets in the selected dataset.",
+                    "Use it to choose likely relevant documents, images, slides, videos, or terms.",
+                    "Do not treat it as a direct quote or final source evidence; cite retrieval evidence, detail reads, database rows, or source documents for exact claims."
+                ],
+            })
+        })
+        .collect(),
+    )
 }
 
 async fn build_assistant_run_dataset_fact_snapshot_supply(
@@ -55308,6 +56957,19 @@ async fn register_document(
         .map_err(ApiError::from_storage)?;
     let document =
         record_local_document_content_fingerprint_if_available(&state, document, Utc::now()).await;
+    if let Err(error) = state
+        .storage
+        .asset_items()
+        .sync_document_asset_profile(state.tenant_id, &document, &[])
+        .await
+    {
+        tracing::warn!(
+            error = ?error,
+            document_id = %document.id,
+            dataset_id = %document.dataset_id,
+            "document asset profile sync failed after register; upload response will continue"
+        );
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -55334,6 +56996,25 @@ async fn create_document_ingest(
         local_thread_id.as_deref(),
     )
     .await?;
+    let existing_chunks = state
+        .storage
+        .document_chunks()
+        .list_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if let Err(error) = state
+        .storage
+        .asset_items()
+        .sync_document_asset_profile(state.tenant_id, &document, &existing_chunks)
+        .await
+    {
+        tracing::warn!(
+            error = ?error,
+            document_id = %document.id,
+            dataset_id = %document.dataset_id,
+            "document asset profile sync failed before ingest workflow; ingest will continue"
+        );
+    }
 
     if document_is_zip_archive(&document) {
         let response = create_zip_archive_child_ingests(&state, &document).await?;
@@ -55425,6 +57106,19 @@ async fn create_zip_archive_child_ingests(
             Utc::now(),
         )
         .await;
+        if let Err(error) = state
+            .storage
+            .asset_items()
+            .sync_document_asset_profile(state.tenant_id, &child_document, &[])
+            .await
+        {
+            tracing::warn!(
+                error = ?error,
+                document_id = %child_document.id,
+                dataset_id = %child_document.dataset_id,
+                "zip child document asset profile sync failed; child ingest will continue"
+            );
+        }
 
         let execution = build_initial_upload_ingest_execution(state, &child_document)?;
         let initial_event = build_initial_upload_ingest_event(&execution, &child_document);
@@ -55468,6 +57162,19 @@ async fn create_zip_archive_child_ingests(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    if let Err(error) = state
+        .storage
+        .asset_items()
+        .sync_document_asset_profile(state.tenant_id, &updated_parent, &[])
+        .await
+    {
+        tracing::warn!(
+            error = ?error,
+            document_id = %updated_parent.id,
+            dataset_id = %updated_parent.dataset_id,
+            "zip parent document asset profile sync failed; response will continue"
+        );
+    }
 
     Ok(CreateDocumentIngestResponse {
         document: to_document_summary(updated_parent),
@@ -62376,6 +64083,7 @@ impl std::error::Error for ApiError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use domain_model::{
         AssistantRun, AssistantRunEventId, ChatMessageId, ChatSession, Dataset, DatasetId,
         DatasetLifecycle, DatasetOutput, DatasetOutputId, DatasetVisibility, DocumentChunk,
@@ -62406,6 +64114,237 @@ mod tests {
         assert!(answer.contains("新世界百货经营管理月报表已生成"));
         assert!(answer.contains("[新世界百货经营管理月报表]("));
         assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
+    }
+
+    #[test]
+    fn v3_client_artifact_file_download_url_stays_platform_api_scoped() {
+        assert_eq!(
+            client_artifact_file_download_url("v3ca_1", 0),
+            "/v1/client-artifacts/v3ca_1/files/0"
+        );
+    }
+
+    #[test]
+    fn v3_client_artifact_file_preview_url_requires_published_html() {
+        assert_eq!(
+            client_artifact_file_preview_url(
+                "v3ca_1",
+                0,
+                "index.html",
+                "text/html",
+                "primary_html",
+                "published"
+            )
+            .as_deref(),
+            Some("/v1/client-artifacts/v3ca_1/files/0/preview")
+        );
+        assert!(client_artifact_file_preview_url(
+            "v3ca_1",
+            0,
+            "index.html",
+            "text/html",
+            "primary_html",
+            "received"
+        )
+        .is_none());
+        assert!(client_artifact_file_preview_url(
+            "v3ca_1",
+            1,
+            "report.md",
+            "text/markdown",
+            "source_summary",
+            "published"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn v3_client_artifact_preview_sanitizer_removes_active_content() {
+        let sanitized = sanitize_client_artifact_preview_html(
+            r#"<html><head><script>alert(1)</script><link rel="stylesheet" href="https://x.test/a.css"></head>
+            <body onload="alert(1)">
+              <img src="https://x.test/a.png" onerror="alert(1)">
+              <img src="data:image/png;base64,abc">
+              <a href="javascript:alert(1)">bad</a>
+              <iframe src="https://x.test/embed"></iframe>
+              <style>@import url("https://x.test/a.css"); .hero{background:url(https://x.test/a.png)}</style>
+            </body></html>"#,
+        );
+
+        assert!(!sanitized.to_ascii_lowercase().contains("<script"));
+        assert!(!sanitized.to_ascii_lowercase().contains("<iframe"));
+        assert!(!sanitized.to_ascii_lowercase().contains("<link"));
+        assert!(!sanitized.to_ascii_lowercase().contains("onload"));
+        assert!(!sanitized.to_ascii_lowercase().contains("onerror"));
+        assert!(!sanitized.to_ascii_lowercase().contains("javascript:"));
+        assert!(!sanitized.contains("https://x.test/a.png"));
+        assert!(sanitized.contains("data:image/png;base64,abc"));
+    }
+
+    #[test]
+    fn v3_client_artifact_preview_response_wraps_sandboxed_html() {
+        let response =
+            client_artifact_html_preview_response("Client Page", "index.html", "<h1>ok</h1>")
+                .expect("preview response should build");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline"
+        );
+        assert!(response.headers().get("content-security-policy").is_some());
+        assert_eq!(
+            response.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
+        );
+    }
+
+    #[test]
+    fn v3_client_artifact_publish_manifest_marks_private_publish() {
+        let manifest = serde_json::to_value(test_v3_client_artifact_manifest())
+            .expect("test manifest should serialize");
+        let published_at = Utc
+            .with_ymd_and_hms(2026, 6, 17, 8, 30, 0)
+            .single()
+            .expect("valid timestamp");
+
+        let updated = mark_client_artifact_manifest_published(manifest, published_at)
+            .expect("publish marker should be added");
+        let publish = &updated["metadata"]["v3_publish"];
+        assert_eq!(publish["status"], "published_private");
+        assert_eq!(publish["mode"], "enterprise_private_download");
+        assert!(publish["public_url"].is_null());
+        assert_eq!(publish["html_inline_preview"], false);
+        assert_eq!(publish["published_at"], "2026-06-17T08:30:00Z");
+    }
+
+    #[test]
+    fn v3_client_artifact_public_html_publish_manifest_marks_public_url() {
+        let manifest = serde_json::to_value(test_v3_client_artifact_manifest())
+            .expect("test manifest should serialize");
+        let published_at = Utc
+            .with_ymd_and_hms(2026, 6, 17, 9, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/client-artifacts/v3ca_1/html-0/index.html";
+
+        let updated = mark_client_artifact_manifest_public_html_published(
+            manifest,
+            0,
+            public_url,
+            "html-artifact-client-v3ca_1-0",
+            published_at,
+        )
+        .expect("public publish marker should be added");
+
+        assert_eq!(
+            updated["metadata"]["v3_publish"]["status"],
+            "published_public"
+        );
+        assert_eq!(
+            updated["metadata"]["v3_publish"]["mode"],
+            "anonymous_public_sandbox_html"
+        );
+        assert_eq!(updated["metadata"]["v3_publish"]["public_url"], public_url);
+        assert_eq!(
+            updated["metadata"]["v3_public_html"]["html_artifact_id"],
+            "html-artifact-client-v3ca_1-0"
+        );
+        assert_eq!(
+            client_artifact_file_public_url(&updated, 0).as_deref(),
+            Some(public_url)
+        );
+        assert!(client_artifact_file_public_url(&updated, 1).is_none());
+    }
+
+    #[test]
+    fn v3_client_artifact_public_html_manifest_uses_client_artifact_contract() {
+        let published_at = Utc
+            .with_ymd_and_hms(2026, 6, 17, 9, 30, 0)
+            .single()
+            .expect("valid timestamp");
+        let artifact = client_artifact_public_html_artifact_manifest(
+            "v3ca_1",
+            "客户页",
+            0,
+            "index.html",
+            "text/html",
+            "primary_html",
+            120,
+            "https://v3.elepcloud.com/generated-artifacts/client-artifacts/v3ca_1/html-0/index.html",
+            &["dataset-1".to_string()],
+            &["asset-1".to_string()],
+            published_at,
+        );
+
+        assert_eq!(artifact.id, "html-artifact-client-v3ca_1-0");
+        assert_eq!(
+            artifact.source_type,
+            contracts::HtmlArtifactSourceTypeView::ClientArtifact
+        );
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::ClientArtifactHtml
+        );
+        assert_eq!(artifact.owner_scope.scope_type, "v3_client_artifact");
+        assert_eq!(artifact.owner_scope.id, "v3ca_1");
+        assert!(artifact
+            .data_refs
+            .iter()
+            .any(|reference| reference.kind == "dataset" && reference.id == "dataset-1"));
+        assert_eq!(
+            artifact.payload["mode"],
+            json!("anonymous_public_sandbox_html")
+        );
+        assert_eq!(artifact.payload["file_index"], json!(0));
+        assert!(artifact.payload["public_url"]
+            .as_str()
+            .unwrap()
+            .contains("/generated-artifacts/client-artifacts/"));
+        assert_eq!(
+            artifact.payload["preview_url"],
+            json!("/v1/client-artifacts/v3ca_1/files/0/preview")
+        );
+    }
+
+    #[test]
+    fn v3_client_artifact_public_html_relative_dir_rejects_unsafe_segments() {
+        assert_eq!(
+            client_artifact_public_html_relative_dir("v3ca_1", 0)
+                .expect("safe artifact id should build"),
+            "client-artifacts/v3ca_1/html-0"
+        );
+
+        let error = client_artifact_public_html_relative_dir("../v3ca_1", 0)
+            .expect_err("unsafe artifact id should fail");
+        assert_eq!(error.payload.code, "client_artifact_public_path_invalid");
+    }
+
+    fn test_v3_client_artifact_manifest() -> V3ClientArtifactManifestView {
+        V3ClientArtifactManifestView {
+            schema: V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA.to_string(),
+            source: V3_CLIENT_ARTIFACT_SOURCE.to_string(),
+            tenant_id: "tenant-001".to_string(),
+            user_id: "user-001".to_string(),
+            client_id: "client-001".to_string(),
+            task_id: "task-001".to_string(),
+            asset_library_ids: vec!["asset-library-001".to_string()],
+            dataset_ids: vec!["dataset-001".to_string()],
+            title: "Static page".to_string(),
+            artifact_type: "static_page".to_string(),
+            files: vec![contracts::V3ClientArtifactManifestFileView {
+                filename: "index.html".to_string(),
+                content_type: "text/html".to_string(),
+                role: "primary_html".to_string(),
+            }],
+            evidence_refs: vec![],
+            created_at: Utc::now(),
+            metadata: json!({}),
+        }
     }
 
     #[test]
@@ -107112,6 +109051,286 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn asset_library_scope_summary_prunes_invisible_dataset_memberships() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping asset library scope route test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("asset-library-test-{}", Uuid::new_v4()),
+                "Asset Library Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let owner = storage
+            .users()
+            .ensure_by_email(tenant.id, "asset-owner@example.com", Some("Asset Owner"))
+            .await
+            .expect("owner should exist");
+        let other_user = storage
+            .users()
+            .ensure_by_email(tenant.id, "asset-other@example.com", Some("Asset Other"))
+            .await
+            .expect("other user should exist");
+        let visible_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("visible-{}", Uuid::new_v4()),
+                    title: "Visible Asset Dataset".to_string(),
+                    description: None,
+                    owner_user_id: Some(owner.id),
+                },
+            )
+            .await
+            .expect("visible dataset should be created");
+        let hidden_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("hidden-{}", Uuid::new_v4()),
+                    title: "Hidden Asset Dataset".to_string(),
+                    description: None,
+                    owner_user_id: Some(other_user.id),
+                },
+            )
+            .await
+            .expect("hidden dataset should be created");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let (_session, session_token) = create_auth_session(
+            &state,
+            &owner,
+            AuthSessionMethod::EmailCode,
+            Some("asset-library-test".to_string()),
+        )
+        .await
+        .expect("session should be created");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_str(&format!(
+                "{AUTH_SESSION_COOKIE_NAME}={session_token}"
+            ))
+            .expect("cookie header should parse"),
+        );
+
+        let (status, Json(created)) = create_asset_library(
+            State(state.clone()),
+            headers.clone(),
+            Json(CreateAssetLibraryRequest {
+                external_id: Some("fashion-design-main".to_string()),
+                name: "Fashion Design".to_string(),
+                domain: Some("fashion_design".to_string()),
+                description: Some("图库、文档和产物".to_string()),
+                visibility: None,
+                metadata: json!({"sample_domain": "fashion_design"}),
+            }),
+        )
+        .await
+        .expect("asset library should be created");
+        assert_eq!(status, StatusCode::CREATED);
+        let asset_library_id =
+            Uuid::parse_str(&created.asset_library.id).expect("asset library id should parse");
+
+        let Json(attached) = upsert_asset_library_dataset_membership(
+            State(state.clone()),
+            headers.clone(),
+            Path((asset_library_id.to_string(), visible_dataset.id.to_string())),
+            Json(UpsertAssetLibraryDatasetMembershipRequest {
+                role: Some("primary".to_string()),
+                priority: Some(10),
+            }),
+        )
+        .await
+        .expect("visible dataset should attach");
+        assert_eq!(attached.asset_library.dataset_count, 1);
+        assert_eq!(attached.membership.dataset_id, visible_dataset.id);
+
+        storage
+            .asset_libraries()
+            .upsert_dataset_membership(
+                tenant.id,
+                asset_library_id,
+                NewAssetLibraryDatasetMembership {
+                    dataset_id: hidden_dataset.id,
+                    role: "member".to_string(),
+                    priority: 20,
+                },
+            )
+            .await
+            .expect("hidden membership fixture should be inserted");
+
+        let visible_asset = storage
+            .asset_items()
+            .create(
+                tenant.id,
+                NewAssetItem {
+                    asset_library_id: None,
+                    collection_id: None,
+                    external_id: Some("visible-image".to_string()),
+                    title: "Visible Fashion Image".to_string(),
+                    asset_kind: "image".to_string(),
+                    source_kind: "upload".to_string(),
+                    source_id: Some("visible-upload".to_string()),
+                    content_type: Some("image/png".to_string()),
+                    object_key: Some("private/visible-image.png".to_string()),
+                    metadata: json!({"fixture": "visible"}),
+                },
+            )
+            .await
+            .expect("visible asset should be inserted");
+        storage
+            .asset_items()
+            .upsert_dataset_membership(
+                tenant.id,
+                visible_asset.id,
+                NewDatasetAssetMembership {
+                    dataset_id: visible_dataset.id,
+                    membership_kind: "curated".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("visible dataset asset membership should be inserted");
+        storage
+            .asset_items()
+            .upsert_profile(
+                tenant.id,
+                visible_asset.id,
+                NewAssetProfile {
+                    profile_kind: "image_semantic".to_string(),
+                    profile_version: "v1".to_string(),
+                    attributes: json!({
+                        "category": "连衣裙",
+                        "colors": ["绿色", "白色"],
+                        "noun_terms": ["泡泡袖", "碎花"]
+                    }),
+                    embedding_status: "queued".to_string(),
+                },
+            )
+            .await
+            .expect("visible profile should be inserted");
+        let hidden_asset = storage
+            .asset_items()
+            .create(
+                tenant.id,
+                NewAssetItem {
+                    asset_library_id: None,
+                    collection_id: None,
+                    external_id: Some("hidden-image".to_string()),
+                    title: "Hidden Fashion Image".to_string(),
+                    asset_kind: "image".to_string(),
+                    source_kind: "upload".to_string(),
+                    source_id: Some("hidden-upload".to_string()),
+                    content_type: Some("image/png".to_string()),
+                    object_key: Some("private/hidden-image.png".to_string()),
+                    metadata: json!({"fixture": "hidden"}),
+                },
+            )
+            .await
+            .expect("hidden asset should be inserted");
+        storage
+            .asset_items()
+            .upsert_dataset_membership(
+                tenant.id,
+                hidden_asset.id,
+                NewDatasetAssetMembership {
+                    dataset_id: hidden_dataset.id,
+                    membership_kind: "curated".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("hidden dataset asset membership should be inserted");
+        storage
+            .asset_items()
+            .upsert_profile(
+                tenant.id,
+                hidden_asset.id,
+                NewAssetProfile {
+                    profile_kind: "image_semantic".to_string(),
+                    profile_version: "v1".to_string(),
+                    attributes: json!({
+                        "summary": "hidden profile must not be supplied",
+                        "noun_terms": ["隐藏资产"]
+                    }),
+                    embedding_status: "queued".to_string(),
+                },
+            )
+            .await
+            .expect("hidden profile should be inserted");
+
+        let Json(scope_response) = get_asset_library_scope_summary(
+            State(state.clone()),
+            headers.clone(),
+            Path(asset_library_id.to_string()),
+        )
+        .await
+        .expect("scope summary should load");
+        let scope = scope_response.summary;
+        assert_eq!(scope.membership_count, 2);
+        assert_eq!(scope.denied_dataset_count, 1);
+        assert_eq!(scope.authorized_dataset_count, 1);
+        assert_eq!(scope.dataset_ids, vec![visible_dataset.id]);
+        assert_eq!(scope.datasets.len(), 1);
+        assert_eq!(scope.datasets[0].id, visible_dataset.id);
+        assert_eq!(scope.memberships.len(), 1);
+        assert_eq!(scope.memberships[0].dataset_id, visible_dataset.id);
+        assert_eq!(scope.asset_count, 1);
+        assert_eq!(scope.assets.len(), 1);
+        assert_eq!(scope.assets[0].id, visible_asset.id.to_string());
+        assert_eq!(scope.asset_profile_hint_count, 1);
+        assert_eq!(scope.asset_profile_hints.len(), 1);
+        assert_eq!(
+            scope.asset_profile_hints[0].asset_id,
+            visible_asset.id.to_string()
+        );
+        assert!(scope.asset_profile_hints[0]
+            .summary
+            .contains("品类: 连衣裙"));
+        assert!(scope.asset_profile_hints[0]
+            .noun_terms
+            .contains(&"泡泡袖".to_string()));
+        assert!(!scope
+            .memberships
+            .iter()
+            .any(|membership| membership.dataset_id == hidden_dataset.id));
+        assert!(!scope
+            .assets
+            .iter()
+            .any(|asset| asset.id == hidden_asset.id.to_string()));
+        assert!(!scope
+            .asset_profile_hints
+            .iter()
+            .any(|hint| hint.summary.contains("hidden profile")));
+
+        let Json(removed) = remove_asset_library_dataset_membership(
+            State(state),
+            headers,
+            Path((asset_library_id.to_string(), visible_dataset.id.to_string())),
+        )
+        .await
+        .expect("visible dataset should detach");
+        assert!(removed.removed);
+        assert_eq!(removed.dataset_id, visible_dataset.id);
+        assert_eq!(removed.asset_library.dataset_count, 1);
+    }
+
+    #[tokio::test]
     async fn resolve_dataset_secret_bindings_returns_matching_private_dataset() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -109497,6 +111716,59 @@ retrieve_evidence:
         assert_eq!(tasks[0].queue, "ingest");
         assert_eq!(tasks[0].task_key, "ingest_uploaded_document");
         assert_eq!(tasks[0].status.as_str(), "queued");
+
+        let assets = harness
+            .storage
+            .asset_items()
+            .list_by_dataset_ids(harness.tenant_id, &[document.dataset_id], 10)
+            .await
+            .expect("document assets should load");
+        let asset = assets
+            .iter()
+            .find(|asset| asset.source_id.as_deref() == Some(&document.id.0.to_string()))
+            .expect("document asset should be synced");
+        assert_eq!(asset.asset_kind, "document");
+        assert_eq!(asset.source_kind, "document");
+        assert_eq!(asset.profile_count, 1);
+        let profiles = harness
+            .storage
+            .asset_items()
+            .list_profiles(harness.tenant_id, asset.id)
+            .await
+            .expect("document asset profiles should load");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile_kind, "document_parse");
+        assert_eq!(profiles[0].attributes["title"], json!("Manual ingest doc"));
+
+        let state = AppState::new(
+            harness.storage.clone(),
+            workflow_definitions::catalog(),
+            harness.tenant_id,
+            EventBus::Disabled,
+        );
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &json!({
+                "datasets": [dataset.id.to_string()]
+            }),
+            "概括这个文档的资产画像",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("assistant evidence state should build");
+        let supplied_items = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be array");
+        assert!(supplied_items.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("asset_profile_hint")
+                && item.get("title").and_then(Value::as_str) == Some("Manual ingest doc")
+        }));
+        assert_eq!(
+            evidence_state["supply_quality"]["assetProfileHintCount"],
+            json!(1)
+        );
     }
 
     #[tokio::test]

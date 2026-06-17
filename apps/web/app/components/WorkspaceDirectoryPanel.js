@@ -10,6 +10,12 @@ import {
   startDatabaseSourceSync,
   testDatabaseSourceConnection,
 } from '../lib/database-source';
+import {
+  ASSET_LIBRARY_PRESETS,
+  assetLibraryContainsDataset,
+  assetProfileKindOptions,
+  filterAssetProfileHints,
+} from '../lib/asset-library-view-model';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import ModelPoolPanel from './ModelPoolPanel';
@@ -244,6 +250,198 @@ function DocumentMembershipEditor({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function AssetLibraryManager({
+  datasets,
+  assetLibraries = [],
+  selectedAssetLibraryId = '',
+  selectedAssetLibrary,
+  assetLibraryScope,
+  assetLibraryDraft,
+  creatingAssetLibrary,
+  assetLibraryLoading,
+  assetLibraryActionBusy,
+  selectedDatasetId,
+  onSelectAssetLibrary,
+  onAssetLibraryDraftChange,
+  onApplyAssetLibraryPreset,
+  onCreateAssetLibrary,
+  onToggleAssetLibraryDataset,
+  onRefreshAssetLibraries,
+}) {
+  const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
+  const selectedDatasetIsInLibrary = selectedDatasetId
+    ? assetLibraryContainsDataset(assetLibraryScope, selectedDatasetId)
+    : false;
+  const [assetProfileQuery, setAssetProfileQuery] = useState('');
+  const [assetProfileKind, setAssetProfileKind] = useState('all');
+  const assetProfileKinds = assetProfileKindOptions(assetLibraryScope);
+  const filteredAssetProfileHints = filterAssetProfileHints(assetLibraryScope, {
+    query: assetProfileQuery,
+    assetKind: assetProfileKind,
+    limit: 8,
+  });
+
+  useEffect(() => {
+    setAssetProfileQuery('');
+    setAssetProfileKind('all');
+  }, [selectedAssetLibraryId]);
+
+  return (
+    <section className="directory-card asset-library-card">
+      <div className="directory-section-head">
+        <div>
+          <h3>资产库</h3>
+          <p>{selectedAssetLibrary ? `${selectedAssetLibrary.name} · ${assetLibraryScope?.datasets?.length || 0} 个可见数据集` : '企业资产空间和数据集关系。'}</p>
+        </div>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshAssetLibraries} disabled={assetLibraryLoading}>
+          刷新
+        </button>
+      </div>
+
+      <form
+        className="asset-library-create-row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onCreateAssetLibrary?.();
+        }}
+      >
+        <input
+          value={assetLibraryDraft?.name || ''}
+          onChange={(event) => onAssetLibraryDraftChange?.('name', event.target.value)}
+          placeholder="资产库名称"
+          disabled={creatingAssetLibrary}
+        />
+        <input
+          value={assetLibraryDraft?.domain || ''}
+          onChange={(event) => onAssetLibraryDraftChange?.('domain', event.target.value)}
+          placeholder="领域，如 fashion_design"
+          disabled={creatingAssetLibrary}
+        />
+        <button className="primary-btn compact-action-btn" type="submit" disabled={creatingAssetLibrary}>
+          {creatingAssetLibrary ? '创建中' : '新建'}
+        </button>
+      </form>
+
+      <div className="asset-library-preset-row">
+        {ASSET_LIBRARY_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className="ghost-btn compact-action-btn"
+            onClick={() => onApplyAssetLibraryPreset?.(preset.id)}
+            disabled={creatingAssetLibrary}
+            title={preset.description}
+          >
+            {preset.label}
+          </button>
+        ))}
+        {assetLibraryDraft?.description ? (
+          <span>{assetLibraryDraft.description}</span>
+        ) : null}
+      </div>
+
+      <div className="asset-library-list">
+        {assetLibraries.length ? assetLibraries.map((library) => (
+          <button
+            key={library.id}
+            type="button"
+            className={`asset-library-item ${library.id === selectedAssetLibraryId ? 'active' : ''}`.trim()}
+            onClick={() => onSelectAssetLibrary?.(library.id)}
+          >
+            <strong>{library.name}</strong>
+            <span>{library.domain} · {library.visibility} · {library.datasetCount} 数据集</span>
+          </button>
+        )) : (
+          <div className="directory-empty">{assetLibraryLoading ? '正在读取资产库。' : '暂无可见资产库。'}</div>
+        )}
+      </div>
+
+      {selectedAssetLibrary ? (
+        <div className="asset-library-scope-box">
+          <div className="asset-library-scope-metrics">
+            <MiniMetric label="已挂数据集" value={assetLibraryScope?.membershipCount || selectedAssetLibrary.datasetCount || 0} />
+            <MiniMetric label="当前可见" value={assetLibraryScope?.authorizedDatasetCount || 0} />
+            <MiniMetric label="无权限" value={assetLibraryScope?.deniedDatasetCount || 0} />
+            <MiniMetric label="可见资产" value={assetLibraryScope?.assetCount || 0} />
+            <MiniMetric label="画像摘要" value={assetLibraryScope?.assetProfileHintCount || 0} />
+          </div>
+          {assetLibraryScope?.assetProfileHints?.length ? (
+            <div className="asset-profile-gallery">
+              <div className="asset-profile-filter-row">
+                <input
+                  value={assetProfileQuery}
+                  onChange={(event) => setAssetProfileQuery(event.target.value)}
+                  placeholder="搜索素材、主题、字段"
+                />
+                <select
+                  value={assetProfileKind}
+                  onChange={(event) => setAssetProfileKind(event.target.value)}
+                >
+                  <option value="all">全部类型</option>
+                  {assetProfileKinds.map((kind) => (
+                    <option key={kind} value={kind}>{kind}</option>
+                  ))}
+                </select>
+              </div>
+              {filteredAssetProfileHints.length ? (
+                <div className="asset-profile-hint-list">
+                  {filteredAssetProfileHints.map((hint) => (
+                    <div key={`${hint.assetId || hint.title}:${hint.profileKind}`} className="asset-profile-hint-item">
+                      <div>
+                        <strong>{hint.title || hint.assetId || '未命名资产'}</strong>
+                        <span>{hint.assetKind}{hint.profileKind ? ` · ${hint.profileKind}` : ''}</span>
+                      </div>
+                      {hint.summary ? <p>{hint.summary}</p> : null}
+                      {hint.nounTerms?.length || hint.facets?.length ? (
+                        <div className="asset-profile-term-row">
+                          {[...(hint.nounTerms || []), ...(hint.facets || [])].slice(0, 6).map((term) => (
+                            <span key={term}>{term}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="directory-empty compact-empty">当前筛选无匹配画像。</div>
+              )}
+            </div>
+          ) : null}
+          {selectedDataset ? (
+            <button
+              type="button"
+              className={`asset-library-current-toggle ${selectedDatasetIsInLibrary ? 'active' : ''}`.trim()}
+              disabled={Boolean(assetLibraryActionBusy)}
+              onClick={() => onToggleAssetLibraryDataset?.(selectedDataset.id)}
+            >
+              <strong>{selectedDataset.title}</strong>
+              <span>{selectedDatasetIsInLibrary ? '已在资产库中，点击移出' : '当前数据集，点击加入资产库'}</span>
+            </button>
+          ) : null}
+          <div className="asset-library-dataset-grid">
+            {datasets.map((dataset) => {
+              const active = assetLibraryContainsDataset(assetLibraryScope, dataset.id);
+              return (
+                <button
+                  key={dataset.id}
+                  type="button"
+                  className={`directory-membership-chip ${active ? 'active' : ''}`.trim()}
+                  aria-pressed={active}
+                  disabled={Boolean(assetLibraryActionBusy)}
+                  onClick={() => onToggleAssetLibraryDataset?.(dataset.id)}
+                >
+                  <strong>{dataset.title}</strong>
+                  <span>{active ? '已挂接' : '未挂接'}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -546,6 +744,20 @@ function DatabaseSourcePanel({ datasets }) {
 
 function DatasetsPage({
   datasets,
+  assetLibraries,
+  selectedAssetLibraryId,
+  selectedAssetLibrary,
+  assetLibraryScope,
+  assetLibraryDraft,
+  creatingAssetLibrary,
+  assetLibraryLoading,
+  assetLibraryActionBusy,
+  onSelectAssetLibrary,
+  onAssetLibraryDraftChange,
+  onApplyAssetLibraryPreset,
+  onCreateAssetLibrary,
+  onToggleAssetLibraryDataset,
+  onRefreshAssetLibraries,
   selectedDatasetId,
   selectedDatasetIds = [],
   onSelectDataset,
@@ -616,83 +828,103 @@ function DatasetsPage({
 
   return (
     <div className="directory-two-column">
-      <section className="directory-card">
-        <div className="directory-section-head">
-          <div>
-            <h3>数据集列表</h3>
-            <p>左侧只负责选择供料范围；完整管理集中在这里。</p>
+      <div className="directory-column-stack">
+        <AssetLibraryManager
+          datasets={datasets}
+          assetLibraries={assetLibraries}
+          selectedAssetLibraryId={selectedAssetLibraryId}
+          selectedAssetLibrary={selectedAssetLibrary}
+          assetLibraryScope={assetLibraryScope}
+          assetLibraryDraft={assetLibraryDraft}
+          creatingAssetLibrary={creatingAssetLibrary}
+          assetLibraryLoading={assetLibraryLoading}
+          assetLibraryActionBusy={assetLibraryActionBusy}
+          selectedDatasetId={selectedDatasetId}
+          onSelectAssetLibrary={onSelectAssetLibrary}
+          onAssetLibraryDraftChange={onAssetLibraryDraftChange}
+          onApplyAssetLibraryPreset={onApplyAssetLibraryPreset}
+          onCreateAssetLibrary={onCreateAssetLibrary}
+          onToggleAssetLibraryDataset={onToggleAssetLibraryDataset}
+          onRefreshAssetLibraries={onRefreshAssetLibraries}
+        />
+        <section className="directory-card">
+          <div className="directory-section-head">
+            <div>
+              <h3>数据集列表</h3>
+              <p>左侧只负责选择供料范围；完整管理集中在这里。</p>
+            </div>
+            <button type="button" className="ghost-btn compact-action-btn" onClick={onClearDatasetSelection}>
+              普通聊天
+            </button>
           </div>
-          <button type="button" className="ghost-btn compact-action-btn" onClick={onClearDatasetSelection}>
-            普通聊天
-          </button>
-        </div>
-        <form
-          className="directory-create-row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onCreateDataset?.();
-          }}
-        >
-          <input
-            value={datasetDraft.key}
-            onChange={(event) => onDatasetDraftChange?.('key', event.target.value)}
-            placeholder="数据集 key"
-            disabled={creatingDataset}
-          />
-          <input
-            value={datasetDraft.title}
-            onChange={(event) => onDatasetDraftChange?.('title', event.target.value)}
-            placeholder="数据集标题"
-            disabled={creatingDataset}
-          />
-          <button className="primary-btn" type="submit" disabled={creatingDataset}>
-            {creatingDataset ? '创建中' : '新建'}
-          </button>
-        </form>
-        <div className="directory-list">
-          {datasets.map((dataset) => (
-            <button
-              type="button"
-              key={dataset.id}
-              className={`directory-list-item ${selectedIdSet.has(dataset.id) ? 'active' : ''}`.trim()}
-              onClick={() => onSelectDataset?.(dataset.id)}
-            >
-              <strong>{dataset.title}</strong>
-              <span>{dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}</span>
+          <form
+            className="directory-create-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCreateDataset?.();
+            }}
+          >
+            <input
+              value={datasetDraft.key}
+              onChange={(event) => onDatasetDraftChange?.('key', event.target.value)}
+              placeholder="数据集 key"
+              disabled={creatingDataset}
+            />
+            <input
+              value={datasetDraft.title}
+              onChange={(event) => onDatasetDraftChange?.('title', event.target.value)}
+              placeholder="数据集标题"
+              disabled={creatingDataset}
+            />
+            <button className="primary-btn" type="submit" disabled={creatingDataset}>
+              {creatingDataset ? '创建中' : '新建'}
             </button>
-          ))}
-        </div>
-        <form
-          className="directory-edit-box"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (selectedDataset) {
-              onUpdateDataset?.(selectedDataset.id, { title: datasetTitleDraft });
-            }
-          }}
-        >
-          <strong>{selectedDataset ? '当前数据集设置' : '未选择数据集'}</strong>
-          <input
-            value={datasetTitleDraft}
-            onChange={(event) => setDatasetTitleDraft(event.target.value)}
-            placeholder="选择数据集后可改名"
-            disabled={!selectedDataset || Boolean(datasetActionBusy)}
-          />
-          <div className="directory-edit-actions">
-            <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDataset || Boolean(datasetActionBusy)}>
-              保存
-            </button>
-            <button
-              className="ghost-btn compact-action-btn danger-action"
-              type="button"
+          </form>
+          <div className="directory-list">
+            {datasets.map((dataset) => (
+              <button
+                type="button"
+                key={dataset.id}
+                className={`directory-list-item ${selectedIdSet.has(dataset.id) ? 'active' : ''}`.trim()}
+                onClick={() => onSelectDataset?.(dataset.id)}
+              >
+                <strong>{dataset.title}</strong>
+                <span>{dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}</span>
+              </button>
+            ))}
+          </div>
+          <form
+            className="directory-edit-box"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (selectedDataset) {
+                onUpdateDataset?.(selectedDataset.id, { title: datasetTitleDraft });
+              }
+            }}
+          >
+            <strong>{selectedDataset ? '当前数据集设置' : '未选择数据集'}</strong>
+            <input
+              value={datasetTitleDraft}
+              onChange={(event) => setDatasetTitleDraft(event.target.value)}
+              placeholder="选择数据集后可改名"
               disabled={!selectedDataset || Boolean(datasetActionBusy)}
-              onClick={() => selectedDataset && onArchiveDataset?.(selectedDataset.id)}
-            >
-              归档
-            </button>
-          </div>
-        </form>
-      </section>
+            />
+            <div className="directory-edit-actions">
+              <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDataset || Boolean(datasetActionBusy)}>
+                保存
+              </button>
+              <button
+                className="ghost-btn compact-action-btn danger-action"
+                type="button"
+                disabled={!selectedDataset || Boolean(datasetActionBusy)}
+                onClick={() => selectedDataset && onArchiveDataset?.(selectedDataset.id)}
+              >
+                归档
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
 
       <section className="directory-card">
         <div className="directory-section-head">
@@ -1097,6 +1329,20 @@ function AuditPage({ stats, activityEvents, htmlArtifacts }) {
 export default function WorkspaceDirectoryPanel({
   activePage,
   datasets,
+  assetLibraries,
+  selectedAssetLibraryId,
+  selectedAssetLibrary,
+  assetLibraryScope,
+  assetLibraryDraft,
+  creatingAssetLibrary,
+  assetLibraryLoading,
+  assetLibraryActionBusy,
+  onSelectAssetLibrary,
+  onAssetLibraryDraftChange,
+  onApplyAssetLibraryPreset,
+  onCreateAssetLibrary,
+  onToggleAssetLibraryDataset,
+  onRefreshAssetLibraries,
   selectedDatasetId,
   selectedDatasetIds = [],
   onSelectDataset,
@@ -1140,6 +1386,20 @@ export default function WorkspaceDirectoryPanel({
       {activePage === 'datasets' ? (
         <DatasetsPage
           datasets={datasets}
+          assetLibraries={assetLibraries}
+          selectedAssetLibraryId={selectedAssetLibraryId}
+          selectedAssetLibrary={selectedAssetLibrary}
+          assetLibraryScope={assetLibraryScope}
+          assetLibraryDraft={assetLibraryDraft}
+          creatingAssetLibrary={creatingAssetLibrary}
+          assetLibraryLoading={assetLibraryLoading}
+          assetLibraryActionBusy={assetLibraryActionBusy}
+          onSelectAssetLibrary={onSelectAssetLibrary}
+          onAssetLibraryDraftChange={onAssetLibraryDraftChange}
+          onApplyAssetLibraryPreset={onApplyAssetLibraryPreset}
+          onCreateAssetLibrary={onCreateAssetLibrary}
+          onToggleAssetLibraryDataset={onToggleAssetLibraryDataset}
+          onRefreshAssetLibraries={onRefreshAssetLibraries}
           selectedDatasetId={selectedDatasetId}
           selectedDatasetIds={selectedDatasetIds}
           onSelectDataset={onSelectDataset}

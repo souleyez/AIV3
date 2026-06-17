@@ -81,7 +81,7 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
     });
 
     const forwardedHeaders = new Headers();
-    ['content-type', 'cache-control', 'etag', 'content-disposition'].forEach((name) => {
+    ['content-type', 'cache-control', 'etag', 'content-disposition', 'content-security-policy', 'referrer-policy'].forEach((name) => {
       const value = response.headers.get(name);
       if (value) forwardedHeaders.set(name, value);
     });
