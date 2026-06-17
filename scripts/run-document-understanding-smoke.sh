@@ -148,7 +148,8 @@ const report = {
   finished_at: process.env.SMOKE_FINISHED_AT,
   runtime_gate_requested: /^(true|1|yes|on)$/i.test(process.env.SMOKE_RUNTIME_GATE || ""),
   contract: {
-    parser_quality: "PaddleOCR parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
+    parser_quality: "PaddleOCR / PP-OCRv6 parsing, low-quality PDF detection, and diagnostic fallback must not treat one-character extraction as usable content.",
+    parser_page_scope: "PaddleOCR, rendered OCR, PDF VLM, and presentation VLM fallbacks should parse the full document by default; page caps are explicit deployment safety settings only.",
     candidate_selection: "PDF parser candidates should be selected by text coverage plus structure/layout signals instead of returning the first minimally usable parser output.",
     vlm_rescue: "Short unstructured PDF text that barely passes the minimum quality gate may try MiniMax VLM rescue when configured; structured or complete local parses should not pay that cost.",
     structure_aware_chunks: "PaddleOCR title/table blocks should seed section title hints, paragraph samples, and candidate noun terms for chunk metadata and later model supply.",
@@ -186,6 +187,7 @@ const lines = [
   "## Contract",
   "",
   `- Parser quality: ${report.contract.parser_quality}`,
+  `- Parser page scope: ${report.contract.parser_page_scope}`,
   `- Candidate selection: ${report.contract.candidate_selection}`,
   `- VLM rescue: ${report.contract.vlm_rescue}`,
   `- Structure-aware chunks: ${report.contract.structure_aware_chunks}`,

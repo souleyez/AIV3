@@ -10,6 +10,7 @@ report_basename="ingest-runtime-gate-$(date -u +%Y%m%dT%H%M%SZ)"
 report_json="${report_dir}/${report_basename}.json"
 report_md="${report_dir}/${report_basename}.md"
 required_markitdown_version="${MARKITDOWN_REQUIRED_VERSION:-0.1.5}"
+required_paddleocr_version="${PADDLEOCR_REQUIRED_VERSION:-3.7.0}"
 aiv3_env_file="${AIV3_ENV_FILE:-/etc/aiv3/aiv3.env}"
 
 read_aiv3_env_value() {
@@ -75,6 +76,7 @@ echo "HEAD: ${head_short}"
 echo "Report directory: ${report_dir}"
 echo "PYTHON_BIN: ${PYTHON_BIN}"
 echo "Required MarkItDown: ${required_markitdown_version}"
+echo "Required PaddleOCR: ${required_paddleocr_version}"
 echo "DOCUMENT_PADDLEOCR_ENABLED: ${DOCUMENT_PADDLEOCR_ENABLED:-}"
 echo "DOCUMENT_PDF_PARSE_ENGINE: ${DOCUMENT_PDF_PARSE_ENGINE:-}"
 echo "DOCUMENT_PADDLEOCR_PYTHON_BIN: ${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}"
@@ -126,12 +128,33 @@ if [[ "${paddleocr_required}" == "true" ]]; then
     echo "PaddleOCR Python was not found: ${paddleocr_python_bin}" >&2
     exit 1
   fi
-  paddleocr_output="$("${paddleocr_python_bin}" - <<'PY' 2>&1
+  paddleocr_output="$("${paddleocr_python_bin}" - "${required_paddleocr_version}" <<'PY' 2>&1
+import importlib.metadata as md
+import sys
 from paddleocr import PPStructureV3
-print("PPStructureV3 import ok")
+
+def version_tuple(value):
+    parts = []
+    for part in str(value).split("."):
+        digits = ""
+        for char in part:
+            if char.isdigit():
+                digits += char
+            else:
+                break
+        parts.append(int(digits or "0"))
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+required = sys.argv[1]
+observed = md.version("paddleocr")
+if version_tuple(observed) < version_tuple(required):
+    raise RuntimeError(f"paddleocr {observed} is older than required {required}")
+print(f"PPStructureV3 import ok; paddleocr={observed}")
 PY
 )" || {
-    echo "PaddleOCR check failed. Expected: ${paddleocr_python_bin} can import paddleocr.PPStructureV3" >&2
+    echo "PaddleOCR check failed. Expected: ${paddleocr_python_bin} can import paddleocr.PPStructureV3 with paddleocr >= ${required_paddleocr_version}" >&2
     echo "${paddleocr_output}" >&2
     exit 1
   }
@@ -159,6 +182,9 @@ trailer << /Root 1 0 R >>
 path = Path(tempfile.gettempdir()) / "aiv3-paddleocr-gate-smoke.pdf"
 path.write_bytes(pdf)
 pipeline = PPStructureV3(
+    ocr_version="PP-OCRv6",
+    text_detection_model_name="PP-OCRv6_medium_det",
+    text_recognition_model_name="PP-OCRv6_medium_rec",
     use_formula_recognition=False,
     use_chart_recognition=False,
     use_seal_recognition=False,
@@ -187,6 +213,7 @@ INGEST_GATE_FINISHED_AT="${finished_at}" \
 INGEST_GATE_PYTHON_BIN="${PYTHON_BIN}" \
 INGEST_GATE_MARKITDOWN_VERSION="${markitdown_version_output}" \
 INGEST_GATE_REQUIRED_MARKITDOWN_VERSION="${required_markitdown_version}" \
+INGEST_GATE_REQUIRED_PADDLEOCR_VERSION="${required_paddleocr_version}" \
 INGEST_GATE_DOCUMENT_PADDLEOCR_ENABLED="${DOCUMENT_PADDLEOCR_ENABLED:-}" \
 INGEST_GATE_DOCUMENT_PDF_PARSE_ENGINE="${DOCUMENT_PDF_PARSE_ENGINE:-}" \
 INGEST_GATE_DOCUMENT_PADDLEOCR_PYTHON_BIN="${DOCUMENT_PADDLEOCR_PYTHON_BIN:-}" \
@@ -206,7 +233,7 @@ const checks = [
   { name: "MarkItDown version matches pinned fallback version", status: "passed" }
 ];
 if (paddleocrStatus !== "skipped") {
-  checks.push({ name: "PYTHON_BIN can import paddleocr.PPStructureV3", status: paddleocrStatus });
+  checks.push({ name: "PaddleOCR runtime can import PPStructureV3 and meets PP-OCRv6 version floor", status: paddleocrStatus });
 }
 const paddleocrSmokeStatus = process.env.INGEST_GATE_PADDLEOCR_SMOKE_STATUS || "skipped";
 if (paddleocrSmokeStatus !== "skipped") {
@@ -223,10 +250,12 @@ const report = {
     primary_parser_path: "V3 local ingest parsers remain the primary path.",
     fallback_parser: "MarkItDown is enabled only as the generic fallback parser.",
     optional_structured_pdf_parser: "PaddleOCR PP-StructureV3 is the default PDF parser when DOCUMENT_PADDLEOCR_PYTHON_BIN is configured; use DOCUMENT_PADDLEOCR_ENABLED=false or DOCUMENT_PDF_PARSE_ENGINE=native_first to opt out.",
+    paddleocr_version_guard: "PaddleOCR runtime must be new enough for PP-OCRv6 model selection.",
     deployment_guard: "Deployment target must pass PYTHON_BIN -m markitdown --version with the pinned version before ingest fallback is considered ready."
   },
   python_bin: process.env.INGEST_GATE_PYTHON_BIN,
   required_markitdown_version: process.env.INGEST_GATE_REQUIRED_MARKITDOWN_VERSION,
+  required_paddleocr_version: process.env.INGEST_GATE_REQUIRED_PADDLEOCR_VERSION,
   observed_markitdown_version: process.env.INGEST_GATE_MARKITDOWN_VERSION,
   paddleocr: {
     required: paddleocrRequired,
@@ -243,7 +272,7 @@ const report = {
   notes: [
     "This gate is non-destructive and does not parse customer documents.",
     "Run on deployment targets after environment setup and before relying on MarkItDown fallback parsing.",
-    "The PaddleOCR check validates package import readiness only; first real parse may still need model files and adequate timeout.",
+    "The PaddleOCR check validates package import and version readiness; first real parse may still need model files and adequate timeout.",
     "Future A/B parsing quality comparisons for DOCX/PDF/PPTX should run as a separate evidence smoke."
   ]
 };
@@ -263,6 +292,7 @@ const lines = [
   `- Finished: ${report.finished_at}`,
   `- PYTHON_BIN: ${report.python_bin}`,
   `- Required MarkItDown: ${report.required_markitdown_version}`,
+  `- Required PaddleOCR: ${report.required_paddleocr_version}`,
   `- Observed MarkItDown: ${report.observed_markitdown_version}`,
   `- PaddleOCR required: ${report.paddleocr.required}`,
   `- PaddleOCR Python: ${report.paddleocr.python_bin}`,
@@ -274,6 +304,7 @@ const lines = [
   `- Primary parser path: ${report.contract.primary_parser_path}`,
   `- Fallback parser: ${report.contract.fallback_parser}`,
   `- Optional structured PDF parser: ${report.contract.optional_structured_pdf_parser}`,
+  `- PaddleOCR version guard: ${report.contract.paddleocr_version_guard}`,
   `- Deployment guard: ${report.contract.deployment_guard}`,
   "",
   "## Checks",

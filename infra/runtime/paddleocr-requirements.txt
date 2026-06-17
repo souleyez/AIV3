@@ -1,6 +1,6 @@
 # PaddleOCR sidecar runtime for document parsing.
 # Keep this isolated from the media/MarkItDown Python runtime.
-paddleocr==3.5.0
-paddlex[ocr]==3.5.2
+paddleocr==3.7.0
+paddlex[ocr]==3.7.1
 paddlepaddle==3.2.2
 numpy>=1.24,<2.4

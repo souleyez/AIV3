@@ -16,8 +16,9 @@ target/document-understanding-smoke/
 
 ## Current Coverage
 
-- PaddleOCR parser contract and one-character PDF low-quality detection.
+- PaddleOCR / PP-OCRv6 parser contract and one-character PDF low-quality detection.
 - MiniMax VLM rescue selection for weak unstructured PDF text when configured.
+- Full-document parsing defaults for PaddleOCR, rendered OCR, PDF VLM, and presentation VLM fallback paths.
 - Structure-aware chunking, parser section preservation, paragraph samples, and candidate noun terms.
 - External parse request/detail compatibility for Java/camelCase callers.
 - Third-party `documentExternalId` source inference and unresolved-document model visibility.

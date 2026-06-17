@@ -1423,12 +1423,13 @@ fn document_paddleocr_timeout() -> Duration {
     Duration::from_millis(millis)
 }
 
-fn document_paddleocr_max_pages() -> usize {
+fn document_paddleocr_max_pages() -> Option<usize> {
     std::env::var("DOCUMENT_PADDLEOCR_MAX_PAGES")
         .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(8)
-        .max(1)
+        .filter(|value| *value > 0)
 }
 
 fn env_flag_value(name: &str) -> Option<bool> {
@@ -1480,7 +1481,9 @@ fn run_paddleocr_sidecar(path: &Path, output_dir: &Path) -> Option<ExtractedDocu
     let path_arg = path.to_string_lossy().to_string();
     let output_arg = output_path.to_string_lossy().to_string();
     let max_pages = document_paddleocr_max_pages();
-    let max_pages_arg = max_pages.to_string();
+    let max_pages_arg = max_pages
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "0".to_string());
     let script = r##"
 import json
 import os
@@ -1490,7 +1493,8 @@ os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 pdf_path = sys.argv[1]
 output_path = sys.argv[2]
-max_pages = max(1, int(sys.argv[3]))
+max_pages_raw = int(sys.argv[3])
+max_pages = max_pages_raw if max_pages_raw > 0 else None
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
 def env_bool(name, default):
@@ -1498,6 +1502,12 @@ def env_bool(name, default):
     if value is None or not str(value).strip():
         return default
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+def env_str(name, default=None):
+    value = os.environ.get(name)
+    if value is None or not str(value).strip():
+        return default
+    return str(value).strip()
 
 def emit(payload):
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -1604,10 +1614,19 @@ try:
         "use_chart_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_CHART_RECOGNITION", False),
         "use_seal_recognition": env_bool("DOCUMENT_PADDLEOCR_USE_SEAL_RECOGNITION", False),
     }
+    ocr_version = env_str("DOCUMENT_PADDLEOCR_OCR_VERSION", "PP-OCRv6")
+    if ocr_version:
+        paddleocr_config["ocr_version"] = ocr_version
+    text_detection_model_name = env_str("DOCUMENT_PADDLEOCR_TEXT_DETECTION_MODEL_NAME", "PP-OCRv6_medium_det")
+    text_recognition_model_name = env_str("DOCUMENT_PADDLEOCR_TEXT_RECOGNITION_MODEL_NAME", "PP-OCRv6_medium_rec")
+    if text_detection_model_name:
+        paddleocr_config["text_detection_model_name"] = text_detection_model_name
+    if text_recognition_model_name:
+        paddleocr_config["text_recognition_model_name"] = text_recognition_model_name
     pipeline = PPStructureV3(**paddleocr_config)
     output = pipeline.predict(input=pdf_path)
     for page_index, result in enumerate(output):
-        if page_index >= max_pages:
+        if max_pages is not None and page_index >= max_pages:
             break
         page_number = page_index + 1
         page_count += 1
@@ -1644,6 +1663,10 @@ try:
         "blocks": blocks,
         "errors": errors,
         "config": paddleocr_config,
+        "ocr_family": ocr_version,
+        "text_detection_model_name": text_detection_model_name,
+        "text_recognition_model_name": text_recognition_model_name,
+        "max_pages": max_pages,
     })
     sys.exit(0 if combined_markdown.strip() else 3)
 except Exception as exc:
@@ -1655,6 +1678,10 @@ except Exception as exc:
         "blocks": blocks,
         "errors": errors,
         "config": globals().get("paddleocr_config", {}),
+        "ocr_family": globals().get("ocr_version", None),
+        "text_detection_model_name": globals().get("text_detection_model_name", None),
+        "text_recognition_model_name": globals().get("text_recognition_model_name", None),
+        "max_pages": max_pages,
     })
     sys.exit(4)
 "##;
@@ -1689,7 +1716,7 @@ except Exception as exc:
 
 fn paddleocr_payload_to_extracted_text(
     payload: Value,
-    max_pages: usize,
+    max_pages: Option<usize>,
 ) -> Option<ExtractedDocumentText> {
     if payload
         .get("ok")
@@ -1723,7 +1750,11 @@ fn paddleocr_payload_to_extracted_text(
             },
             "paddleocr": {
                 "parser": "PP-StructureV3",
-                "max_pages": max_pages,
+                "ocr_family": payload.get("ocr_family").cloned().unwrap_or_else(|| json!("PP-OCRv6")),
+                "text_detection_model_name": payload.get("text_detection_model_name").cloned().unwrap_or_else(|| json!("PP-OCRv6_medium_det")),
+                "text_recognition_model_name": payload.get("text_recognition_model_name").cloned().unwrap_or_else(|| json!("PP-OCRv6_medium_rec")),
+                "max_pages": max_pages.map(|value| json!(value)).unwrap_or(Value::Null),
+                "page_scope": if max_pages.is_some() { "limited" } else { "all" },
                 "config": payload.get("config").cloned().unwrap_or_else(|| json!({})),
                 "errors": payload.get("errors").cloned().unwrap_or_else(|| json!([])),
             }
@@ -1807,9 +1838,11 @@ fn extract_pdf_with_tesseract_render(path: &Path) -> Option<String> {
     let path_arg = path.to_string_lossy().to_string();
     let max_pages = std::env::var("DOCUMENT_PDF_OCR_MAX_PAGES")
         .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(4)
-        .max(1)
+        .filter(|value| *value > 0)
+        .unwrap_or(0)
         .to_string();
     let script = r#"
 import os, shutil, subprocess, sys, tempfile
@@ -1819,7 +1852,8 @@ except Exception:
     sys.exit(2)
 work = tempfile.mkdtemp(prefix="aidp-pdf-render-")
 try:
-    max_pages = max(1, int(sys.argv[2]))
+    max_pages_raw = int(sys.argv[2])
+    max_pages = max_pages_raw if max_pages_raw > 0 else None
     pages = convert_from_path(sys.argv[1], first_page=1, last_page=max_pages)
     tesseract = os.environ.get("TESSERACT_BIN", "tesseract")
     texts = []
@@ -1855,7 +1889,7 @@ fn extract_pdf_with_vlm_render(
     }
 
     let temp_dir = create_temp_dir("aidp-pdf-vlm-render").ok()?;
-    let rendered = render_pdf_pages_to_images(path, &temp_dir, "DOCUMENT_PDF_VLM_MAX_PAGES", 4);
+    let rendered = render_pdf_pages_to_images(path, &temp_dir, "DOCUMENT_PDF_VLM_MAX_PAGES", 0);
     let mut blocks = Vec::new();
     let mut pages = Vec::new();
     for (index, image_path) in rendered.iter().enumerate() {
@@ -1926,7 +1960,7 @@ fn extract_presentation_with_vlm_render(path: &Path) -> Option<String> {
                 pdf_path,
                 &temp_dir,
                 "DOCUMENT_PRESENTATION_VLM_MAX_SLIDES",
-                4,
+                0,
             )
         })
         .unwrap_or_default();
@@ -2015,9 +2049,10 @@ fn render_pdf_pages_to_images(
     let output_arg = output_dir.to_string_lossy().to_string();
     let max_pages = std::env::var(max_pages_env)
         .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(default_max_pages)
-        .max(1)
         .to_string();
     let script = r#"
 import os, sys
@@ -2027,7 +2062,8 @@ except Exception:
     sys.exit(2)
 out = sys.argv[2]
 os.makedirs(out, exist_ok=True)
-max_pages = max(1, int(sys.argv[3]))
+max_pages_raw = int(sys.argv[3])
+max_pages = max_pages_raw if max_pages_raw > 0 else None
 pages = convert_from_path(sys.argv[1], first_page=1, last_page=max_pages)
 for index, image in enumerate(pages):
     image_path = os.path.join(out, f"page-{index + 1}.png")
@@ -4331,6 +4367,27 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn paddleocr_defaults_to_all_pages_without_hard_cap() {
+        with_paddleocr_env(&[("DOCUMENT_PADDLEOCR_MAX_PAGES", None)], || {
+            assert_eq!(document_paddleocr_max_pages(), None);
+        });
+    }
+
+    #[test]
+    fn paddleocr_max_pages_env_sets_explicit_limit() {
+        with_paddleocr_env(&[("DOCUMENT_PADDLEOCR_MAX_PAGES", Some("12"))], || {
+            assert_eq!(document_paddleocr_max_pages(), Some(12));
+        });
+    }
+
+    #[test]
+    fn paddleocr_zero_max_pages_keeps_all_pages() {
+        with_paddleocr_env(&[("DOCUMENT_PADDLEOCR_MAX_PAGES", Some("0"))], || {
+            assert_eq!(document_paddleocr_max_pages(), None);
+        });
+    }
+
+    #[test]
     fn paddleocr_payload_keeps_structured_markdown_and_blocks() {
         let extracted = paddleocr_payload_to_extracted_text(
             json!({
@@ -4352,9 +4409,12 @@ trailer << /Root 1 0 R >>
                         "text": "广东高明中港城商业管理有限公司"
                     }
                 ],
-                "errors": []
+                "errors": [],
+                "ocr_family": "PP-OCRv6",
+                "text_detection_model_name": "PP-OCRv6_medium_det",
+                "text_recognition_model_name": "PP-OCRv6_medium_rec"
             }),
-            8,
+            None,
         )
         .expect("structured PaddleOCR payload should become extracted text");
 
@@ -4368,8 +4428,43 @@ trailer << /Root 1 0 R >>
             extracted.metadata["document_structure"]["blocks"][0]["type"],
             json!("paragraph_title")
         );
-        assert_eq!(extracted.metadata["paddleocr"]["max_pages"], json!(8));
+        assert_eq!(extracted.metadata["paddleocr"]["max_pages"], Value::Null);
+        assert_eq!(extracted.metadata["paddleocr"]["page_scope"], json!("all"));
+        assert_eq!(
+            extracted.metadata["paddleocr"]["ocr_family"],
+            json!("PP-OCRv6")
+        );
+        assert_eq!(
+            extracted.metadata["paddleocr"]["text_detection_model_name"],
+            json!("PP-OCRv6_medium_det")
+        );
+        assert_eq!(
+            extracted.metadata["paddleocr"]["text_recognition_model_name"],
+            json!("PP-OCRv6_medium_rec")
+        );
         assert_eq!(extracted.metadata["paddleocr"]["config"], json!({}));
+    }
+
+    #[test]
+    fn paddleocr_payload_records_explicit_page_limit() {
+        let extracted = paddleocr_payload_to_extracted_text(
+            json!({
+                "ok": true,
+                "markdown": "第一页\n\n第二页",
+                "page_count": 2,
+                "block_count": 2,
+                "blocks": [],
+                "errors": []
+            }),
+            Some(2),
+        )
+        .expect("structured PaddleOCR payload should become extracted text");
+
+        assert_eq!(extracted.metadata["paddleocr"]["max_pages"], json!(2));
+        assert_eq!(
+            extracted.metadata["paddleocr"]["page_scope"],
+            json!("limited")
+        );
     }
 
     #[test]
@@ -4383,7 +4478,7 @@ trailer << /Root 1 0 R >>
                     "block_count": 1,
                     "blocks": [{"page_number": 1, "text": "字"}],
                 }),
-                8,
+                None,
             )
             .expect("single character payload is still parseable before quality gate");
 
