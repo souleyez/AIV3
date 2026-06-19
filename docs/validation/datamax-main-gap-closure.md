@@ -2,6 +2,43 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Manifest Service Handoff Helpers GitHub And 8-server Release
+
+- Scope:
+  - released #298, #299, and #300 together;
+  - included `crates/platform-api/src/lib.rs`, `crates/platform-api/src/manifest_service_handoff_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation ledger;
+  - excluded existing LF/CRLF-only working-tree noise in public integration docs and archived performance docs.
+- Diff review:
+  - confirmed the substantive code change is private helper extraction from `lib.rs` into `manifest_service_handoff_support`;
+  - confirmed public API URLs, third-party request/response fields, auth methods, database schema, and production data mappings were unchanged;
+  - confirmed staged diff was limited to the intended four files before commit.
+- Local verification:
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api to_chat_message_view_exposes_confirmed_report_service_handoff --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api derive_report_render_output_model_facing_summary_exposes_service_handoff_signals --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api report_entry_route_enter_report_service_creates_plan_and_execution --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line secret-shape scan: passed.
+- GitHub:
+  - committed and pushed `e9797ea7 Split manifest service handoff helpers` to `origin/main`.
+- 8-server deployment:
+  - target host: `8.155.8.7`;
+  - remote repo: `/srv/aiv3/repo`;
+  - remote repo fast-forwarded from `df9bc7387` to `e9797ea78`;
+  - release build command used `CC=clang CXX=clang++ cargo build --release -q -p platform-api`;
+  - restarted `aiv3-platform-api.service`;
+  - service status: active;
+  - `GET http://127.0.0.1:3000/healthz`: HTTP 200, status `ok`;
+  - `GET http://127.0.0.1:3000/readyz`: HTTP 200, status `ready`;
+  - recent service log scan showed no `ERROR`, `WARN`, `panic`, or `failed` entries in the checked window.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, 120 server change, or unrelated service restart was performed.
+
 ## 2026-06-20 P5 Chat Session Report Entry Manifest Writer Helper Local Verification
 
 - Purpose:
