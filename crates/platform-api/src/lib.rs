@@ -129,13 +129,11 @@ use domain_model::{
     StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus,
     StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession,
     UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus, WorkflowTask,
+    WorkflowStatus,
 };
 #[cfg(test)]
 use domain_model::{SecretScopeLevel, StaticPageRenderOutputId};
-use event_bus::{
-    workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
-};
+use event_bus::EventBus;
 use external_source_connectors::{
     aggregate_mysql_table, inspect_mysql_schema, preview_mysql_table, profile_mysql_database,
     test_mysql_connection, DatabaseSemanticProfile, DatabaseSourceError, MySqlAggregateRequest,
@@ -458,14 +456,19 @@ mod text_normalization;
 mod tool_view_support;
 mod wechat_video_login_handoff_support;
 mod workflow_context_support;
+mod workflow_definition_view_support;
 mod workflow_execution_child_list_support;
 mod workflow_execution_query_support;
+mod workflow_execution_view_support;
 mod workflow_execution_visibility_support;
+mod workflow_initial_context_support;
 mod workflow_initial_event_support;
 mod workflow_runtime_artifact_manifest_support;
+mod workflow_runtime_inspect_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod workflow_task_view_support;
+mod workflow_transition_event_publish_support;
 mod workflow_transition_support;
 mod zip_ingest_support;
 
@@ -736,11 +739,15 @@ use text_normalization::*;
 use tool_view_support::*;
 use wechat_video_login_handoff_support::*;
 use workflow_context_support::*;
+use workflow_definition_view_support::*;
 use workflow_execution_child_list_support::*;
 use workflow_execution_query_support::*;
+use workflow_execution_view_support::*;
 use workflow_execution_visibility_support::*;
+use workflow_initial_context_support::*;
 use workflow_initial_event_support::*;
 use workflow_runtime_artifact_manifest_support::*;
+use workflow_runtime_inspect_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
     render_dataset_output_runtime_summary, render_execution_scope_runtime_summary,
@@ -749,6 +756,7 @@ pub use workflow_runtime_summary::{
     render_workflow_runtime_pretty_summaries,
 };
 use workflow_task_view_support::*;
+use workflow_transition_event_publish_support::*;
 use workflow_transition_support::*;
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
@@ -981,16 +989,7 @@ impl AppState {
         let workflows = workflow_catalog
             .descriptors()
             .into_iter()
-            .map(|definition| WorkflowDefinitionView {
-                kind: definition.kind,
-                version: definition.version,
-                summary: definition.summary,
-                accepted_signals: definition
-                    .accepted_signals
-                    .into_iter()
-                    .map(|signal| signal.as_str().to_string())
-                    .collect(),
-            })
+            .map(to_workflow_definition_view)
             .collect();
 
         Self {
@@ -55626,24 +55625,20 @@ async fn load_workflow_runtime_inspect_view(
     let execution_scope_runtime: Option<contracts::WorkflowExecutionRuntimeSummaryView> =
         summarize_execution_scope_runtime(&llm_invocations, &tool_executions);
 
-    let mut inspect = WorkflowRuntimeInspectView {
-        execution: to_workflow_execution_view(execution),
-        execution_scope_runtime,
-        dataset_output,
-        chat_session,
-        report_plan,
-        report_render_output,
-        chat_messages,
-        llm_invocations,
-        tool_executions,
-        model_facing: None,
-        pretty_summaries: Vec::new(),
-        artifact_manifests,
-    };
-    inspect.model_facing = Some(derive_model_facing_summary(&inspect));
-    inspect.pretty_summaries = render_workflow_runtime_pretty_summaries(&inspect);
-
-    Ok(inspect)
+    Ok(build_workflow_runtime_inspect_view(
+        WorkflowRuntimeInspectParts {
+            execution,
+            execution_scope_runtime,
+            dataset_output,
+            chat_session,
+            report_plan,
+            report_render_output,
+            chat_messages,
+            llm_invocations,
+            tool_executions,
+            artifact_manifests,
+        },
+    ))
 }
 
 async fn list_llm_invocations(
@@ -56154,45 +56149,6 @@ async fn maybe_record_data_ingestion_staging_sync_workflow_event(
     Ok(())
 }
 
-async fn publish_workflow_transition_events(
-    event_bus: &EventBus,
-    execution: &WorkflowExecution,
-    persisted_event: &WorkflowEventRecord,
-    persisted_tasks: &[WorkflowTask],
-) {
-    let execution_event = EventEnvelope {
-        subject: workflow_execution_transition_subject(execution.kind.as_str()),
-        payload: json!({
-            "execution_id": execution.id,
-            "tenant_id": execution.tenant_id,
-            "kind": execution.kind.as_str(),
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "event_name": persisted_event.event_name,
-            "event_sequence_no": persisted_event.sequence_no,
-        }),
-        published_at: persisted_event.created_at,
-    };
-    event_bus.publish(execution_event).await;
-
-    for task in persisted_tasks {
-        let task_event = EventEnvelope {
-            subject: workflow_task_enqueued_subject(&task.queue, &task.task_key),
-            payload: json!({
-                "task_id": task.id,
-                "tenant_id": task.tenant_id,
-                "execution_id": task.execution_id,
-                "queue": task.queue,
-                "task_key": task.task_key,
-                "status": task.status.as_str(),
-                "available_at": task.available_at,
-            }),
-            published_at: task.created_at,
-        };
-        event_bus.publish(task_event).await;
-    }
-}
-
 fn build_initial_report_plan_execution(
     state: &AppState,
     plan: &ReportPlan,
@@ -56210,11 +56166,7 @@ fn build_initial_report_plan_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "report_time_range_contract".to_string(),
         build_static_page_report_time_range_contract(),
@@ -56270,11 +56222,7 @@ fn build_initial_external_source_sync_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "source_id".to_string(),
         Value::String(source.source_id.clone()),
@@ -56355,11 +56303,7 @@ fn build_initial_external_action_dispatch_execution(
         })?;
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "channel_connection_id".to_string(),
         Value::String(connection_id.to_string()),
@@ -56406,11 +56350,7 @@ fn build_initial_memory_directory_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert("include_directory".to_string(), Value::Bool(true));
     if let Some(owner_user_id) = owner_user_id {
         context.insert(
@@ -56456,11 +56396,7 @@ fn build_initial_dataset_output_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "prompt".to_string(),
         Value::String(prompt.trim().to_string()),
@@ -56536,11 +56472,7 @@ fn build_initial_chat_session_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "chat_session_id".to_string(),
         Value::String(chat_session_id.to_string()),
@@ -56608,11 +56540,7 @@ fn build_initial_report_render_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "report_time_range_contract".to_string(),
         build_static_page_report_time_range_contract(),
@@ -56676,11 +56604,7 @@ fn build_initial_static_page_image_generation_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "static_page_draft_id".to_string(),
         Value::String(draft.id.to_string()),
@@ -56737,11 +56661,7 @@ fn build_initial_static_page_render_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
+    let mut context = workflow_initial_context_with_retries(&runtime_state);
     context.insert(
         "static_page_draft_id".to_string(),
         Value::String(draft.id.to_string()),
@@ -59011,16 +58931,6 @@ fn build_published_report_version_manifest(
     }
 }
 
-fn to_workflow_execution_view(execution: WorkflowExecution) -> WorkflowExecutionView {
-    WorkflowExecutionView {
-        id: execution.id,
-        kind: execution.kind,
-        status: execution.status,
-        stage: execution.stage,
-        updated_at: execution.updated_at,
-    }
-}
-
 fn assistant_run_detail_diagnostics(run: &AssistantRun, events: &[AssistantRunEvent]) -> Value {
     let provider_usage_events = assistant_run_provider_usage_events(run, events);
     json!({
@@ -60256,7 +60166,7 @@ mod tests {
         ReportPlanStatus, ReportRenderOutput, ReportRenderOutputId, ReportRenderOutputStatus,
         RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, TenantId, ToolExecution,
         ToolExecutionId, ToolExecutionSourceKind, ToolExecutionStatus, WorkflowExecutionId,
-        WorkflowStatus,
+        WorkflowStatus, WorkflowTask,
     };
     use event_bus::{workflow_execution_transition_subject, workflow_task_enqueued_subject};
     use std::io::{Read, Write};

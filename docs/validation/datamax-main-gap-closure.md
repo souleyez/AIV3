@@ -21292,6 +21292,115 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, web rebuild, web restart, worker restart, or 120 server change was performed.
 
+## 2026-06-20 P5 Workflow Transition Event Publish Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow transition event-bus notification construction out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/workflow_transition_event_publish_support.rs`;
+  - moved `publish_workflow_transition_events` into the new module;
+  - kept workflow signal handling, visible execution checks, storage `advance_with_tasks`, external source sync status updates, static-page render output sync, route response construction, and handler-side side effects in `lib.rs`;
+  - preserved execution transition subject, queued-task subject, envelope payload fields, `published_at` timestamps, task iteration order, and the behavior that a transition with no new tasks still publishes the execution event only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_transition_event_publish_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api publish_workflow_transition_events_emits_execution_and_task_notifications --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_transition_support --lib`: passed, 4/4 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Execution View Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow execution public summary view mapping out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/workflow_execution_view_support.rs`;
+  - moved `to_workflow_execution_view` into the new module;
+  - kept route handlers responsible for path parsing, active secret parsing, current user lookup, workflow visibility checks, storage queries, runtime inspect hydration, and response wrapping;
+  - preserved the public `WorkflowExecutionView` fields `id`, `kind`, `status`, `stage`, and `updated_at`, and kept internal fields such as version, attempt, context, and created_at out of the view.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_execution_view_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - added-line sensitive scan for key/database/bearer patterns: no matches.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Runtime Inspect Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move final workflow runtime inspect view assembly out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/workflow_runtime_inspect_support.rs`;
+  - added `WorkflowRuntimeInspectParts` and `build_workflow_runtime_inspect_view`;
+  - kept route access checks, storage loads, dataset/chat/report hydration, LLM/tool trace queries, execution-scope runtime summarization, and artifact manifest loading in `lib.rs`;
+  - preserved final `WorkflowRuntimeInspectView` field population, `derive_model_facing_summary` invocation, `render_workflow_runtime_pretty_summaries` invocation, artifact manifest propagation, and response contract shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_runtime_inspect_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api derive_model_facing_summary --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api render_workflow_runtime_pretty_summaries --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Definition View Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow definition descriptor to public view mapping out of `AppState::new` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/workflow_definition_view_support.rs`;
+  - added `to_workflow_definition_view` for `WorkflowDefinitionSummary` to `WorkflowDefinitionView` conversion;
+  - kept `AppState::new` responsible for bootstrapping the tool registry, keeping the workflow catalog, and storing tenant/storage/event bus state;
+  - preserved public fields `kind`, `version`, `summary`, `accepted_signals`, and the accepted signal string order.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_definition_view_support --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Context Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the repeated workflow initial runtime context plus `retries_remaining` seed out of current workflow initial execution builders.
+- Code change:
+  - added `crates/platform-api/src/workflow_initial_context_support.rs`;
+  - added `workflow_initial_context_with_retries` to clone initial runtime context and write `retries_remaining` with the same overwrite semantics as the previous inline `insert`;
+  - updated current workflow initial execution builders for report plan, external source sync, external action dispatch, memory directory, dataset output, chat session, report render, static-page image generation, and static-page render to use the helper;
+  - kept workflow definition lookup, execution id/time generation, business-specific context fields, `WorkflowExecution` construction, storage writes, and queue dispatch in `lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api request_memory_directory_refresh_creates_execution_for_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_dataset_output_binds_query_ranked_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Workflow Runtime Artifact Helpers GitHub And 8-server Release
 
 - Scope:
