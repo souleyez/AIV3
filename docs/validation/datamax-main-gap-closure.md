@@ -20426,6 +20426,37 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
 
+## 2026-06-19 P5 Client Artifact Response Helper GitHub and 8-Server Verification
+
+- Deployment:
+  - GitHub commit `41d660729c44117f8607aacc6d459373aa77ba48` was pushed to `main`;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `c0f737ad0` to `41d660729`;
+  - service restarted: `aiv3-platform-api.service`;
+  - no Web build or worker restart was required because the shipped code changes were limited to `platform-api` helper extraction plus documentation.
+- Local validation before publish:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_ref_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 55/55 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- 8-server build and checks:
+  - default `cargo build --release -p platform-api` hit the known target-host `aws-lc-sys` compiler guard with Alibaba GCC 10;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api`: passed;
+  - `aiv3-platform-api.service`: active after restart;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `aiv3-web.service`, `aiv3-external-source-worker.service`, `aiv3-ingest-worker.service`, and `aiv3-retrieval-worker.service`: active;
+  - public `https://v3.elepcloud.com/`: HTTP 200;
+  - 8-server repo status after deployment: clean.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded in this release note;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
