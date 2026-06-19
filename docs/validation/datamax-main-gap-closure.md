@@ -20027,6 +20027,42 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
 
+## 2026-06-19 P5 Client Artifact / Client Config / Asset Library Helper Release Verification
+
+- Scope:
+  - release the behavior-preserving P5 helper split batch covering client artifact public HTML publish, client config package create, and asset library create request construction.
+- Diff audit:
+  - reviewed semantic diffs for `crates/platform-api/src/client_artifact_publish_support.rs`, `crates/platform-api/src/client_config_package_support.rs`, `crates/platform-api/src/asset_library_create_support.rs`, `crates/platform-api/src/lib.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation file;
+  - kept unrelated LF/CRLF-only working-tree noise out of the commit.
+- Local verification before commit:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_create_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- GitHub:
+  - committed and pushed to `origin/main` as `a92d0d98` (`Refactor DataMax client artifact helpers`).
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `e2f7928d4` to `a92d0d982`;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed;
+  - restarted `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`;
+  - all five services returned `active`;
+  - 8-server repo head after deployment: `a92d0d982`;
+  - 8-server repo status after deployment: clean;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `200 OK`;
+  - `http://127.0.0.1:3100/admin/login`: `200 OK`;
+  - `https://v3.elepcloud.com/`: `200`;
+  - `https://v3.elepcloud.com/admin/login`: `200`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed during this deployment.
+
 ## 2026-06-19 P5 Client Config Package Create Orchestration Helper Local Verification
 
 - Purpose:
