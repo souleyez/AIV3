@@ -20712,6 +20712,30 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-19 P5 Dataset And Asset Library Helper 8-Server Deployment
+
+- Scope:
+  - deploy GitHub main helper-split commit `f107cd01` to `8服务器` `/srv/aiv3/repo`;
+  - affected runtime service: `aiv3-platform-api.service`;
+  - no web source, schema, worker logic, public third-party contract, or data-source mapping was changed.
+- Deployment:
+  - pre-deploy remote head: `c20ec9160`;
+  - `/srv/aiv3/repo` fast-forwarded to `f107cd016`;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api dataset_update_support --lib`: passed, 4/4 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library --lib`: passed, 32/32 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api`: passed.
+- Post-deploy verification:
+  - `aiv3-platform-api.service` restarted and returned `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned `{"service":"platform-api","status":"ok","version":"0.1.0"}`;
+  - `GET http://127.0.0.1:3000/readyz` returned `{"service":"platform-api","status":"ready","version":"0.1.0"}`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - `journalctl -u aiv3-platform-api.service --since '10 minutes ago' -p warning --no-pager` had no warning-or-higher entries.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during deployment;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
