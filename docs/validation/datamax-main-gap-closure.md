@@ -21153,6 +21153,74 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-20 P5 Document Visibility Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document visibility, dataset-scope document listing, and retrieval-evidence document visibility filtering out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/document_visibility_support.rs`;
+  - moved `load_visible_document_for_user`, `load_visible_document_for_assistant_scope`, `load_visible_document_for_user_with_local_scope`, dataset-scope document listing, visible-document-id filtering, retrieval evidence visible-document filtering, assistant evidence owner/selected-document fallback, and `external_acl_allows_missing_snapshot_for_selected_document` into the new module;
+  - kept dataset visibility, external ACL snapshot filtering, memory directory visibility, assistant supply builders, document list/detail/ingest/update helpers, and ReAct tools calling the same helper names;
+  - kept owner visibility, local-only thread scope, secondary dataset membership, archived document filtering, temporary dataset selected-document fallback, and retrieval-evidence filtering semantics unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_visibility_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api anonymous_local_only_dataset_lists_only_for_matching_browser_thread --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_external_document_scope_supplies_selected_doc_without_acl_snapshot --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_document_memberships_allow_document_in_multiple_dataset_scopes --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Memory Directory Visibility Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move memory directory visible-scope loading and filtering out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/memory_directory_visibility_support.rs`;
+  - moved `filter_visible_memory_directories_for_user`, `visible_memory_directory_for_user`, and `latest_visible_memory_directory_for_user` into the new module;
+  - kept `memory_directory_scope` responsible for manifest source document id extraction and pure owner/source-document visibility checks;
+  - kept `memory_directory_list_support`, assistant-run memory context, and dataset-output memory context calling the same helper names.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api memory_directory_visibility_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api memory_directory_scope --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api memory_directory_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api anonymous_local_only_dataset_lists_only_for_matching_browser_thread --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Report Plan Visibility Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move report-plan dataset visibility and owner visibility masking out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/report_plan_visibility_support.rs`;
+  - moved `load_visible_report_plan`, `load_visible_report_plan_for_user`, and internal `load_report_plan_with_visible_dataset_for_user` into the new module;
+  - kept report plan routes, continue/report render paths, HTML artifact publishing, published report loading, and workflow visibility checks calling the same helper names;
+  - kept dataset visibility, owner visibility, and `report_plan_not_found` masking semantics unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api report_plan_visibility_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api resource_access --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api report_plan_routes_hide_owned_public_dataset_plan_from_other_users --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
 
 - Purpose:
