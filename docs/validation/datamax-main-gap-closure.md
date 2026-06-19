@@ -21153,6 +21153,104 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-20 P5 Runtime Trace List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move LLM invocation and tool execution list loading/view mapping out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/runtime_trace_list_support.rs`;
+  - moved workflow execution, dataset output, and chat message scoped LLM invocation/tool execution storage reads into helper functions;
+  - kept route-level execution id parsing, active secret parsing, current user lookup, and workflow execution visibility checks in the existing handlers;
+  - updated workflow runtime inspect, LLM invocation route, tool execution route, dataset output hydration, and chat message hydration to call the helper;
+  - changed `llm_invocation_view_support::*` import in `lib.rs` to `#[cfg(test)]` because non-test runtime now calls through the helper.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api runtime_trace_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api customer_codex --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api to_dataset_output_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api to_chat_message_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api completed_chat_session_view_hydrates_latest_message_from_llm_invocations_when_manifest_view_absent --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Runtime Artifact Manifest Loader Consolidation Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow runtime artifact manifest storage/event loading into `workflow_runtime_artifact_manifest_support` so `lib.rs` keeps only the runtime inspect call site.
+- Code change:
+  - moved `load_workflow_runtime_artifact_manifests` into `crates/platform-api/src/workflow_runtime_artifact_manifest_support.rs`;
+  - added an internal collector that merges assistant-run `output_artifacts`, direct event `artifact_manifest` payloads, and customer Codex ready-event output artifact manifests before first-seen deduplication;
+  - kept missing assistant run behavior as an empty manifest list and preserved direct/fixed-task assistant run id lookup, schema/version gating, allowlisted fields, links/refs/safety defaults, raw field stripping, and runtime inspect response shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api customer_codex --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api runtime_trace_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api to_dataset_output_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api to_chat_message_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api completed_chat_session_view_hydrates_latest_message_from_llm_invocations_when_manifest_view_absent --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_execution_query_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Assistant Run Customer Codex Artifact Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move customer Codex artifact ready-event to assistant-run output-artifact conversion out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`;
+  - moved customer Codex artifact bundle output conversion, output artifact deduplication, safe relative-path filtering, generated-artifacts URL allowlisting, published link assembly, capability/route normalization, sensitive display-text suppression, and safe workflow execution id extraction into the new module;
+  - kept `lib.rs` call sites unchanged and only made related capability/event constants plus `external_channel_generated_artifact_public_base_url` crate-visible for reuse;
+  - preserved customer artifact request, generated static page edit, generated static page publish, unsafe URL stripping, secret-like path rejection, non-artifact capability fallback, runtime inspect manifest exposure, and published route behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api customer_codex --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 4/4 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Runtime Artifact Manifest Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move workflow runtime artifact manifest parsing, allowlisting, and deduplication out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/workflow_runtime_artifact_manifest_support.rs`;
+  - moved `workflow_runtime_assistant_run_id`, `output_artifact_manifests_from_output_artifacts`, `dedupe_output_artifact_manifests`, and `safe_output_artifact_manifest` into the new module;
+  - kept `load_workflow_runtime_artifact_manifests` in `lib.rs` so storage reads and customer Codex event materialization remain in the route/runtime area;
+  - kept customer artifact bundle construction in `lib.rs` and only reused the new manifest allowlist helper for runtime inspect output;
+  - preserved direct and `/fixed_task/assistant_run_id` lookup, `artifact_manifest`/`artifactManifest` aliases, schema/version gating, links/refs/safety defaults, raw field stripping, and first-seen deduplication order.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api customer_codex_artifacts_ready_event_becomes_safe_output_artifact --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api customer_codex_output_artifact_manifest_is_exposed_for_runtime_inspect --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api customer_codex_generated_static_page_publish_ready_event_preserves_publish_route_in_output_artifact --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_execution_query_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Workflow Execution Child List Support Helper Local Verification
 
 - Purpose:

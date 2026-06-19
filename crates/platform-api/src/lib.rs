@@ -213,6 +213,7 @@ mod assistant_run_codex_shadow_gate_support;
 mod assistant_run_codex_shadow_support;
 mod assistant_run_codex_tool_output_support;
 mod assistant_run_conversation_memory_support;
+mod assistant_run_customer_codex_artifact_support;
 mod assistant_run_detail_support;
 mod assistant_run_evidence_limit_support;
 mod assistant_run_evidence_state_support;
@@ -389,6 +390,7 @@ mod retrieval_evidence_ranking_support;
 mod retrieval_evidence_view_support;
 mod retrieval_query_support;
 mod runtime_manifest_support;
+mod runtime_trace_list_support;
 mod sse_support;
 mod static_page_artifact_stability_support;
 mod static_page_artifact_summary_support;
@@ -456,6 +458,7 @@ mod workflow_context_support;
 mod workflow_execution_child_list_support;
 mod workflow_execution_query_support;
 mod workflow_execution_visibility_support;
+mod workflow_runtime_artifact_manifest_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod workflow_task_view_support;
@@ -474,6 +477,7 @@ use assistant_run_codex_promotion_gate_support::*;
 use assistant_run_codex_shadow_gate_support::*;
 use assistant_run_codex_shadow_support::*;
 use assistant_run_conversation_memory_support::*;
+use assistant_run_customer_codex_artifact_support::*;
 use assistant_run_detail_support::*;
 use assistant_run_evidence_limit_support::*;
 use assistant_run_evidence_state_support::*;
@@ -631,6 +635,7 @@ use html_artifact_summary_support::*;
 use id_parse_support::*;
 #[cfg(test)]
 use lifecycle_updates::*;
+#[cfg(test)]
 use llm_invocation_view_support::*;
 use manifest_service_handoff_support::*;
 use memory_directory_list_support::*;
@@ -669,6 +674,7 @@ use retrieval_evidence_ranking_support::*;
 use retrieval_evidence_view_support::*;
 use retrieval_query_support::*;
 use runtime_manifest_support::*;
+use runtime_trace_list_support::*;
 use sse_support::*;
 use static_page_artifact_stability_support::*;
 use static_page_artifact_summary_support::*;
@@ -727,6 +733,7 @@ use workflow_context_support::*;
 use workflow_execution_child_list_support::*;
 use workflow_execution_query_support::*;
 use workflow_execution_visibility_support::*;
+use workflow_runtime_artifact_manifest_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
     render_dataset_output_runtime_summary, render_execution_scope_runtime_summary,
@@ -743,12 +750,13 @@ const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
 const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
-const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
-const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
-const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
-const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
+pub(crate) const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
+pub(crate) const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
+pub(crate) const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
+pub(crate) const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str =
+    "generated_static_page_publish";
 const CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
-const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
+pub(crate) const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
 pub(crate) const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 pub(crate) const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 pub(crate) const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize =
@@ -785,9 +793,9 @@ const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SKILL_LIMIT: usize = 4;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_CHUNK_LIMIT: usize = 5;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_TEXT_LIMIT: usize = 2400;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SECTION_LIMIT: usize = 16;
-const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
+pub(crate) const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.customer_artifact_request_artifacts_ready";
-const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
+pub(crate) const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
@@ -27523,7 +27531,7 @@ fn external_channel_generated_artifact_root() -> std::result::Result<PathBuf, Ap
     Ok(root)
 }
 
-fn external_channel_generated_artifact_public_base_url() -> String {
+pub(crate) fn external_channel_generated_artifact_public_base_url() -> String {
     std::env::var("V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL")
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
@@ -55605,24 +55613,8 @@ async fn load_workflow_runtime_inspect_view(
         Some(output) => Some(hydrate_report_render_output_view(state, output).await?),
         None => None,
     };
-    let llm_invocations: Vec<LlmInvocationView> = state
-        .storage
-        .llm_invocations()
-        .list_by_execution(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_llm_invocation_view)
-        .collect();
-    let tool_executions: Vec<ToolExecutionView> = state
-        .storage
-        .tool_executions()
-        .list_by_execution(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_tool_execution_view)
-        .collect();
+    let llm_invocations = list_llm_invocation_views_for_execution(state, execution_id).await?;
+    let tool_executions = list_tool_execution_views_for_execution(state, execution_id).await?;
     let execution_scope_runtime: Option<contracts::WorkflowExecutionRuntimeSummaryView> =
         summarize_execution_scope_runtime(&llm_invocations, &tool_executions);
 
@@ -55646,641 +55638,6 @@ async fn load_workflow_runtime_inspect_view(
     Ok(inspect)
 }
 
-async fn load_workflow_runtime_artifact_manifests(
-    state: &AppState,
-    execution: &WorkflowExecution,
-) -> std::result::Result<Vec<Value>, ApiError> {
-    let Some(run_id) = workflow_runtime_assistant_run_id(&execution.context) else {
-        return Ok(Vec::new());
-    };
-    let Some(run) = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-    else {
-        return Ok(Vec::new());
-    };
-    let mut manifests = output_artifact_manifests_from_output_artifacts(&run.output_artifacts);
-    let events = state
-        .storage
-        .assistant_runs()
-        .list_events(state.tenant_id, run_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let event_output_artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
-    manifests.extend(
-        events
-            .iter()
-            .filter_map(|event| safe_output_artifact_manifest(&event.payload)),
-    );
-    manifests.extend(
-        event_output_artifacts
-            .iter()
-            .filter_map(safe_output_artifact_manifest),
-    );
-    Ok(dedupe_output_artifact_manifests(manifests))
-}
-
-fn workflow_runtime_assistant_run_id(context: &Value) -> Option<AssistantRunId> {
-    workflow_context_uuid(context, "assistant_run_id")
-        .or_else(|| {
-            context
-                .pointer("/fixed_task/assistant_run_id")
-                .and_then(Value::as_str)
-                .and_then(|raw| Uuid::parse_str(raw).ok())
-        })
-        .map(AssistantRunId)
-}
-
-fn output_artifact_manifests_from_output_artifacts(output_artifacts: &Value) -> Vec<Value> {
-    dedupe_output_artifact_manifests(
-        value_array(output_artifacts.clone())
-            .into_iter()
-            .filter_map(|artifact| safe_output_artifact_manifest(&artifact))
-            .collect(),
-    )
-}
-
-fn dedupe_output_artifact_manifests(manifests: Vec<Value>) -> Vec<Value> {
-    let mut seen = BTreeSet::new();
-    manifests
-        .into_iter()
-        .filter(|manifest| {
-            let key = serde_json::to_string(manifest).unwrap_or_default();
-            seen.insert(key)
-        })
-        .collect()
-}
-
-fn assistant_run_append_deduped_output_artifacts(
-    output_artifacts: Vec<Value>,
-    additional_artifacts: Vec<Value>,
-) -> Vec<Value> {
-    let mut seen = BTreeSet::new();
-    output_artifacts
-        .into_iter()
-        .chain(additional_artifacts)
-        .filter(|artifact| {
-            let key = serde_json::to_string(artifact).unwrap_or_default();
-            seen.insert(key)
-        })
-        .collect()
-}
-
-fn assistant_run_customer_codex_output_artifacts_from_events(
-    events: &[AssistantRunEvent],
-) -> Vec<Value> {
-    assistant_run_append_deduped_output_artifacts(
-        Vec::new(),
-        events
-            .iter()
-            .filter_map(assistant_run_customer_codex_output_artifact_from_ready_event)
-            .collect(),
-    )
-}
-
-fn assistant_run_customer_codex_output_artifact_from_ready_event(
-    event: &AssistantRunEvent,
-) -> Option<Value> {
-    let event_name = event.event_name.as_str();
-    if !matches!(
-        event_name,
-        ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT
-            | ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT
-    ) {
-        return None;
-    }
-    let payload = &event.payload;
-    if payload.get("source").and_then(Value::as_str) != Some("codex_host_customer_artifacts") {
-        return None;
-    }
-    let mut customer_artifacts =
-        assistant_run_safe_customer_codex_artifacts(payload.get("customer_artifacts")?)?;
-    let artifacts = customer_artifacts
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if artifacts.is_empty() {
-        return None;
-    }
-    let artifact_paths = artifacts
-        .iter()
-        .filter_map(|artifact| artifact.get("path").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let default_capability =
-        if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT {
-            CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT
-        } else {
-            CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST
-        };
-    let capability = payload
-        .get("capability")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_artifact_capability)
-        .unwrap_or_else(|| default_capability.to_string());
-    let default_route =
-        assistant_run_customer_codex_default_route_for_capability(event_name, &capability);
-    let route = payload
-        .get("route")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_artifact_route)
-        .unwrap_or(default_route);
-    if let Some(object) = customer_artifacts.as_object_mut() {
-        object.insert("capability".to_string(), json!(capability.clone()));
-    }
-    let status = assistant_run_safe_customer_codex_text(
-        payload
-            .get("status")
-            .or_else(|| customer_artifacts.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("available"),
-        40,
-    );
-    let workflow_execution_id = assistant_run_safe_uuid_string(payload, "workflow_execution_id");
-    let title = customer_artifacts
-        .get("title")
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT {
-                "Codex generated page edit artifacts".to_string()
-            } else {
-                "Codex customer artifacts".to_string()
-            }
-        });
-    let manifest_path = customer_artifacts
-        .get("manifest_path")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_relative_path);
-    let artifact_count = artifacts.len();
-    let primary_url = customer_artifacts
-        .get("primary_url")
-        .or_else(|| customer_artifacts.get("public_url"))
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
-    let published = customer_artifacts
-        .get("published")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && primary_url.is_some();
-    let status = if published {
-        "published".to_string()
-    } else {
-        status
-    };
-    let links =
-        assistant_run_customer_codex_artifact_links(&customer_artifacts, primary_url.as_deref());
-    let primary_url_value = primary_url
-        .as_ref()
-        .map(|url| json!(url))
-        .unwrap_or(Value::Null);
-
-    Some(json!({
-        "type": "codex_customer_artifact_bundle",
-        "artifact_type": "codex_customer_artifacts",
-        "artifact_kind": "customer_artifact_bundle",
-        "status": status.clone(),
-        "capability": capability,
-        "route": route,
-        "workflow_execution_id": workflow_execution_id.clone(),
-        "published": published,
-        "primary_url": primary_url_value.clone(),
-        "public_url": primary_url_value.clone(),
-        "artifact_count": artifact_count,
-        "customer_artifacts": customer_artifacts,
-        "artifact_manifest": {
-            "schema": "v3.output_artifact_manifest",
-            "schema_version": 1,
-            "artifact_type": "codex_customer_artifacts",
-            "artifact_kind": "customer_artifact_bundle",
-            "title": title,
-            "status": status,
-            "primary_url": primary_url_value,
-            "links": links,
-            "refs": {
-                "workflow_execution_id": workflow_execution_id,
-                "artifact_paths": artifact_paths,
-                "manifest_path": manifest_path,
-            },
-            "safety": {
-                "credentials_exposed": false,
-                "raw_logs_exposed": false,
-                "workspace_paths_only": true,
-                "absolute_paths_exposed": false,
-                "published": published,
-                "requires_datamax_publish_validation": !published,
-            },
-        },
-    }))
-}
-
-fn assistant_run_safe_customer_codex_artifacts(customer_artifacts: &Value) -> Option<Value> {
-    if !customer_artifacts.is_object() {
-        return None;
-    }
-    if customer_artifacts.get("schema").and_then(Value::as_str)
-        != Some("v3.customer_codex_artifacts")
-    {
-        return None;
-    }
-    if customer_artifacts.get("version").and_then(Value::as_i64) != Some(1) {
-        return None;
-    }
-    let artifacts = customer_artifacts
-        .get("artifacts")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(assistant_run_safe_customer_codex_artifact_item)
-        .collect::<Vec<_>>();
-    if artifacts.is_empty() {
-        return None;
-    }
-    let status = assistant_run_safe_customer_codex_text(
-        customer_artifacts
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("available"),
-        40,
-    );
-    let capability = customer_artifacts
-        .get("capability")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_artifact_capability)
-        .unwrap_or_else(|| CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST.to_string());
-    let manifest_path = customer_artifacts
-        .get("manifest_path")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_relative_path);
-    let title = customer_artifacts
-        .get("title")
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
-        .unwrap_or_default();
-    let summary = customer_artifacts
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_display_text(value, 600))
-        .unwrap_or_default();
-    let primary_url = customer_artifacts
-        .get("primary_url")
-        .or_else(|| customer_artifacts.get("public_url"))
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
-        .or_else(|| {
-            artifacts
-                .iter()
-                .filter_map(|artifact| artifact.get("public_url").and_then(Value::as_str))
-                .find_map(assistant_run_safe_customer_codex_generated_artifact_url)
-        });
-    let published_manifest_url = customer_artifacts
-        .get("published_manifest_url")
-        .or_else(|| customer_artifacts.pointer("/publish/manifest_url"))
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
-    let published = customer_artifacts
-        .get("published")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && primary_url.is_some();
-    let published_artifact_count = customer_artifacts
-        .get("published_artifact_count")
-        .or_else(|| customer_artifacts.pointer("/publish/artifact_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| {
-            artifacts
-                .iter()
-                .filter(|artifact| artifact.get("public_url").and_then(Value::as_str).is_some())
-                .count() as u64
-        });
-
-    let primary_url_value = primary_url
-        .as_ref()
-        .map(|url| json!(url))
-        .unwrap_or(Value::Null);
-    let published_manifest_url_value = published_manifest_url
-        .as_ref()
-        .map(|url| json!(url))
-        .unwrap_or(Value::Null);
-
-    Some(json!({
-        "schema": "v3.customer_codex_artifacts",
-        "version": 1,
-        "status": if published { "published".to_string() } else { status },
-        "capability": capability,
-        "manifest_path": manifest_path,
-        "artifact_count": artifacts.len(),
-        "artifacts": artifacts,
-        "summary": summary,
-        "title": title,
-        "published": published,
-        "published_artifact_count": published_artifact_count,
-        "primary_url": primary_url_value.clone(),
-        "public_url": primary_url_value,
-        "published_manifest_url": published_manifest_url_value,
-        "validation": {
-            "workspace_scoped": true,
-            "v3_product_repo_write_blocked": true,
-            "absolute_paths_redacted": true,
-            "published_to_generated_artifacts": published,
-        },
-    }))
-}
-
-fn assistant_run_safe_customer_codex_artifact_item(item: &Value) -> Option<Value> {
-    let path = item
-        .get("path")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_relative_path)?;
-    let title = item
-        .get("title")
-        .or_else(|| item.get("name"))
-        .or_else(|| item.get("label"))
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
-        .unwrap_or_default();
-    let kind = item
-        .get("kind")
-        .or_else(|| item.get("type"))
-        .or_else(|| item.get("artifact_kind"))
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_text(value, 80))
-        .unwrap_or_else(|| "file".to_string());
-    let mime_type = item
-        .get("mime_type")
-        .or_else(|| item.get("mimeType"))
-        .or_else(|| item.get("content_type"))
-        .and_then(Value::as_str)
-        .map(|value| assistant_run_safe_customer_codex_text(value, 120))
-        .unwrap_or_default();
-    let bytes = item.get("bytes").and_then(Value::as_u64).unwrap_or(0);
-    let sha256 = item
-        .get("sha256")
-        .and_then(Value::as_str)
-        .filter(|value| value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
-        .unwrap_or_default();
-    let public_url = item
-        .get("public_url")
-        .or_else(|| item.get("publicUrl"))
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
-    let published = item
-        .get("published")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && public_url.is_some();
-
-    Some(json!({
-        "path": path,
-        "title": title,
-        "kind": kind,
-        "mime_type": mime_type,
-        "bytes": bytes,
-        "sha256": sha256,
-        "published": published,
-        "public_url": public_url,
-    }))
-}
-
-fn assistant_run_safe_customer_codex_relative_path(path: &str) -> Option<String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with('/')
-        || trimmed.starts_with('~')
-        || trimmed.starts_with("\\\\")
-        || trimmed.contains('\\')
-        || trimmed.contains(':')
-        || trimmed.contains('\0')
-    {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("/srv/aiv3/repo")
-        || lower.contains("/users/")
-        || lower.contains("node_modules")
-        || lower.contains(".git")
-        || lower.contains(".env")
-        || lower.ends_with(".env")
-        || lower.contains("secret")
-        || lower.contains("credential")
-        || lower.contains("access_token")
-        || lower.contains("refresh_token")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("private_key")
-        || lower.contains("password")
-        || lower.ends_with(".pem")
-        || lower.ends_with(".key")
-        || lower.ends_with(".p12")
-        || lower.ends_with(".pfx")
-        || lower.contains("id_rsa")
-        || lower.contains("id_dsa")
-        || lower.contains("id_ecdsa")
-        || lower.contains("id_ed25519")
-        || lower.contains("authorized_keys")
-    {
-        return None;
-    }
-    if trimmed
-        .split('/')
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-fn assistant_run_safe_customer_codex_generated_artifact_url(url: &str) -> Option<String> {
-    let trimmed = url.trim();
-    if trimmed.is_empty()
-        || trimmed.contains('\0')
-        || trimmed.contains("/generated-artifacts/pending-")
-        || trimmed.contains("/generated-artifacts/pending/")
-        || trimmed.ends_with("/generated-artifacts/pending")
-    {
-        return None;
-    }
-    if trimmed.starts_with("/generated-artifacts/") {
-        return Some(trimmed.to_string());
-    }
-    let default_base = "https://v3.elepcloud.com/generated-artifacts";
-    if trimmed.starts_with(&format!("{default_base}/")) {
-        return Some(trimmed.to_string());
-    }
-    let configured_base = external_channel_generated_artifact_public_base_url();
-    if configured_base != default_base
-        && trimmed.starts_with(&format!("{}/", configured_base.trim_end_matches('/')))
-    {
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
-fn assistant_run_customer_codex_artifact_links(
-    customer_artifacts: &Value,
-    primary_url: Option<&str>,
-) -> Vec<Value> {
-    let mut links = Vec::new();
-    let mut seen = BTreeSet::new();
-    if let Some(url) = primary_url {
-        if seen.insert(url.to_string()) {
-            links.push(json!({"rel": "public", "url": url}));
-        }
-    }
-    if let Some(url) = customer_artifacts
-        .get("published_manifest_url")
-        .and_then(Value::as_str)
-        .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
-    {
-        if seen.insert(url.clone()) {
-            links.push(json!({"rel": "manifest", "url": url}));
-        }
-    }
-    if let Some(artifacts) = customer_artifacts
-        .get("artifacts")
-        .and_then(Value::as_array)
-    {
-        for artifact in artifacts {
-            let Some(url) = artifact
-                .get("public_url")
-                .and_then(Value::as_str)
-                .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
-            else {
-                continue;
-            };
-            if !seen.insert(url.clone()) {
-                continue;
-            }
-            let path = artifact
-                .get("path")
-                .and_then(Value::as_str)
-                .and_then(assistant_run_safe_customer_codex_relative_path);
-            let kind = artifact
-                .get("kind")
-                .and_then(Value::as_str)
-                .map(|value| assistant_run_safe_customer_codex_text(value, 80))
-                .unwrap_or_else(|| "file".to_string());
-            links.push(json!({
-                "rel": "file",
-                "url": url,
-                "path": path,
-                "kind": kind,
-            }));
-        }
-    }
-    links
-}
-
-fn assistant_run_safe_customer_codex_artifact_capability(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    match trimmed {
-        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST
-        | CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT
-        | CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => Some(trimmed.to_string()),
-        _ => None,
-    }
-}
-
-fn assistant_run_safe_customer_codex_artifact_route(value: &str) -> Option<String> {
-    assistant_run_safe_customer_codex_artifact_capability(value)
-}
-
-fn assistant_run_customer_codex_default_route_for_capability(
-    event_name: &str,
-    capability: &str,
-) -> String {
-    match capability {
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => "generated_static_page_edit",
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => "generated_static_page_publish",
-        CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST => "customer_complex_request",
-        CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST => "v3_product_change_request",
-        _ if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT => {
-            "generated_static_page_edit"
-        }
-        _ => "customer_artifact_request",
-    }
-    .to_string()
-}
-
-fn assistant_run_customer_codex_text_looks_sensitive(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("authorization")
-        || lower.contains("bearer ")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("access_token")
-        || lower.contains("refresh_token")
-        || lower.contains("private_key")
-        || lower.contains("secret")
-        || lower.contains("cookie")
-        || lower.contains("database_url")
-        || lower.contains("mysql://")
-        || lower.contains("postgres://")
-        || lower.contains("postgresql://")
-        || lower.contains("mongodb://")
-        || lower.contains("/users/")
-        || lower.contains("/srv/aiv3/repo")
-        || lower.contains("/srv/aiv3/shared")
-        || lower.contains("/private/var/")
-        || lower.contains("\\.codex")
-        || lower.contains("/.codex")
-        || lower.contains(".env")
-        || lower.contains("sk-")
-        || lower.contains(":\\")
-}
-
-fn assistant_run_safe_customer_codex_display_text(value: &str, max_chars: usize) -> String {
-    let text = assistant_run_safe_customer_codex_text(value, max_chars);
-    if assistant_run_customer_codex_text_looks_sensitive(&text) {
-        String::new()
-    } else {
-        text
-    }
-}
-
-fn assistant_run_safe_customer_codex_text(value: &str, max_chars: usize) -> String {
-    truncate_assistant_supply_text(value.trim(), max_chars)
-}
-
-fn assistant_run_safe_uuid_string(payload: &Value, key: &str) -> Value {
-    payload
-        .get(key)
-        .and_then(Value::as_str)
-        .and_then(|value| Uuid::parse_str(value).ok())
-        .map(|uuid| json!(uuid.to_string()))
-        .unwrap_or(Value::Null)
-}
-
-fn safe_output_artifact_manifest(artifact: &Value) -> Option<Value> {
-    let manifest = artifact
-        .get("artifact_manifest")
-        .or_else(|| artifact.get("artifactManifest"))?;
-    let schema = manifest.get("schema").and_then(Value::as_str)?;
-    let schema_version = manifest
-        .get("schema_version")
-        .or_else(|| manifest.get("schemaVersion"))
-        .and_then(Value::as_i64)?;
-    if schema != "v3.output_artifact_manifest" || schema_version != 1 {
-        return None;
-    }
-    Some(json!({
-        "schema": "v3.output_artifact_manifest",
-        "schema_version": 1,
-        "artifact_type": manifest.get("artifact_type").cloned().unwrap_or(Value::Null),
-        "artifact_kind": manifest.get("artifact_kind").cloned().unwrap_or(Value::Null),
-        "title": manifest.get("title").cloned().unwrap_or(Value::Null),
-        "status": manifest.get("status").cloned().unwrap_or(Value::Null),
-        "primary_url": manifest.get("primary_url").cloned().unwrap_or(Value::Null),
-        "links": manifest.get("links").cloned().unwrap_or_else(|| json!([])),
-        "refs": manifest.get("refs").cloned().unwrap_or_else(|| json!({})),
-        "safety": manifest.get("safety").cloned().unwrap_or_else(|| json!({})),
-    }))
-}
-
 async fn list_llm_invocations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -56297,18 +55654,8 @@ async fn list_llm_invocations(
     )
     .await?;
 
-    let llm_invocations = state
-        .storage
-        .llm_invocations()
-        .list_by_execution(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
     Ok(Json(
-        llm_invocations
-            .into_iter()
-            .map(to_llm_invocation_view)
-            .collect(),
+        list_llm_invocation_views_for_execution(&state, execution_id).await?,
     ))
 }
 
@@ -56328,18 +55675,8 @@ async fn list_tool_executions(
     )
     .await?;
 
-    let tool_executions = state
-        .storage
-        .tool_executions()
-        .list_by_execution(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
     Ok(Json(
-        tool_executions
-            .into_iter()
-            .map(to_tool_execution_view)
-            .collect(),
+        list_tool_execution_views_for_execution(&state, execution_id).await?,
     ))
 }
 
@@ -59628,24 +58965,8 @@ pub(crate) async fn hydrate_dataset_output_view(
     state: &AppState,
     output: DatasetOutput,
 ) -> std::result::Result<DatasetOutputView, ApiError> {
-    let llm_invocations = state
-        .storage
-        .llm_invocations()
-        .list_by_dataset_output(state.tenant_id, output.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_llm_invocation_view)
-        .collect();
-    let tool_executions = state
-        .storage
-        .tool_executions()
-        .list_by_dataset_output(state.tenant_id, output.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_tool_execution_view)
-        .collect();
+    let llm_invocations = list_llm_invocation_views_for_dataset_output(state, output.id).await?;
+    let tool_executions = list_tool_execution_views_for_dataset_output(state, output.id).await?;
     let memory_directory = match output.memory_directory_id {
         Some(directory_id) => match state
             .storage
@@ -59797,24 +59118,8 @@ async fn hydrate_chat_message_view(
     state: &AppState,
     message: ChatMessage,
 ) -> std::result::Result<ChatMessageView, ApiError> {
-    let llm_invocations = state
-        .storage
-        .llm_invocations()
-        .list_by_chat_message(state.tenant_id, message.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_llm_invocation_view)
-        .collect();
-    let tool_executions = state
-        .storage
-        .tool_executions()
-        .list_by_chat_message(state.tenant_id, message.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(to_tool_execution_view)
-        .collect();
+    let llm_invocations = list_llm_invocation_views_for_chat_message(state, message.id).await?;
+    let tool_executions = list_tool_execution_views_for_chat_message(state, message.id).await?;
 
     Ok(to_chat_message_view(
         message,
@@ -87408,77 +86713,6 @@ retrieve_evidence:
         assert_eq!(
             card["dynamic_page_contract"]["source_snapshot_file"],
             json!("data-snapshot.json")
-        );
-    }
-
-    #[test]
-    fn output_artifact_manifests_from_output_artifacts_returns_only_safe_manifests() {
-        let output_artifacts = json!([
-            {
-                "type": "external_channel_static_page_artifact",
-                "artifact_manifest": {
-                    "schema": "v3.output_artifact_manifest",
-                    "schema_version": 1,
-                    "artifact_type": "static_page",
-                    "artifact_kind": "generated_artifact",
-                    "primary_url": "https://v3.elepcloud.com/generated-artifacts/a/index.html",
-                    "safety": {
-                        "credentials_exposed": false,
-                        "raw_logs_exposed": false
-                    },
-                    "raw_log": "must-not-leak"
-                }
-            },
-            {
-                "type": "external_channel_data_ingestion_analysis",
-                "artifactManifest": {
-                    "schema": "v3.output_artifact_manifest",
-                    "schema_version": 1,
-                    "artifact_type": "data_ingestion_analysis",
-                    "artifact_kind": "data_ingestion_staging_plan",
-                    "safety": {
-                        "production_write_allowed": false,
-                        "raw_table_dump_exposed": false
-                    }
-                }
-            },
-            {
-                "artifact_manifest": {
-                    "schema": "legacy",
-                    "schema_version": 1,
-                    "artifact_type": "raw_log"
-                }
-            },
-            {
-                "artifact_manifest": {
-                    "schema": "v3.output_artifact_manifest",
-                    "schema_version": 2,
-                    "artifact_type": "future"
-                }
-            },
-            {
-                "artifact_manifest": {
-                    "schema": "v3.output_artifact_manifest",
-                    "schema_version": 1,
-                    "artifact_type": "static_page",
-                    "artifact_kind": "generated_artifact",
-                    "primary_url": "https://v3.elepcloud.com/generated-artifacts/a/index.html",
-                    "safety": {
-                        "credentials_exposed": false,
-                        "raw_logs_exposed": false
-                    }
-                }
-            }
-        ]);
-
-        let manifests = output_artifact_manifests_from_output_artifacts(&output_artifacts);
-
-        assert_eq!(manifests.len(), 2);
-        assert_eq!(manifests[0]["artifact_type"], json!("static_page"));
-        assert!(manifests[0].get("raw_log").is_none());
-        assert_eq!(
-            manifests[1]["artifact_kind"],
-            json!("data_ingestion_staging_plan")
         );
     }
 
