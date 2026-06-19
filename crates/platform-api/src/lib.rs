@@ -159,11 +159,12 @@ use static_page_runtime::{
     interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
+#[cfg(test)]
+use std::fs::File;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::Infallible,
-    fs::{self, File},
-    io::{Read, Write},
+    fs,
     path::{Path as StdPath, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
@@ -186,7 +187,6 @@ use storage::{
 use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
-use zip::ZipArchive;
 
 mod asset_library_asset_supply_support;
 mod asset_library_auth_support;
@@ -279,13 +279,16 @@ mod document_dataset_membership_support;
 mod document_detail_load_support;
 mod document_detail_model_facing;
 mod document_enrichment_run_list_support;
+mod document_ingest_support;
 mod document_list_support;
+mod document_local_object_support;
 mod document_media_detail_load_support;
 mod document_media_model_facing;
 mod document_model_facing_support;
 mod document_register_support;
 mod document_retrieval_evidence_support;
 mod document_update_support;
+mod document_upload_ingest_workflow_support;
 mod document_view_support;
 mod external_action_dispatch_transport_support;
 mod external_action_result_callback_support;
@@ -520,7 +523,9 @@ use document_dataset_membership_support::*;
 use document_detail_load_support::*;
 use document_detail_model_facing::*;
 use document_enrichment_run_list_support::*;
+use document_ingest_support::*;
 use document_list_support::*;
+use document_local_object_support::*;
 use document_media_detail_load_support::*;
 use document_media_model_facing::*;
 #[cfg(test)]
@@ -528,6 +533,7 @@ use document_model_facing_support::format_document_lifecycle_view;
 use document_register_support::*;
 use document_retrieval_evidence_support::*;
 use document_update_support::*;
+use document_upload_ingest_workflow_support::*;
 use document_view_support::*;
 use external_action_dispatch_transport_support::*;
 use external_action_result_callback_support::*;
@@ -718,7 +724,6 @@ pub use workflow_runtime_summary::{
     render_workflow_runtime_pretty_summaries,
 };
 use workflow_task_view_support::*;
-use zip_ingest_support::*;
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
 const RETRIEVAL_SEARCH_BACKEND_ENV: &str = "RETRIEVAL_SEARCH_BACKEND";
@@ -55239,450 +55244,20 @@ async fn create_document_ingest(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let document = load_visible_document_for_user_with_local_scope(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-    let existing_chunks = state
-        .storage
-        .document_chunks()
-        .list_by_document(state.tenant_id, document.id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    if let Err(error) = state
-        .storage
-        .asset_items()
-        .sync_document_asset_profile(state.tenant_id, &document, &existing_chunks)
-        .await
-    {
-        tracing::warn!(
-            error = ?error,
-            document_id = %document.id,
-            dataset_id = %document.dataset_id,
-            "document asset profile sync failed before ingest workflow; ingest will continue"
-        );
-    }
-
-    if document_is_zip_archive(&document) {
-        let response = create_zip_archive_child_ingests(&state, &document).await?;
-        return Ok((StatusCode::CREATED, Json(response)));
-    }
-
-    let execution = build_initial_upload_ingest_execution(&state, &document)?;
-    let initial_event = build_initial_upload_ingest_event(&execution, &document);
-    state
-        .storage
-        .workflow_executions()
-        .create_with_initial_event(&execution, &initial_event)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let started = apply_workflow_signal(&state, execution.id, WorkflowSignal::Start).await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateDocumentIngestResponse {
-            document: to_document_summary(document),
-            workflow_execution: started.execution,
-            child_documents: Vec::new(),
-            child_documents_camel: Vec::new(),
-            child_workflow_executions: Vec::new(),
-            child_workflow_executions_camel: Vec::new(),
-        }),
+        Json(
+            create_document_ingest_for_user(
+                &state,
+                document_id,
+                &active_secret_binding_ids,
+                current_user_id,
+                local_thread_id.as_deref(),
+            )
+            .await?,
+        ),
     ))
-}
-
-#[derive(Clone, Debug)]
-struct ExpandedZipEntry {
-    entry_name: String,
-    title: String,
-    object_key: String,
-    content_type: String,
-    size_bytes: u64,
-}
-
-async fn create_zip_archive_child_ingests(
-    state: &AppState,
-    parent_document: &Document,
-) -> std::result::Result<CreateDocumentIngestResponse, ApiError> {
-    let entries = expand_zip_document_to_local_files(parent_document)?;
-    if entries.is_empty() {
-        return Err(ApiError::bad_request(
-            "zip_archive_empty",
-            "zip archive did not contain supported files to ingest".to_string(),
-        ));
-    }
-
-    let mut child_documents = Vec::new();
-    let mut child_workflow_executions = Vec::new();
-    for (index, entry) in entries.into_iter().enumerate() {
-        let child_document = state
-            .storage
-            .documents()
-            .create(
-                state.tenant_id,
-                NewDocument {
-                    dataset_id: parent_document.dataset_id,
-                    title: entry.title.clone(),
-                    object_key: entry.object_key.clone(),
-                    content_type: entry.content_type.clone(),
-                    secret_binding_ids: parent_document.secret_binding_ids.clone(),
-                    owner_user_id: parent_document.owner_user_id,
-                    metadata: json!({
-                        "zip_parent": {
-                            "document_id": parent_document.id,
-                            "title": parent_document.title,
-                            "object_key": parent_document.object_key,
-                        },
-                        "zip_entry": {
-                            "name": entry.entry_name,
-                            "index": index,
-                            "size_bytes": entry.size_bytes,
-                        },
-                        "parse_state": {
-                            "stage": "queued",
-                            "user_blocking": false,
-                        }
-                    }),
-                },
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-        let child_document = record_local_document_content_fingerprint_if_available(
-            state,
-            child_document,
-            Utc::now(),
-        )
-        .await;
-        if let Err(error) = state
-            .storage
-            .asset_items()
-            .sync_document_asset_profile(state.tenant_id, &child_document, &[])
-            .await
-        {
-            tracing::warn!(
-                error = ?error,
-                document_id = %child_document.id,
-                dataset_id = %child_document.dataset_id,
-                "zip child document asset profile sync failed; child ingest will continue"
-            );
-        }
-
-        let execution = build_initial_upload_ingest_execution(state, &child_document)?;
-        let initial_event = build_initial_upload_ingest_event(&execution, &child_document);
-        state
-            .storage
-            .workflow_executions()
-            .create_with_initial_event(&execution, &initial_event)
-            .await
-            .map_err(ApiError::from_storage)?;
-        let started = apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
-        child_workflow_executions.push(started.execution);
-        child_documents.push(child_document);
-    }
-
-    let child_document_views =
-        to_document_summaries_with_dataset_ids(state, child_documents, None).await?;
-    let parent_metadata = json!({
-        "parse_status": "zip_expanded",
-        "ingest": {
-            "processor": "zip_expander",
-            "parse_method": "zip-child-documents",
-            "parse_status": "zip_expanded",
-            "child_document_count": child_document_views.len(),
-            "child_document_ids": child_document_views
-                .iter()
-                .map(|document| document.id.to_string())
-                .collect::<Vec<_>>(),
-            "extracted_at": Utc::now(),
-        }
-    });
-    let updated_parent = state
-        .storage
-        .documents()
-        .update_state(
-            state.tenant_id,
-            parent_document.id,
-            DocumentLifecycle::Indexed,
-            Some(&parent_document.title),
-            &parent_metadata,
-            Utc::now(),
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    if let Err(error) = state
-        .storage
-        .asset_items()
-        .sync_document_asset_profile(state.tenant_id, &updated_parent, &[])
-        .await
-    {
-        tracing::warn!(
-            error = ?error,
-            document_id = %updated_parent.id,
-            dataset_id = %updated_parent.dataset_id,
-            "zip parent document asset profile sync failed; response will continue"
-        );
-    }
-
-    Ok(CreateDocumentIngestResponse {
-        document: to_document_summary(updated_parent),
-        workflow_execution: child_workflow_executions.first().cloned().ok_or_else(|| {
-            ApiError::internal(
-                "zip_archive_ingest_missing_child_workflow",
-                "zip archive expansion did not create child workflows".to_string(),
-            )
-        })?,
-        child_documents: child_document_views.clone(),
-        child_documents_camel: child_document_views,
-        child_workflow_executions: child_workflow_executions.clone(),
-        child_workflow_executions_camel: child_workflow_executions,
-    })
-}
-
-fn document_is_zip_archive(document: &Document) -> bool {
-    let content_type = document
-        .content_type
-        .split(';')
-        .next()
-        .unwrap_or(&document.content_type)
-        .trim()
-        .to_ascii_lowercase();
-    matches!(
-        content_type.as_str(),
-        "application/zip" | "application/x-zip-compressed" | "multipart/x-zip"
-    ) || document.title.to_ascii_lowercase().ends_with(".zip")
-        || document.object_key.to_ascii_lowercase().ends_with(".zip")
-}
-
-fn expand_zip_document_to_local_files(
-    document: &Document,
-) -> std::result::Result<Vec<ExpandedZipEntry>, ApiError> {
-    let path = resolve_platform_local_object_path(&document.object_key).ok_or_else(|| {
-        ApiError::bad_request(
-            "zip_archive_object_not_found",
-            "zip archive object file was not found on this server".to_string(),
-        )
-    })?;
-    let file = File::open(&path).map_err(|error| {
-        ApiError::bad_request(
-            "zip_archive_open_failed",
-            format!("failed to open zip archive: {error}"),
-        )
-    })?;
-    let mut archive = ZipArchive::new(file).map_err(|error| {
-        ApiError::bad_request(
-            "zip_archive_invalid",
-            format!("uploaded file is not a readable zip archive: {error}"),
-        )
-    })?;
-
-    let max_entries = zip_ingest_env_usize("ZIP_INGEST_MAX_ENTRIES", 80).clamp(1, 500);
-    let max_entry_bytes = zip_ingest_env_u64("ZIP_INGEST_MAX_ENTRY_BYTES", 80 * 1024 * 1024).max(1);
-    let max_total_bytes =
-        zip_ingest_env_u64("ZIP_INGEST_MAX_TOTAL_BYTES", 300 * 1024 * 1024).max(1);
-    let output_root = zip_child_output_root(&path, document)?;
-    fs::create_dir_all(&output_root).map_err(|error| {
-        ApiError::internal(
-            "zip_archive_expand_failed",
-            format!("failed to create zip extraction directory: {error}"),
-        )
-    })?;
-
-    let mut entries = Vec::new();
-    let mut total_bytes = 0u64;
-    for index in 0..archive.len() {
-        if entries.len() >= max_entries {
-            break;
-        }
-        let file = archive.by_index(index).map_err(|error| {
-            ApiError::bad_request(
-                "zip_archive_read_failed",
-                format!("failed to read zip entry {index}: {error}"),
-            )
-        })?;
-        if file.is_dir() {
-            continue;
-        }
-        let Some(enclosed_name) = file.enclosed_name().map(PathBuf::from) else {
-            continue;
-        };
-        let entry_name = enclosed_name.to_string_lossy().replace('\\', "/");
-        if zip_entry_should_skip(&entry_name) {
-            continue;
-        }
-        let extension = enclosed_name
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| format!(".{}", value.to_ascii_lowercase()))
-            .unwrap_or_default();
-        if !zip_entry_extension_supported(&extension) {
-            continue;
-        }
-        let entry_size = file.size();
-        if entry_size > max_entry_bytes {
-            continue;
-        }
-        total_bytes = total_bytes.saturating_add(entry_size);
-        if total_bytes > max_total_bytes {
-            return Err(ApiError::bad_request(
-                "zip_archive_too_large",
-                format!("zip expanded content exceeds {} bytes", max_total_bytes),
-            ));
-        }
-        let safe_name = safe_zip_entry_output_name(entries.len(), &entry_name, &extension);
-        let output_path = output_root.join(safe_name);
-        let mut output = File::create(&output_path).map_err(|error| {
-            ApiError::internal(
-                "zip_archive_expand_failed",
-                format!("failed to create extracted zip entry: {error}"),
-            )
-        })?;
-        let copied =
-            std::io::copy(&mut file.take(max_entry_bytes + 1), &mut output).map_err(|error| {
-                ApiError::internal(
-                    "zip_archive_expand_failed",
-                    format!("failed to write extracted zip entry: {error}"),
-                )
-            })?;
-        output.flush().map_err(|error| {
-            ApiError::internal(
-                "zip_archive_expand_failed",
-                format!("failed to flush extracted zip entry: {error}"),
-            )
-        })?;
-        if copied > max_entry_bytes {
-            let _ = fs::remove_file(&output_path);
-            continue;
-        }
-        entries.push(ExpandedZipEntry {
-            entry_name: entry_name.clone(),
-            title: zip_entry_title(&entry_name),
-            object_key: output_path.to_string_lossy().to_string(),
-            content_type: infer_zip_child_content_type(&extension).to_string(),
-            size_bytes: copied,
-        });
-    }
-
-    Ok(entries)
-}
-
-fn resolve_platform_local_object_path(object_key: &str) -> Option<PathBuf> {
-    let raw = object_key.trim().trim_start_matches("file://");
-    if raw.is_empty() {
-        return None;
-    }
-
-    let direct = PathBuf::from(raw);
-    if direct.is_file() {
-        return Some(direct);
-    }
-
-    if cfg!(windows) {
-        if let Some(rest) = raw.strip_prefix("/mnt/") {
-            let mut parts = rest.splitn(2, '/');
-            if let (Some(drive), Some(path)) = (parts.next(), parts.next()) {
-                if drive.len() == 1 {
-                    let windows_path = format!("{}:\\{}", drive, path.replace('/', "\\"));
-                    let candidate = PathBuf::from(windows_path);
-                    if candidate.is_file() {
-                        return Some(candidate);
-                    }
-                }
-            }
-        }
-    }
-
-    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
-    let rooted = StdPath::new(&root).join(raw);
-    rooted.is_file().then_some(rooted)
-}
-
-pub(crate) async fn record_local_document_content_fingerprint_if_available(
-    state: &AppState,
-    document: Document,
-    recorded_at: DateTime<Utc>,
-) -> Document {
-    let Some((content_sha256, content_size_bytes)) =
-        local_document_content_fingerprint_from_object_key(&document.object_key)
-    else {
-        return document;
-    };
-    match state
-        .storage
-        .documents()
-        .record_content_fingerprint(
-            state.tenant_id,
-            document.id,
-            &content_sha256,
-            content_size_bytes,
-            recorded_at,
-        )
-        .await
-    {
-        Ok(updated) => updated,
-        Err(error) => {
-            tracing::warn!(
-                error = ?error,
-                document_id = %document.id,
-                "skipping local document content fingerprint after storage failure"
-            );
-            document
-        }
-    }
-}
-
-fn local_document_content_fingerprint_from_object_key(object_key: &str) -> Option<(String, i64)> {
-    let path = resolve_platform_local_object_path(object_key)?;
-    let metadata = fs::metadata(&path).ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    let max_bytes = zip_ingest_env_u64("DOCUMENT_FINGERPRINT_MAX_BYTES", 300 * 1024 * 1024).max(1);
-    if metadata.len() > max_bytes || metadata.len() > i64::MAX as u64 {
-        tracing::warn!(
-            object_key = %object_key,
-            file_size_bytes = metadata.len(),
-            max_bytes,
-            "skipping local document content fingerprint because file is too large"
-        );
-        return None;
-    }
-
-    let mut file = File::open(&path).ok()?;
-    let mut hasher = Sha256::new();
-    let mut total = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).ok()?;
-        if read == 0 {
-            break;
-        }
-        total = total.saturating_add(read as u64);
-        if total > max_bytes || total > i64::MAX as u64 {
-            return None;
-        }
-        hasher.update(&buffer[..read]);
-    }
-
-    Some((format!("{:x}", hasher.finalize()), total as i64))
-}
-
-fn zip_child_output_root(
-    zip_path: &StdPath,
-    document: &Document,
-) -> std::result::Result<PathBuf, ApiError> {
-    let base = zip_path
-        .parent()
-        .map(StdPath::to_path_buf)
-        .unwrap_or_else(|| {
-            external_document_object_root().unwrap_or_else(|_| std::env::temp_dir())
-        });
-    Ok(base
-        .join("_zip_extracted")
-        .join(safe_external_path_segment(&document.id.to_string())))
 }
 
 async fn create_report_plan(
@@ -57473,7 +57048,7 @@ async fn sync_static_page_render_output_for_workflow(
     Ok(())
 }
 
-async fn apply_workflow_signal(
+pub(crate) async fn apply_workflow_signal(
     state: &AppState,
     execution_id: WorkflowExecutionId,
     signal: WorkflowSignal,
@@ -58228,56 +57803,6 @@ fn build_initial_chat_session_execution(
     })
 }
 
-fn build_initial_upload_ingest_execution(
-    state: &AppState,
-    document: &Document,
-) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::UploadIngest)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "upload_ingest workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = runtime_state.context;
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(runtime_state.retries_remaining.into()),
-    );
-    context.insert(
-        "document_id".to_string(),
-        Value::String(document.id.to_string()),
-    );
-    context.insert(
-        "content_type".to_string(),
-        Value::String(document.content_type.clone()),
-    );
-    context.insert(
-        "object_key".to_string(),
-        Value::String(document.object_key.clone()),
-    );
-
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(document.dataset_id),
-        report_plan_id: None,
-        kind: WorkflowKind::UploadIngest,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
-}
-
 fn build_initial_report_render_execution(
     state: &AppState,
     plan: &ReportPlan,
@@ -58651,28 +58176,6 @@ fn build_initial_chat_session_event(
             "dataset_id": execution.dataset_id,
             "chat_session_id": chat_session_id,
             "prompt": prompt.trim(),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_upload_ingest_event(
-    execution: &WorkflowExecution,
-    document: &Document,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "document_id": document.id,
-            "dataset_id": document.dataset_id,
-            "content_type": document.content_type,
         }),
         created_at: execution.created_at,
     }

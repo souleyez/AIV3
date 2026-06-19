@@ -21063,6 +21063,96 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-19 P5 Document Ingest Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document ingest orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving the route response status and shape.
+- Code change:
+  - added `crates/platform-api/src/document_ingest_support.rs`;
+  - added `create_document_ingest_for_user` for visible document loading, asset profile sync, non-zip workflow creation/start, zip branch delegation, and final `CreateDocumentIngestResponse` assembly;
+  - kept `create_document_ingest` responsible for document id path parsing, active secret header parsing, current-user/local-thread loading, and `StatusCode::CREATED` with `Json`;
+  - kept zip expansion implementation in `lib.rs` for this slice and made existing zip/workflow helpers crate-visible without changing their implementations;
+  - added a pure helper test covering the non-zip response alias fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_ingest_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Zip Ingest Support Consolidation Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - finish the document-ingest helper boundary by moving zip expansion and child-ingest orchestration beside the main document ingest helper.
+- Code change:
+  - moved `ExpandedZipEntry`, zip detection, zip expansion, zip child document creation, parent `zip_expanded` update, and child workflow startup into `crates/platform-api/src/document_ingest_support.rs`;
+  - kept `resolve_platform_local_object_path` in `lib.rs` because local content fingerprinting still shares it, and made it crate-visible for the helper;
+  - reused existing `zip_ingest_support` entry filtering, output-name, content-type, and env-limit helpers without changing their behavior;
+  - removed the now-unused top-level `ZipArchive` and `Write` imports from `lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_ingest_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api zip_archive_expansion_extracts_supported_entries_safely --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Local Object Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move local document object path resolution and content fingerprint recording out of `crates/platform-api/src/lib.rs` into a focused helper module shared by register and ingest flows.
+- Code change:
+  - added `crates/platform-api/src/document_local_object_support.rs`;
+  - moved `resolve_platform_local_object_path`, local file fingerprint calculation, and `record_local_document_content_fingerprint_if_available` into the new module;
+  - kept direct file path, `file://` trimming, Windows `/mnt/<drive>` mapping, `PLATFORM_LOCAL_OBJECT_ROOT` fallback, and `DOCUMENT_FINGERPRINT_MAX_BYTES` behavior unchanged;
+  - kept storage-record failures as warn-and-continue so upload/register responses remain non-blocking;
+  - removed the now-unused `zip_ingest_support::*` glob import and top-level `Read` import from `lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_local_object_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api document_ingest_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api register_document_records_local_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Upload Ingest Workflow Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move upload-ingest workflow execution/event construction out of `crates/platform-api/src/lib.rs` into a shared helper module because document ingest, external document parse, reparse, and ReAct tool flows all use the same builder.
+- Code change:
+  - added `crates/platform-api/src/document_upload_ingest_workflow_support.rs`;
+  - moved `build_initial_upload_ingest_execution` and `build_initial_upload_ingest_event` into the new module;
+  - kept the same `WorkflowKind::UploadIngest`, runtime initial state, `retries_remaining`, `document_id`, `content_type`, `object_key`, `workflow.execution_created` payload, and sequence number;
+  - left `apply_workflow_signal` in `lib.rs` because it is a general workflow operation shared by many workflow kinds.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_upload_ingest_workflow_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_document_ingest_starts_workflow_and_enqueues_task --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_supplies_document_parse_status_for_failed_and_reparsing_documents --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
 
 - Purpose:
