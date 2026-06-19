@@ -20977,6 +20977,92 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-19 P5 Document Update Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document update orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving the route response shape.
+- Code change:
+  - added `crates/platform-api/src/document_update_support.rs`;
+  - added `update_document_for_user` for visible document loading, owner-managed resource masking, title normalization/validation, lifecycle parsing, archive metadata update, and storage `update_state`;
+  - kept `update_document` responsible for path/header/current-user/request parsing plus `Json<DocumentSummary>` response wrapping;
+  - made existing `validate_required` crate-visible so the helper keeps the same validation error code/message path;
+  - added pure helper tests covering trimmed titles with non-object metadata, archive metadata preservation, and unsupported lifecycle errors.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_update_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api update_lifecycle_parsers_accept_archive_values --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Dataset Membership Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document dataset-membership orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving the add/remove route response shape.
+- Code change:
+  - added `crates/platform-api/src/document_dataset_membership_support.rs`;
+  - added `add_document_dataset_membership_for_user` and `remove_document_dataset_membership_for_user` for visible document/dataset loading, owner-managed resource masking, manual membership creation, canonical dataset promotion, membership cleanup, and final response hydration;
+  - kept existing route handlers responsible for document id/dataset id path parsing, active secret header parsing, current-user loading, and `Json<DocumentDatasetMembershipResponse>` response wrapping;
+  - moved `DocumentDatasetMembershipResponse` into the helper module and made existing `to_document_summary` / `hydrate_document_summary_dataset_ids` crate-visible without changing their implementations;
+  - added pure helper tests covering manual membership storage shape, canonical-vs-secondary guard, promotion candidate ordering, update metadata keys, and the membership-required error.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_dataset_membership_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api document_dataset_membership_endpoints_allow_main_site_public_document_moves --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Register Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document registration orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving validation order and route response status.
+- Code change:
+  - added `crates/platform-api/src/document_register_support.rs`;
+  - added `validate_register_document_request` and `register_document_for_user` for required field validation, visible dataset loading, document creation, local content fingerprint recording, asset profile sync, and final `RegisterDocumentResponse` assembly;
+  - kept the route handler responsible for running required-field validation before active-secret parsing, merging active secret ids with request secret ids, loading current user/local thread, and returning `StatusCode::CREATED` with `Json`;
+  - made existing `record_local_document_content_fingerprint_if_available` crate-visible without changing its implementation;
+  - added pure helper tests covering required-field errors and `NewDocument` storage field trimming/payload preservation.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_register_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api register_document_records_local_content_fingerprint --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api anonymous_local_only_dataset_allows_matching_thread_document_register_and_ingest --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving the route response shape.
+- Code change:
+  - added `crates/platform-api/src/document_list_support.rs`;
+  - added `list_document_summaries_for_user` for tenant dataset loading, visible dataset id selection, visible document scope loading, and final document summary hydration;
+  - kept `list_documents` responsible for active secret header parsing, current-user loading, local-thread header parsing, and `Json<Vec<DocumentSummary>>` response wrapping;
+  - made existing `list_documents_for_visible_dataset_scopes` and `to_document_summaries_with_dataset_ids` crate-visible without changing their implementations;
+  - added a pure helper test covering public, owner-private, secret-private, and local-only dataset visibility for the document list scope.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api anonymous_local_only_dataset_lists_only_for_matching_browser_thread --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_document_memberships_allow_document_in_multiple_dataset_scopes --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
 
 - Purpose:

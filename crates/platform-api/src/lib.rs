@@ -275,13 +275,17 @@ mod document_chunk_list_support;
 mod document_chunk_support;
 mod document_compare_load_support;
 mod document_compare_model_facing;
+mod document_dataset_membership_support;
 mod document_detail_load_support;
 mod document_detail_model_facing;
 mod document_enrichment_run_list_support;
+mod document_list_support;
 mod document_media_detail_load_support;
 mod document_media_model_facing;
 mod document_model_facing_support;
+mod document_register_support;
 mod document_retrieval_evidence_support;
+mod document_update_support;
 mod document_view_support;
 mod external_action_dispatch_transport_support;
 mod external_action_result_callback_support;
@@ -512,14 +516,18 @@ use document_chunk_list_support::*;
 use document_chunk_support::*;
 use document_compare_load_support::*;
 use document_compare_model_facing::*;
+use document_dataset_membership_support::*;
 use document_detail_load_support::*;
 use document_detail_model_facing::*;
 use document_enrichment_run_list_support::*;
+use document_list_support::*;
 use document_media_detail_load_support::*;
 use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
+use document_register_support::*;
 use document_retrieval_evidence_support::*;
+use document_update_support::*;
 use document_view_support::*;
 use external_action_dispatch_transport_support::*;
 use external_action_result_callback_support::*;
@@ -608,6 +616,7 @@ use html_artifact_event_support::*;
 use html_artifact_static_page_patch_support::*;
 use html_artifact_summary_support::*;
 use id_parse_support::*;
+#[cfg(test)]
 use lifecycle_updates::*;
 use llm_invocation_view_support::*;
 use manifest_service_handoff_support::*;
@@ -3745,7 +3754,7 @@ async fn document_belongs_to_dataset_scope(
     Ok(membership_dataset_ids.contains(&dataset_id))
 }
 
-async fn list_documents_for_visible_dataset_scopes(
+pub(crate) async fn list_documents_for_visible_dataset_scopes(
     state: &AppState,
     visible_dataset_ids: &HashSet<DatasetId>,
     current_user_id: Option<UserId>,
@@ -54943,27 +54952,15 @@ async fn list_documents(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let visible_dataset_ids: HashSet<DatasetId> = filter_visible_datasets(
-        state
-            .storage
-            .datasets()
-            .list_by_tenant(state.tenant_id)
-            .await
-            .map_err(ApiError::from_storage)?,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .into_iter()
-    .map(|dataset| dataset.id)
-    .collect();
-    let documents =
-        list_documents_for_visible_dataset_scopes(&state, &visible_dataset_ids, current_user_id)
-            .await?;
 
     Ok(Json(
-        to_document_summaries_with_dataset_ids(&state, documents, Some(&visible_dataset_ids))
-            .await?,
+        list_document_summaries_for_user(
+            &state,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -54976,60 +54973,17 @@ async fn update_document(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let document = load_visible_document_for_user(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    ensure_owner_managed_resource(
-        "document",
-        document.id.to_string(),
-        document.owner_user_id,
-        current_user_id,
-    )?;
 
-    let title = trim_optional(request.title);
-    if let Some(title) = title.as_deref() {
-        validate_required("title", title)?;
-    }
-    let lifecycle = parse_document_lifecycle_update(request.lifecycle)?;
-    let mut metadata_updates = if request.metadata.is_object() {
-        request.metadata
-    } else {
-        json!({})
-    };
-    if lifecycle == Some(DocumentLifecycle::Archived) {
-        set_payload_value(&mut metadata_updates, "archived_at", json!(Utc::now()));
-    }
-
-    let updated = state
-        .storage
-        .documents()
-        .update_state(
-            state.tenant_id,
+    Ok(Json(to_document_summary(
+        update_document_for_user(
+            &state,
             document_id,
-            lifecycle.unwrap_or(document.lifecycle),
-            title.as_deref(),
-            &metadata_updates,
-            Utc::now(),
+            request,
+            &active_secret_binding_ids,
+            current_user_id,
         )
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    Ok(Json(to_document_summary(updated)))
-}
-
-#[derive(Debug, Serialize)]
-struct DocumentDatasetMembershipResponse {
-    document: DocumentSummary,
-    dataset_ids: Vec<DatasetId>,
-    #[serde(rename = "datasetIds")]
-    dataset_ids_camel: Vec<DatasetId>,
-    canonical_dataset_id: DatasetId,
-    #[serde(rename = "canonicalDatasetId")]
-    canonical_dataset_id_camel: DatasetId,
+        .await?,
+    )))
 }
 
 async fn add_document_dataset_membership(
@@ -55041,52 +54995,17 @@ async fn add_document_dataset_membership(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let document = load_visible_document_for_user(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    ensure_owner_managed_resource(
-        "document",
-        document.id.to_string(),
-        document.owner_user_id,
-        current_user_id,
-    )?;
-    let dataset = load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    ensure_owner_managed_resource(
-        "dataset",
-        dataset.id.to_string(),
-        dataset.owner_user_id,
-        current_user_id,
-    )?;
 
-    if document.dataset_id != dataset_id {
-        state
-            .storage
-            .dataset_document_memberships()
-            .create_or_update(
-                state.tenant_id,
-                NewDatasetDocumentMembership {
-                    dataset_id,
-                    document_id,
-                    membership_kind: "curated".to_string(),
-                    source: "manual".to_string(),
-                    expires_at: None,
-                },
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-    }
-
-    document_dataset_membership_response(&state, document, None).await
+    Ok(Json(
+        add_document_dataset_membership_for_user(
+            &state,
+            document_id,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
+    ))
 }
 
 async fn remove_document_dataset_membership(
@@ -55098,94 +55017,17 @@ async fn remove_document_dataset_membership(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let document = load_visible_document_for_user(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    ensure_owner_managed_resource(
-        "document",
-        document.id.to_string(),
-        document.owner_user_id,
-        current_user_id,
-    )?;
-    load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
 
-    let updated_document = if document.dataset_id == dataset_id {
-        let membership_dataset_ids = state
-            .storage
-            .dataset_document_memberships()
-            .list_dataset_ids_by_document(state.tenant_id, document.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        let mut promote_to = None;
-        for membership_dataset_id in membership_dataset_ids {
-            if membership_dataset_id == dataset_id {
-                continue;
-            }
-            if load_visible_dataset_for_user(
-                &state,
-                membership_dataset_id,
-                &active_secret_binding_ids,
-                current_user_id,
-            )
-            .await
-            .is_ok()
-            {
-                promote_to = Some(membership_dataset_id);
-                break;
-            }
-        }
-        let promote_to = promote_to.ok_or_else(|| {
-            ApiError::bad_request(
-                "document_dataset_membership_required",
-                "document must belong to at least one visible dataset".to_string(),
-            )
-        })?;
-        let moved = state
-            .storage
-            .documents()
-            .move_to_dataset(
-                state.tenant_id,
-                document.id,
-                promote_to,
-                &json!({
-                    "dataset_membership_update": {
-                        "removed_dataset_id": dataset_id,
-                        "promoted_dataset_id": promote_to,
-                        "updated_at": Utc::now(),
-                    }
-                }),
-                Utc::now(),
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-        state
-            .storage
-            .dataset_document_memberships()
-            .delete(state.tenant_id, promote_to, document.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        moved
-    } else {
-        state
-            .storage
-            .dataset_document_memberships()
-            .delete(state.tenant_id, dataset_id, document.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        document
-    };
-
-    document_dataset_membership_response(&state, updated_document, None).await
+    Ok(Json(
+        remove_document_dataset_membership_for_user(
+            &state,
+            document_id,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
+    ))
 }
 
 async fn get_document_detail(
@@ -55364,9 +55206,7 @@ async fn register_document(
     headers: HeaderMap,
     Json(request): Json<RegisterDocumentRequest>,
 ) -> std::result::Result<(StatusCode, Json<RegisterDocumentResponse>), ApiError> {
-    validate_required("title", &request.title)?;
-    validate_required("object_key", &request.object_key)?;
-    validate_required("content_type", &request.content_type)?;
+    validate_register_document_request(&request)?;
 
     let active_secret_binding_ids = merge_secret_binding_ids(
         &active_secret_binding_ids_from_headers(&headers)?,
@@ -55374,53 +55214,19 @@ async fn register_document(
     );
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    load_visible_dataset_for_user_with_local_scope(
-        &state,
-        request.dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-
-    let document = state
-        .storage
-        .documents()
-        .create(
-            state.tenant_id,
-            NewDocument {
-                dataset_id: request.dataset_id,
-                title: request.title.trim().to_string(),
-                object_key: request.object_key.trim().to_string(),
-                content_type: request.content_type.trim().to_string(),
-                secret_binding_ids: request.secret_binding_ids,
-                owner_user_id: current_user_id,
-                metadata: request.metadata,
-            },
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let document =
-        record_local_document_content_fingerprint_if_available(&state, document, Utc::now()).await;
-    if let Err(error) = state
-        .storage
-        .asset_items()
-        .sync_document_asset_profile(state.tenant_id, &document, &[])
-        .await
-    {
-        tracing::warn!(
-            error = ?error,
-            document_id = %document.id,
-            dataset_id = %document.dataset_id,
-            "document asset profile sync failed after register; upload response will continue"
-        );
-    }
 
     Ok((
         StatusCode::CREATED,
-        Json(RegisterDocumentResponse {
-            document: to_document_summary(document),
-        }),
+        Json(
+            register_document_for_user(
+                &state,
+                request,
+                &active_secret_binding_ids,
+                current_user_id,
+                local_thread_id.as_deref(),
+            )
+            .await?,
+        ),
     ))
 }
 
@@ -55794,7 +55600,7 @@ fn resolve_platform_local_object_path(object_key: &str) -> Option<PathBuf> {
     rooted.is_file().then_some(rooted)
 }
 
-async fn record_local_document_content_fingerprint_if_available(
+pub(crate) async fn record_local_document_content_fingerprint_if_available(
     state: &AppState,
     document: Document,
     recorded_at: DateTime<Utc>,
@@ -59608,7 +59414,7 @@ async fn hydrate_report_plan_summary(
     Ok(to_report_plan_summary(plan, service_handoff))
 }
 
-fn to_document_summary(document: Document) -> DocumentSummary {
+pub(crate) fn to_document_summary(document: Document) -> DocumentSummary {
     let dataset_ids = vec![document.dataset_id];
     to_document_summary_with_dataset_ids(document, dataset_ids)
 }
@@ -59640,7 +59446,7 @@ fn to_document_summary_with_dataset_ids(
     }
 }
 
-async fn to_document_summaries_with_dataset_ids(
+pub(crate) async fn to_document_summaries_with_dataset_ids(
     state: &AppState,
     documents: Vec<Document>,
     visible_dataset_ids: Option<&HashSet<DatasetId>>,
@@ -59672,7 +59478,7 @@ async fn to_document_summaries_with_dataset_ids(
         .collect())
 }
 
-async fn hydrate_document_summary_dataset_ids(
+pub(crate) async fn hydrate_document_summary_dataset_ids(
     state: &AppState,
     summary: DocumentSummary,
     visible_dataset_ids: Option<&HashSet<DatasetId>>,
@@ -59695,27 +59501,6 @@ async fn hydrate_document_summary_dataset_ids(
         dataset_ids_camel: dataset_ids,
         ..summary
     })
-}
-
-async fn document_dataset_membership_response(
-    state: &AppState,
-    document: Document,
-    visible_dataset_ids: Option<&HashSet<DatasetId>>,
-) -> std::result::Result<Json<DocumentDatasetMembershipResponse>, ApiError> {
-    let document = hydrate_document_summary_dataset_ids(
-        state,
-        to_document_summary(document),
-        visible_dataset_ids,
-    )
-    .await?;
-    let dataset_ids = document.dataset_ids.clone();
-    Ok(Json(DocumentDatasetMembershipResponse {
-        canonical_dataset_id: document.dataset_id,
-        canonical_dataset_id_camel: document.dataset_id,
-        document,
-        dataset_ids: dataset_ids.clone(),
-        dataset_ids_camel: dataset_ids,
-    }))
 }
 
 pub(crate) fn to_document_detail_view(
@@ -61467,7 +61252,10 @@ pub(crate) fn value_array(value: Value) -> Vec<Value> {
     }
 }
 
-fn validate_required(field: &'static str, value: &str) -> std::result::Result<(), ApiError> {
+pub(crate) fn validate_required(
+    field: &'static str,
+    value: &str,
+) -> std::result::Result<(), ApiError> {
     if value.trim().is_empty() {
         return Err(ApiError::bad_request(
             "validation_error",
