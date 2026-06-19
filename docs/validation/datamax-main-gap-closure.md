@@ -2,6 +2,44 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow Initial Event Helpers GitHub And 8-server Release
+
+- Scope:
+  - released #295, #296, and #297 together;
+  - included `crates/platform-api/src/workflow_initial_event_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation ledger;
+  - excluded existing LF/CRLF-only working-tree noise in public integration docs and archived performance docs.
+- Diff review:
+  - confirmed the only substantive code change was private helper extraction in `workflow_initial_event_support.rs`;
+  - confirmed public builder signatures, route contracts, third-party request/response fields, database schema, and production data mappings were unchanged;
+  - confirmed staged diff was limited to the intended three files before commit.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_memory_directory_refresh_creates_execution_for_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- GitHub:
+  - committed and pushed `6f65a0d1 Split workflow initial event helpers` to `origin/main`.
+- 8-server deployment:
+  - target host: `8.155.8.7`;
+  - remote repo: `/srv/aiv3/repo`;
+  - remote repo fast-forwarded from `59ff8c997` to `6f65a0d16`;
+  - release build command used `CC=clang CXX=clang++ cargo build --release -q -p platform-api` because the default `cc/gcc 10.2.1` is blocked by the upstream `aws-lc-sys` compiler guard;
+  - restarted `aiv3-platform-api.service`;
+  - service status: active;
+  - `GET http://127.0.0.1:3000/healthz`: HTTP 200, status `ok`;
+  - `GET http://127.0.0.1:3000/readyz`: HTTP 200, status `ready`;
+  - recent service logs showed startup/listening and no `ERROR`, `WARN`, `panic`, or `failed` entries in the checked window.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, 120 server change, or unrelated service restart was performed.
+
 ## 2026-06-20 P5 Workflow Initial Base Payload Helper Local Verification
 
 - Purpose:
