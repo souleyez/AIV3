@@ -2,6 +2,34 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow Initial Event Helpers GitHub And 8-server Release
+
+- Scope:
+  - release P5 workflow initial event helper slices #289-#294;
+  - publish behavior-preserving `platform-api` helper extractions and validation records.
+- GitHub:
+  - committed `83ffb76c` with message `Split workflow initial event payload helpers`;
+  - pushed `main` to `origin/main`;
+  - staged files were limited to `crates/platform-api/src/workflow_initial_event_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and `docs/validation/datamax-main-gap-closure.md`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `981b44a41` to `83ffb76cc`;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 10/10 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api`: passed;
+  - `aiv3-platform-api.service` was restarted; `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` returned `active`;
+  - `GET http://127.0.0.1:3000/healthz` returned `{"service":"platform-api","status":"ok","version":"0.1.0"}`;
+  - `GET http://127.0.0.1:3000/readyz` returned `{"service":"platform-api","status":"ready","version":"0.1.0"}`;
+  - `journalctl -u aiv3-platform-api.service --since "10 min ago" -p warning --no-pager` returned no entries after restart.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed during deployment;
+  - no 120 server change was performed.
+
 ## 2026-06-20 P5 Workflow Initial External Event Helper Local Verification
 
 - Purpose:
