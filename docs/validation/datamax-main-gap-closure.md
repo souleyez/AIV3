@@ -20188,6 +20188,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
 
+## 2026-06-19 P5 Asset Library Helper Boundary Release Verification
+
+- Scope:
+  - release code commit `35fb5865` for P5 asset library helper boundary splits;
+  - include asset library list, dataset membership upsert/remove, and scope summary response helper extraction;
+  - keep all changes behavior-preserving and outside public third-party contract fields.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library_membership_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 22/22 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - staged diff audit covered only `crates/platform-api/src/lib.rs`, the three new `asset_library_*_support.rs` modules, and the two DataMax plan/validation docs.
+- GitHub:
+  - pushed `main` from `f58b6b69` to `35fb5865`;
+  - commit message: `Refactor asset library helper boundaries`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `f58b6b692` to `35fb58654`;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library_membership_support --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library --lib`: passed, 22/22 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed;
+  - restarted `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`;
+  - all five services reported `active`;
+  - `http://127.0.0.1:3000/healthz`: returned `{"service":"platform-api","status":"ok"}`;
+  - `http://127.0.0.1:3000/readyz`: returned `{"service":"platform-api","status":"ready"}`;
+  - `https://v3.elepcloud.com/`: returned HTTP 200.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, or 120 server change was performed.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
