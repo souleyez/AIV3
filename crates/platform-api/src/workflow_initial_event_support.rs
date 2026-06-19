@@ -45,12 +45,7 @@ pub(crate) fn build_initial_static_page_image_generation_event(
 ) -> WorkflowEventRecord {
     workflow_execution_created_event(
         execution,
-        static_page_draft_event_extra(
-            draft,
-            json!({
-            "static_page_image_job_id": job.id,
-            }),
-        ),
+        static_page_image_generation_event_extra(draft, job),
     )
 }
 
@@ -61,30 +56,14 @@ pub(crate) fn build_initial_static_page_render_event(
 ) -> WorkflowEventRecord {
     workflow_execution_created_event(
         execution,
-        static_page_draft_event_extra(
-            draft,
-            json!({
-            "static_page_render_output_id": render_output.id,
-            "static_page_image_job_id": render_output.image_job_id,
-            }),
-        ),
+        static_page_render_output_event_extra(draft, render_output),
     )
 }
 
 pub(crate) fn build_initial_memory_directory_event(
     execution: &WorkflowExecution,
 ) -> WorkflowEventRecord {
-    workflow_execution_created_event(
-        execution,
-        json!({
-            "dataset_id": execution.dataset_id,
-            "include_directory": execution
-                .context
-                .get("include_directory")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-        }),
-    )
+    workflow_execution_created_event(execution, memory_directory_event_extra(execution))
 }
 
 pub(crate) fn build_initial_dataset_output_event(
@@ -146,6 +125,17 @@ fn dataset_prompt_event_extra(
     })
 }
 
+fn memory_directory_event_extra(execution: &WorkflowExecution) -> Value {
+    json!({
+        "dataset_id": execution.dataset_id,
+        "include_directory": execution
+            .context
+            .get("include_directory")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
 fn static_page_draft_event_extra(draft: &StaticPageDraft, extra: Value) -> Value {
     let mut payload = json!({
         "assistant_run_id": draft.assistant_run_id,
@@ -153,6 +143,31 @@ fn static_page_draft_event_extra(draft: &StaticPageDraft, extra: Value) -> Value
     });
     merge_object_fields(&mut payload, &extra);
     payload
+}
+
+fn static_page_image_generation_event_extra(
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+) -> Value {
+    static_page_draft_event_extra(
+        draft,
+        json!({
+            "static_page_image_job_id": job.id,
+        }),
+    )
+}
+
+fn static_page_render_output_event_extra(
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+) -> Value {
+    static_page_draft_event_extra(
+        draft,
+        json!({
+            "static_page_render_output_id": render_output.id,
+            "static_page_image_job_id": render_output.image_job_id,
+        }),
+    )
 }
 
 fn report_plan_event_extra(report_plan_id: ReportPlanId) -> Value {
@@ -196,14 +211,18 @@ fn external_action_dispatch_event_extra(connection_id: &str, action_id: &str) ->
 }
 
 fn initial_payload(execution: &WorkflowExecution, extra: Value) -> Value {
-    let mut payload = json!({
+    let mut payload = workflow_execution_base_payload(execution);
+    merge_object_fields(&mut payload, &extra);
+    payload
+}
+
+fn workflow_execution_base_payload(execution: &WorkflowExecution) -> Value {
+    json!({
         "kind": execution.kind.as_str(),
         "version": execution.version,
         "status": execution.status.as_str(),
         "stage": execution.stage,
-    });
-    merge_object_fields(&mut payload, &extra);
-    payload
+    })
 }
 
 fn merge_object_fields(target: &mut Value, extra: &Value) {
@@ -219,7 +238,8 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use domain_model::{
-        AssistantRunId, DatasetId, StaticPageDraftId, StaticPageDraftStatus, TenantId,
+        AssistantRunId, DatasetId, StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJobId,
+        StaticPageImageJobStatus, StaticPageRenderOutputId, StaticPageRenderOutputStatus, TenantId,
         WorkflowExecutionId, WorkflowKind, WorkflowStatus,
     };
 
@@ -260,6 +280,39 @@ mod tests {
         }
     }
 
+    fn static_page_image_job(draft: &StaticPageDraft) -> StaticPageImageJob {
+        let now = Utc::now();
+        StaticPageImageJob {
+            id: StaticPageImageJobId(Uuid::from_u128(10)),
+            tenant_id: draft.tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            status: StaticPageImageJobStatus::Queued,
+            queue_position: Some(1),
+            image_prompt_payload: json!({}),
+            preview_asset_key: None,
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn static_page_render_output(draft: &StaticPageDraft) -> StaticPageRenderOutput {
+        StaticPageRenderOutput {
+            id: StaticPageRenderOutputId(Uuid::from_u128(11)),
+            tenant_id: draft.tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            owner_user_id: None,
+            image_job_id: Some(StaticPageImageJobId(Uuid::from_u128(10))),
+            status: StaticPageRenderOutputStatus::Queued,
+            html: String::new(),
+            asset_manifest: json!({}),
+            created_at: Utc::now(),
+        }
+    }
+
     fn external_source_summary() -> ExternalSourceConnectionSummary {
         ExternalSourceConnectionSummary {
             source_id: "source-1".to_string(),
@@ -296,6 +349,18 @@ mod tests {
     }
 
     #[test]
+    fn workflow_execution_base_payload_preserves_common_workflow_fields() {
+        let execution = workflow_execution(WorkflowKind::ReportPlan);
+
+        let payload = workflow_execution_base_payload(&execution);
+
+        assert_eq!(payload["kind"], json!(execution.kind.as_str()));
+        assert_eq!(payload["version"], json!("workflow/v1"));
+        assert_eq!(payload["status"], json!("pending"));
+        assert_eq!(payload["stage"], json!("created"));
+    }
+
+    #[test]
     fn dataset_prompt_event_extra_preserves_dataset_optional_session_and_trimmed_prompt() {
         let execution = workflow_execution(WorkflowKind::DatasetOutput);
 
@@ -304,6 +369,27 @@ mod tests {
         assert_eq!(extra["dataset_id"], json!(execution.dataset_id));
         assert_eq!(extra["chat_session_id"], Value::Null);
         assert_eq!(extra["prompt"], json!("hello"));
+    }
+
+    #[test]
+    fn memory_directory_event_extra_preserves_dataset_and_include_directory_default() {
+        let execution = workflow_execution(WorkflowKind::MemoryDirectory);
+
+        let extra = memory_directory_event_extra(&execution);
+
+        assert_eq!(extra["dataset_id"], json!(execution.dataset_id));
+        assert_eq!(extra["include_directory"], json!(false));
+
+        let mut default_execution = workflow_execution(WorkflowKind::MemoryDirectory);
+        default_execution.context = json!({});
+
+        let default_extra = memory_directory_event_extra(&default_execution);
+
+        assert_eq!(
+            default_extra["dataset_id"],
+            json!(default_execution.dataset_id)
+        );
+        assert_eq!(default_extra["include_directory"], json!(true));
     }
 
     #[test]
@@ -320,6 +406,37 @@ mod tests {
         assert_eq!(extra["assistant_run_id"], json!(draft.assistant_run_id));
         assert_eq!(extra["static_page_draft_id"], json!(draft.id));
         assert_eq!(extra["static_page_image_job_id"], json!("job-1"));
+    }
+
+    #[test]
+    fn static_page_image_generation_event_extra_preserves_draft_and_job_ids() {
+        let draft = static_page_draft();
+        let job = static_page_image_job(&draft);
+
+        let extra = static_page_image_generation_event_extra(&draft, &job);
+
+        assert_eq!(extra["assistant_run_id"], json!(draft.assistant_run_id));
+        assert_eq!(extra["static_page_draft_id"], json!(draft.id));
+        assert_eq!(extra["static_page_image_job_id"], json!(job.id));
+    }
+
+    #[test]
+    fn static_page_render_output_event_extra_preserves_render_and_image_job_ids() {
+        let draft = static_page_draft();
+        let render_output = static_page_render_output(&draft);
+
+        let extra = static_page_render_output_event_extra(&draft, &render_output);
+
+        assert_eq!(extra["assistant_run_id"], json!(draft.assistant_run_id));
+        assert_eq!(extra["static_page_draft_id"], json!(draft.id));
+        assert_eq!(
+            extra["static_page_render_output_id"],
+            json!(render_output.id)
+        );
+        assert_eq!(
+            extra["static_page_image_job_id"],
+            json!(render_output.image_job_id)
+        );
     }
 
     #[test]
