@@ -3,7 +3,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use contracts::{
     ClientArtifactFileRecordView, ClientArtifactView, HtmlArtifactDataRefView,
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView, PublishClientArtifactResponse,
+    HtmlArtifactProvenanceView, PublishClientArtifactPublicHtmlResponse,
+    PublishClientArtifactResponse,
 };
 use domain_model::UserId;
 use serde_json::{json, Value};
@@ -579,6 +580,34 @@ pub(crate) async fn publish_client_artifact_public_html_and_load_view(
     })
 }
 
+pub(crate) async fn publish_client_artifact_public_html_and_load_response(
+    state: &AppState,
+    artifact_id: &str,
+    current_user_id: UserId,
+    published_at: DateTime<Utc>,
+) -> std::result::Result<PublishClientArtifactPublicHtmlResponse, ApiError> {
+    let artifact_id = client_artifact_required_artifact_id(artifact_id)?;
+    let published = publish_client_artifact_public_html_and_load_view(
+        state,
+        &artifact_id,
+        current_user_id,
+        published_at,
+    )
+    .await?;
+
+    Ok(client_artifact_public_html_publish_response(published))
+}
+
+fn client_artifact_public_html_publish_response(
+    published: ClientArtifactPublicHtmlPublishResult,
+) -> PublishClientArtifactPublicHtmlResponse {
+    PublishClientArtifactPublicHtmlResponse {
+        artifact: published.artifact,
+        html_artifact: published.html_artifact,
+        public_url: published.public_url,
+    }
+}
+
 pub(crate) async fn client_artifact_html_preview_response_for_user(
     state: &AppState,
     artifact_id: &str,
@@ -586,6 +615,7 @@ pub(crate) async fn client_artifact_html_preview_response_for_user(
     current_user_id: UserId,
     max_html_preview_bytes: i64,
 ) -> std::result::Result<Response<axum::body::Body>, ApiError> {
+    validate_client_artifact_html_preview_request(artifact_id, file_index)?;
     let file = load_client_artifact_preview_file(state, artifact_id, file_index).await?;
     ensure_owner_managed_resource(
         "client_artifact",
@@ -606,6 +636,14 @@ pub(crate) async fn client_artifact_html_preview_response_for_user(
         "HTML preview requires UTF-8 encoded content",
     )?;
     client_artifact_html_preview_response(&file.title, &file.filename, &sanitized)
+}
+
+fn validate_client_artifact_html_preview_request(
+    artifact_id: &str,
+    file_index: i32,
+) -> std::result::Result<(), ApiError> {
+    validate_required("artifact_id", artifact_id)?;
+    validate_client_artifact_file_index(file_index)
 }
 
 pub(crate) async fn update_client_artifact_public_html_manifest(
@@ -1191,6 +1229,71 @@ mod tests {
         let bad_index =
             validate_client_artifact_file_index(-1).expect_err("negative file index should fail");
         assert_eq!(bad_index.payload.code, "invalid_client_artifact_file_index");
+    }
+
+    #[test]
+    fn client_artifact_publish_support_keeps_preview_route_validation() {
+        validate_client_artifact_html_preview_request(" v3ca_1 ", 0)
+            .expect("artifact id and file index should be valid");
+
+        let missing_artifact_id = validate_client_artifact_html_preview_request("   ", 0)
+            .expect_err("blank artifact id should fail");
+        assert_eq!(missing_artifact_id.payload.code, "validation_error");
+
+        let bad_index = validate_client_artifact_html_preview_request("v3ca_1", -1)
+            .expect_err("negative file index should fail");
+        assert_eq!(bad_index.payload.code, "invalid_client_artifact_file_index");
+    }
+
+    #[test]
+    fn client_artifact_publish_support_builds_public_html_response() {
+        let published_at = Utc
+            .with_ymd_and_hms(2026, 6, 19, 10, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/client-artifacts/v3ca_1/html-0/index.html"
+                .to_string();
+        let artifact = ClientArtifactView {
+            artifact_id: "v3ca_1".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            user_id: "user-1".to_string(),
+            client_id: "client-1".to_string(),
+            task_id: "task-1".to_string(),
+            title: "客户页面".to_string(),
+            artifact_type: "html".to_string(),
+            status: "published".to_string(),
+            dataset_ids: vec!["dataset-1".to_string()],
+            asset_library_ids: vec!["asset-1".to_string()],
+            files: Vec::new(),
+            manifest: json!({"kind": "client_artifact"}),
+            created_at: published_at,
+            updated_at: published_at,
+        };
+        let html_artifact = client_artifact_public_html_artifact_manifest(
+            "v3ca_1",
+            "客户页面",
+            0,
+            "index.html",
+            "text/html",
+            "primary_html",
+            1024,
+            &public_url,
+            &artifact.dataset_ids,
+            &artifact.asset_library_ids,
+            published_at,
+        );
+
+        let response =
+            client_artifact_public_html_publish_response(ClientArtifactPublicHtmlPublishResult {
+                artifact: artifact.clone(),
+                html_artifact: html_artifact.clone(),
+                public_url: public_url.clone(),
+            });
+
+        assert_eq!(response.artifact.artifact_id, artifact.artifact_id);
+        assert_eq!(response.html_artifact.id, html_artifact.id);
+        assert_eq!(response.public_url, public_url);
     }
 
     #[test]

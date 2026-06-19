@@ -87,6 +87,13 @@ pub(crate) async fn list_client_artifact_views_for_query_limit(
     list_client_artifact_views(state, client_artifacts_list_limit(limit)).await
 }
 
+pub(crate) async fn get_client_artifact_view_for_request(
+    state: &AppState,
+    artifact_id: &str,
+) -> std::result::Result<ClientArtifactView, ApiError> {
+    load_client_artifact_view(state, artifact_id).await
+}
+
 pub(crate) async fn load_client_artifact_download_file(
     state: &AppState,
     artifact_id: &str,

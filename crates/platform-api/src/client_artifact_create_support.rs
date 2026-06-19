@@ -1,5 +1,5 @@
 use axum::http::HeaderMap;
-use contracts::{ClientArtifactView, V3ClientArtifactManifestView};
+use contracts::{ClientArtifactView, CreateClientArtifactResponse, V3ClientArtifactManifestView};
 use domain_model::UserId;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -151,9 +151,28 @@ pub(crate) async fn create_client_artifact_from_upload(
     load_client_artifact_view(state, &artifact_id).await
 }
 
+pub(crate) async fn create_client_artifact_from_upload_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: Option<UserId>,
+    manifest: &V3ClientArtifactManifestView,
+    files: &[UploadedClientArtifactFile],
+) -> std::result::Result<CreateClientArtifactResponse, ApiError> {
+    let artifact =
+        create_client_artifact_from_upload(state, headers, current_user_id, manifest, files)
+            .await?;
+    Ok(create_client_artifact_response(artifact))
+}
+
+fn create_client_artifact_response(artifact: ClientArtifactView) -> CreateClientArtifactResponse {
+    CreateClientArtifactResponse { artifact }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use serde_json::json;
 
     #[test]
     fn client_artifact_create_support_generates_prefixed_ids() {
@@ -172,5 +191,31 @@ mod tests {
             client_artifact_file_sha256_hex(b"client artifact"),
             "ab9439bd568e9a2bcdc16cc45c8a18b24012d7ce7c02e151e2a4ddf0354c44eb"
         );
+    }
+
+    #[test]
+    fn client_artifact_create_support_builds_create_response() {
+        let now = Utc::now();
+        let artifact = ClientArtifactView {
+            artifact_id: "v3ca_1".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            user_id: "user-1".to_string(),
+            client_id: "client-1".to_string(),
+            task_id: "task-1".to_string(),
+            title: "客户产物".to_string(),
+            artifact_type: "html".to_string(),
+            status: "received".to_string(),
+            dataset_ids: vec!["dataset-1".to_string()],
+            asset_library_ids: Vec::new(),
+            files: Vec::new(),
+            manifest: json!({"kind": "client_artifact"}),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let response = create_client_artifact_response(artifact.clone());
+
+        assert_eq!(response.artifact.artifact_id, artifact.artifact_id);
+        assert_eq!(response.artifact.status, "received");
     }
 }

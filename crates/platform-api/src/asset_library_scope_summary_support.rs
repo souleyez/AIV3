@@ -3,6 +3,9 @@ use contracts::{
     AssetLibraryScopeSummaryView, AssetLibraryView, AssetProfileSupplyHintView, DatasetSummary,
 };
 use domain_model::DatasetId;
+use uuid::Uuid;
+
+use crate::{asset_library_validation_support::parse_asset_library_id, ApiError};
 
 pub(crate) const ASSET_LIBRARY_SCOPE_POLICY: &str =
     "asset_library_memberships_intersect_authorized_datasets";
@@ -43,12 +46,17 @@ pub(crate) fn asset_library_scope_summary_response(
     }
 }
 
+pub(crate) fn parse_asset_library_scope_summary_path(
+    asset_library_id: &str,
+) -> std::result::Result<Uuid, ApiError> {
+    parse_asset_library_id(asset_library_id)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
     use domain_model::{DatasetId, DatasetLifecycle, DatasetVisibility};
     use serde_json::json;
-    use uuid::Uuid;
 
     use super::*;
 
@@ -147,5 +155,20 @@ mod tests {
         assert_eq!(response.summary.membership_count, 2);
         assert_eq!(response.summary.authorized_dataset_count, 1);
         assert_eq!(response.summary.scope_policy, ASSET_LIBRARY_SCOPE_POLICY);
+    }
+
+    #[test]
+    fn scope_summary_path_parser_keeps_asset_library_id_validation() {
+        let asset_library_id = Uuid::from_u128(9);
+
+        assert_eq!(
+            parse_asset_library_scope_summary_path(&asset_library_id.to_string())
+                .expect("valid asset library id should parse"),
+            asset_library_id
+        );
+
+        let error = parse_asset_library_scope_summary_path("not-a-uuid")
+            .expect_err("invalid asset library id should fail");
+        assert_eq!(error.payload.code, "invalid_asset_library_id");
     }
 }

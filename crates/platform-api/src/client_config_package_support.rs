@@ -310,6 +310,13 @@ pub(crate) async fn load_client_config_package_view(
     })
 }
 
+pub(crate) async fn get_client_config_package_view_for_request(
+    state: &AppState,
+    package_id: &str,
+) -> std::result::Result<ClientConfigPackageView, ApiError> {
+    load_client_config_package_view(state, package_id).await
+}
+
 pub(crate) async fn create_client_config_package_and_load_view(
     state: &AppState,
     headers: &HeaderMap,

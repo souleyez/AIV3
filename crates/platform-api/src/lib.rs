@@ -10,7 +10,6 @@ use asset_library_list_support::*;
 use asset_library_load_support::*;
 use asset_library_membership_support::*;
 use asset_library_scope_summary_support::*;
-use asset_library_validation_support::*;
 use asset_library_view_support::*;
 use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope, ScopePlannerInput,
@@ -4456,7 +4455,7 @@ async fn get_client_config_package(
     Path(package_id): Path<String>,
 ) -> std::result::Result<Json<ClientConfigPackageView>, ApiError> {
     Ok(Json(
-        load_client_config_package_view(&state, &package_id).await?,
+        get_client_config_package_view_for_request(&state, &package_id).await?,
     ))
 }
 
@@ -4478,18 +4477,19 @@ async fn create_client_artifact(
 ) -> std::result::Result<(StatusCode, Json<CreateClientArtifactResponse>), ApiError> {
     let auth_user = require_client_artifact_upload_authorization(&state, &headers).await?;
     let (manifest, files) = parse_client_artifact_multipart(multipart).await?;
-    let artifact = create_client_artifact_from_upload(
-        &state,
-        &headers,
-        auth_user.as_ref().map(|user| user.id),
-        &manifest,
-        &files,
-    )
-    .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateClientArtifactResponse { artifact }),
+        Json(
+            create_client_artifact_from_upload_response(
+                &state,
+                &headers,
+                auth_user.as_ref().map(|user| user.id),
+                &manifest,
+                &files,
+            )
+            .await?,
+        ),
     ))
 }
 
@@ -4499,7 +4499,9 @@ async fn get_client_artifact(
     Path(artifact_id): Path<String>,
 ) -> std::result::Result<Json<ClientArtifactView>, ApiError> {
     require_client_artifact_upload_authorization(&state, &headers).await?;
-    Ok(Json(load_client_artifact_view(&state, &artifact_id).await?))
+    Ok(Json(
+        get_client_artifact_view_for_request(&state, &artifact_id).await?,
+    ))
 }
 
 async fn download_client_artifact_file(
@@ -4517,8 +4519,6 @@ async fn preview_client_artifact_html_file(
     Path((artifact_id, file_index)): Path<(String, i32)>,
 ) -> std::result::Result<Response, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("artifact_id", &artifact_id)?;
-    validate_client_artifact_file_index(file_index)?;
     client_artifact_html_preview_response_for_user(
         &state,
         &artifact_id,
@@ -4590,21 +4590,15 @@ async fn publish_client_artifact_public_html(
     Path(artifact_id): Path<String>,
 ) -> std::result::Result<Json<PublishClientArtifactPublicHtmlResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("artifact_id", &artifact_id)?;
-    let artifact_id = artifact_id.trim().to_string();
-    let published = publish_client_artifact_public_html_and_load_view(
-        &state,
-        &artifact_id,
-        user.id,
-        Utc::now(),
-    )
-    .await?;
-
-    Ok(Json(PublishClientArtifactPublicHtmlResponse {
-        artifact: published.artifact,
-        html_artifact: published.html_artifact,
-        public_url: published.public_url,
-    }))
+    Ok(Json(
+        publish_client_artifact_public_html_and_load_response(
+            &state,
+            &artifact_id,
+            user.id,
+            Utc::now(),
+        )
+        .await?,
+    ))
 }
 
 async fn upsert_asset_library_dataset_membership(
@@ -4614,14 +4608,12 @@ async fn upsert_asset_library_dataset_membership(
     Json(request): Json<UpsertAssetLibraryDatasetMembershipRequest>,
 ) -> std::result::Result<Json<AssetLibraryDatasetMembershipResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
-    let dataset_id = parse_dataset_id(&dataset_id)?;
-    let response = upsert_asset_library_dataset_membership_and_load_response(
+    let response = upsert_asset_library_dataset_membership_path_and_load_response(
         &state,
         &headers,
         user.id,
-        asset_library_id,
-        dataset_id,
+        &asset_library_id,
+        &dataset_id,
         request,
     )
     .await?;
@@ -4635,14 +4627,12 @@ async fn remove_asset_library_dataset_membership(
     Path((asset_library_id, dataset_id)): Path<(String, String)>,
 ) -> std::result::Result<Json<RemoveAssetLibraryDatasetMembershipResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
-    let dataset_id = parse_dataset_id(&dataset_id)?;
-    let response = remove_asset_library_dataset_membership_and_load_response(
+    let response = remove_asset_library_dataset_membership_path_and_load_response(
         &state,
         &headers,
         user.id,
-        asset_library_id,
-        dataset_id,
+        &asset_library_id,
+        &dataset_id,
     )
     .await?;
 
@@ -4655,7 +4645,7 @@ async fn get_asset_library_scope_summary(
     Path(asset_library_id): Path<String>,
 ) -> std::result::Result<Json<AssetLibraryScopeSummaryResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    let asset_library_id = parse_asset_library_id(&asset_library_id)?;
+    let asset_library_id = parse_asset_library_scope_summary_path(&asset_library_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let local_thread_id = local_thread_id_from_headers(&headers);
     let asset_library = load_asset_library(&state, asset_library_id).await?;
