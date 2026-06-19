@@ -21262,6 +21262,40 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-19 V3 Client Artifact/Asset Library Release 8-Server Verification
+
+- Deployment:
+  - GitHub commit `bf4eeed51` was pushed to `main`;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `8221ba2cf` to `bf4eeed51`;
+  - pre-existing Web download-entry local edits on 8-server were preserved with `git stash push -m pre-bf4eeed5-web-download-local` before the fast-forward;
+  - services restarted: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server build and tests:
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library --lib`: passed, 15/15 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api client_config_package_support --lib`: passed, 11/11 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p contracts --lib`: passed, 41/41 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack NFT trace warnings only;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`, `/v3-landing`, `/admin/login`, `/external-integrations`: all returned HTTP 200;
+  - `/v3-landing` contains `V3企业定制agent终端`;
+  - `/external-integrations` contains `下载 Codex 执行器`.
+- 8-server smoke:
+  - `node scripts/smoke/v3-client-artifact-joint-smoke.mjs --self-test --pretty`: passed, `codex_control.has_activation_token=false`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`.
+- Safety:
+  - `/outputs` was added to `.gitignore` and local generated output files were not committed;
+  - no public API URL, required request field, existing response field, schema, or production data mapping was intentionally broken;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, production data mutation, or 120 server change was performed.
+
 ## 2026-06-17 P4 Client Artifact Joint Smoke Harness Local Verification
 
 - Purpose:
