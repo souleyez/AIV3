@@ -453,6 +453,9 @@ mod text_normalization;
 mod tool_view_support;
 mod wechat_video_login_handoff_support;
 mod workflow_context_support;
+mod workflow_execution_child_list_support;
+mod workflow_execution_query_support;
+mod workflow_execution_visibility_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod workflow_task_view_support;
@@ -721,6 +724,9 @@ use text_normalization::*;
 use tool_view_support::*;
 use wechat_video_login_handoff_support::*;
 use workflow_context_support::*;
+use workflow_execution_child_list_support::*;
+use workflow_execution_query_support::*;
+use workflow_execution_visibility_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
     render_dataset_output_runtime_summary, render_execution_scope_runtime_summary,
@@ -3632,7 +3638,7 @@ pub(crate) async fn load_visible_dataset_output_for_user(
     Ok(output)
 }
 
-async fn load_visible_chat_session_for_user(
+pub(crate) async fn load_visible_chat_session_for_user(
     state: &AppState,
     session_id: ChatSessionId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -3658,7 +3664,7 @@ async fn load_visible_chat_session_for_user(
     Ok(session)
 }
 
-async fn load_visible_assistant_run_for_user(
+pub(crate) async fn load_visible_assistant_run_for_user(
     state: &AppState,
     run_id: AssistantRunId,
     current_user_id: Option<UserId>,
@@ -3700,115 +3706,6 @@ async fn load_external_channel_assistant_run_for_owner_or_operator(
         return Err(assistant_run_not_found_error(run_id));
     }
     Ok((run, Some(user.id), true))
-}
-
-async fn ensure_workflow_execution_visible_for_user(
-    state: &AppState,
-    execution: &WorkflowExecution,
-    active_secret_binding_ids: &[SecretBindingId],
-    current_user_id: Option<UserId>,
-) -> std::result::Result<(), ApiError> {
-    if let Some(output) = state
-        .storage
-        .dataset_outputs()
-        .get_by_execution_id(state.tenant_id, execution.id)
-        .await
-        .map_err(ApiError::from_storage)?
-    {
-        load_visible_dataset_output_for_user(
-            state,
-            output.id,
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
-
-    if let Some(session) = state
-        .storage
-        .chat_sessions()
-        .get_by_execution_id(state.tenant_id, execution.id)
-        .await
-        .map_err(ApiError::from_storage)?
-    {
-        load_visible_chat_session_for_user(
-            state,
-            session.id,
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
-
-    if let Some(plan_id) = execution.report_plan_id {
-        load_visible_report_plan_for_user(
-            state,
-            plan_id,
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
-
-    if let Some(raw_id) = workflow_context_uuid(&execution.context, "static_page_draft_id") {
-        load_visible_static_page_draft(state, StaticPageDraftId(raw_id), current_user_id).await?;
-    }
-
-    if let Some(raw_id) = workflow_context_uuid(&execution.context, "assistant_run_id") {
-        load_visible_assistant_run_for_user(state, AssistantRunId(raw_id), current_user_id).await?;
-    }
-
-    if let Some(raw_id) = workflow_context_uuid(&execution.context, "chat_session_id") {
-        load_visible_chat_session_for_user(
-            state,
-            ChatSessionId(raw_id),
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
-
-    if let Some(dataset_id) = execution.dataset_id {
-        load_visible_dataset_for_user(
-            state,
-            dataset_id,
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-async fn load_visible_workflow_execution_for_user(
-    state: &AppState,
-    execution_id: WorkflowExecutionId,
-    active_secret_binding_ids: &[SecretBindingId],
-    current_user_id: Option<UserId>,
-) -> std::result::Result<WorkflowExecution, ApiError> {
-    let execution = state
-        .storage
-        .workflow_executions()
-        .get_by_id(state.tenant_id, execution_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| workflow_execution_not_found_error(execution_id))?;
-    ensure_workflow_execution_visible_for_user(
-        state,
-        &execution,
-        active_secret_binding_ids,
-        current_user_id,
-    )
-    .await
-    .map_err(|error| {
-        if error.status == StatusCode::NOT_FOUND {
-            workflow_execution_not_found_error(execution_id)
-        } else {
-            error
-        }
-    })?;
-    Ok(execution)
 }
 
 pub(crate) async fn ensure_default_public_datasets(
@@ -55415,32 +55312,6 @@ struct WorkflowTaskQueueStatsQuery {
     limit: Option<usize>,
 }
 
-fn parse_workflow_kind_query(value: &str) -> std::result::Result<WorkflowKind, ApiError> {
-    let normalized = value.trim();
-    if let Some(kind) = WorkflowKind::from_str(normalized) {
-        return Ok(kind);
-    }
-    match normalized {
-        "codex_host_task" | "codex_host" | "executor" | "codex_executor" => {
-            Ok(WorkflowKind::CodexHostTask)
-        }
-        _ => Err(ApiError::bad_request(
-            "invalid_workflow_kind",
-            format!("unknown workflow kind filter: {normalized}"),
-        )),
-    }
-}
-
-fn parse_workflow_status_query(value: &str) -> std::result::Result<WorkflowStatus, ApiError> {
-    let normalized = value.trim();
-    WorkflowStatus::from_str(normalized).ok_or_else(|| {
-        ApiError::bad_request(
-            "invalid_workflow_status",
-            format!("unknown workflow status filter: {normalized}"),
-        )
-    })
-}
-
 async fn list_workflow_executions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -55458,10 +55329,7 @@ async fn list_workflow_executions(
         .as_deref()
         .map(parse_workflow_status_query)
         .transpose()?;
-    let limit = query
-        .limit
-        .filter(|limit| *limit > 0)
-        .map(|limit| limit.min(200));
+    let limit = workflow_execution_list_limit(query.limit);
     let executions = state
         .storage
         .workflow_executions()
@@ -55471,16 +55339,11 @@ async fn list_workflow_executions(
 
     let mut visible = Vec::with_capacity(executions.len());
     for execution in executions {
-        if kind_filter
-            .as_ref()
-            .is_some_and(|kind| &execution.kind != kind)
-        {
-            continue;
-        }
-        if status_filter
-            .as_ref()
-            .is_some_and(|status| &execution.status != status)
-        {
+        if !workflow_execution_matches_filters(
+            &execution,
+            kind_filter.as_ref(),
+            status_filter.as_ref(),
+        ) {
             continue;
         }
         match ensure_workflow_execution_visible_for_user(
@@ -55522,11 +55385,7 @@ async fn get_workflow_task_queue_stats(
         .as_deref()
         .map(parse_workflow_status_query)
         .transpose()?;
-    let limit = query
-        .limit
-        .filter(|limit| *limit > 0)
-        .unwrap_or(200)
-        .min(500);
+    let limit = workflow_task_queue_stats_limit(query.limit);
     let executions = state
         .storage
         .workflow_executions()
@@ -55536,16 +55395,11 @@ async fn get_workflow_task_queue_stats(
 
     let mut visible = Vec::with_capacity(executions.len().min(limit));
     for execution in executions {
-        if kind_filter
-            .as_ref()
-            .is_some_and(|kind| &execution.kind != kind)
-        {
-            continue;
-        }
-        if status_filter
-            .as_ref()
-            .is_some_and(|status| &execution.status != status)
-        {
+        if !workflow_execution_matches_filters(
+            &execution,
+            kind_filter.as_ref(),
+            status_filter.as_ref(),
+        ) {
             continue;
         }
         match ensure_workflow_execution_visible_for_user(
@@ -55634,24 +55488,8 @@ async fn list_workflow_events(
     )
     .await?;
 
-    let events = state
-        .storage
-        .workflow_events()
-        .list_by_execution(execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
     Ok(Json(
-        events
-            .into_iter()
-            .map(|event| WorkflowEventView {
-                id: event.id,
-                sequence_no: event.sequence_no,
-                event_name: event.event_name,
-                payload: event.payload,
-                created_at: event.created_at,
-            })
-            .collect(),
+        list_workflow_event_views_for_execution(&state, execution_id).await?,
     ))
 }
 
@@ -55671,14 +55509,9 @@ async fn list_workflow_tasks(
     )
     .await?;
 
-    let tasks = state
-        .storage
-        .workflow_tasks()
-        .list_by_execution(execution_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    Ok(Json(tasks.into_iter().map(to_workflow_task_view).collect()))
+    Ok(Json(
+        list_workflow_task_views_for_execution(&state, execution_id).await?,
+    ))
 }
 
 async fn get_workflow_runtime_inspect(
@@ -61069,7 +60902,7 @@ async fn load_static_page_draft_or_404(
         })
 }
 
-async fn load_visible_static_page_draft(
+pub(crate) async fn load_visible_static_page_draft(
     state: &AppState,
     draft_id: StaticPageDraftId,
     current_user_id: Option<UserId>,
@@ -61705,40 +61538,6 @@ mod tests {
             "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 DataMax 产物链接，不覆盖旧页面。"
         )
         .is_none());
-    }
-
-    #[test]
-    fn workflow_execution_list_query_accepts_codex_executor_aliases() {
-        assert_eq!(
-            parse_workflow_kind_query("codex_host_task_workflow").expect("canonical kind"),
-            WorkflowKind::CodexHostTask
-        );
-        assert_eq!(
-            parse_workflow_kind_query("codex_host_task").expect("short kind"),
-            WorkflowKind::CodexHostTask
-        );
-        assert_eq!(
-            parse_workflow_kind_query("codex_executor").expect("operator alias"),
-            WorkflowKind::CodexHostTask
-        );
-    }
-
-    #[test]
-    fn workflow_execution_list_query_rejects_unknown_filters() {
-        assert_eq!(
-            parse_workflow_kind_query("not-a-workflow")
-                .expect_err("unknown kind should fail")
-                .payload
-                .code,
-            "invalid_workflow_kind"
-        );
-        assert_eq!(
-            parse_workflow_status_query("paused")
-                .expect_err("unknown status should fail")
-                .payload
-                .code,
-            "invalid_workflow_status"
-        );
     }
 
     fn react_test_action(
