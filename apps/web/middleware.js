@@ -19,6 +19,7 @@ function isExternalObservationAllowedPath(pathname) {
     || pathname.startsWith('/external-integrations/')
     || pathname.startsWith('/v1/')
     || pathname.startsWith('/api/v3/')
+    || pathname.startsWith('/api/codex-control/')
     || pathname.startsWith('/_next/')
     || pathname === '/favicon.ico'
     || pathname === '/robots.txt'
