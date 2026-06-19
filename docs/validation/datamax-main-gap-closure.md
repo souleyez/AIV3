@@ -21251,6 +21251,47 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-20 P5 Workflow Support Helpers GitHub And 8-server Release
+
+- Scope:
+  - released the behavior-preserving `platform-api` helper splits for workflow transition support, workflow initial event support, and required field support;
+  - no web UI, public documentation, third-party API contract, schema, source sync mapping, static-page generation behavior, or worker package source was changed.
+- GitHub:
+  - local diff audit covered `crates/platform-api/src/lib.rs`, `required_field_support.rs`, `workflow_initial_event_support.rs`, `workflow_transition_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation file;
+  - content diff excluded the remaining EOL-only working-tree status files under external integration docs and archived plans;
+  - commit `e9c18527` (`Split workflow support helpers`) was pushed to `origin/main`.
+- Local verification:
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - added-line sensitive scan for key/database/bearer patterns: no new matches;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api required_field_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api workflow_transition_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_dataset_output_binds_query_ranked_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_memory_directory_refresh_creates_execution_for_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_react_create_endpoint_can_create_static_page_draft --lib`: passed, 1/1 test.
+- 8-server deployment:
+  - repo `/srv/aiv3/repo` fast-forwarded from `d27dc4cbc` to `e9c185270`;
+  - first plain `cargo build --release -p platform-api` stopped on the existing `aws-lc-sys` GCC memcmp compiler guard;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api`: passed;
+  - restarted `aiv3-platform-api.service` only, because this release changed only the `platform-api` crate source and docs;
+  - `systemctl is-active aiv3-platform-api.service`: active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - sampled `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-static-page-worker.service`, `aiv3-dataset-output-worker.service`, and `aiv3-chat-session-worker.service`: all active;
+  - public homepage `https://v3.elepcloud.com`: HTTP 200;
+  - 8-server repo head after deployment: `e9c185270`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, web rebuild, web restart, worker restart, or 120 server change was performed.
+
 ## 2026-06-20 P5 Workflow Runtime Artifact Helpers GitHub And 8-server Release
 
 - Scope:
