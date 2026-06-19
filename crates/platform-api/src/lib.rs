@@ -245,6 +245,7 @@ mod assistant_scope_summary;
 pub mod auth_email;
 mod auth_session_support;
 mod chat_message_model_facing;
+mod chat_session_list_support;
 mod chat_session_manifest_view_support;
 mod chat_session_model_facing;
 mod chat_session_titles;
@@ -262,11 +263,15 @@ mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
 mod dataset_create_support;
 mod dataset_list_support;
+mod dataset_output_evidence_support;
+mod dataset_output_list_support;
 mod dataset_output_model_facing;
 mod dataset_output_view_support;
+mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
 mod dataset_summary_support;
 mod dataset_update_support;
+mod document_chunk_list_support;
 mod document_chunk_support;
 mod document_compare_model_facing;
 mod document_detail_model_facing;
@@ -342,6 +347,7 @@ mod lifecycle_updates;
 mod llm_invocation_view_support;
 mod manifest_runtime_view_support;
 mod manifest_service_handoff_support;
+mod memory_directory_list_support;
 mod memory_directory_scope;
 mod memory_directory_view_support;
 mod model_facing_document_focus;
@@ -480,6 +486,7 @@ use assistant_run_view_support::*;
 use assistant_run_xinbai_report_link_support::*;
 use assistant_scope_summary::*;
 use auth_session_support::*;
+use chat_session_list_support::*;
 use chat_session_manifest_view_support::*;
 use chat_session_model_facing::*;
 use chat_session_titles::*;
@@ -488,11 +495,15 @@ use code_review_summary_artifact_support::*;
 use codex_orchestrator_access_support::*;
 use dataset_create_support::*;
 use dataset_list_support::*;
+use dataset_output_evidence_support::*;
+use dataset_output_list_support::*;
 use dataset_output_model_facing::*;
 use dataset_output_view_support::*;
+use dataset_retrieval_evidence_support::*;
 use dataset_secret_binding_support::*;
 use dataset_summary_support::*;
 use dataset_update_support::*;
+use document_chunk_list_support::*;
 use document_chunk_support::*;
 use document_compare_model_facing::*;
 use document_detail_model_facing::*;
@@ -590,6 +601,7 @@ use id_parse_support::*;
 use lifecycle_updates::*;
 use llm_invocation_view_support::*;
 use manifest_service_handoff_support::*;
+use memory_directory_list_support::*;
 use memory_directory_scope::*;
 use memory_directory_view_support::*;
 use model_facing_format::*;
@@ -3632,7 +3644,7 @@ async fn load_visible_document_for_assistant_scope(
     }
 }
 
-async fn load_visible_document_for_user_with_local_scope(
+pub(crate) async fn load_visible_document_for_user_with_local_scope(
     state: &AppState,
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -3776,7 +3788,7 @@ async fn list_documents_for_dataset_scope(
         .map_err(ApiError::from_storage)
 }
 
-async fn filter_retrieval_evidences_for_visible_documents(
+pub(crate) async fn filter_retrieval_evidences_for_visible_documents(
     state: &AppState,
     dataset_id: DatasetId,
     evidences: Vec<RetrievalEvidence>,
@@ -3848,7 +3860,7 @@ async fn filter_retrieval_evidences_for_assistant_evidence_scope(
         .collect())
 }
 
-async fn filter_visible_memory_directories_for_user(
+pub(crate) async fn filter_visible_memory_directories_for_user(
     state: &AppState,
     dataset_id: DatasetId,
     directories: Vec<MemoryDirectory>,
@@ -3900,7 +3912,7 @@ async fn latest_visible_memory_directory_for_user(
     )
 }
 
-async fn load_visible_dataset_output_for_user(
+pub(crate) async fn load_visible_dataset_output_for_user(
     state: &AppState,
     output_id: DatasetOutputId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -4532,33 +4544,15 @@ async fn list_memory_directories(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-
-    let directories = state
-        .storage
-        .memory_directories()
-        .list_by_dataset(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let directories = filter_visible_memory_directories_for_user(
-        &state,
-        dataset_id,
-        directories,
-        current_user_id,
-    )
-    .await?;
 
     Ok(Json(
-        directories
-            .into_iter()
-            .map(to_memory_directory_view)
-            .collect(),
+        list_memory_directory_views_for_user(
+            &state,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
     ))
 }
 
@@ -4570,34 +4564,15 @@ async fn list_dataset_retrieval_evidences(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-
-    let mut evidences = state
-        .storage
-        .retrieval_evidences()
-        .list_latest_by_dataset_scope(state.tenant_id, dataset_id, 100)
-        .await
-        .map_err(ApiError::from_storage)?;
-    evidences = filter_retrieval_evidences_for_visible_documents(
-        &state,
-        dataset_id,
-        evidences,
-        current_user_id,
-    )
-    .await?;
-    sort_retrieval_evidences_by_relevance(&mut evidences);
 
     Ok(Json(
-        evidences
-            .into_iter()
-            .map(to_retrieval_evidence_view)
-            .collect(),
+        list_dataset_retrieval_evidence_views_for_user(
+            &state,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
     ))
 }
 
@@ -4714,30 +4689,16 @@ async fn list_dataset_outputs(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
 
-    let outputs = state
-        .storage
-        .dataset_outputs()
-        .list_by_dataset(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    let mut views = Vec::with_capacity(outputs.len());
-    for output in outputs {
-        if !owner_user_id_is_visible(output.owner_user_id, current_user_id) {
-            continue;
-        }
-        views.push(hydrate_dataset_output_view(&state, output).await?);
-    }
-
-    Ok(Json(views))
+    Ok(Json(
+        list_dataset_output_views_for_user(
+            &state,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
+    ))
 }
 
 async fn create_dataset_output(
@@ -4842,33 +4803,15 @@ async fn list_dataset_output_retrieval_evidences(
     let output_id = parse_dataset_output_id(&output_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let output = load_visible_dataset_output_for_user(
-        &state,
-        output_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-
-    let evidences = state
-        .storage
-        .retrieval_evidences()
-        .list_by_ids(state.tenant_id, &output.retrieval_evidence_ids)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let evidences = filter_retrieval_evidences_for_visible_documents(
-        &state,
-        output.dataset_id,
-        evidences,
-        current_user_id,
-    )
-    .await?;
 
     Ok(Json(
-        evidences
-            .into_iter()
-            .map(to_retrieval_evidence_view)
-            .collect(),
+        list_dataset_output_retrieval_evidence_views_for_user(
+            &state,
+            output_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
     ))
 }
 
@@ -4880,30 +4823,16 @@ async fn list_chat_sessions(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
 
-    let sessions = state
-        .storage
-        .chat_sessions()
-        .list_by_dataset(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    let mut views = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        if !owner_user_id_is_visible(session.user_id, current_user_id) {
-            continue;
-        }
-        views.push(hydrate_chat_session_view(&state, session).await?);
-    }
-
-    Ok(Json(views))
+    Ok(Json(
+        list_chat_session_views_for_user(
+            &state,
+            dataset_id,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?,
+    ))
 }
 
 async fn create_chat_session(
@@ -55319,24 +55248,16 @@ async fn list_document_chunks(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    load_visible_document_for_user_with_local_scope(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-
-    let chunks = state
-        .storage
-        .document_chunks()
-        .list_by_document(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        chunks.into_iter().map(to_document_chunk_view).collect(),
+        list_document_chunk_views_for_user(
+            &state,
+            document_id,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -61072,7 +60993,7 @@ async fn apply_html_artifact_action_intent_to_product(
     })))
 }
 
-async fn hydrate_dataset_output_view(
+pub(crate) async fn hydrate_dataset_output_view(
     state: &AppState,
     output: DatasetOutput,
 ) -> std::result::Result<DatasetOutputView, ApiError> {
@@ -61140,7 +61061,7 @@ async fn hydrate_dataset_output_view(
     Ok(view)
 }
 
-async fn hydrate_chat_session_view(
+pub(crate) async fn hydrate_chat_session_view(
     state: &AppState,
     session: ChatSession,
 ) -> std::result::Result<ChatSessionView, ApiError> {

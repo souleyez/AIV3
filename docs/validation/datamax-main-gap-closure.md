@@ -20736,6 +20736,141 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during deployment;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-19 P5 Dataset Output List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset output list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_output_list_support.rs`;
+  - added `list_dataset_output_views_for_user` for visible dataset validation, dataset output loading, owner filtering, and final `DatasetOutputView` hydration;
+  - added a pure owner-filter helper and module test covering public output, current-user-owned output, and another user's private output;
+  - made existing `hydrate_dataset_output_view` crate-visible without changing its implementation;
+  - kept `list_dataset_outputs` responsible for dataset id parsing, active secret header parsing, current user lookup, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_output_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Dataset Output Retrieval Evidence Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset output retrieval evidence list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_output_evidence_support.rs`;
+  - added `list_dataset_output_retrieval_evidence_views_for_user` for visible dataset output validation, retrieval evidence id loading, visible document filtering, and final `RetrievalEvidenceView` construction;
+  - added a pure view conversion helper and module test covering evidence order and id preservation;
+  - made existing `load_visible_dataset_output_for_user` and `filter_retrieval_evidences_for_visible_documents` crate-visible without changing their implementation;
+  - kept `list_dataset_output_retrieval_evidences` responsible for output id parsing, active secret header parsing, current user lookup, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_output_evidence_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Dataset Retrieval Evidence Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset-level retrieval evidence list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_retrieval_evidence_support.rs`;
+  - added `list_dataset_retrieval_evidence_views_for_user` for visible dataset validation, latest dataset retrieval evidence loading, visible document filtering, relevance sorting, and final `RetrievalEvidenceView` construction;
+  - added a pure sorted-view helper and module test covering existing relevance ordering by recall score;
+  - kept `list_dataset_retrieval_evidences` responsible for dataset id parsing, active secret header parsing, current user lookup, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_retrieval_evidence_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed;
+  - `cargo test -q -p platform-api retrieval_evidence --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Chat Session List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset chat session list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/chat_session_list_support.rs`;
+  - added `list_chat_session_views_for_user` for visible dataset validation, chat session loading, owner filtering, and final `ChatSessionView` hydration;
+  - added a pure owner-filter helper and module test covering public session, current-user-owned session, and another user's private session;
+  - made existing `hydrate_chat_session_view` crate-visible without changing its implementation;
+  - kept `list_chat_sessions` responsible for dataset id parsing, active secret header parsing, current user lookup, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api chat_session_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api chat_session --lib`: passed, 40/40 tests;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api retrieval_evidence --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Memory Directory List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset memory directory list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/memory_directory_list_support.rs`;
+  - added `list_memory_directory_views_for_user` for visible dataset validation, memory directory loading, visible document scope filtering, and final `MemoryDirectoryView` construction;
+  - added a pure view conversion helper and module test covering order and version preservation;
+  - made existing `filter_visible_memory_directories_for_user` crate-visible without changing its implementation;
+  - kept `list_memory_directories` responsible for dataset id parsing, active secret header parsing, current user lookup, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api memory_directory_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api memory_directory --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api chat_session --lib`: passed, 40/40 tests;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api retrieval_evidence --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Chunk List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document chunk list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/document_chunk_list_support.rs`;
+  - added `list_document_chunk_views_for_user` for visible document validation, document chunk loading, and final `DocumentChunkView` construction;
+  - added a pure view conversion helper and module test covering order and chunk index preservation;
+  - made existing `load_visible_document_for_user_with_local_scope` crate-visible without changing its implementation;
+  - kept `list_document_chunks` responsible for document id parsing, active secret header parsing, current user lookup, local thread header parsing, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_chunk_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api document_chunk --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api memory_directory --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api chat_session --lib`: passed, 40/40 tests;
+  - `cargo test -q -p platform-api dataset_output --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api retrieval_evidence --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
 
 - Purpose:
