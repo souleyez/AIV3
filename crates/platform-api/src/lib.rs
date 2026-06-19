@@ -186,7 +186,9 @@ use storage::{
 };
 use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
-use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
+#[cfg(test)]
+use workflow_engine::WorkflowRuntimeState;
+use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 mod asset_library_asset_supply_support;
 mod asset_library_auth_support;
@@ -385,6 +387,7 @@ mod report_render_output_asset;
 mod report_render_summary_artifact_support;
 mod report_view_support;
 mod request_scope_headers;
+mod required_field_support;
 mod resource_access;
 mod retrieval_evidence_ranking_support;
 mod retrieval_evidence_view_support;
@@ -458,10 +461,12 @@ mod workflow_context_support;
 mod workflow_execution_child_list_support;
 mod workflow_execution_query_support;
 mod workflow_execution_visibility_support;
+mod workflow_initial_event_support;
 mod workflow_runtime_artifact_manifest_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 mod workflow_task_view_support;
+mod workflow_transition_support;
 mod zip_ingest_support;
 
 use assistant_run_answer_policy_support::*;
@@ -669,6 +674,7 @@ use report_render_output_asset::*;
 use report_render_summary_artifact_support::*;
 use report_view_support::*;
 use request_scope_headers::*;
+use required_field_support::*;
 use resource_access::*;
 use retrieval_evidence_ranking_support::*;
 use retrieval_evidence_view_support::*;
@@ -733,6 +739,7 @@ use workflow_context_support::*;
 use workflow_execution_child_list_support::*;
 use workflow_execution_query_support::*;
 use workflow_execution_visibility_support::*;
+use workflow_initial_event_support::*;
 use workflow_runtime_artifact_manifest_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
@@ -742,6 +749,7 @@ pub use workflow_runtime_summary::{
     render_workflow_runtime_pretty_summaries,
 };
 use workflow_task_view_support::*;
+use workflow_transition_support::*;
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
 const RETRIEVAL_SEARCH_BACKEND_ENV: &str = "RETRIEVAL_SEARCH_BACKEND";
@@ -6776,13 +6784,13 @@ struct ExternalChannelConnectionSummary {
 }
 
 #[derive(Clone, Debug)]
-struct ExternalSourceConnectionSummary {
-    source_id: String,
-    connector_kind: String,
-    display_name: String,
-    sync_mode: String,
-    permission_mode: String,
-    health_status: String,
+pub(crate) struct ExternalSourceConnectionSummary {
+    pub(crate) source_id: String,
+    pub(crate) connector_kind: String,
+    pub(crate) display_name: String,
+    pub(crate) sync_mode: String,
+    pub(crate) permission_mode: String,
+    pub(crate) health_status: String,
     config_redacted: Value,
     disabled_at: Option<DateTime<Utc>>,
 }
@@ -56775,213 +56783,6 @@ fn build_initial_static_page_render_execution(
     })
 }
 
-fn build_initial_execution_event(
-    execution: &WorkflowExecution,
-    report_plan_id: domain_model::ReportPlanId,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "report_plan_id": report_plan_id,
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_external_source_sync_event(
-    execution: &WorkflowExecution,
-    source: &ExternalSourceConnectionSummary,
-    sync_run_id: Uuid,
-    sync_kind: &str,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "source_id": source.source_id,
-            "external_sync_run_id": sync_run_id,
-            "sync_kind": sync_kind,
-            "connector_kind": source.connector_kind,
-            "sync_mode": source.sync_mode,
-            "permission_mode": source.permission_mode,
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_external_action_dispatch_event(
-    execution: &WorkflowExecution,
-    connection_id: &str,
-    action_id: &str,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "channel_connection_id": connection_id,
-            "external_action_id": action_id,
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_static_page_image_generation_event(
-    execution: &WorkflowExecution,
-    draft: &StaticPageDraft,
-    job: &StaticPageImageJob,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "assistant_run_id": draft.assistant_run_id,
-            "static_page_draft_id": draft.id,
-            "static_page_image_job_id": job.id,
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_static_page_render_event(
-    execution: &WorkflowExecution,
-    draft: &StaticPageDraft,
-    render_output: &StaticPageRenderOutput,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "assistant_run_id": draft.assistant_run_id,
-            "static_page_draft_id": draft.id,
-            "static_page_render_output_id": render_output.id,
-            "static_page_image_job_id": render_output.image_job_id,
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_memory_directory_event(execution: &WorkflowExecution) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "dataset_id": execution.dataset_id,
-            "include_directory": execution
-                .context
-                .get("include_directory")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_dataset_output_event(
-    execution: &WorkflowExecution,
-    chat_session_id: Option<ChatSessionId>,
-    prompt: &str,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "dataset_id": execution.dataset_id,
-            "chat_session_id": chat_session_id,
-            "prompt": prompt.trim(),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_chat_session_event(
-    execution: &WorkflowExecution,
-    chat_session_id: ChatSessionId,
-    prompt: &str,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "dataset_id": execution.dataset_id,
-            "chat_session_id": chat_session_id,
-            "prompt": prompt.trim(),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-fn build_initial_render_execution_event(
-    execution: &WorkflowExecution,
-    ast_version_id: domain_model::ReportPlanAstVersionId,
-    surface: &PublishedSurface,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.execution_created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "report_plan_id": execution.report_plan_id,
-            "report_plan_ast_version_id": ast_version_id,
-            "surface": surface.as_str(),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
 fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
     if selected_dataset_ids_from_scope(scope).is_empty() {
         return false;
@@ -57563,128 +57364,6 @@ fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
             .any(|hint| lower_prompt.contains(hint));
 
     has_resume_signal && has_company_signal && (has_coverage_signal || prompt.contains("公司名"))
-}
-
-fn build_workflow_signal(
-    request: WorkflowSignalRequest,
-) -> std::result::Result<WorkflowSignal, ApiError> {
-    match request.kind {
-        contracts::WorkflowSignalKindView::Start => Ok(WorkflowSignal::Start),
-        contracts::WorkflowSignalKindView::StepCompleted => Ok(WorkflowSignal::StepCompleted {
-            task_key: required_field("task_key", request.task_key)?,
-            output: request.output,
-        }),
-        contracts::WorkflowSignalKindView::StepFailed => Ok(WorkflowSignal::StepFailed {
-            task_key: required_field("task_key", request.task_key)?,
-            error: required_field("error", request.error)?,
-        }),
-        contracts::WorkflowSignalKindView::RetryRequested => Ok(WorkflowSignal::RetryRequested {
-            reason: required_field("reason", request.reason)?,
-        }),
-        contracts::WorkflowSignalKindView::CancelRequested => Ok(WorkflowSignal::CancelRequested {
-            reason: required_field("reason", request.reason)?,
-        }),
-        contracts::WorkflowSignalKindView::PublishRequested => {
-            Ok(WorkflowSignal::PublishRequested { note: request.note })
-        }
-        contracts::WorkflowSignalKindView::Other(other) => Err(ApiError::bad_request(
-            "invalid_signal_kind",
-            format!("{} is not a supported workflow signal", other.trim()),
-        )),
-    }
-}
-
-fn workflow_runtime_state_from_execution(
-    execution: &WorkflowExecution,
-) -> std::result::Result<WorkflowRuntimeState, ApiError> {
-    let mut context = extract_context_object(&execution.context)?;
-    let retries_remaining = context
-        .remove("retries_remaining")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(3) as u32;
-
-    Ok(WorkflowRuntimeState {
-        execution_id: execution.id,
-        kind: execution.kind.clone(),
-        version: execution.version.clone(),
-        stage: execution.stage.clone(),
-        status: execution.status.clone(),
-        retries_remaining,
-        context,
-        updated_at: execution.updated_at,
-    })
-}
-
-fn workflow_execution_from_transition(
-    previous: &WorkflowExecution,
-    next_state: WorkflowRuntimeState,
-) -> std::result::Result<WorkflowExecution, ApiError> {
-    let next_attempt = next_attempt(&previous.status, previous.attempt, &next_state.status);
-    let WorkflowRuntimeState {
-        kind,
-        version,
-        stage,
-        status,
-        retries_remaining,
-        mut context,
-        updated_at,
-        ..
-    } = next_state;
-
-    context.insert(
-        "retries_remaining".to_string(),
-        Value::Number(retries_remaining.into()),
-    );
-
-    Ok(WorkflowExecution {
-        id: previous.id,
-        tenant_id: previous.tenant_id,
-        dataset_id: previous.dataset_id,
-        report_plan_id: previous.report_plan_id,
-        kind,
-        version,
-        stage,
-        status,
-        attempt: next_attempt,
-        context: Value::Object(context),
-        created_at: previous.created_at,
-        updated_at,
-    })
-}
-
-fn next_attempt(
-    previous_status: &domain_model::WorkflowStatus,
-    previous_attempt: u32,
-    next_status: &domain_model::WorkflowStatus,
-) -> u32 {
-    if *previous_status == domain_model::WorkflowStatus::Pending
-        && *next_status == domain_model::WorkflowStatus::Running
-    {
-        previous_attempt + 1
-    } else {
-        previous_attempt
-    }
-}
-
-fn extract_context_object(value: &Value) -> std::result::Result<Map<String, Value>, ApiError> {
-    match value {
-        Value::Object(map) => Ok(map.clone()),
-        Value::Null => Ok(Map::new()),
-        _ => Err(ApiError::internal(
-            "invalid_execution_context",
-            "workflow execution context must be a JSON object".to_string(),
-        )),
-    }
-}
-
-fn required_field(
-    field: &'static str,
-    value: Option<String>,
-) -> std::result::Result<String, ApiError> {
-    let value = value
-        .ok_or_else(|| ApiError::bad_request("validation_error", format!("{field} is required")))?;
-    validate_required(field, &value)?;
-    Ok(value.trim().to_string())
 }
 
 async fn hydrate_report_plan_summary(
