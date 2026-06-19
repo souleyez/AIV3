@@ -2,6 +2,170 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow Initial External Event Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove external source sync and external action dispatch extra payload construction from workflow initial event public builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `external_source_sync_event_extra` and `external_action_dispatch_event_extra`;
+  - updated external source sync and external action dispatch initial event builders to call the shared helpers;
+  - kept both public builder signatures and all call sites unchanged;
+  - preserved `source_id`, `external_sync_run_id`, `sync_kind`, `connector_kind`, `sync_mode`, `permission_mode`, `channel_connection_id`, `external_action_id`, and the `workflow.execution_created` payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Report Event Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove report plan/report render extra payload construction from workflow initial event public builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `report_plan_event_extra` and `report_render_event_extra`;
+  - updated report plan and report render initial event builders to call the shared helpers;
+  - kept both public builder signatures and all call sites unchanged;
+  - preserved `report_plan_id`, `report_plan_ast_version_id`, `surface.as_str()` output, and the `workflow.execution_created` payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Event Payload Merge Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove duplicated JSON object merge loops from workflow initial event payload helpers.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `merge_object_fields`;
+  - updated `initial_payload` and `static_page_draft_event_extra` to use the shared helper;
+  - preserved base payload fields, static-page draft payload fields, extra object append/overwrite behavior, and non-object extra ignore behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Static-page Event Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove duplicated static-page draft extra payload construction from workflow initial event builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `static_page_draft_event_extra`;
+  - updated static-page image generation and static-page render initial event builders to call the shared helper;
+  - kept both public builder signatures and all call sites unchanged;
+  - preserved `assistant_run_id`, `static_page_draft_id`, image job id, render output id, render image job id, payload merge behavior, and the `workflow.execution_created` payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Dataset Prompt Event Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove duplicated dataset/chat prompt extra payload construction from workflow initial event builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `dataset_prompt_event_extra`;
+  - updated dataset output and chat session initial event builders to call the shared helper;
+  - kept both public builder signatures and all call sites unchanged;
+  - preserved `dataset_id`, `chat_session_id`, prompt trimming, null output when no chat session is present, and the `workflow.execution_created` payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api create_dataset_output_binds_query_ranked_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Workflow Initial Event Envelope Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - remove repeated `WorkflowEventRecord` envelope construction from workflow initial event builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_event_support.rs`;
+  - added private `workflow_execution_created_event`;
+  - updated report plan, external source sync, external action dispatch, static-page image generation, static-page render, memory directory, dataset output, chat session, and report render initial event builders to call the shared helper;
+  - kept each builder responsible for its original business extra payload fields;
+  - preserved `execution_id`, `sequence_no=1`, `event_name=workflow.execution_created`, `created_at`, base payload fields, extra payload fields, prompt trimming, include-directory defaulting, and published payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api request_memory_directory_refresh_creates_execution_for_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_dataset_output_binds_query_ranked_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Workflow Initial Helpers GitHub And 8-server Release
 
 - Scope:
