@@ -2,6 +2,123 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Data Snapshot With-evidence Builder Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - finish moving the static-page data snapshot builder into the existing data snapshot support module.
+- Code change:
+  - extended `crates/platform-api/src/static_page_data_snapshot_support.rs`;
+  - moved `build_static_page_data_snapshot_with_evidence` out of `crates/platform-api/src/lib.rs`;
+  - kept `build_static_page_field_candidates` in `lib.rs` for a smaller follow-up boundary;
+  - preserved data source candidates, field candidates, supplemental metrics, docs-page heading binding, module sample data, binding quality, structure signals, snapshot version, updated timestamp, report snapshot, refresh policy, and validation summary fields.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_ --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api docs_page_data_snapshot_binds_structure_modules_to_section_title_hints --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_image_prompt_payload_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_design_contract_refresh_support --lib`: passed, 3/3 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Data Snapshot Wrapper Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the thin static-page data snapshot wrapper into the existing data snapshot support module.
+- Code change:
+  - extended `crates/platform-api/src/static_page_data_snapshot_support.rs`;
+  - moved `build_static_page_data_snapshot` out of `crates/platform-api/src/lib.rs`;
+  - kept `build_static_page_data_snapshot_with_evidence` in `lib.rs` and changed it to `pub(crate)` so the support wrapper can call the existing builder without moving the larger dependency surface;
+  - preserved `assistant_context.evidence_state` extraction, `static_page_draft` source, selected scope passthrough, evidence status, updated timestamp, snapshot version, and refresh-policy fields.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_design_contract_refresh_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_image_prompt_payload_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 3/3 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Chat Session Report Entry Write Wrapper Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep prepared report-entry to manifest-update mapping beside report-entry planning and manifest write helpers.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved `write_chat_session_report_entry` out of `crates/platform-api/src/lib.rs`;
+  - kept route handling, storage writes, report plan/workflow creation, and response assembly in `lib.rs`;
+  - preserved prepared entry field mapping, confirmed/not-applicable state writes, resolved action writes, suggested title/objective writes, confirmed report plan id writes, and non-object manifest error behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api write_chat_session_report_entry_persists_confirmed_state_fields --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api write_chat_session_report_entry_persists_decline_history_fields --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api report_entry_route_stay_material_service_persists_decline_history --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Chat Session Report Entry Update Planner Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move report-entry update pure planning beside the report-entry manifest/service-handoff helpers.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved `ChatSessionReportEntryUpdatePlan`, `PreparedChatSessionReportEntry`, and `plan_chat_session_report_entry_update` out of `crates/platform-api/src/lib.rs`;
+  - kept route handling, storage writes, report plan/workflow creation, manifest write wrapper, and response assembly in `lib.rs`;
+  - preserved request confirmation, stay-material-service, and enter-report-service branch behavior, default report title/objective derivation, suggested value reuse, required title/objective validation, confirmed-entry guard, and caller-provided error messages.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api plan_chat_session_report_entry_update_builds_confirmation_request_from_defaults --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api plan_chat_session_report_entry_update_reuses_suggested_values_for_report_entry --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api report_entry_route_enter_report_service_creates_plan_and_execution --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Chat Session Report Entry Confirmed Guard Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep report-entry service handoff/manifest helpers and confirmed-entry guard behavior in `manifest_service_handoff_support`.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved `ensure_chat_session_report_entry_not_confirmed` out of `crates/platform-api/src/lib.rs`;
+  - kept report-entry update planning, route handling, storage writes, and response assembly in `lib.rs`;
+  - preserved missing report-entry allowance, unconfirmed report-entry allowance, confirmed report-entry rejection, `report_entry_already_confirmed` error code, and caller-provided error messages.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api plan_chat_session_report_entry_update_rejects_resetting_confirmed_entry --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api report_entry_route_rejects_confirmed_entry_mutation --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api plan_chat_session_report_entry_update_preserves_decline_history_context --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Manifest Service Handoff Helpers GitHub And 8-server Release
 
 - Scope:

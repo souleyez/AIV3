@@ -1,11 +1,27 @@
 use chrono::{DateTime, Utc};
-use domain_model::{ReportPlanId, WorkflowExecution};
+use domain_model::{ChatSession, ReportPlanId, WorkflowExecution};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    format_chat_session_report_entry_resolution, format_model_facing_report_entry_state, ApiError,
+    derive_chat_session_report_plan_objective, derive_chat_session_report_plan_title,
+    format_chat_session_report_entry_resolution, format_model_facing_report_entry_state,
+    trim_optional, validate_required, ApiError,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChatSessionReportEntryUpdatePlan {
+    RequestConfirmation(PreparedChatSessionReportEntry),
+    StayMaterialService(PreparedChatSessionReportEntry),
+    EnterReportService(PreparedChatSessionReportEntry),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedChatSessionReportEntry {
+    pub(crate) requested_at: DateTime<Utc>,
+    pub(crate) title: String,
+    pub(crate) objective: String,
+}
 
 pub(crate) struct ChatSessionReportEntryManifestUpdate<'a> {
     pub(crate) state: &'a contracts::ModelFacingReportEntryStateView,
@@ -172,6 +188,123 @@ pub(crate) fn write_chat_session_report_entry_manifest(
     Ok(())
 }
 
+pub(crate) fn write_chat_session_report_entry(
+    session_manifest: &mut Value,
+    state: contracts::ModelFacingReportEntryStateView,
+    entry: &PreparedChatSessionReportEntry,
+    resolved_at: Option<DateTime<Utc>>,
+    resolved_action: Option<contracts::ChatSessionReportEntryResolutionView>,
+    confirmed_report_plan_id: Option<ReportPlanId>,
+) -> std::result::Result<(), ApiError> {
+    write_chat_session_report_entry_manifest(
+        session_manifest,
+        ChatSessionReportEntryManifestUpdate {
+            state: &state,
+            requested_at: entry.requested_at,
+            resolved_at,
+            resolved_action: resolved_action.as_ref(),
+            suggested_title: &entry.title,
+            suggested_objective: &entry.objective,
+            confirmed_report_plan_id,
+        },
+    )
+}
+
+pub(crate) fn plan_chat_session_report_entry_update(
+    session: &ChatSession,
+    current_report_entry: Option<&contracts::ChatSessionReportEntryView>,
+    request: &contracts::UpdateChatSessionReportEntryRequest,
+    now: DateTime<Utc>,
+) -> std::result::Result<ChatSessionReportEntryUpdatePlan, ApiError> {
+    match request.action {
+        contracts::ChatSessionReportEntryActionView::RequestConfirmation => {
+            ensure_chat_session_report_entry_not_confirmed(
+                current_report_entry,
+                "chat session report entry has already been confirmed",
+            )?;
+
+            Ok(ChatSessionReportEntryUpdatePlan::RequestConfirmation(
+                PreparedChatSessionReportEntry {
+                    requested_at: current_report_entry
+                        .and_then(|entry| entry.requested_at)
+                        .unwrap_or(now),
+                    title: trim_optional(request.title.clone())
+                        .unwrap_or_else(|| derive_chat_session_report_plan_title(session)),
+                    objective: trim_optional(request.objective.clone())
+                        .unwrap_or_else(|| derive_chat_session_report_plan_objective(session)),
+                },
+            ))
+        }
+        contracts::ChatSessionReportEntryActionView::StayMaterialService => {
+            ensure_chat_session_report_entry_not_confirmed(
+                current_report_entry,
+                "confirmed report service entry cannot be reset through this endpoint",
+            )?;
+            Ok(ChatSessionReportEntryUpdatePlan::StayMaterialService(
+                PreparedChatSessionReportEntry {
+                    requested_at: current_report_entry
+                        .and_then(|entry| entry.requested_at)
+                        .unwrap_or(now),
+                    title: current_report_entry
+                        .and_then(|entry| trim_optional(entry.suggested_title.clone()))
+                        .unwrap_or_else(|| derive_chat_session_report_plan_title(session)),
+                    objective: current_report_entry
+                        .and_then(|entry| trim_optional(entry.suggested_objective.clone()))
+                        .unwrap_or_else(|| derive_chat_session_report_plan_objective(session)),
+                },
+            ))
+        }
+        contracts::ChatSessionReportEntryActionView::EnterReportService => {
+            ensure_chat_session_report_entry_not_confirmed(
+                current_report_entry,
+                "chat session report entry has already been confirmed",
+            )?;
+
+            let title = trim_optional(request.title.clone())
+                .or_else(|| {
+                    current_report_entry
+                        .and_then(|entry| trim_optional(entry.suggested_title.clone()))
+                })
+                .unwrap_or_else(|| derive_chat_session_report_plan_title(session));
+            let objective = trim_optional(request.objective.clone())
+                .or_else(|| {
+                    current_report_entry
+                        .and_then(|entry| trim_optional(entry.suggested_objective.clone()))
+                })
+                .unwrap_or_else(|| derive_chat_session_report_plan_objective(session));
+            validate_required("title", &title)?;
+            validate_required("objective", &objective)?;
+
+            Ok(ChatSessionReportEntryUpdatePlan::EnterReportService(
+                PreparedChatSessionReportEntry {
+                    requested_at: current_report_entry
+                        .and_then(|entry| entry.requested_at)
+                        .unwrap_or(now),
+                    title,
+                    objective,
+                },
+            ))
+        }
+    }
+}
+
+pub(crate) fn ensure_chat_session_report_entry_not_confirmed(
+    current_report_entry: Option<&contracts::ChatSessionReportEntryView>,
+    message: &str,
+) -> std::result::Result<(), ApiError> {
+    if matches!(
+        current_report_entry.map(|entry| &entry.state),
+        Some(contracts::ModelFacingReportEntryStateView::Confirmed)
+    ) {
+        return Err(ApiError::bad_request(
+            "report_entry_already_confirmed",
+            message.to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn parse_manifest_timestamp(value: &Value) -> Option<DateTime<Utc>> {
     let timestamp = value.as_str()?;
     DateTime::parse_from_rfc3339(timestamp)
@@ -181,10 +314,32 @@ pub(crate) fn parse_manifest_timestamp(value: &Value) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use domain_model::{TenantId, WorkflowExecutionId, WorkflowKind, WorkflowStatus};
+    use domain_model::{
+        ChatSessionId, DatasetId, TenantId, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    };
     use serde_json::json;
 
     use super::*;
+
+    fn sample_chat_session_for_report_entry(
+        title: &str,
+        session_manifest: Value,
+        now: DateTime<Utc>,
+    ) -> ChatSession {
+        ChatSession {
+            id: ChatSessionId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            user_id: None,
+            execution_id: WorkflowExecutionId::new(),
+            title: title.to_string(),
+            latest_memory_directory_id: None,
+            latest_dataset_output_id: None,
+            session_manifest,
+            created_at: now,
+            updated_at: now,
+        }
+    }
 
     #[test]
     fn service_handoff_preserves_required_fields_optional_fields_and_timestamps() {
@@ -472,5 +627,174 @@ mod tests {
         .expect_err("non-object manifest should be rejected");
 
         assert_eq!(error.payload.code, "chat_session_manifest_invalid");
+    }
+
+    #[test]
+    fn write_chat_session_report_entry_uses_prepared_entry_fields() {
+        let now = Utc::now();
+        let requested_at = now - chrono::TimeDelta::minutes(5);
+        let report_plan_id = ReportPlanId::new();
+        let mut manifest = json!({
+            "status": "assistant_replied",
+        });
+
+        write_chat_session_report_entry(
+            &mut manifest,
+            contracts::ModelFacingReportEntryStateView::Confirmed,
+            &PreparedChatSessionReportEntry {
+                requested_at,
+                title: "Prepared report title".to_string(),
+                objective: "Prepared report objective".to_string(),
+            },
+            Some(now),
+            Some(contracts::ChatSessionReportEntryResolutionView::EnterReportService),
+            Some(report_plan_id),
+        )
+        .expect("prepared entry should be persisted");
+
+        assert_eq!(manifest["report_entry"]["state"], json!("confirmed"));
+        assert_eq!(
+            manifest["report_entry"]["suggested_title"],
+            json!("Prepared report title")
+        );
+        assert_eq!(
+            manifest["report_entry"]["suggested_objective"],
+            json!("Prepared report objective")
+        );
+        assert_eq!(
+            manifest["report_entry"]["resolved_action"],
+            json!("enter_report_service")
+        );
+        assert_eq!(
+            manifest["report_entry"]["confirmed_report_plan_id"],
+            json!(report_plan_id)
+        );
+    }
+
+    #[test]
+    fn plan_chat_session_report_entry_update_builds_confirmation_request_from_defaults() {
+        let now = Utc::now();
+        let session = sample_chat_session_for_report_entry(
+            "Materials review",
+            json!({
+                "status": "assistant_replied",
+                "initial_prompt": "Review the materials",
+                "last_prompt": "Turn this into a report",
+            }),
+            now,
+        );
+
+        let plan = plan_chat_session_report_entry_update(
+            &session,
+            None,
+            &contracts::UpdateChatSessionReportEntryRequest {
+                action: contracts::ChatSessionReportEntryActionView::RequestConfirmation,
+                title: None,
+                objective: None,
+            },
+            now,
+        )
+        .expect("confirmation request should be planned");
+
+        assert_eq!(
+            plan,
+            ChatSessionReportEntryUpdatePlan::RequestConfirmation(
+                PreparedChatSessionReportEntry {
+                    requested_at: now,
+                    title: "Materials review Report".to_string(),
+                    objective: "Turn the current dataset context into a report-ready output for: Turn this into a report".to_string(),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn plan_chat_session_report_entry_update_reuses_suggested_values_for_report_entry() {
+        let now = Utc::now();
+        let requested_at = now - chrono::TimeDelta::minutes(5);
+        let session = sample_chat_session_for_report_entry(
+            "Materials review",
+            json!({
+                "status": "assistant_replied",
+                "initial_prompt": "Review the materials",
+            }),
+            now,
+        );
+        let current_report_entry = contracts::ChatSessionReportEntryView {
+            state: contracts::ModelFacingReportEntryStateView::ConfirmationRequired,
+            requested_at: Some(requested_at),
+            resolved_at: None,
+            resolved_action: None,
+            suggested_title: Some("Prepared report title".to_string()),
+            suggested_objective: Some("Prepared report objective".to_string()),
+            confirmed_report_plan_id: None,
+        };
+
+        let plan = plan_chat_session_report_entry_update(
+            &session,
+            Some(&current_report_entry),
+            &contracts::UpdateChatSessionReportEntryRequest {
+                action: contracts::ChatSessionReportEntryActionView::EnterReportService,
+                title: None,
+                objective: None,
+            },
+            now,
+        )
+        .expect("report entry should reuse suggested values");
+
+        assert_eq!(
+            plan,
+            ChatSessionReportEntryUpdatePlan::EnterReportService(PreparedChatSessionReportEntry {
+                requested_at,
+                title: "Prepared report title".to_string(),
+                objective: "Prepared report objective".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn ensure_chat_session_report_entry_not_confirmed_allows_missing_or_unconfirmed_entry() {
+        ensure_chat_session_report_entry_not_confirmed(None, "entry already confirmed")
+            .expect("missing report entry should be allowed");
+
+        let current_report_entry = contracts::ChatSessionReportEntryView {
+            state: contracts::ModelFacingReportEntryStateView::ConfirmationRequired,
+            requested_at: Some(Utc::now()),
+            resolved_at: None,
+            resolved_action: None,
+            suggested_title: Some("Monthly Report".to_string()),
+            suggested_objective: Some("Summarize operating signals".to_string()),
+            confirmed_report_plan_id: None,
+        };
+
+        ensure_chat_session_report_entry_not_confirmed(
+            Some(&current_report_entry),
+            "entry already confirmed",
+        )
+        .expect("unconfirmed report entry should be allowed");
+    }
+
+    #[test]
+    fn ensure_chat_session_report_entry_not_confirmed_rejects_confirmed_entry() {
+        let current_report_entry = contracts::ChatSessionReportEntryView {
+            state: contracts::ModelFacingReportEntryStateView::Confirmed,
+            requested_at: Some(Utc::now()),
+            resolved_at: Some(Utc::now()),
+            resolved_action: Some(
+                contracts::ChatSessionReportEntryResolutionView::EnterReportService,
+            ),
+            suggested_title: Some("Monthly Report".to_string()),
+            suggested_objective: Some("Summarize operating signals".to_string()),
+            confirmed_report_plan_id: Some(ReportPlanId::new()),
+        };
+
+        let error = ensure_chat_session_report_entry_not_confirmed(
+            Some(&current_report_entry),
+            "entry already confirmed",
+        )
+        .expect_err("confirmed report entry should be rejected");
+
+        assert_eq!(error.payload.code, "report_entry_already_confirmed");
+        assert_eq!(error.payload.message, "entry already confirmed");
     }
 }

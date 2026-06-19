@@ -4,7 +4,186 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{push_string_hint, static_page_artifact_string};
+use crate::{
+    build_static_page_data_source_candidates, build_static_page_field_candidates,
+    build_static_page_module_sample_data, build_static_page_report_snapshot,
+    build_static_page_structure_signals,
+    build_static_page_supplemental_metrics_summary_from_candidates,
+    enrich_docs_page_heading_binding, push_string_hint, static_page_artifact_string,
+    static_page_heading_field_candidate, static_page_module_binding_quality,
+    static_page_module_chart_runtime, static_page_payload_modules, static_page_sample_data_quality,
+    static_page_template_reference_id_from_payload,
+};
+
+pub(crate) fn build_static_page_data_snapshot(payload: &Value, selected_scope: &Value) -> Value {
+    let evidence_state = payload
+        .get("assistant_context")
+        .and_then(|context| context.get("evidence_state"));
+    build_static_page_data_snapshot_with_evidence(
+        payload,
+        selected_scope,
+        evidence_state,
+        "static_page_draft",
+    )
+}
+
+pub(crate) fn build_static_page_data_snapshot_with_evidence(
+    payload: &Value,
+    selected_scope: &Value,
+    evidence_state: Option<&Value>,
+    source: &str,
+) -> Value {
+    let data_source_candidates =
+        build_static_page_data_source_candidates(selected_scope, evidence_state);
+    let field_candidates = build_static_page_field_candidates(selected_scope, evidence_state);
+    let supplemental_metrics = build_static_page_supplemental_metrics_summary_from_candidates(
+        &field_candidates,
+        evidence_state,
+    );
+    let is_docs_page_template =
+        static_page_template_reference_id_from_payload(payload) == Some("docs-page");
+    let heading_candidate = if is_docs_page_template {
+        static_page_heading_field_candidate(&field_candidates)
+    } else {
+        None
+    };
+    let module_bindings = static_page_payload_modules(payload)
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut module| {
+            let sample_data =
+                build_static_page_module_sample_data(&module, evidence_state, &field_candidates);
+            let data_quality = static_page_sample_data_quality(&sample_data);
+            let mut binding = module
+                .get("dataBinding")
+                .or_else(|| module.get("data_binding"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            binding = enrich_docs_page_heading_binding(&module, binding, heading_candidate);
+            if binding.is_object() {
+                if let Some(object) = module.as_object_mut() {
+                    object.insert("dataBinding".to_string(), binding.clone());
+                    object.insert("data_binding".to_string(), binding.clone());
+                }
+            }
+            let visualization_type = module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("type"))
+                .cloned()
+                .unwrap_or_else(|| json!("text-insight"));
+            let chart_runtime = static_page_module_chart_runtime(&module);
+            let chart_options = module
+                .get("visualization")
+                .and_then(|visualization| visualization.get("chartOptions"))
+                .or_else(|| module.get("chartOptions"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let binding_quality = static_page_module_binding_quality(
+                &module,
+                &binding,
+                &field_candidates,
+                &sample_data,
+                data_quality,
+            );
+            json!({
+                "moduleId": module.get("id").cloned().unwrap_or(Value::Null),
+                "title": module.get("title").cloned().unwrap_or(Value::Null),
+                "binding": binding,
+                "visualizationType": visualization_type,
+                "chartRuntime": chart_runtime,
+                "chartOptions": chart_options,
+                "sampleData": sample_data,
+                "dataQuality": data_quality,
+                "bindingQuality": binding_quality.clone(),
+                "bindingQualityStatus": binding_quality
+                    .get("status")
+                    .cloned()
+                    .unwrap_or_else(|| json!("partial")),
+                "chartDataFit": binding_quality
+                    .get("chartDataFit")
+                    .cloned()
+                    .unwrap_or_else(|| json!("unknown")),
+                "recommendedAction": binding_quality
+                    .get("recommendedAction")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let structure_signals =
+        build_static_page_structure_signals(&field_candidates, &module_bindings);
+    let snapshot_version = static_page_data_snapshot_version(
+        source,
+        selected_scope,
+        &data_source_candidates,
+        &field_candidates,
+        &module_bindings,
+    );
+    let updated_at = static_page_data_snapshot_updated_at(evidence_state);
+    let validation_summary = build_static_page_data_snapshot_validation_summary(
+        &data_source_candidates,
+        &field_candidates,
+        &module_bindings,
+        &updated_at,
+    );
+    let report_snapshot =
+        build_static_page_report_snapshot(&module_bindings, evidence_state, &validation_summary);
+    json!({
+        "version": 1,
+        "snapshotVersion": snapshot_version,
+        "snapshot_version": snapshot_version,
+        "updatedAt": updated_at,
+        "updated_at": updated_at,
+        "source": source,
+        "selected_scope": selected_scope,
+        "evidence_status": evidence_state
+            .and_then(|state| state.get("status"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "refresh": {
+            "dataFile": "data.json",
+            "sourceSnapshotFile": "data-snapshot.json",
+            "policy": "replace_data_json_then_client_refresh",
+            "manualRefresh": true,
+            "autoRefresh": true,
+            "pollIntervalSeconds": 60,
+            "changeDetectionFields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
+        },
+        "refresh_policy": {
+            "data_file": "data.json",
+            "source_snapshot_file": "data-snapshot.json",
+            "policy": "replace_data_json_then_client_refresh",
+            "manual_refresh": true,
+            "auto_refresh": true,
+            "poll_interval_seconds": 60,
+            "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
+        },
+        "data_source_candidates": data_source_candidates,
+        "field_candidates": field_candidates,
+        "module_bindings": module_bindings,
+        "reportSnapshot": report_snapshot.clone(),
+        "report_snapshot": report_snapshot.clone(),
+        "kpis": report_snapshot.get("kpis").cloned().unwrap_or_else(|| json!([])),
+        "filters": report_snapshot.get("filters").cloned().unwrap_or_else(|| json!([])),
+        "chartSeries": report_snapshot.get("chartSeries").cloned().unwrap_or_else(|| json!([])),
+        "chart_series": report_snapshot.get("chart_series").cloned().unwrap_or_else(|| json!([])),
+        "businessTables": report_snapshot.get("businessTables").cloned().unwrap_or_else(|| json!([])),
+        "business_tables": report_snapshot.get("business_tables").cloned().unwrap_or_else(|| json!({})),
+        "evidenceNotes": report_snapshot.get("evidenceNotes").cloned().unwrap_or_else(|| json!([])),
+        "evidence_notes": report_snapshot.get("evidence_notes").cloned().unwrap_or_else(|| json!([])),
+        "dataQuality": report_snapshot.get("dataQuality").cloned().unwrap_or_else(|| json!({})),
+        "data_quality": report_snapshot.get("data_quality").cloned().unwrap_or_else(|| json!({})),
+        "structure_signals": structure_signals,
+        "supplemental_metrics": supplemental_metrics.clone(),
+        "supplementalMetrics": supplemental_metrics,
+        "validation_summary": validation_summary,
+        "sampleRowCount": validation_summary.get("sampleRowCount").cloned().unwrap_or(Value::Null),
+        "detailRowCount": validation_summary.get("detailRowCount").cloned().unwrap_or(Value::Null),
+        "unitHints": validation_summary.get("unitHints").cloned().unwrap_or_else(|| json!([])),
+    })
+}
 
 pub(crate) fn static_page_data_snapshot_version(
     source: &str,
@@ -205,6 +384,32 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.starts_with("static-page-data-v1-"));
+    }
+
+    #[test]
+    fn data_snapshot_wrapper_uses_assistant_context_evidence_state() {
+        let payload = json!({
+            "modules": [],
+            "assistant_context": {
+                "evidence_state": {
+                    "status": "ready",
+                    "updated_at": "2026-06-20T00:00:00Z",
+                    "supplied_items": []
+                }
+            }
+        });
+        let selected_scope = json!({"dataset_ids": ["dataset-1"]});
+
+        let snapshot = build_static_page_data_snapshot(&payload, &selected_scope);
+
+        assert_eq!(snapshot["source"], json!("static_page_draft"));
+        assert_eq!(snapshot["selected_scope"], selected_scope);
+        assert_eq!(snapshot["evidence_status"], json!("ready"));
+        assert_eq!(snapshot["updatedAt"], json!("2026-06-20T00:00:00Z"));
+        assert_eq!(snapshot["refresh"]["manualRefresh"], json!(true));
+        assert!(snapshot["snapshotVersion"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("static-page-data-v1-")));
     }
 
     #[test]
