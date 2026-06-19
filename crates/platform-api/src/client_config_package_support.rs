@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
 use contracts::{
-    ClientConfigPackageView, CreateClientConfigPackageRequest, V3ClientArtifactUploadConfigView,
-    V3CodexControlConfigView, V3_CLIENT_CONFIG_SCHEMA,
+    ClientConfigPackageView, CreateClientConfigPackageRequest, CreateClientConfigPackageResponse,
+    V3ClientArtifactUploadConfigView, V3CodexControlConfigView, V3_CLIENT_CONFIG_SCHEMA,
 };
 use domain_model::UserId;
 use reqwest::Url;
@@ -16,7 +16,7 @@ use crate::{
     },
     client_artifact_error_support::client_config_package_not_found_error,
     client_artifact_scope_support::validate_v3_client_scope_refs,
-    ApiError, AppState,
+    validate_required, ApiError, AppState,
 };
 
 const DEFAULT_CODEX_CONTROL_BASE_URL: &str = "https://ad.goods-editor.com";
@@ -374,6 +374,32 @@ pub(crate) async fn create_client_config_package_and_load_view(
     load_client_config_package_view(state, &package_id).await
 }
 
+pub(crate) async fn create_client_config_package_and_load_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: UserId,
+    request: CreateClientConfigPackageRequest,
+) -> std::result::Result<CreateClientConfigPackageResponse, ApiError> {
+    validate_create_client_config_package_request(&request)?;
+    let package =
+        create_client_config_package_and_load_view(state, headers, current_user_id, request)
+            .await?;
+    Ok(create_client_config_package_response(package))
+}
+
+fn validate_create_client_config_package_request(
+    request: &CreateClientConfigPackageRequest,
+) -> std::result::Result<(), ApiError> {
+    validate_required("client_id", &request.client_id)?;
+    validate_required("v3_base_url", &request.v3_base_url)
+}
+
+fn create_client_config_package_response(
+    package: ClientConfigPackageView,
+) -> CreateClientConfigPackageResponse {
+    CreateClientConfigPackageResponse { package }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
@@ -631,5 +657,25 @@ mod tests {
         );
         assert!(client_config_package_string_vec(Some(&json!("dataset-1"))).is_empty());
         assert!(client_config_package_string_vec(None).is_empty());
+    }
+
+    #[test]
+    fn client_config_package_support_keeps_create_required_validation() {
+        validate_create_client_config_package_request(&request())
+            .expect("default request should pass required validation");
+
+        let mut missing_client = request();
+        missing_client.client_id = "   ".to_string();
+        let client_error = validate_create_client_config_package_request(&missing_client)
+            .expect_err("blank client id should fail");
+        assert_eq!(client_error.payload.code, "validation_error");
+        assert!(client_error.payload.message.contains("client_id"));
+
+        let mut missing_base_url = request();
+        missing_base_url.v3_base_url = "   ".to_string();
+        let base_url_error = validate_create_client_config_package_request(&missing_base_url)
+            .expect_err("blank base url should fail");
+        assert_eq!(base_url_error.payload.code, "validation_error");
+        assert!(base_url_error.payload.message.contains("v3_base_url"));
     }
 }

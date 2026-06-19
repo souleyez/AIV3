@@ -4442,13 +4442,12 @@ async fn create_client_config_package(
     Json(request): Json<CreateClientConfigPackageRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateClientConfigPackageResponse>), ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("client_id", &request.client_id)?;
-    validate_required("v3_base_url", &request.v3_base_url)?;
-    let package =
-        create_client_config_package_and_load_view(&state, &headers, user.id, request).await?;
     Ok((
         StatusCode::CREATED,
-        Json(CreateClientConfigPackageResponse { package }),
+        Json(
+            create_client_config_package_and_load_response(&state, &headers, user.id, request)
+                .await?,
+        ),
     ))
 }
 
@@ -4468,7 +4467,7 @@ async fn list_client_artifacts(
 ) -> std::result::Result<Json<Vec<ClientArtifactView>>, ApiError> {
     require_client_artifact_upload_authorization(&state, &headers).await?;
     Ok(Json(
-        list_client_artifact_views(&state, client_artifacts_list_limit(query.limit)).await?,
+        list_client_artifact_views_for_query_limit(&state, query.limit).await?,
     ))
 }
 
@@ -4509,10 +4508,7 @@ async fn download_client_artifact_file(
     Path((artifact_id, file_index)): Path<(String, i32)>,
 ) -> std::result::Result<Response, ApiError> {
     require_client_artifact_upload_authorization(&state, &headers).await?;
-    validate_required("artifact_id", &artifact_id)?;
-    validate_client_artifact_file_index(file_index)?;
-    let file = load_client_artifact_download_file(&state, &artifact_id, file_index).await?;
-    client_artifact_file_download_response(&file.filename, &file.content_type, file.bytes)
+    client_artifact_download_response_for_file(&state, &artifact_id, file_index).await
 }
 
 async fn preview_client_artifact_html_file(
@@ -4540,19 +4536,16 @@ async fn attach_client_artifact_to_dataset(
     Json(request): Json<AttachClientArtifactToDatasetRequest>,
 ) -> std::result::Result<Json<AttachClientArtifactToDatasetResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("dataset_id", &request.dataset_id)?;
-    let dataset_id = request.dataset_id.trim().to_string();
-    Ok(Json(AttachClientArtifactToDatasetResponse {
-        artifact: attach_client_artifact_ref_and_load_view(
+    Ok(Json(
+        attach_client_artifact_to_dataset_and_load_response(
             &state,
             &headers,
             user.id,
             &artifact_id,
-            "dataset_ids",
-            &dataset_id,
+            request,
         )
         .await?,
-    }))
+    ))
 }
 
 async fn attach_client_artifact_to_asset_library(
@@ -4562,19 +4555,16 @@ async fn attach_client_artifact_to_asset_library(
     Json(request): Json<AttachClientArtifactToAssetLibraryRequest>,
 ) -> std::result::Result<Json<AttachClientArtifactToAssetLibraryResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("asset_library_id", &request.asset_library_id)?;
-    let asset_library_id = request.asset_library_id.trim().to_string();
-    Ok(Json(AttachClientArtifactToAssetLibraryResponse {
-        artifact: attach_client_artifact_ref_and_load_view(
+    Ok(Json(
+        attach_client_artifact_to_asset_library_and_load_response(
             &state,
             &headers,
             user.id,
             &artifact_id,
-            "asset_library_ids",
-            &asset_library_id,
+            request,
         )
         .await?,
-    }))
+    ))
 }
 
 async fn publish_client_artifact(
@@ -4583,17 +4573,15 @@ async fn publish_client_artifact(
     Path(artifact_id): Path<String>,
 ) -> std::result::Result<Json<PublishClientArtifactResponse>, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("artifact_id", &artifact_id)?;
-    let artifact_id = artifact_id.trim().to_string();
-    Ok(Json(PublishClientArtifactResponse {
-        artifact: publish_client_artifact_private_and_load_view(
+    Ok(Json(
+        publish_client_artifact_private_and_load_response(
             &state,
             &artifact_id,
             user.id,
             Utc::now(),
         )
         .await?,
-    }))
+    ))
 }
 
 async fn publish_client_artifact_public_html(

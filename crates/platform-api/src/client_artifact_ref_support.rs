@@ -1,12 +1,16 @@
 use axum::http::HeaderMap;
-use contracts::ClientArtifactView;
+use contracts::{
+    AttachClientArtifactToAssetLibraryRequest, AttachClientArtifactToAssetLibraryResponse,
+    AttachClientArtifactToDatasetRequest, AttachClientArtifactToDatasetResponse,
+    ClientArtifactView,
+};
 use domain_model::UserId;
 
 use crate::{
     client_artifact_contract_support::validate_v3_client_ref_list,
     client_artifact_error_support::client_artifact_not_found_error,
     client_artifact_scope_support::validate_v3_client_scope_refs,
-    client_artifact_view_support::load_client_artifact_view, ApiError, AppState,
+    client_artifact_view_support::load_client_artifact_view, validate_required, ApiError, AppState,
 };
 
 pub(crate) fn client_artifact_ref_update_sql(
@@ -94,6 +98,57 @@ pub(crate) async fn attach_client_artifact_ref_and_load_view(
     load_client_artifact_view(state, artifact_id).await
 }
 
+pub(crate) async fn attach_client_artifact_to_dataset_and_load_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: UserId,
+    artifact_id: &str,
+    request: AttachClientArtifactToDatasetRequest,
+) -> std::result::Result<AttachClientArtifactToDatasetResponse, ApiError> {
+    let dataset_id = client_artifact_required_ref_value("dataset_id", &request.dataset_id)?;
+    Ok(AttachClientArtifactToDatasetResponse {
+        artifact: attach_client_artifact_ref_and_load_view(
+            state,
+            headers,
+            current_user_id,
+            artifact_id,
+            "dataset_ids",
+            &dataset_id,
+        )
+        .await?,
+    })
+}
+
+pub(crate) async fn attach_client_artifact_to_asset_library_and_load_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: UserId,
+    artifact_id: &str,
+    request: AttachClientArtifactToAssetLibraryRequest,
+) -> std::result::Result<AttachClientArtifactToAssetLibraryResponse, ApiError> {
+    let asset_library_id =
+        client_artifact_required_ref_value("asset_library_id", &request.asset_library_id)?;
+    Ok(AttachClientArtifactToAssetLibraryResponse {
+        artifact: attach_client_artifact_ref_and_load_view(
+            state,
+            headers,
+            current_user_id,
+            artifact_id,
+            "asset_library_ids",
+            &asset_library_id,
+        )
+        .await?,
+    })
+}
+
+fn client_artifact_required_ref_value(
+    field: &'static str,
+    value: &str,
+) -> std::result::Result<String, ApiError> {
+    validate_required(field, value)?;
+    Ok(value.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +200,28 @@ mod tests {
 
         assert!(dataset_ids.is_empty());
         assert_eq!(asset_library_ids, vec!["asset-1".to_string()]);
+    }
+
+    #[test]
+    fn client_artifact_ref_support_trims_required_ref_values() {
+        assert_eq!(
+            client_artifact_required_ref_value("dataset_id", " dataset-1 ")
+                .expect("dataset id should be accepted"),
+            "dataset-1"
+        );
+        assert_eq!(
+            client_artifact_required_ref_value("asset_library_id", " asset-1 ")
+                .expect("asset library id should be accepted"),
+            "asset-1"
+        );
+    }
+
+    #[test]
+    fn client_artifact_ref_support_rejects_blank_required_ref_values() {
+        let error = client_artifact_required_ref_value("dataset_id", "   ")
+            .expect_err("blank dataset id should fail");
+
+        assert_eq!(error.payload.code, "validation_error");
+        assert!(error.payload.message.contains("dataset_id"));
     }
 }

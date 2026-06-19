@@ -20326,6 +20326,106 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed during 8-server deployment.
 
+## 2026-06-19 P5 Client Artifact Attach Response Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact attach response orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/client_artifact_ref_support.rs`;
+  - added `attach_client_artifact_to_dataset_and_load_response` and `attach_client_artifact_to_asset_library_and_load_response`;
+  - moved target ref required validation, trim, shared ref-scope validation, append, final view reload, and response construction out of `attach_client_artifact_to_dataset` and `attach_client_artifact_to_asset_library`;
+  - kept the routes responsible for V3 user session auth, path `artifact_id` forwarding, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_ref_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 53/53 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Client Artifact Download Response Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact file download response orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - added `client_artifact_download_response_for_file` for artifact id validation, file index validation, file loading, and download response construction;
+  - kept `download_client_artifact_file` responsible for upload/session authorization, path parameter forwarding, and `Response` return only;
+  - preserved download headers, file storage loading path, file index validation, and error codes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 54/54 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Client Artifact List Query Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact list query limit handling out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/client_artifact_view_support.rs`;
+  - added `list_client_artifact_views_for_query_limit` for applying the existing query limit default/bounds before listing artifact views;
+  - kept `list_client_artifacts` responsible for upload/session authorization, query parameter forwarding, and `Json` response wrapping only;
+  - preserved default limit, limit clamp range, ordering, response fields, and error behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 55/55 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Client Config Package Create Response Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client config package create response orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/client_config_package_support.rs`;
+  - added `create_client_config_package_and_load_response` for required-field validation, package creation/loading, and `CreateClientConfigPackageResponse` construction;
+  - kept `create_client_config_package` responsible for V3 user session auth and `201 Created` response wrapping only;
+  - preserved `client_id` and `v3_base_url` required validation order, payload construction, Codex control defaults/validation, scope validation, response fields, and error codes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 55/55 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Client Artifact Private Publish Response Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact private publish response orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - added `publish_client_artifact_private_and_load_response` for artifact id validation/trim, private publish view loading, and `PublishClientArtifactResponse` construction;
+  - kept `publish_client_artifact` responsible for V3 user session auth, `Utc::now()` timestamp generation, and `Json` response wrapping only;
+  - preserved private publish manifest marker, owner check, status update, response fields, and error codes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 55/55 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:

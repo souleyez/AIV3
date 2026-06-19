@@ -80,6 +80,13 @@ pub(crate) async fn list_client_artifact_views(
     Ok(artifacts)
 }
 
+pub(crate) async fn list_client_artifact_views_for_query_limit(
+    state: &AppState,
+    limit: Option<i64>,
+) -> std::result::Result<Vec<ClientArtifactView>, ApiError> {
+    list_client_artifact_views(state, client_artifacts_list_limit(limit)).await
+}
+
 pub(crate) async fn load_client_artifact_download_file(
     state: &AppState,
     artifact_id: &str,
@@ -317,5 +324,16 @@ mod tests {
         assert_eq!(client_artifacts_list_limit(Some(0)), 1);
         assert_eq!(client_artifacts_list_limit(Some(5)), 5);
         assert_eq!(client_artifacts_list_limit(Some(500)), 100);
+    }
+
+    #[test]
+    fn client_artifact_view_support_keeps_query_limit_bounds() {
+        let limits = [None, Some(-1), Some(1), Some(100), Some(101)];
+        let effective = limits
+            .into_iter()
+            .map(client_artifacts_list_limit)
+            .collect::<Vec<_>>();
+
+        assert_eq!(effective, vec![50, 1, 1, 100, 100]);
     }
 }

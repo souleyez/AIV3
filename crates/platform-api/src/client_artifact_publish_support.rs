@@ -3,7 +3,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use contracts::{
     ClientArtifactFileRecordView, ClientArtifactView, HtmlArtifactDataRefView,
     HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView,
+    HtmlArtifactProvenanceView, PublishClientArtifactResponse,
 };
 use domain_model::UserId;
 use serde_json::{json, Value};
@@ -16,14 +16,14 @@ use crate::{
         read_client_artifact_file_storage, ClientArtifactFileStorageRecord,
     },
     client_artifact_view_support::{
-        load_client_artifact_preview_file, load_client_artifact_public_html_candidate_file,
-        load_client_artifact_public_html_record, load_client_artifact_publish_record,
-        load_client_artifact_view,
+        load_client_artifact_download_file, load_client_artifact_preview_file,
+        load_client_artifact_public_html_candidate_file, load_client_artifact_public_html_record,
+        load_client_artifact_publish_record, load_client_artifact_view,
     },
     external_channel_generated_artifact_public_url, external_channel_generated_artifact_root,
     html_artifact_summary_support::html_artifact_serialized_variant,
     resource_access::ensure_owner_managed_resource,
-    ApiError, AppState,
+    validate_client_artifact_file_index, validate_required, ApiError, AppState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,6 +276,24 @@ pub(crate) fn client_artifact_file_download_response(
         })
 }
 
+pub(crate) async fn client_artifact_download_response_for_file(
+    state: &AppState,
+    artifact_id: &str,
+    file_index: i32,
+) -> std::result::Result<Response<axum::body::Body>, ApiError> {
+    let artifact_id = client_artifact_required_artifact_id(artifact_id)?;
+    validate_client_artifact_file_index(file_index)?;
+    let file = load_client_artifact_download_file(state, &artifact_id, file_index).await?;
+    client_artifact_file_download_response(&file.filename, &file.content_type, file.bytes)
+}
+
+fn client_artifact_required_artifact_id(
+    artifact_id: &str,
+) -> std::result::Result<String, ApiError> {
+    validate_required("artifact_id", artifact_id)?;
+    Ok(artifact_id.trim().to_string())
+}
+
 pub(crate) fn client_artifact_html_preview_response(
     title: &str,
     filename: &str,
@@ -493,6 +511,24 @@ pub(crate) async fn publish_client_artifact_private_and_load_view(
     )
     .await?;
     load_client_artifact_view(state, artifact_id).await
+}
+
+pub(crate) async fn publish_client_artifact_private_and_load_response(
+    state: &AppState,
+    artifact_id: &str,
+    current_user_id: UserId,
+    published_at: DateTime<Utc>,
+) -> std::result::Result<PublishClientArtifactResponse, ApiError> {
+    let artifact_id = client_artifact_required_artifact_id(artifact_id)?;
+    Ok(PublishClientArtifactResponse {
+        artifact: publish_client_artifact_private_and_load_view(
+            state,
+            &artifact_id,
+            current_user_id,
+            published_at,
+        )
+        .await?,
+    })
 }
 
 pub(crate) async fn publish_client_artifact_public_html_and_load_view(
@@ -1137,6 +1173,24 @@ mod tests {
             "no-store"
         );
         assert_eq!(response.headers().get(header::CONTENT_LENGTH).unwrap(), "8");
+    }
+
+    #[test]
+    fn client_artifact_publish_support_keeps_download_route_validation() {
+        assert_eq!(
+            client_artifact_required_artifact_id(" v3ca_1 ")
+                .expect("artifact id should be required"),
+            "v3ca_1"
+        );
+        validate_client_artifact_file_index(0).expect("zero file index should be valid");
+
+        let missing_artifact_id =
+            client_artifact_required_artifact_id("   ").expect_err("blank artifact id should fail");
+        assert_eq!(missing_artifact_id.payload.code, "validation_error");
+
+        let bad_index =
+            validate_client_artifact_file_index(-1).expect_err("negative file index should fail");
+        assert_eq!(bad_index.payload.code, "invalid_client_artifact_file_index");
     }
 
     #[test]
