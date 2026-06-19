@@ -1,13 +1,31 @@
-use contracts::CreateAssetLibraryRequest;
-use storage::NewAssetLibrary;
+use contracts::{CreateAssetLibraryRequest, CreateAssetLibraryResponse};
+use storage::{AssetLibraryRecord, NewAssetLibrary};
 
 use crate::{
     asset_library_validation_support::{
         normalize_asset_library_metadata, normalize_asset_library_visibility,
     },
+    asset_library_view_support::asset_library_view,
     text_normalization::trim_optional,
-    ApiError,
+    validate_required, ApiError, AppState,
 };
+
+pub(crate) async fn create_asset_library_and_load_response(
+    state: &AppState,
+    request: CreateAssetLibraryRequest,
+) -> std::result::Result<CreateAssetLibraryResponse, ApiError> {
+    validate_create_asset_library_request(&request)?;
+    let new_asset_library = new_asset_library_from_request(request)?;
+
+    let asset_library = state
+        .storage
+        .asset_libraries()
+        .create(state.tenant_id, new_asset_library)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(create_asset_library_response(asset_library))
+}
 
 pub(crate) fn new_asset_library_from_request(
     request: CreateAssetLibraryRequest,
@@ -27,11 +45,36 @@ pub(crate) fn new_asset_library_from_request(
     })
 }
 
+fn validate_create_asset_library_request(
+    request: &CreateAssetLibraryRequest,
+) -> std::result::Result<(), ApiError> {
+    validate_required("name", &request.name)
+}
+
+fn create_asset_library_response(asset_library: AssetLibraryRecord) -> CreateAssetLibraryResponse {
+    CreateAssetLibraryResponse {
+        asset_library: asset_library_view(asset_library),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
+    use domain_model::TenantId;
     use serde_json::{json, Value};
+    use uuid::Uuid;
 
     use super::*;
+
+    fn timestamp() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0)
+            .single()
+            .expect("valid timestamp")
+    }
+
+    fn tenant_id() -> TenantId {
+        TenantId(Uuid::from_u128(1))
+    }
 
     fn request() -> CreateAssetLibraryRequest {
         CreateAssetLibraryRequest {
@@ -91,5 +134,42 @@ mod tests {
             new_asset_library_from_request(request).expect_err("non-object metadata should fail");
 
         assert_eq!(error.payload.code, "invalid_asset_library_metadata");
+    }
+
+    #[test]
+    fn asset_library_create_support_builds_response_view() {
+        let id = Uuid::from_u128(2);
+        let response = create_asset_library_response(AssetLibraryRecord {
+            id,
+            tenant_id: tenant_id(),
+            external_id: Some("fashion-library".to_string()),
+            name: "服装设计资产库".to_string(),
+            domain: "fashion".to_string(),
+            description: Some("图库".to_string()),
+            visibility: "private".to_string(),
+            metadata: json!({"owner": "design"}),
+            dataset_count: 0,
+            created_at: timestamp(),
+            updated_at: timestamp(),
+        });
+
+        assert_eq!(response.asset_library.id, id.to_string());
+        assert_eq!(
+            response.asset_library.external_id.as_deref(),
+            Some("fashion-library")
+        );
+        assert_eq!(response.asset_library.name, "服装设计资产库");
+        assert_eq!(response.asset_library.metadata["owner"], "design");
+    }
+
+    #[test]
+    fn asset_library_create_support_keeps_name_required_validation() {
+        let mut request = request();
+        request.name = "   ".to_string();
+
+        let error =
+            validate_create_asset_library_request(&request).expect_err("blank name should fail");
+
+        assert_eq!(error.payload.code, "validation_error");
     }
 }

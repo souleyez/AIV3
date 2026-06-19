@@ -3,8 +3,11 @@
 mod basic_view_support;
 mod client_artifact_create_support;
 
+use asset_library_asset_supply_support::*;
+use asset_library_auth_support::*;
 use asset_library_create_support::*;
 use asset_library_list_support::*;
+use asset_library_load_support::*;
 use asset_library_membership_support::*;
 use asset_library_scope_summary_support::*;
 use asset_library_validation_support::*;
@@ -43,22 +46,22 @@ use contracts::{
     AppendAssistantRunEventResponse, AppendChatSessionTurnRequest, AppendChatSessionTurnResponse,
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
-    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssetItemView,
+    ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
     AssetLibraryDatasetMembershipResponse, AssetLibraryScopeSummaryResponse,
-    AssetProfileSupplyHintView, AssistantRunDetailView, AssistantRunExecutorTransportView,
-    AssistantRunMessageView, AttachClientArtifactToAssetLibraryRequest,
-    AttachClientArtifactToAssetLibraryResponse, AttachClientArtifactToDatasetRequest,
-    AttachClientArtifactToDatasetResponse, AuthAuditEventView, AuthSessionResponse,
-    BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
-    ClaimLocalDataResponse, ClientArtifactView, ClientConfigPackageView,
-    CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
-    CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
-    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
-    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
-    ConversationMemoryItemView, CreateAssetLibraryRequest, CreateAssetLibraryResponse,
-    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateClientArtifactResponse, CreateClientConfigPackageRequest,
+    AssistantRunDetailView, AssistantRunExecutorTransportView, AssistantRunMessageView,
+    AttachClientArtifactToAssetLibraryRequest, AttachClientArtifactToAssetLibraryResponse,
+    AttachClientArtifactToDatasetRequest, AttachClientArtifactToDatasetResponse,
+    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
+    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, ClientArtifactView,
+    ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
+    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
+    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
+    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
+    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
+    CreateAssetLibraryRequest, CreateAssetLibraryResponse, CreateAssistantRunRequest,
+    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
+    CreateClientArtifactResponse, CreateClientConfigPackageRequest,
     CreateClientConfigPackageResponse, CreateConversationMemoryItemRequest,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
     CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
@@ -170,13 +173,12 @@ use std::{
 #[cfg(test)]
 use storage::NewModelGatewayProfile;
 use storage::{
-    AssetLibraryRecord, LexicalRetrievalQuery, ModelGatewayProfile,
-    ModelGatewayProfileUsageSummary, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
-    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
-    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
-    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
-    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
-    NewWorkflowTask, PgStorage,
+    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssistantRun,
+    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
+    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
+    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 #[cfg(test)]
 use storage::{
@@ -187,8 +189,11 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod asset_library_asset_supply_support;
+mod asset_library_auth_support;
 mod asset_library_create_support;
 mod asset_library_list_support;
+mod asset_library_load_support;
 mod asset_library_membership_support;
 mod asset_library_scope_summary_support;
 mod asset_library_scope_support;
@@ -4411,19 +4416,6 @@ async fn create_dataset(
     ))
 }
 
-async fn require_asset_library_user_session(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> std::result::Result<User, ApiError> {
-    let Some((user, _session)) = current_auth_session(state, headers).await? else {
-        return Err(ApiError::unauthorized(
-            "auth_session_required",
-            "请先登录主系统后再管理企业资产库".to_string(),
-        ));
-    };
-    Ok(user)
-}
-
 async fn list_asset_libraries(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4438,21 +4430,9 @@ async fn create_asset_library(
     Json(request): Json<CreateAssetLibraryRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateAssetLibraryResponse>), ApiError> {
     let _user = require_asset_library_user_session(&state, &headers).await?;
-    validate_required("name", &request.name)?;
-    let new_asset_library = new_asset_library_from_request(request)?;
-
-    let asset_library = state
-        .storage
-        .asset_libraries()
-        .create(state.tenant_id, new_asset_library)
-        .await
-        .map_err(ApiError::from_storage)?;
-
     Ok((
         StatusCode::CREATED,
-        Json(CreateAssetLibraryResponse {
-            asset_library: asset_library_view(asset_library),
-        }),
+        Json(create_asset_library_and_load_response(&state, request).await?),
     ))
 }
 
@@ -4760,83 +4740,6 @@ async fn get_asset_library_scope_summary(
             authorized_dataset_count: authorized_dataset_ids.len(),
         },
     )))
-}
-
-async fn load_asset_library_authorized_asset_supply(
-    state: &AppState,
-    asset_library_id: Uuid,
-    authorized_dataset_ids: &BTreeSet<DatasetId>,
-) -> std::result::Result<(Vec<AssetItemView>, Vec<AssetProfileSupplyHintView>), ApiError> {
-    if authorized_dataset_ids.is_empty() {
-        return Ok((vec![], vec![]));
-    }
-
-    let mut asset_views = Vec::new();
-    let mut profile_inputs = Vec::new();
-    let direct_assets = state
-        .storage
-        .asset_items()
-        .list_by_asset_library(state.tenant_id, asset_library_id, 100)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let dataset_assets = state
-        .storage
-        .asset_items()
-        .list_by_dataset_ids(
-            state.tenant_id,
-            &authorized_dataset_ids.iter().copied().collect::<Vec<_>>(),
-            100,
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let mut assets_by_id = BTreeMap::new();
-    for asset in direct_assets.into_iter().chain(dataset_assets.into_iter()) {
-        assets_by_id.entry(asset.id).or_insert(asset);
-    }
-
-    for asset in assets_by_id.into_values().take(100) {
-        let dataset_memberships = state
-            .storage
-            .asset_items()
-            .list_dataset_memberships(state.tenant_id, asset.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        if !dataset_memberships
-            .iter()
-            .any(|membership| authorized_dataset_ids.contains(&membership.dataset_id))
-        {
-            continue;
-        }
-
-        let profiles = state
-            .storage
-            .asset_items()
-            .list_profiles(state.tenant_id, asset.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        profile_inputs.extend(asset_profile_supply_inputs(&asset, &profiles));
-        asset_views.push(asset_item_view(asset));
-    }
-    let asset_profile_hints =
-        asset_profile_supply_support::build_asset_profile_supply_hints(&profile_inputs, 100)
-            .into_iter()
-            .map(asset_profile_supply_hint_view)
-            .collect::<Vec<_>>();
-
-    Ok((asset_views, asset_profile_hints))
-}
-
-pub(crate) async fn load_asset_library(
-    state: &AppState,
-    asset_library_id: Uuid,
-) -> std::result::Result<AssetLibraryRecord, ApiError> {
-    state
-        .storage
-        .asset_libraries()
-        .get_by_id(state.tenant_id, asset_library_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| asset_library_not_found_error(asset_library_id))
 }
 
 async fn update_dataset(

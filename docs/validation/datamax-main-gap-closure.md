@@ -20222,6 +20222,88 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production data mutation, or 120 server change was performed.
 
+## 2026-06-19 P5 Asset Library Authorized Asset Supply Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library authorized asset supply loading out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_asset_supply_support.rs`;
+  - moved `load_asset_library_authorized_asset_supply` into the new module;
+  - preserved direct asset and dataset asset lookup limits, asset id de-duplication, dataset membership authorization filtering, profile loading, and compact profile hint conversion;
+  - kept `get_asset_library_scope_summary` responsible for auth, path parsing, dataset scope calculation, and response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_asset_supply_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 24/24 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Loader Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move shared asset library loading out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_load_support.rs`;
+  - moved `load_asset_library` into the new module while preserving the internal `crate::load_asset_library` binding for existing support modules;
+  - kept storage get, storage error mapping, and missing record mapping to `asset_library_not_found` unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_load_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library_asset_supply_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Auth Session Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move shared asset library management session gate out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_auth_support.rs`;
+  - moved `require_asset_library_user_session` into the new module while preserving the existing handler call name;
+  - kept `current_auth_session` use, user return semantics, missing-session code `auth_session_required`, and the existing Chinese login-required prompt unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_auth_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library_load_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library_asset_supply_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 27/27 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Create Orchestration Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library create orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/asset_library_create_support.rs`;
+  - added `create_asset_library_and_load_response` for name validation, storage request construction, asset library create, storage error mapping, and `CreateAssetLibraryResponse` construction;
+  - kept the route responsible for V3 user session auth and `201 Created` response wrapping only;
+  - preserved name validation order, default domain and visibility behavior, metadata normalization, and response fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_create_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api asset_library_auth_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 29/29 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
