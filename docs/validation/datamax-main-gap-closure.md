@@ -2,6 +2,87 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Chat Session Report Entry Manifest Writer Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep service-handoff/report-entry manifest formatting and writing rules in `manifest_service_handoff_support`.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - added `ChatSessionReportEntryManifestUpdate`;
+  - added `write_chat_session_report_entry_manifest`;
+  - removed the `lib.rs`-local manifest object mutation helper;
+  - kept the `PreparedChatSessionReportEntry` wrapper, report-entry planning, route handling, storage writes, and response assembly in `lib.rs`;
+  - preserved report-entry JSON fields, state formatting, resolved action formatting, DateTime JSON serialization, confirmed report plan id serialization, and `chat_session_manifest_invalid` error behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - first `cargo test -q -p platform-api manifest_service_handoff_support --lib` failed because the new test expected `+00:00` while serde JSON serializes `DateTime<Utc>` with `Z`; test expectation was corrected to compare against `json!(DateTime<Utc>)`;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api write_chat_session_report_entry_persists_confirmed_state_fields --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api write_chat_session_report_entry_persists_decline_history_fields --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api report_entry_route_enter_report_service_creates_plan_and_execution --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Manifest Service Handoff Builder Finalizer Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep service handoff parse, workflow-context extraction, confirmed report-service handoff construction, and report-plan finalization in the same support module.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved confirmed report-entry service handoff construction out of `crates/platform-api/src/lib.rs`;
+  - moved `finalize_report_service_handoff` out of `lib.rs`;
+  - kept chat session report-entry planning, report plan/workflow creation, session manifest persistence, storage access, and response assembly in `lib.rs`;
+  - preserved source, service lane, report-entry state, resolved action, requested/resolved timestamps, suggested title/objective, existing confirmed report plan id, unconfirmed state behavior, and all public view shapes.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api report_entry_route_enter_report_service_creates_plan_and_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api to_chat_message_view_exposes_confirmed_report_service_handoff --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api derive_report_render_output_model_facing_summary_exposes_service_handoff_signals --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Manifest Service Handoff Workflow Context Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep service handoff manifest parsing and workflow execution context extraction in the same support module.
+- Code change:
+  - extended `crates/platform-api/src/manifest_service_handoff_support.rs`;
+  - moved `workflow_execution_context_service_handoff` out of `crates/platform-api/src/lib.rs`;
+  - kept `load_report_plan_service_handoff` in `lib.rs` because it owns storage access and latest report-plan workflow lookup;
+  - kept existing call sites unchanged through the existing `manifest_service_handoff_support::*` import;
+  - preserved `service_handoff` context key lookup, required enum parsing, optional timestamp/id parsing, missing/invalid handoff returning `None`, and all public view shapes.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api to_chat_message_view_exposes_confirmed_report_service_handoff --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api derive_report_render_output_model_facing_summary_exposes_service_handoff_signals --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Workflow Initial Event Helpers GitHub And 8-server Release
 
 - Scope:

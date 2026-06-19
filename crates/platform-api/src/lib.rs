@@ -1787,16 +1787,6 @@ async fn load_report_plan_service_handoff(
         .and_then(workflow_execution_context_service_handoff))
 }
 
-fn workflow_execution_context_service_handoff(
-    execution: &WorkflowExecution,
-) -> Option<contracts::ManifestServiceHandoffView> {
-    execution
-        .context
-        .as_object()
-        .and_then(|context| context.get("service_handoff"))
-        .and_then(parse_manifest_service_handoff)
-}
-
 async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: "platform-api".to_string(),
@@ -54425,7 +54415,12 @@ async fn apply_chat_session_report_entry_update_with_state(
             })
         }
         ChatSessionReportEntryUpdatePlan::EnterReportService(entry) => {
-            let report_service_handoff = confirmed_report_entry_service_handoff(&entry, now);
+            let report_service_handoff = confirmed_report_entry_service_handoff(
+                entry.requested_at,
+                now,
+                &entry.title,
+                &entry.objective,
+            );
             let (plan, execution) = create_report_plan_and_execution(
                 state,
                 session.dataset_id,
@@ -59040,17 +59035,6 @@ fn ensure_chat_session_report_entry_not_confirmed(
     Ok(())
 }
 
-fn chat_session_manifest_object_mut(
-    session_manifest: &mut Value,
-) -> std::result::Result<&mut Map<String, Value>, ApiError> {
-    session_manifest.as_object_mut().ok_or_else(|| {
-        ApiError::internal(
-            "chat_session_manifest_invalid",
-            "chat session manifest must be a JSON object".to_string(),
-        )
-    })
-}
-
 fn write_chat_session_report_entry(
     session_manifest: &mut Value,
     state: contracts::ModelFacingReportEntryStateView,
@@ -59059,50 +59043,18 @@ fn write_chat_session_report_entry(
     resolved_action: Option<contracts::ChatSessionReportEntryResolutionView>,
     confirmed_report_plan_id: Option<ReportPlanId>,
 ) -> std::result::Result<(), ApiError> {
-    chat_session_manifest_object_mut(session_manifest)?.insert(
-        "report_entry".to_string(),
-        json!({
-            "state": format_model_facing_report_entry_state(&state),
-            "requested_at": entry.requested_at,
-            "resolved_at": resolved_at,
-            "resolved_action": resolved_action.as_ref().map(format_chat_session_report_entry_resolution),
-            "suggested_title": entry.title,
-            "suggested_objective": entry.objective,
-            "confirmed_report_plan_id": confirmed_report_plan_id,
-        }),
-    );
-    Ok(())
-}
-
-fn confirmed_report_entry_service_handoff(
-    entry: &PreparedChatSessionReportEntry,
-    resolved_at: DateTime<Utc>,
-) -> contracts::ManifestServiceHandoffView {
-    contracts::ManifestServiceHandoffView {
-        source: contracts::ManifestServiceHandoffSourceView::ChatSessionReportEntry,
-        service_lane: contracts::ModelFacingServiceLaneView::ReportService,
-        report_entry_state: contracts::ModelFacingReportEntryStateView::Confirmed,
-        requested_at: Some(entry.requested_at),
-        resolved_at: Some(resolved_at),
-        resolved_action: Some(contracts::ChatSessionReportEntryResolutionView::EnterReportService),
-        suggested_title: Some(entry.title.clone()),
-        suggested_objective: Some(entry.objective.clone()),
-        confirmed_report_plan_id: None,
-    }
-}
-
-fn finalize_report_service_handoff(
-    service_handoff: Option<contracts::ManifestServiceHandoffView>,
-    report_plan_id: ReportPlanId,
-) -> Option<contracts::ManifestServiceHandoffView> {
-    service_handoff.map(|mut handoff| {
-        if handoff.confirmed_report_plan_id.is_none()
-            && handoff.report_entry_state == contracts::ModelFacingReportEntryStateView::Confirmed
-        {
-            handoff.confirmed_report_plan_id = Some(report_plan_id);
-        }
-        handoff
-    })
+    write_chat_session_report_entry_manifest(
+        session_manifest,
+        ChatSessionReportEntryManifestUpdate {
+            state: &state,
+            requested_at: entry.requested_at,
+            resolved_at,
+            resolved_action: resolved_action.as_ref(),
+            suggested_title: &entry.title,
+            suggested_objective: &entry.objective,
+            confirmed_report_plan_id,
+        },
+    )
 }
 
 fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> Value {
