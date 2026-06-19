@@ -2,6 +2,42 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow Initial Runtime, Execution Assembly, Shared Context, And Report Context Helpers Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move repeated workflow definition lookup, workflow execution id generation, `initial_state` creation, final `WorkflowExecution` field assembly, shared prompt/memory-directory context writes, and report default context writes out of current workflow initial execution builders.
+- Code change:
+  - extended `crates/platform-api/src/workflow_initial_context_support.rs`;
+  - added `WorkflowInitialRuntimeParts` and `workflow_initial_runtime_parts`;
+  - added `workflow_initial_execution_from_parts`;
+  - added `insert_prompt_context` and `insert_optional_memory_directory_context`;
+  - added `insert_report_default_context`;
+  - updated current workflow initial execution builders for report plan, external source sync, external action dispatch, memory directory, dataset output, chat session, report render, static-page image generation, and static-page render to use the helper;
+  - replaced duplicated dataset output and chat session prompt trim and memory-directory id/version context insertion with shared helpers;
+  - replaced duplicated report plan and report render `report_time_range_contract` and `report_default_controls` context insertion with a shared helper;
+  - kept business-specific context fields, dataset/report scope selection, storage writes, queue dispatch, and route responses in `lib.rs`;
+  - preserved missing-definition error code and message shape, including the external action dispatch path that receives an existing `now` timestamp from its caller;
+  - preserved tenant/dataset/report scope, request workflow kind, `attempt=0`, context object shape, `created_at`/`updated_at`, version, stage, status, prompt trim, absent-memory omission, memory-directory id/version semantics, report time range contract passthrough, and report default controls order.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api request_memory_directory_refresh_creates_execution_for_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api create_dataset_output_binds_query_ranked_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_source_sync_endpoint_enqueues_workflow_and_records_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_render_creates_execution_for_planned_report --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api request_report_plan_continue_creates_execution_for_existing_draft_plan --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Workflow View And Context Helpers GitHub And 8-server Release
 
 - Scope:

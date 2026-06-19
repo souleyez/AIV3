@@ -56154,50 +56154,24 @@ fn build_initial_report_plan_execution(
     plan: &ReportPlan,
     service_handoff: Option<&contracts::ManifestServiceHandoffView>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::ReportPlan)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "report_plan workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
-    context.insert(
-        "report_time_range_contract".to_string(),
-        build_static_page_report_time_range_contract(),
-    );
-    context.insert(
-        "report_default_controls".to_string(),
-        json!([
-            "time_range",
-            "primary_partition",
-            "manual_refresh",
-            "auto_refresh"
-        ]),
-    );
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::ReportPlan,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
+    insert_report_default_context(&mut context, build_static_page_report_time_range_contract());
     if let Some(service_handoff) = service_handoff {
         context.insert("service_handoff".to_string(), json!(service_handoff));
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(plan.dataset_id),
-        report_plan_id: Some(plan.id),
-        kind: WorkflowKind::ReportPlan,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        Some(plan.dataset_id),
+        Some(plan.id),
+        context,
+    ))
 }
 
 fn build_initial_external_source_sync_execution(
@@ -56210,19 +56184,12 @@ fn build_initial_external_source_sync_execution(
     checkpoint: &Value,
     connector_context: &Value,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::ExternalSourceSync)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "external_source_sync workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::ExternalSourceSync,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert(
         "source_id".to_string(),
         Value::String(source.source_id.clone()),
@@ -56270,20 +56237,13 @@ fn build_initial_external_source_sync_execution(
         );
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
         dataset_id,
-        report_plan_id: None,
-        kind: WorkflowKind::ExternalSourceSync,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+        None,
+        context,
+    ))
 }
 
 fn build_initial_external_action_dispatch_execution(
@@ -56292,18 +56252,12 @@ fn build_initial_external_action_dispatch_execution(
     action_id: &str,
     now: DateTime<Utc>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::ExternalActionDispatch)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "external_action_dispatch workflow definition is not registered".to_string(),
-            )
-        })?;
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::ExternalActionDispatch,
+        now,
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert(
         "channel_connection_id".to_string(),
         Value::String(connection_id.to_string()),
@@ -56317,20 +56271,13 @@ fn build_initial_external_action_dispatch_execution(
         Value::String("external_integrations_panel".to_string()),
     );
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: None,
-        report_plan_id: None,
-        kind: WorkflowKind::ExternalActionDispatch,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        None,
+        None,
+        context,
+    ))
 }
 
 fn build_initial_memory_directory_execution(
@@ -56338,19 +56285,12 @@ fn build_initial_memory_directory_execution(
     dataset_id: DatasetId,
     owner_user_id: Option<UserId>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::MemoryDirectory)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "memory_directory workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::MemoryDirectory,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert("include_directory".to_string(), Value::Bool(true));
     if let Some(owner_user_id) = owner_user_id {
         context.insert(
@@ -56359,20 +56299,13 @@ fn build_initial_memory_directory_execution(
         );
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(dataset_id),
-        report_plan_id: None,
-        kind: WorkflowKind::MemoryDirectory,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        Some(dataset_id),
+        None,
+        context,
+    ))
 }
 
 fn build_initial_dataset_output_execution(
@@ -56384,23 +56317,13 @@ fn build_initial_dataset_output_execution(
     memory_directory: Option<&MemoryDirectory>,
     retrieval_evidence_ids: &[domain_model::RetrievalEvidenceId],
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::DatasetOutput)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "dataset_output workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
-    context.insert(
-        "prompt".to_string(),
-        Value::String(prompt.trim().to_string()),
-    );
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::DatasetOutput,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
+    insert_prompt_context(&mut context, prompt);
     if let Some(chat_session_id) = chat_session_id {
         context.insert(
             "chat_session_id".to_string(),
@@ -56413,16 +56336,7 @@ fn build_initial_dataset_output_execution(
             Value::String(owner_user_id.to_string()),
         );
     }
-    if let Some(memory_directory) = memory_directory {
-        context.insert(
-            "memory_directory_id".to_string(),
-            Value::String(memory_directory.id.to_string()),
-        );
-        context.insert(
-            "memory_directory_version_no".to_string(),
-            Value::Number(memory_directory.version_no.into()),
-        );
-    }
+    insert_optional_memory_directory_context(&mut context, memory_directory);
     if !retrieval_evidence_ids.is_empty() {
         context.insert(
             "retrieval_evidence_ids".to_string(),
@@ -56435,20 +56349,13 @@ fn build_initial_dataset_output_execution(
         );
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(dataset_id),
-        report_plan_id: None,
-        kind: WorkflowKind::DatasetOutput,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        Some(dataset_id),
+        None,
+        context,
+    ))
 }
 
 fn build_initial_chat_session_execution(
@@ -56460,19 +56367,12 @@ fn build_initial_chat_session_execution(
     memory_directory: Option<&MemoryDirectory>,
     dataset_output_id: Option<domain_model::DatasetOutputId>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::ChatSession)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "chat_session workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::ChatSession,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert(
         "chat_session_id".to_string(),
         Value::String(chat_session_id.to_string()),
@@ -56484,20 +56384,8 @@ fn build_initial_chat_session_execution(
         "chat_turn_id".to_string(),
         Value::String(Uuid::new_v4().to_string()),
     );
-    context.insert(
-        "prompt".to_string(),
-        Value::String(prompt.trim().to_string()),
-    );
-    if let Some(memory_directory) = memory_directory {
-        context.insert(
-            "memory_directory_id".to_string(),
-            Value::String(memory_directory.id.to_string()),
-        );
-        context.insert(
-            "memory_directory_version_no".to_string(),
-            Value::Number(memory_directory.version_no.into()),
-        );
-    }
+    insert_prompt_context(&mut context, prompt);
+    insert_optional_memory_directory_context(&mut context, memory_directory);
     if let Some(dataset_output_id) = dataset_output_id {
         context.insert(
             "dataset_output_id".to_string(),
@@ -56505,20 +56393,13 @@ fn build_initial_chat_session_execution(
         );
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(dataset_id),
-        report_plan_id: None,
-        kind: WorkflowKind::ChatSession,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        Some(dataset_id),
+        None,
+        context,
+    ))
 }
 
 fn build_initial_report_render_execution(
@@ -56528,32 +56409,13 @@ fn build_initial_report_render_execution(
     surface: PublishedSurface,
     service_handoff: Option<&contracts::ManifestServiceHandoffView>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::ReportRender)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "report_render workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
-    context.insert(
-        "report_time_range_contract".to_string(),
-        build_static_page_report_time_range_contract(),
-    );
-    context.insert(
-        "report_default_controls".to_string(),
-        json!([
-            "time_range",
-            "primary_partition",
-            "manual_refresh",
-            "auto_refresh"
-        ]),
-    );
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::ReportRender,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
+    insert_report_default_context(&mut context, build_static_page_report_time_range_contract());
     context.insert(
         "surface".to_string(),
         Value::String(surface.as_str().to_string()),
@@ -56570,20 +56432,13 @@ fn build_initial_report_render_execution(
         context.insert("service_handoff".to_string(), json!(service_handoff));
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: Some(plan.dataset_id),
-        report_plan_id: Some(plan.id),
-        kind: WorkflowKind::ReportRender,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        Some(plan.dataset_id),
+        Some(plan.id),
+        context,
+    ))
 }
 
 fn build_initial_static_page_image_generation_execution(
@@ -56592,19 +56447,12 @@ fn build_initial_static_page_image_generation_execution(
     job: &StaticPageImageJob,
     prompt: Option<&str>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::StaticPageImageGeneration)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "static_page_image_generation workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::StaticPageImageGeneration,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert(
         "static_page_draft_id".to_string(),
         Value::String(draft.id.to_string()),
@@ -56627,20 +56475,13 @@ fn build_initial_static_page_image_generation_execution(
         context.insert("customer_visible".to_string(), Value::Bool(false));
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: None,
-        report_plan_id: None,
-        kind: WorkflowKind::StaticPageImageGeneration,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        None,
+        None,
+        context,
+    ))
 }
 
 fn build_initial_static_page_render_execution(
@@ -56649,19 +56490,12 @@ fn build_initial_static_page_render_execution(
     render_output: &StaticPageRenderOutput,
     image_job: Option<&StaticPageImageJob>,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
-    let definition = state
-        .workflow_catalog
-        .find_definition(WorkflowKind::StaticPageRender)
-        .ok_or_else(|| {
-            ApiError::internal(
-                "workflow_definition_missing",
-                "static_page_render workflow definition is not registered".to_string(),
-            )
-        })?;
-    let now = Utc::now();
-    let execution_id = WorkflowExecutionId::new();
-    let runtime_state = definition.initial_state(execution_id, now);
-    let mut context = workflow_initial_context_with_retries(&runtime_state);
+    let initial = workflow_initial_runtime_parts(
+        &state.workflow_catalog,
+        WorkflowKind::StaticPageRender,
+        Utc::now(),
+    )?;
+    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
     context.insert(
         "static_page_draft_id".to_string(),
         Value::String(draft.id.to_string()),
@@ -56687,20 +56521,13 @@ fn build_initial_static_page_render_execution(
         }
     }
 
-    Ok(WorkflowExecution {
-        id: execution_id,
-        tenant_id: state.tenant_id,
-        dataset_id: None,
-        report_plan_id: None,
-        kind: WorkflowKind::StaticPageRender,
-        version: runtime_state.version,
-        stage: runtime_state.stage,
-        status: runtime_state.status,
-        attempt: 0,
-        context: Value::Object(context),
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(workflow_initial_execution_from_parts(
+        initial,
+        state.tenant_id,
+        None,
+        None,
+        context,
+    ))
 }
 
 fn assistant_run_dataset_entity_scan_requested(scope: &Value, prompt: &str) -> bool {
