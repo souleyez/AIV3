@@ -20602,6 +20602,36 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
 
+## 2026-06-19 P5 Remaining Artifact Helper Splits 8-Server Verification
+
+- Deployment:
+  - GitHub commit `8f794dc77df9306a4247064926098b0999e33df7` was pushed to `main`;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `ae09ebae5` to `8f794dc77`;
+  - services restarted: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server build and tests:
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api client_artifact --lib`: passed, 58/58 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_library --lib`: passed, 31/31 tests;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api client_config_package_support --lib`: passed, 12/12 tests;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: returned HTTP 200;
+  - `https://v3.elepcloud.com/`: returned HTTP 200;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `8f794dc77`.
+- Runtime log note:
+  - `aiv3-web.service` logged `exit code 143` during the explicit restart stop phase, then immediately started and reported Next.js ready; current service state stayed active;
+  - `aiv3-platform-api.service` startup logs contained existing idempotent schema/index `already exists, skipping` notices only in the checked window.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
