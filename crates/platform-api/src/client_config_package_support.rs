@@ -1,13 +1,130 @@
 use contracts::{
-    CreateClientConfigPackageRequest, V3ClientArtifactUploadConfigView, V3_CLIENT_CONFIG_SCHEMA,
+    ClientConfigPackageView, CreateClientConfigPackageRequest, V3ClientArtifactUploadConfigView,
+    V3CodexControlConfigView, V3_CLIENT_CONFIG_SCHEMA,
 };
+use reqwest::Url;
 use serde_json::{json, Value};
+use sqlx::Row;
+use std::env;
+
+use crate::{
+    client_artifact_error_support::client_config_package_not_found_error, ApiError, AppState,
+};
+
+const DEFAULT_CODEX_CONTROL_BASE_URL: &str = "https://ad.goods-editor.com";
+const CODEX_CONTROL_BASE_URL_ENV: &str = "V3_CODEX_CONTROL_BASE_URL";
+const DEFAULT_CODEX_ACTIVATION_ENDPOINT: &str = "/api/codex/clients/activate";
+const DEFAULT_CODEX_HEARTBEAT_ENDPOINT: &str = "/api/codex/clients/heartbeat";
+const DEFAULT_CODEX_REVOKE_ENDPOINT: &str = "/api/codex/clients/self-revoke";
+const DEFAULT_CODEX_ACTIVATION_TOKEN_ENV: &str = "CODEX_CLIENT_ACTIVATION_TOKEN";
+const DEFAULT_CODEX_SESSION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 pub(crate) fn default_client_artifact_upload_config() -> V3ClientArtifactUploadConfigView {
     V3ClientArtifactUploadConfigView {
         mode: "session_token".to_string(),
         endpoint: "/v1/client-artifacts".to_string(),
     }
+}
+
+fn trim_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn default_codex_control_base_url() -> String {
+    env::var(CODEX_CONTROL_BASE_URL_ENV)
+        .ok()
+        .and_then(|value| trim_optional(Some(value)))
+        .unwrap_or_else(|| DEFAULT_CODEX_CONTROL_BASE_URL.to_string())
+}
+
+pub(crate) fn default_codex_control_config(terminal_id: &str) -> V3CodexControlConfigView {
+    V3CodexControlConfigView {
+        base_url: Some(default_codex_control_base_url()),
+        activation_endpoint: Some(DEFAULT_CODEX_ACTIVATION_ENDPOINT.to_string()),
+        heartbeat_endpoint: Some(DEFAULT_CODEX_HEARTBEAT_ENDPOINT.to_string()),
+        revoke_endpoint: Some(DEFAULT_CODEX_REVOKE_ENDPOINT.to_string()),
+        activation_token_env: Some(DEFAULT_CODEX_ACTIVATION_TOKEN_ENV.to_string()),
+        terminal_id: Some(terminal_id.to_string()),
+        terminal_label: None,
+        session_ttl_seconds: Some(DEFAULT_CODEX_SESSION_TTL_SECONDS),
+    }
+}
+
+pub(crate) fn resolve_codex_control_config(
+    input: Option<V3CodexControlConfigView>,
+    terminal_id: &str,
+) -> V3CodexControlConfigView {
+    let fallback = default_codex_control_config(terminal_id);
+    let input = input.unwrap_or_default();
+    V3CodexControlConfigView {
+        base_url: trim_optional(input.base_url).or(fallback.base_url),
+        activation_endpoint: trim_optional(input.activation_endpoint)
+            .or(fallback.activation_endpoint),
+        heartbeat_endpoint: trim_optional(input.heartbeat_endpoint).or(fallback.heartbeat_endpoint),
+        revoke_endpoint: trim_optional(input.revoke_endpoint).or(fallback.revoke_endpoint),
+        activation_token_env: trim_optional(input.activation_token_env)
+            .or(fallback.activation_token_env),
+        terminal_id: trim_optional(input.terminal_id).or(fallback.terminal_id),
+        terminal_label: trim_optional(input.terminal_label),
+        session_ttl_seconds: input.session_ttl_seconds.or(fallback.session_ttl_seconds),
+    }
+}
+
+pub(crate) fn validate_codex_control_config(
+    config: &V3CodexControlConfigView,
+) -> std::result::Result<(), ApiError> {
+    if let Some(base_url) = config.base_url.as_deref() {
+        let parsed = Url::parse(base_url).map_err(|_| {
+            ApiError::bad_request(
+                "invalid_codex_control_base_url",
+                "codex_control.base_url must be an absolute http(s) URL".to_string(),
+            )
+        })?;
+        if parsed.scheme() != "https" && parsed.scheme() != "http" {
+            return Err(ApiError::bad_request(
+                "invalid_codex_control_base_url",
+                "codex_control.base_url must use http or https".to_string(),
+            ));
+        }
+        if parsed.host_str().unwrap_or_default().is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_codex_control_base_url",
+                "codex_control.base_url must include a host".to_string(),
+            ));
+        }
+    }
+    for (field, value) in [
+        (
+            "codex_control.activation_endpoint",
+            config.activation_endpoint.as_deref(),
+        ),
+        (
+            "codex_control.heartbeat_endpoint",
+            config.heartbeat_endpoint.as_deref(),
+        ),
+        (
+            "codex_control.revoke_endpoint",
+            config.revoke_endpoint.as_deref(),
+        ),
+    ] {
+        if let Some(path) = value {
+            if !path.starts_with('/') {
+                return Err(ApiError::bad_request(
+                    "invalid_codex_control_endpoint",
+                    format!("{field} must be an absolute path"),
+                ));
+            }
+        }
+    }
+    if matches!(config.session_ttl_seconds, Some(value) if value < 0) {
+        return Err(ApiError::bad_request(
+            "invalid_codex_control_session_ttl",
+            "codex_control.session_ttl_seconds must be non-negative".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn client_config_ref_or_default(
@@ -27,6 +144,7 @@ pub(crate) fn build_client_config_package_payload(
     user_ref: &str,
     client_id: &str,
     artifact_upload: V3ClientArtifactUploadConfigView,
+    codex_control: V3CodexControlConfigView,
 ) -> Value {
     let mut payload = json!({
         "schema": V3_CLIENT_CONFIG_SCHEMA,
@@ -38,12 +156,92 @@ pub(crate) fn build_client_config_package_payload(
         "dataset_ids": request.dataset_ids,
         "skill_packs": request.skill_packs,
         "artifact_upload": artifact_upload,
+        "codex_control": codex_control,
         "expires_at": request.expires_at,
     });
     if !request.metadata.is_null() {
         payload["metadata"] = request.metadata.clone();
     }
     payload
+}
+
+pub(crate) fn client_config_package_artifact_upload_from_payload(
+    payload: &Value,
+) -> std::result::Result<V3ClientArtifactUploadConfigView, ApiError> {
+    serde_json::from_value::<V3ClientArtifactUploadConfigView>(
+        payload.get("artifact_upload").cloned().unwrap_or_else(
+            || json!({"mode": "session_token", "endpoint": "/v1/client-artifacts"}),
+        ),
+    )
+    .map_err(|error| ApiError::internal("client_config_package_decode_failed", error.to_string()))
+}
+
+pub(crate) fn client_config_package_codex_control_from_payload(
+    payload: &Value,
+) -> std::result::Result<Option<V3CodexControlConfigView>, ApiError> {
+    let Some(value) = payload.get("codex_control") else {
+        return Ok(None);
+    };
+    serde_json::from_value::<V3CodexControlConfigView>(value.clone())
+        .map(Some)
+        .map_err(|error| {
+            ApiError::internal("client_config_package_decode_failed", error.to_string())
+        })
+}
+
+pub(crate) fn client_config_package_string_vec(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) async fn load_client_config_package_view(
+    state: &AppState,
+    package_id: &str,
+) -> std::result::Result<ClientConfigPackageView, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select package_id, tenant_ref, user_ref, client_id, package_payload, expires_at, created_at
+        from v3_client_config_packages
+        where tenant_id = $1 and package_id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(package_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?
+    .ok_or_else(|| client_config_package_not_found_error(package_id))?;
+    let payload = row.get::<Value, _>("package_payload");
+    let artifact_upload = client_config_package_artifact_upload_from_payload(&payload)?;
+    let codex_control = client_config_package_codex_control_from_payload(&payload)?;
+
+    Ok(ClientConfigPackageView {
+        package_id: row.get("package_id"),
+        tenant_id: row.get("tenant_ref"),
+        user_id: row.get("user_ref"),
+        client_id: row.get("client_id"),
+        v3_base_url: payload
+            .get("v3_base_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        asset_library_ids: client_config_package_string_vec(payload.get("asset_library_ids")),
+        dataset_ids: client_config_package_string_vec(payload.get("dataset_ids")),
+        skill_packs: client_config_package_string_vec(payload.get("skill_packs")),
+        artifact_upload,
+        codex_control,
+        expires_at: row.get("expires_at"),
+        created_at: row.get("created_at"),
+        config_package: payload,
+    })
 }
 
 #[cfg(test)]
@@ -63,6 +261,7 @@ mod tests {
             dataset_ids: vec!["dataset-1".to_string()],
             skill_packs: vec!["reporting".to_string()],
             artifact_upload: None,
+            codex_control: None,
             expires_at: Some(
                 Utc.with_ymd_and_hms(2026, 6, 17, 18, 0, 0)
                     .single()
@@ -105,6 +304,7 @@ mod tests {
             "user-default",
             "client-001",
             default_client_artifact_upload_config(),
+            default_codex_control_config("term-001"),
         );
 
         assert_eq!(payload["schema"], V3_CLIENT_CONFIG_SCHEMA);
@@ -116,6 +316,28 @@ mod tests {
         assert_eq!(payload["asset_library_ids"], json!(["asset-1"]));
         assert_eq!(payload["skill_packs"], json!(["reporting"]));
         assert_eq!(payload["artifact_upload"]["mode"], "session_token");
+        assert_eq!(
+            payload["codex_control"]["base_url"],
+            DEFAULT_CODEX_CONTROL_BASE_URL
+        );
+        assert_eq!(
+            payload["codex_control"]["activation_endpoint"],
+            DEFAULT_CODEX_ACTIVATION_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["heartbeat_endpoint"],
+            DEFAULT_CODEX_HEARTBEAT_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["revoke_endpoint"],
+            DEFAULT_CODEX_REVOKE_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["activation_token_env"],
+            DEFAULT_CODEX_ACTIVATION_TOKEN_ENV
+        );
+        assert_eq!(payload["codex_control"]["terminal_id"], "term-001");
+        assert!(payload["codex_control"].get("activation_token").is_none());
         assert_eq!(payload["metadata"]["purpose"], "smoke");
         assert_eq!(payload["expires_at"], "2026-06-17T18:00:00Z");
     }
@@ -131,8 +353,113 @@ mod tests {
             "user-default",
             "client-001",
             default_client_artifact_upload_config(),
+            default_codex_control_config("term-001"),
         );
 
         assert!(payload.get("metadata").is_none());
+    }
+
+    #[test]
+    fn client_config_package_support_decodes_artifact_upload_from_payload() {
+        let payload = json!({
+            "artifact_upload": {
+                "mode": "session_token",
+                "endpoint": "/v1/client-artifacts"
+            }
+        });
+
+        let config = client_config_package_artifact_upload_from_payload(&payload)
+            .expect("artifact upload should decode");
+
+        assert_eq!(config.mode, "session_token");
+        assert_eq!(config.endpoint, "/v1/client-artifacts");
+    }
+
+    #[test]
+    fn client_config_package_support_defaults_missing_artifact_upload_on_decode() {
+        let config = client_config_package_artifact_upload_from_payload(&json!({}))
+            .expect("missing artifact upload should default");
+
+        assert_eq!(config, default_client_artifact_upload_config());
+    }
+
+    #[test]
+    fn client_config_package_support_resolves_codex_control_defaults() {
+        let config = resolve_codex_control_config(
+            Some(V3CodexControlConfigView {
+                base_url: Some(" https://custom.example.com ".to_string()),
+                terminal_label: Some(" Finance PC ".to_string()),
+                ..V3CodexControlConfigView::default()
+            }),
+            "term-001",
+        );
+
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some("https://custom.example.com")
+        );
+        assert_eq!(
+            config.activation_endpoint.as_deref(),
+            Some(DEFAULT_CODEX_ACTIVATION_ENDPOINT)
+        );
+        assert_eq!(
+            config.activation_token_env.as_deref(),
+            Some(DEFAULT_CODEX_ACTIVATION_TOKEN_ENV)
+        );
+        assert_eq!(config.terminal_id.as_deref(), Some("term-001"));
+        assert_eq!(config.terminal_label.as_deref(), Some("Finance PC"));
+        validate_codex_control_config(&config).expect("default codex control should be valid");
+    }
+
+    #[test]
+    fn client_config_package_support_decodes_codex_control_from_payload() {
+        let payload = json!({
+            "codex_control": {
+                "base_url": "https://ad.goods-editor.com",
+                "activation_endpoint": "/api/codex/clients/activate",
+                "heartbeat_endpoint": "/api/codex/clients/heartbeat",
+                "revoke_endpoint": "/api/codex/clients/self-revoke",
+                "activation_token_env": "CODEX_CLIENT_ACTIVATION_TOKEN",
+                "terminal_id": "term-001",
+                "session_ttl_seconds": 2592000
+            }
+        });
+
+        let config = client_config_package_codex_control_from_payload(&payload)
+            .expect("codex control should decode")
+            .expect("codex control should be present");
+
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some("https://ad.goods-editor.com")
+        );
+        assert_eq!(config.terminal_id.as_deref(), Some("term-001"));
+    }
+
+    #[test]
+    fn client_config_package_support_keeps_legacy_payloads_without_codex_control() {
+        let config = client_config_package_codex_control_from_payload(&json!({}))
+            .expect("missing codex control should not fail");
+
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn client_config_package_support_reports_decode_failures() {
+        let error =
+            client_config_package_artifact_upload_from_payload(&json!({"artifact_upload": "bad"}))
+                .expect_err("bad artifact upload should fail");
+
+        assert_eq!(error.payload.code, "client_config_package_decode_failed");
+    }
+
+    #[test]
+    fn client_config_package_support_reads_string_arrays() {
+        assert_eq!(
+            client_config_package_string_vec(Some(&json!(["dataset-1", 42, "dataset-2"]))),
+            vec!["dataset-1".to_string(), "dataset-2".to_string()]
+        );
+        assert!(client_config_package_string_vec(Some(&json!("dataset-1"))).is_empty());
+        assert!(client_config_package_string_vec(None).is_empty());
     }
 }

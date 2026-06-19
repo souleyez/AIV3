@@ -109,6 +109,24 @@ const ASSISTANT_REFERENCES = [
   },
 ];
 
+const DOWNLOAD_PACKAGES = [
+  {
+    label: 'V3企业定制agent终端 Windows',
+    href: '/downloads/codex/V3企业定制agent终端-Windows.zip',
+    detail: 'Windows 版安装包。',
+  },
+  {
+    label: 'V3企业定制agent终端 macOS',
+    href: '/downloads/codex/V3企业定制agent终端-macOS.zip',
+    detail: 'macOS 版安装包。',
+  },
+  {
+    label: '镜像源说明',
+    href: '/downloads/codex/',
+    detail: '企业内网可从 V3 域名直连下载，下载并发限制为 3。',
+  },
+];
+
 async function fetchJson(pathname, options = {}) {
   const headers = { accept: 'application/json', ...(options.headers || {}) };
   let body = options.body;
@@ -1076,6 +1094,7 @@ export default function ExternalIntegrationsPageClient() {
           </div>
           <div className="external-hero-actions">
             <a href="#external-docs">查看接口文档</a>
+            <a href="/downloads/codex/">下载 Codex 执行器</a>
             <a href="#external-observability">查看观测状态</a>
           </div>
         </div>
@@ -1094,6 +1113,25 @@ export default function ExternalIntegrationsPageClient() {
             <span>{step.text}</span>
           </article>
         ))}
+      </section>
+
+      <section className="external-download-band" aria-label="Codex 执行器下载镜像">
+        <div className="external-download-copy">
+          <p className="external-kicker">Codex Executor Mirror</p>
+          <h2>企业内网下载与 V3 直连</h2>
+          <p>
+            V3企业定制agent终端已放入 V3 镜像源。客户侧数据可以直连 V3，
+            通过外部接口、资料库、静态页和 Codex 执行器能力完成业务调用。
+          </p>
+        </div>
+        <div className="external-download-list">
+          {DOWNLOAD_PACKAGES.map((item) => (
+            <a href={item.href} key={item.href}>
+              <strong>{item.label}</strong>
+              <span>{item.detail}</span>
+            </a>
+          ))}
+        </div>
       </section>
 
       <section className="external-reference-band" aria-label="智能助手界面参考">

@@ -39,6 +39,26 @@ pub struct V3ClientArtifactUploadConfigView {
     pub endpoint: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct V3CodexControlConfigView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoke_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_token_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_ttl_seconds: Option<i64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateClientConfigPackageRequest {
     #[serde(default)]
@@ -55,6 +75,8 @@ pub struct CreateClientConfigPackageRequest {
     pub skill_packs: Vec<String>,
     #[serde(default)]
     pub artifact_upload: Option<V3ClientArtifactUploadConfigView>,
+    #[serde(default)]
+    pub codex_control: Option<V3CodexControlConfigView>,
     #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -75,6 +97,8 @@ pub struct ClientConfigPackageView {
     #[serde(default)]
     pub skill_packs: Vec<String>,
     pub artifact_upload: V3ClientArtifactUploadConfigView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_control: Option<V3CodexControlConfigView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,

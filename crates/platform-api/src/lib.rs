@@ -1,7 +1,10 @@
 #![recursion_limit = "256"]
 
 mod basic_view_support;
+mod client_artifact_create_support;
 
+use asset_library_validation_support::*;
+use asset_library_view_support::*;
 use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope, ScopePlannerInput,
 };
@@ -23,13 +26,13 @@ use axum::{
 };
 use basic_view_support::*;
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
+use client_artifact_auth_support::*;
 use client_artifact_contract_support::*;
+use client_artifact_create_support::*;
 use client_artifact_publish_support::*;
-use client_artifact_storage_support::{
-    client_artifact_database_file_bytes_limit_from_env, client_artifact_object_root_from_env,
-    prepare_client_artifact_file_storage, read_client_artifact_file_storage,
-    ClientArtifactFileStorageRecord,
-};
+use client_artifact_ref_support::*;
+use client_artifact_scope_support::*;
+use client_artifact_view_support::*;
 use client_config_package_support::*;
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
@@ -38,14 +41,13 @@ use contracts::{
     AppendStaticPageDraftOperationsRequest, AppendStaticPageDraftOperationsResponse,
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssetItemView,
-    AssetLibraryDatasetMembershipResponse, AssetLibraryDatasetMembershipView,
-    AssetLibraryScopeSummaryResponse, AssetLibraryScopeSummaryView, AssetLibraryView,
-    AssetProfileSupplyHintView, AssistantRunDetailView, AssistantRunExecutorTransportView,
-    AssistantRunMessageView, AttachClientArtifactToAssetLibraryRequest,
-    AttachClientArtifactToAssetLibraryResponse, AttachClientArtifactToDatasetRequest,
-    AttachClientArtifactToDatasetResponse, AuthAuditEventView, AuthSessionResponse,
-    BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
-    ClaimLocalDataResponse, ClientArtifactFileRecordView, ClientArtifactView,
+    AssetLibraryDatasetMembershipResponse, AssetLibraryScopeSummaryResponse,
+    AssetLibraryScopeSummaryView, AssetProfileSupplyHintView, AssistantRunDetailView,
+    AssistantRunExecutorTransportView, AssistantRunMessageView,
+    AttachClientArtifactToAssetLibraryRequest, AttachClientArtifactToAssetLibraryResponse,
+    AttachClientArtifactToDatasetRequest, AttachClientArtifactToDatasetResponse,
+    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
+    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, ClientArtifactView,
     ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
     CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
     CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
@@ -105,14 +107,13 @@ use contracts::{
     UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
     UpdateExternalDocumentDatasetResponse, UpdateStaticPageDraftRequest,
     UpdateStaticPageDraftResponse, UpsertAssetLibraryDatasetMembershipRequest,
-    V3ClientArtifactManifestView, V3ClientArtifactUploadConfigView, VerifyEmailAuthRequest,
-    VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView, WorkflowExecutionView,
-    WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
+    VerifyEmailAuthRequest, VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView,
+    WorkflowExecutionView, WorkflowRuntimeInspectView, WorkflowSignalRequest, WorkflowTaskView,
 };
 #[cfg(test)]
 use contracts::{
     AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView,
-    V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA, V3_CLIENT_ARTIFACT_SOURCE,
+    V3ClientArtifactManifestView, V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA, V3_CLIENT_ARTIFACT_SOURCE,
 };
 #[cfg(test)]
 use domain_model::StaticPageRenderOutputId;
@@ -167,14 +168,13 @@ use std::{
 #[cfg(test)]
 use storage::NewModelGatewayProfile;
 use storage::{
-    AssetItemRecord, AssetLibraryDatasetMembershipRecord, AssetLibraryRecord, AssetProfileRecord,
-    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssetLibrary,
-    NewAssetLibraryDatasetMembership, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
-    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
-    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
-    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
-    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
-    NewWorkflowTask, PgStorage,
+    AssetLibraryRecord, LexicalRetrievalQuery, ModelGatewayProfile,
+    ModelGatewayProfileUsageSummary, NewAssetLibrary, NewAssetLibraryDatasetMembership,
+    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
+    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
+    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 #[cfg(test)]
 use storage::{NewAssetItem, NewAssetProfile, NewDatasetAssetMembership};
@@ -184,6 +184,8 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
 mod asset_library_scope_support;
+mod asset_library_validation_support;
+mod asset_library_view_support;
 mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
 mod assistant_run_codex_action_contract_support;
@@ -235,9 +237,14 @@ mod chat_session_manifest_view_support;
 mod chat_session_model_facing;
 mod chat_session_titles;
 mod chat_session_turn_manifest_support;
+mod client_artifact_auth_support;
 mod client_artifact_contract_support;
+mod client_artifact_error_support;
 mod client_artifact_publish_support;
+mod client_artifact_ref_support;
+mod client_artifact_scope_support;
 mod client_artifact_storage_support;
+mod client_artifact_view_support;
 mod client_config_package_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
@@ -2615,7 +2622,7 @@ async fn create_auth_session(
     Ok((session, session_token))
 }
 
-async fn current_auth_session(
+pub(crate) async fn current_auth_session(
     state: &AppState,
     headers: &HeaderMap,
 ) -> std::result::Result<Option<(User, UserSession)>, ApiError> {
@@ -3477,7 +3484,7 @@ async fn load_visible_dataset_for_user(
     .await
 }
 
-async fn load_visible_dataset_for_user_with_local_scope(
+pub(crate) async fn load_visible_dataset_for_user_with_local_scope(
     state: &AppState,
     dataset_id: DatasetId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -4464,8 +4471,6 @@ async fn create_asset_library(
     ))
 }
 
-const V3_CLIENT_ARTIFACT_UPLOAD_TOKEN_ENV: &str = "V3_CLIENT_ARTIFACT_TOKEN";
-
 async fn create_client_config_package(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4496,12 +4501,16 @@ async fn create_client_config_package(
     let user_ref = client_config_ref_or_default(request.user_id.as_deref(), user.id);
     let client_id = request.client_id.trim().to_string();
     let package_id = format!("v3cp_{}", Uuid::new_v4().simple());
+    let terminal_id = format!("term_{}", package_id.trim_start_matches("v3cp_"));
+    let codex_control = resolve_codex_control_config(request.codex_control.clone(), &terminal_id);
+    validate_codex_control_config(&codex_control)?;
     let payload = build_client_config_package_payload(
         &request,
         &tenant_ref,
         &user_ref,
         &client_id,
         artifact_upload,
+        codex_control,
     );
 
     sqlx::query(
@@ -4547,183 +4556,27 @@ async fn list_client_artifacts(
     Query(query): Query<ClientArtifactsQuery>,
 ) -> std::result::Result<Json<Vec<ClientArtifactView>>, ApiError> {
     require_client_artifact_upload_authorization(&state, &headers).await?;
-    let limit = query.limit.unwrap_or(50).clamp(1, 100);
-    let rows = sqlx::query(
-        r#"
-        select artifact_id
-        from v3_client_artifacts
-        where tenant_id = $1
-        order by created_at desc
-        limit $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(limit)
-    .fetch_all(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-    let mut artifacts = Vec::with_capacity(rows.len());
-    for row in rows {
-        let artifact_id: String = row.get("artifact_id");
-        artifacts.push(load_client_artifact_view(&state, &artifact_id).await?);
-    }
-    Ok(Json(artifacts))
+    Ok(Json(
+        list_client_artifact_views(&state, client_artifacts_list_limit(query.limit)).await?,
+    ))
 }
 
 async fn create_client_artifact(
     State(state): State<AppState>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> std::result::Result<(StatusCode, Json<CreateClientArtifactResponse>), ApiError> {
     let auth_user = require_client_artifact_upload_authorization(&state, &headers).await?;
-    let mut manifest = None;
-    let mut files = Vec::new();
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|error| ApiError::bad_request("invalid_multipart", error.to_string()))?
-    {
-        let name = field.name().unwrap_or_default().to_string();
-        match name.as_str() {
-            "manifest" => {
-                let text = field.text().await.map_err(|error| {
-                    ApiError::bad_request("invalid_manifest", error.to_string())
-                })?;
-                let parsed = serde_json::from_str::<V3ClientArtifactManifestView>(&text).map_err(
-                    |error| {
-                        ApiError::bad_request(
-                            "invalid_manifest",
-                            format!(
-                                "manifest must be v3.client_artifact_manifest.v1 JSON: {error}"
-                            ),
-                        )
-                    },
-                )?;
-                manifest = Some(parsed);
-            }
-            "files" => {
-                if files.len() >= V3_CLIENT_ARTIFACT_MAX_FILES {
-                    return Err(ApiError::bad_request(
-                        "too_many_artifact_files",
-                        format!("at most {V3_CLIENT_ARTIFACT_MAX_FILES} files are allowed"),
-                    ));
-                }
-                let filename = field.file_name().unwrap_or_default().to_string();
-                let bytes = field.bytes().await.map_err(|error| {
-                    ApiError::bad_request("invalid_artifact_file", error.to_string())
-                })?;
-                if bytes.len() > V3_CLIENT_ARTIFACT_MAX_FILE_BYTES {
-                    return Err(ApiError::bad_request(
-                        "artifact_file_too_large",
-                        format!("artifact file {filename} exceeds {V3_CLIENT_ARTIFACT_MAX_FILE_BYTES} bytes"),
-                    ));
-                }
-                files.push(UploadedClientArtifactFile { filename, bytes });
-            }
-            _ => {}
-        }
-    }
-
-    let manifest = manifest.ok_or_else(|| {
-        ApiError::bad_request(
-            "manifest_required",
-            "multipart field manifest is required".to_string(),
-        )
-    })?;
-    validate_client_artifact_manifest(&manifest)?;
-    validate_v3_client_scope_refs(
+    let (manifest, files) = parse_client_artifact_multipart(multipart).await?;
+    let artifact = create_client_artifact_from_upload(
         &state,
         &headers,
         auth_user.as_ref().map(|user| user.id),
-        &manifest.dataset_ids,
-        &manifest.asset_library_ids,
+        &manifest,
+        &files,
     )
     .await?;
-    validate_client_artifact_files_match_manifest(&manifest, &files)?;
 
-    let artifact_id = format!("v3ca_{}", Uuid::new_v4().simple());
-    let manifest_value = serde_json::to_value(&manifest)
-        .map_err(|error| ApiError::internal("manifest_encode_failed", error.to_string()))?;
-    let mut tx = state
-        .storage
-        .pool()
-        .begin()
-        .await
-        .map_err(|error| ApiError::from_storage(error.into()))?;
-    let row = sqlx::query(
-        r#"
-        insert into v3_client_artifacts (
-            artifact_id, tenant_id, owner_user_id, tenant_ref, user_ref,
-            client_id, task_id, title, artifact_type, status, manifest,
-            dataset_ids, asset_library_ids
-        )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'received', $10, $11, $12)
-        returning id
-        "#,
-    )
-    .bind(&artifact_id)
-    .bind(state.tenant_id.0)
-    .bind(auth_user.as_ref().map(|user| user.id.0))
-    .bind(manifest.tenant_id.trim())
-    .bind(manifest.user_id.trim())
-    .bind(manifest.client_id.trim())
-    .bind(manifest.task_id.trim())
-    .bind(manifest.title.trim())
-    .bind(manifest.artifact_type.trim())
-    .bind(&manifest_value)
-    .bind(&manifest.dataset_ids)
-    .bind(&manifest.asset_library_ids)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-    let artifact_db_id = row.get::<Uuid, _>("id");
-    let client_artifact_object_root = client_artifact_object_root_from_env();
-    let client_artifact_database_file_bytes_limit =
-        client_artifact_database_file_bytes_limit_from_env();
-
-    for (index, descriptor) in manifest.files.iter().enumerate() {
-        let file = &files[index];
-        let mut hasher = Sha256::new();
-        hasher.update(file.bytes.as_ref());
-        let sha256 = format!("{:x}", hasher.finalize());
-        let storage = prepare_client_artifact_file_storage(
-            client_artifact_object_root.as_deref(),
-            client_artifact_database_file_bytes_limit,
-            state.tenant_id.0,
-            &artifact_id,
-            index as i32,
-            &sha256,
-            file.bytes.as_ref(),
-        )?;
-        sqlx::query(
-            r#"
-            insert into v3_client_artifact_files (
-                artifact_id, file_index, filename, content_type, role,
-                size_bytes, sha256, storage_kind, object_locator, bytes
-            )
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            "#,
-        )
-        .bind(artifact_db_id)
-        .bind(index as i32)
-        .bind(descriptor.filename.trim())
-        .bind(descriptor.content_type.trim())
-        .bind(descriptor.role.trim())
-        .bind(file.bytes.len() as i64)
-        .bind(sha256)
-        .bind(storage.storage_kind)
-        .bind(storage.object_locator)
-        .bind(storage.database_bytes)
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| ApiError::from_storage(error.into()))?;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|error| ApiError::from_storage(error.into()))?;
-    let artifact = load_client_artifact_view(&state, &artifact_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(CreateClientArtifactResponse { artifact }),
@@ -4746,58 +4599,9 @@ async fn download_client_artifact_file(
 ) -> std::result::Result<Response, ApiError> {
     require_client_artifact_upload_authorization(&state, &headers).await?;
     validate_required("artifact_id", &artifact_id)?;
-    if file_index < 0 {
-        return Err(ApiError::bad_request(
-            "invalid_client_artifact_file_index",
-            "file_index must be non-negative".to_string(),
-        ));
-    }
-    let row = sqlx::query(
-        r#"
-        select f.filename, f.content_type, f.storage_kind, f.object_locator, f.bytes
-        from v3_client_artifact_files f
-        join v3_client_artifacts a on a.id = f.artifact_id
-        where a.tenant_id = $1 and a.artifact_id = $2 and f.file_index = $3
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(artifact_id.trim())
-    .bind(file_index)
-    .fetch_optional(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_artifact_file_not_found",
-            format!("client artifact file {artifact_id}/{file_index} was not found"),
-        )
-    })?;
-    let filename: String = row.get("filename");
-    let content_type: String = row.get("content_type");
-    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
-        storage_kind: row.get("storage_kind"),
-        object_locator: row.get("object_locator"),
-        database_bytes: row.get("bytes"),
-    })?;
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename.replace('"', "")),
-        );
-    if let Ok(length) = HeaderValue::from_str(&bytes.len().to_string()) {
-        builder = builder.header(header::CONTENT_LENGTH, length);
-    }
-    builder
-        .body(axum::body::Body::from(bytes))
-        .map_err(|error| {
-            ApiError::internal(
-                "client_artifact_download_response_failed",
-                format!("failed to build client artifact download response: {error}"),
-            )
-        })
+    validate_client_artifact_file_index(file_index)?;
+    let file = load_client_artifact_download_file(&state, &artifact_id, file_index).await?;
+    client_artifact_file_download_response(&file.filename, &file.content_type, file.bytes)
 }
 
 async fn preview_client_artifact_html_file(
@@ -4807,77 +4611,15 @@ async fn preview_client_artifact_html_file(
 ) -> std::result::Result<Response, ApiError> {
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("artifact_id", &artifact_id)?;
-    if file_index < 0 {
-        return Err(ApiError::bad_request(
-            "invalid_client_artifact_file_index",
-            "file_index must be non-negative".to_string(),
-        ));
-    }
-    let row = sqlx::query(
-        r#"
-        select a.owner_user_id, a.status, a.title,
-               f.filename, f.content_type, f.role, f.size_bytes,
-               f.storage_kind, f.object_locator, f.bytes
-        from v3_client_artifact_files f
-        join v3_client_artifacts a on a.id = f.artifact_id
-        where a.tenant_id = $1 and a.artifact_id = $2 and f.file_index = $3
-        "#,
+    validate_client_artifact_file_index(file_index)?;
+    client_artifact_html_preview_response_for_user(
+        &state,
+        &artifact_id,
+        file_index,
+        user.id,
+        V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES as i64,
     )
-    .bind(state.tenant_id.0)
-    .bind(artifact_id.trim())
-    .bind(file_index)
-    .fetch_optional(state.storage.pool())
     .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_artifact_file_not_found",
-            format!("client artifact file {artifact_id}/{file_index} was not found"),
-        )
-    })?;
-    let owner_user_id = row.get::<Option<Uuid>, _>("owner_user_id").map(UserId);
-    ensure_owner_managed_resource(
-        "client_artifact",
-        artifact_id.trim().to_string(),
-        owner_user_id,
-        Some(user.id),
-    )?;
-    let status: String = row.get("status");
-    if status != "published" {
-        return Err(ApiError::bad_request(
-            "client_artifact_not_published",
-            "client artifact must be published before HTML preview is available".to_string(),
-        ));
-    }
-    let filename: String = row.get("filename");
-    let content_type: String = row.get("content_type");
-    let role: String = row.get("role");
-    if !client_artifact_file_is_html(&filename, &content_type, &role) {
-        return Err(ApiError::bad_request(
-            "client_artifact_preview_not_html",
-            "only HTML client artifact files can be previewed inline".to_string(),
-        ));
-    }
-    let size_bytes: i64 = row.get("size_bytes");
-    if size_bytes > V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES as i64 {
-        return Err(ApiError::bad_request(
-            "client_artifact_preview_too_large",
-            format!("HTML preview is limited to {V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES} bytes"),
-        ));
-    }
-    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
-        storage_kind: row.get("storage_kind"),
-        object_locator: row.get("object_locator"),
-        database_bytes: row.get("bytes"),
-    })?;
-    let html = String::from_utf8(bytes).map_err(|_| {
-        ApiError::bad_request(
-            "client_artifact_html_not_utf8",
-            "HTML preview requires UTF-8 encoded content".to_string(),
-        )
-    })?;
-    let sanitized = sanitize_client_artifact_preview_html(&html);
-    client_artifact_html_preview_response(&row.get::<String, _>("title"), &filename, &sanitized)
 }
 
 async fn attach_client_artifact_to_dataset(
@@ -4889,18 +4631,16 @@ async fn attach_client_artifact_to_dataset(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("dataset_id", &request.dataset_id)?;
     let dataset_id = request.dataset_id.trim().to_string();
-    validate_v3_client_ref_list("dataset_ids", std::slice::from_ref(&dataset_id))?;
-    validate_v3_client_scope_refs(
-        &state,
-        &headers,
-        Some(user.id),
-        std::slice::from_ref(&dataset_id),
-        &[],
-    )
-    .await?;
-    append_client_artifact_ref(&state, &artifact_id, "dataset_ids", &dataset_id).await?;
     Ok(Json(AttachClientArtifactToDatasetResponse {
-        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+        artifact: attach_client_artifact_ref_and_load_view(
+            &state,
+            &headers,
+            user.id,
+            &artifact_id,
+            "dataset_ids",
+            &dataset_id,
+        )
+        .await?,
     }))
 }
 
@@ -4913,19 +4653,16 @@ async fn attach_client_artifact_to_asset_library(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("asset_library_id", &request.asset_library_id)?;
     let asset_library_id = request.asset_library_id.trim().to_string();
-    validate_v3_client_ref_list("asset_library_ids", std::slice::from_ref(&asset_library_id))?;
-    validate_v3_client_scope_refs(
-        &state,
-        &headers,
-        Some(user.id),
-        &[],
-        std::slice::from_ref(&asset_library_id),
-    )
-    .await?;
-    append_client_artifact_ref(&state, &artifact_id, "asset_library_ids", &asset_library_id)
-        .await?;
     Ok(Json(AttachClientArtifactToAssetLibraryResponse {
-        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+        artifact: attach_client_artifact_ref_and_load_view(
+            &state,
+            &headers,
+            user.id,
+            &artifact_id,
+            "asset_library_ids",
+            &asset_library_id,
+        )
+        .await?,
     }))
 }
 
@@ -4937,54 +4674,14 @@ async fn publish_client_artifact(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("artifact_id", &artifact_id)?;
     let artifact_id = artifact_id.trim().to_string();
-    let row = sqlx::query(
-        r#"
-        select owner_user_id, manifest
-        from v3_client_artifacts
-        where tenant_id = $1 and artifact_id = $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(&artifact_id)
-    .fetch_optional(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_artifact_not_found",
-            format!("client artifact {artifact_id} was not found"),
-        )
-    })?;
-    let owner_user_id = row.get::<Option<Uuid>, _>("owner_user_id").map(UserId);
-    ensure_owner_managed_resource(
-        "client_artifact",
-        artifact_id.clone(),
-        owner_user_id,
-        Some(user.id),
-    )?;
-    let manifest = mark_client_artifact_manifest_published(row.get("manifest"), Utc::now())?;
-    let result = sqlx::query(
-        r#"
-        update v3_client_artifacts
-        set status = 'published', manifest = $3, updated_at = now()
-        where tenant_id = $1 and artifact_id = $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(&artifact_id)
-    .bind(&manifest)
-    .execute(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::not_found(
-            "client_artifact_not_found",
-            format!("client artifact {artifact_id} was not found"),
-        ));
-    }
-
     Ok(Json(PublishClientArtifactResponse {
-        artifact: load_client_artifact_view(&state, &artifact_id).await?,
+        artifact: publish_client_artifact_private_and_load_view(
+            &state,
+            &artifact_id,
+            user.id,
+            Utc::now(),
+        )
+        .await?,
     }))
 }
 
@@ -4996,166 +4693,41 @@ async fn publish_client_artifact_public_html(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("artifact_id", &artifact_id)?;
     let artifact_id = artifact_id.trim().to_string();
-    let artifact_row = sqlx::query(
-        r#"
-        select id, owner_user_id, status, title, manifest, dataset_ids, asset_library_ids
-        from v3_client_artifacts
-        where tenant_id = $1 and artifact_id = $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(&artifact_id)
-    .fetch_optional(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_artifact_not_found",
-            format!("client artifact {artifact_id} was not found"),
-        )
-    })?;
-    let owner_user_id = artifact_row
-        .get::<Option<Uuid>, _>("owner_user_id")
-        .map(UserId);
+    let artifact = load_client_artifact_public_html_record(&state, &artifact_id).await?;
     ensure_owner_managed_resource(
         "client_artifact",
         artifact_id.clone(),
-        owner_user_id,
+        artifact.owner_user_id,
         Some(user.id),
     )?;
-    let status: String = artifact_row.get("status");
-    if status != "published" {
-        return Err(ApiError::bad_request(
-            "client_artifact_not_published",
-            "client artifact must be privately published before public HTML publication is available"
-                .to_string(),
-        ));
-    }
+    ensure_client_artifact_can_publish_public_html(&artifact.status)?;
 
-    let artifact_db_id = artifact_row.get::<Uuid, _>("id");
-    let file_rows = sqlx::query(
-        r#"
-        select file_index, filename, content_type, role, size_bytes,
-               storage_kind, object_locator, bytes
-        from v3_client_artifact_files
-        where artifact_id = $1
-        order by case when role = 'primary_html' then 0 else 1 end, file_index asc
-        "#,
-    )
-    .bind(artifact_db_id)
-    .fetch_all(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-    let file_row = file_rows
-        .into_iter()
-        .find(|row| {
-            client_artifact_file_is_html(
-                &row.get::<String, _>("filename"),
-                &row.get::<String, _>("content_type"),
-                &row.get::<String, _>("role"),
-            )
-        })
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "client_artifact_public_html_not_found",
-                "client artifact does not contain an HTML file that can be published".to_string(),
-            )
-        })?;
-    let file_index: i32 = file_row.get("file_index");
-    let filename: String = file_row.get("filename");
-    let content_type: String = file_row.get("content_type");
-    let role: String = file_row.get("role");
-    let size_bytes: i64 = file_row.get("size_bytes");
-    let bytes = read_client_artifact_file_storage(&ClientArtifactFileStorageRecord {
-        storage_kind: file_row.get("storage_kind"),
-        object_locator: file_row.get("object_locator"),
-        database_bytes: file_row.get("bytes"),
-    })?;
-    let html = String::from_utf8(bytes).map_err(|_| {
-        ApiError::bad_request(
-            "client_artifact_html_not_utf8",
-            "public HTML publication requires UTF-8 encoded content".to_string(),
-        )
-    })?;
-    let sanitized = sanitize_client_artifact_preview_html(&html);
-    let title: String = artifact_row.get("title");
-    let public_html = client_artifact_sandboxed_html_document(&title, &filename, &sanitized);
-    let relative_dir = client_artifact_public_html_relative_dir(&artifact_id, file_index)?;
-    let artifact_dir = external_channel_generated_artifact_root()?.join(&relative_dir);
-    fs::create_dir_all(&artifact_dir).map_err(|error| {
-        ApiError::internal(
-            "client_artifact_public_publish_failed",
-            format!("failed to create public client artifact directory: {error}"),
-        )
-    })?;
-    fs::write(artifact_dir.join("index.html"), public_html).map_err(|error| {
-        ApiError::internal(
-            "client_artifact_public_publish_failed",
-            format!("failed to write public client artifact HTML: {error}"),
-        )
-    })?;
-    let public_url = external_channel_generated_artifact_public_url(&relative_dir);
-    let published_at = Utc::now();
-    let dataset_ids: Vec<String> = artifact_row.get("dataset_ids");
-    let asset_library_ids: Vec<String> = artifact_row.get("asset_library_ids");
-    let html_artifact = client_artifact_public_html_artifact_manifest(
-        &artifact_id,
-        &title,
-        file_index,
-        &filename,
-        &content_type,
-        &role,
-        size_bytes,
-        &public_url,
-        &dataset_ids,
-        &asset_library_ids,
-        published_at,
-    );
-    let html_artifact_value = serde_json::to_value(&html_artifact).map_err(|error| {
-        ApiError::internal(
-            "html_artifact_serialize_failed",
-            format!("failed to serialize client artifact HTML manifest: {error}"),
-        )
-    })?;
-    state
-        .storage
-        .html_artifacts()
-        .upsert(
-            state.tenant_id,
-            &NewHtmlArtifact {
-                id: html_artifact.id.clone(),
-                owner_user_id: Some(user.id),
-                assistant_run_id: None,
-                local_thread_id: None,
-                source_type: html_artifact_serialized_variant(&html_artifact.source_type),
-                template_id: html_artifact_serialized_variant(&html_artifact.template_id),
-                interaction_mode: html_artifact_serialized_variant(&html_artifact.interaction_mode),
-                manifest: html_artifact_value,
-                created_at: html_artifact.created_at,
-            },
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let manifest = mark_client_artifact_manifest_public_html_published(
-        artifact_row.get("manifest"),
-        file_index,
-        &public_url,
-        &html_artifact.id,
-        published_at,
+    let file =
+        load_client_artifact_public_html_candidate_file(&state, artifact.artifact_db_id).await?;
+    let file = prepare_client_artifact_public_html_candidate(file)?;
+    let publication =
+        build_client_artifact_public_html_file_publication(&artifact_id, &artifact.title, file)?;
+    let artifact_root = external_channel_generated_artifact_root()?;
+    write_client_artifact_public_html_file(
+        &artifact_root,
+        &publication.relative_dir,
+        &publication.public_html,
     )?;
-    sqlx::query(
-        r#"
-        update v3_client_artifacts
-        set manifest = $3, updated_at = now()
-        where tenant_id = $1 and artifact_id = $2
-        "#,
+    let public_url = external_channel_generated_artifact_public_url(&publication.relative_dir);
+    let published_at = Utc::now();
+    let html_artifact = finalize_client_artifact_public_html_publication(
+        &state,
+        user.id,
+        &artifact_id,
+        &artifact.title,
+        artifact.manifest,
+        &publication,
+        &public_url,
+        &artifact.dataset_ids,
+        &artifact.asset_library_ids,
+        published_at,
     )
-    .bind(state.tenant_id.0)
-    .bind(&artifact_id)
-    .bind(&manifest)
-    .execute(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
+    .await?;
 
     Ok(Json(PublishClientArtifactPublicHtmlResponse {
         artifact: load_client_artifact_view(&state, &artifact_id).await?,
@@ -5416,7 +4988,7 @@ async fn load_asset_library_authorized_asset_supply(
     Ok((asset_views, asset_profile_hints))
 }
 
-async fn load_asset_library(
+pub(crate) async fn load_asset_library(
     state: &AppState,
     asset_library_id: Uuid,
 ) -> std::result::Result<AssetLibraryRecord, ApiError> {
@@ -5427,416 +4999,6 @@ async fn load_asset_library(
         .await
         .map_err(ApiError::from_storage)?
         .ok_or_else(|| asset_library_not_found_error(asset_library_id))
-}
-
-async fn load_client_config_package_view(
-    state: &AppState,
-    package_id: &str,
-) -> std::result::Result<ClientConfigPackageView, ApiError> {
-    let row = sqlx::query(
-        r#"
-        select package_id, tenant_ref, user_ref, client_id, package_payload, expires_at, created_at
-        from v3_client_config_packages
-        where tenant_id = $1 and package_id = $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(package_id)
-    .fetch_optional(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_config_package_not_found",
-            format!("client config package {package_id} was not found"),
-        )
-    })?;
-    let payload = row.get::<Value, _>("package_payload");
-    let artifact_upload = serde_json::from_value::<V3ClientArtifactUploadConfigView>(
-        payload.get("artifact_upload").cloned().unwrap_or_else(
-            || json!({"mode": "session_token", "endpoint": "/v1/client-artifacts"}),
-        ),
-    )
-    .map_err(|error| {
-        ApiError::internal("client_config_package_decode_failed", error.to_string())
-    })?;
-
-    Ok(ClientConfigPackageView {
-        package_id: row.get("package_id"),
-        tenant_id: row.get("tenant_ref"),
-        user_id: row.get("user_ref"),
-        client_id: row.get("client_id"),
-        v3_base_url: payload
-            .get("v3_base_url")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        asset_library_ids: value_string_vec(payload.get("asset_library_ids")),
-        dataset_ids: value_string_vec(payload.get("dataset_ids")),
-        skill_packs: value_string_vec(payload.get("skill_packs")),
-        artifact_upload,
-        expires_at: row.get("expires_at"),
-        created_at: row.get("created_at"),
-        config_package: payload,
-    })
-}
-
-async fn load_client_artifact_view(
-    state: &AppState,
-    artifact_id: &str,
-) -> std::result::Result<ClientArtifactView, ApiError> {
-    let row = sqlx::query(
-        r#"
-        select id, artifact_id, tenant_ref, user_ref, client_id, task_id, title,
-               artifact_type, status, manifest, dataset_ids, asset_library_ids,
-               created_at, updated_at
-        from v3_client_artifacts
-        where tenant_id = $1 and artifact_id = $2
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(artifact_id)
-    .fetch_optional(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?
-    .ok_or_else(|| {
-        ApiError::not_found(
-            "client_artifact_not_found",
-            format!("client artifact {artifact_id} was not found"),
-        )
-    })?;
-    let artifact_db_id = row.get::<Uuid, _>("id");
-    let file_rows = sqlx::query(
-        r#"
-        select file_index, filename, content_type, role, size_bytes, sha256
-        from v3_client_artifact_files
-        where artifact_id = $1
-        order by file_index asc
-        "#,
-    )
-    .bind(artifact_db_id)
-    .fetch_all(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-    let artifact_status: String = row.get("status");
-    let manifest_value: Value = row.get("manifest");
-    let files = file_rows
-        .into_iter()
-        .map(|row| ClientArtifactFileRecordView {
-            file_index: row.get::<i32, _>("file_index"),
-            filename: row.get::<String, _>("filename"),
-            content_type: row.get::<String, _>("content_type"),
-            role: row.get::<String, _>("role"),
-            size_bytes: row.get("size_bytes"),
-            sha256: row.get("sha256"),
-            download_url: client_artifact_file_download_url(
-                artifact_id,
-                row.get::<i32, _>("file_index"),
-            ),
-            preview_url: client_artifact_file_preview_url(
-                artifact_id,
-                row.get::<i32, _>("file_index"),
-                &row.get::<String, _>("filename"),
-                &row.get::<String, _>("content_type"),
-                &row.get::<String, _>("role"),
-                &artifact_status,
-            ),
-            public_url: client_artifact_file_public_url(
-                &manifest_value,
-                row.get::<i32, _>("file_index"),
-            ),
-        })
-        .collect();
-
-    Ok(ClientArtifactView {
-        artifact_id: row.get("artifact_id"),
-        tenant_id: row.get("tenant_ref"),
-        user_id: row.get("user_ref"),
-        client_id: row.get("client_id"),
-        task_id: row.get("task_id"),
-        title: row.get("title"),
-        artifact_type: row.get("artifact_type"),
-        status: artifact_status,
-        dataset_ids: row.get("dataset_ids"),
-        asset_library_ids: row.get("asset_library_ids"),
-        files,
-        manifest: manifest_value,
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    })
-}
-
-async fn require_client_artifact_upload_authorization(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> std::result::Result<Option<User>, ApiError> {
-    if let Some((user, _session)) = current_auth_session(state, headers).await? {
-        return Ok(Some(user));
-    }
-    let Some(expected) = std::env::var(V3_CLIENT_ARTIFACT_UPLOAD_TOKEN_ENV)
-        .ok()
-        .and_then(|value| trim_optional(Some(value)))
-    else {
-        return Err(ApiError::unauthorized(
-            "client_artifact_token_required",
-            "client artifact upload requires a V3 session or upload token".to_string(),
-        ));
-    };
-    let Some(actual) = bearer_token(headers) else {
-        return Err(ApiError::unauthorized(
-            "client_artifact_token_required",
-            "client artifact upload token is required".to_string(),
-        ));
-    };
-    if actual != expected {
-        return Err(ApiError::unauthorized(
-            "invalid_client_artifact_token",
-            "client artifact upload token is invalid".to_string(),
-        ));
-    }
-    Ok(None)
-}
-
-async fn append_client_artifact_ref(
-    state: &AppState,
-    artifact_id: &str,
-    field: &'static str,
-    value: &str,
-) -> std::result::Result<(), ApiError> {
-    let sql = match field {
-        "dataset_ids" => {
-            r#"
-            update v3_client_artifacts
-            set dataset_ids = case
-                    when $3 = any(dataset_ids) then dataset_ids
-                    else array_append(dataset_ids, $3)
-                end,
-                updated_at = now()
-            where tenant_id = $1 and artifact_id = $2
-            "#
-        }
-        "asset_library_ids" => {
-            r#"
-            update v3_client_artifacts
-            set asset_library_ids = case
-                    when $3 = any(asset_library_ids) then asset_library_ids
-                    else array_append(asset_library_ids, $3)
-                end,
-                updated_at = now()
-            where tenant_id = $1 and artifact_id = $2
-            "#
-        }
-        _ => {
-            return Err(ApiError::internal(
-                "invalid_client_artifact_ref_field",
-                format!("unsupported client artifact ref field {field}"),
-            ))
-        }
-    };
-    let result = sqlx::query(sql)
-        .bind(state.tenant_id.0)
-        .bind(artifact_id)
-        .bind(value)
-        .execute(state.storage.pool())
-        .await
-        .map_err(|error| ApiError::from_storage(error.into()))?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::not_found(
-            "client_artifact_not_found",
-            format!("client artifact {artifact_id} was not found"),
-        ));
-    }
-    Ok(())
-}
-
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    raw.strip_prefix("Bearer ")
-        .or_else(|| raw.strip_prefix("bearer "))
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-}
-
-async fn validate_v3_client_scope_refs(
-    state: &AppState,
-    headers: &HeaderMap,
-    current_user_id: Option<UserId>,
-    dataset_ids: &[String],
-    asset_library_ids: &[String],
-) -> std::result::Result<(), ApiError> {
-    let active_secret_binding_ids = active_secret_binding_ids_from_headers(headers)?;
-    let local_thread_id = local_thread_id_from_headers(headers);
-    for dataset_ref in dataset_ids {
-        if let Ok(dataset_uuid) = Uuid::parse_str(dataset_ref.trim()) {
-            let dataset_id = DatasetId(dataset_uuid);
-            load_visible_dataset_for_user_with_local_scope(
-                state,
-                dataset_id,
-                &active_secret_binding_ids,
-                current_user_id,
-                local_thread_id.as_deref(),
-            )
-            .await?;
-        }
-    }
-    for asset_library_ref in asset_library_ids {
-        if let Ok(asset_library_id) = Uuid::parse_str(asset_library_ref.trim()) {
-            load_asset_library(state, asset_library_id).await?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_v3_client_ref_list(
-    field: &'static str,
-    values: &[String],
-) -> std::result::Result<(), ApiError> {
-    let mut seen = BTreeSet::new();
-    for value in values {
-        let trimmed = value.trim();
-        validate_required(field, trimmed)?;
-        if !seen.insert(trimmed.to_string()) {
-            return Err(ApiError::bad_request(
-                "duplicate_client_scope_ref",
-                format!("{field} contains duplicate value {trimmed}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn value_string_vec(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn parse_asset_library_id(raw: &str) -> std::result::Result<Uuid, ApiError> {
-    Uuid::parse_str(raw).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_asset_library_id",
-            format!("{raw} is not a valid UUID"),
-        )
-    })
-}
-
-fn asset_library_not_found_error(asset_library_id: Uuid) -> ApiError {
-    ApiError::not_found(
-        "asset_library_not_found",
-        format!("asset library {asset_library_id} was not found"),
-    )
-}
-
-fn normalize_asset_library_visibility(raw: &str) -> std::result::Result<String, ApiError> {
-    let visibility = raw.trim().to_ascii_lowercase();
-    validate_required("visibility", &visibility)?;
-    match visibility.as_str() {
-        "private" | "internal" | "public" => Ok(visibility),
-        _ => Err(ApiError::bad_request(
-            "invalid_asset_library_visibility",
-            "visibility must be private, internal, or public".to_string(),
-        )),
-    }
-}
-
-fn normalize_asset_library_metadata(metadata: Value) -> std::result::Result<Value, ApiError> {
-    if metadata.is_null() {
-        return Ok(json!({}));
-    }
-    if metadata.is_object() {
-        return Ok(metadata);
-    }
-    Err(ApiError::bad_request(
-        "invalid_asset_library_metadata",
-        "metadata must be a JSON object".to_string(),
-    ))
-}
-
-fn asset_library_view(asset_library: AssetLibraryRecord) -> AssetLibraryView {
-    AssetLibraryView {
-        id: asset_library.id.to_string(),
-        external_id: asset_library.external_id,
-        name: asset_library.name,
-        domain: asset_library.domain,
-        description: asset_library.description,
-        visibility: asset_library.visibility,
-        metadata: asset_library.metadata,
-        dataset_count: asset_library.dataset_count,
-        created_at: asset_library.created_at,
-        updated_at: asset_library.updated_at,
-    }
-}
-
-fn asset_library_membership_view(
-    membership: AssetLibraryDatasetMembershipRecord,
-) -> AssetLibraryDatasetMembershipView {
-    AssetLibraryDatasetMembershipView {
-        asset_library_id: membership.asset_library_id.to_string(),
-        dataset_id: membership.dataset_id,
-        role: membership.role,
-        priority: membership.priority,
-        created_at: membership.created_at,
-    }
-}
-
-fn asset_item_view(asset: AssetItemRecord) -> AssetItemView {
-    AssetItemView {
-        id: asset.id.to_string(),
-        asset_library_id: asset.asset_library_id.map(|id| id.to_string()),
-        collection_id: asset.collection_id.map(|id| id.to_string()),
-        external_id: asset.external_id,
-        title: asset.title,
-        asset_kind: asset.asset_kind,
-        source_kind: asset.source_kind,
-        source_id: asset.source_id,
-        content_type: asset.content_type,
-        object_key: asset.object_key,
-        metadata: asset.metadata,
-        profile_count: asset.profile_count,
-        created_at: asset.created_at,
-        updated_at: asset.updated_at,
-    }
-}
-
-fn asset_profile_supply_inputs(
-    asset: &AssetItemRecord,
-    profiles: &[AssetProfileRecord],
-) -> Vec<asset_profile_supply_support::AssetProfileSupplyInput> {
-    profiles
-        .iter()
-        .map(
-            |profile| asset_profile_supply_support::AssetProfileSupplyInput {
-                asset_id: asset.id.to_string(),
-                title: asset.title.clone(),
-                asset_kind: asset.asset_kind.clone(),
-                source_kind: asset.source_kind.clone(),
-                profile_kind: profile.profile_kind.clone(),
-                attributes: profile.attributes.clone(),
-            },
-        )
-        .collect()
-}
-
-fn asset_profile_supply_hint_view(
-    hint: asset_profile_supply_support::AssetProfileSupplyHint,
-) -> AssetProfileSupplyHintView {
-    AssetProfileSupplyHintView {
-        asset_id: hint.asset_id,
-        title: hint.title,
-        asset_kind: hint.asset_kind,
-        source_kind: hint.source_kind,
-        profile_kind: hint.profile_kind,
-        summary: hint.summary,
-        noun_terms: hint.noun_terms,
-        facets: hint.facets,
-    }
 }
 
 async fn update_dataset(

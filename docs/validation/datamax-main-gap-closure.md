@@ -20007,6 +20007,219 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move `load_client_config_package_view` out of `lib.rs` into `crates/platform-api/src/client_config_package_support.rs`.
+- Code change:
+  - `client_config_package_support` now owns config package SQL load, artifact upload decode, string-array normalization, and `client_config_package_not_found` mapping;
+  - `create_client_config_package` and `get_client_config_package` continue calling the same helper name through the support module wildcard import;
+  - route paths, auth/session requirements, response fields, error codes, and error text are unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 38/38 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact View Loader Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move `load_client_artifact_view` out of `lib.rs` into `crates/platform-api/src/client_artifact_view_support.rs`.
+- Code change:
+  - added `client_artifact_view_support` for client artifact SQL load, file-row load, and `ClientArtifactView` assembly;
+  - existing list/get/create/publish/attach/download/preview handlers keep calling the same helper name through module import;
+  - response fields, file ordering, generated download/preview/public URLs, error codes, and permission checks are unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 38/38 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact Append Ref Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move `append_client_artifact_ref` out of `lib.rs` into `crates/platform-api/src/client_artifact_ref_support.rs`.
+- Code change:
+  - `client_artifact_ref_support` now owns the append-ref SQL execution helper, not only SQL selection;
+  - attach-dataset and attach-asset-library routes continue calling the same helper name through module import;
+  - duplicate-ref prevention, `updated_at` update, unknown-field protection, not-found mapping, response fields, and permission checks are unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_ref_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 38/38 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact Scope Validation Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move `validate_v3_client_scope_refs` out of `lib.rs` into `crates/platform-api/src/client_artifact_scope_support.rs`.
+- Code change:
+  - added `client_artifact_scope_support` for V3 client dataset/asset-library scope validation;
+  - UUID dataset refs still use current active secret bindings, current user, and local thread scope through `load_visible_dataset_for_user_with_local_scope`;
+  - UUID asset library refs still use `load_asset_library`; non-UUID external refs keep the existing no-op realtime UUID validation behavior;
+  - `load_visible_dataset_for_user_with_local_scope` and `load_asset_library` were widened only to `pub(crate)` so the support module can call them.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_scope_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 40/40 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact Upload Authorization Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move `require_client_artifact_upload_authorization` out of `lib.rs` into `crates/platform-api/src/client_artifact_auth_support.rs`.
+- Code change:
+  - added `client_artifact_auth_support` for V3 session or `V3_CLIENT_ARTIFACT_TOKEN` Bearer upload authorization;
+  - kept successful session authorization returning `Some(User)` and token authorization returning `None`;
+  - preserved missing env token, missing bearer token, invalid token error codes and messages;
+  - `current_auth_session` was widened only to `pub(crate)` so the support module can call it.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_auth_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 41/41 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact List View Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact list view loading and list limit normalization out of `lib.rs` into `crates/platform-api/src/client_artifact_view_support.rs`.
+- Code change:
+  - added `client_artifacts_list_limit` to preserve `limit.unwrap_or(50).clamp(1, 100)`;
+  - added `list_client_artifact_views` to load artifact ids by `created_at desc`, apply the same tenant filter and limit, and assemble each `ClientArtifactView` through the existing loader;
+  - `list_client_artifacts` still performs upload authorization before list loading and returns the same `Json<Vec<ClientArtifactView>>` shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 42/42 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact HTML Preview Gate Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact HTML preview gate checks out of `preview_client_artifact_html_file` into `crates/platform-api/src/client_artifact_publish_support.rs`.
+- Code change:
+  - added `ensure_client_artifact_file_can_preview_html`;
+  - preserved the published-status requirement, HTML file detection via existing `client_artifact_file_is_html`, and `V3_CLIENT_ARTIFACT_MAX_HTML_PREVIEW_BYTES` limit;
+  - preserved `client_artifact_not_published`, `client_artifact_preview_not_html`, and `client_artifact_preview_too_large` error codes and messages.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-18 P5 Client Artifact Download File Loader Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact download file query and storage read out of `download_client_artifact_file` into `crates/platform-api/src/client_artifact_view_support.rs`.
+- Code change:
+  - added `ClientArtifactDownloadFile` and `load_client_artifact_download_file`;
+  - preserved tenant filter, artifact id trim, file index match, `client_artifact_file_not_found` mapping, and DB/filesystem storage read behavior;
+  - `download_client_artifact_file` still performs upload authorization and parameter validation before building the existing download response.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or service restart was performed;
+  - 120 server was not touched.
+
+## 2026-06-17 P5 Asset Library View Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset-library record-to-view and profile-hint adapter helpers out of `lib.rs` into `crates/platform-api/src/asset_library_view_support.rs`.
+- Code change:
+  - moved `asset_library_view`, `asset_library_membership_view`, `asset_item_view`, `asset_profile_supply_inputs`, and `asset_profile_supply_hint_view` into the new module;
+  - kept asset-library scope summary, dataset membership routes, assistant-run asset-profile hint supply, and response field shapes unchanged;
+  - added module tests for library view mapping, membership/item view mapping, and asset profile hint input/view adaptation.
+- Local verification:
+  - `cargo test -q -p platform-api asset_library_view_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 7/7 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-06-17 P5 Asset Library Validation Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset-library validation and parsing helpers out of `lib.rs` into `crates/platform-api/src/asset_library_validation_support.rs`.
+- Code change:
+  - moved `parse_asset_library_id`, `asset_library_not_found_error`, `normalize_asset_library_visibility`, and `normalize_asset_library_metadata` into the new module;
+  - kept create-asset-library, dataset membership, scope summary, and not-found/validation response semantics unchanged;
+  - added module tests for UUID parsing, not-found error code, visibility normalization/rejection, and metadata normalization/rejection.
+- Local verification:
+  - `cargo test -q -p platform-api asset_library_validation_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 13/13 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-17 P4 V3 Client Artifact Pipeline 8-Server Verification
 
 - Deployment:
@@ -20436,6 +20649,613 @@ Data-ingestion external fixed-task smoke:
   - `cargo fmt --check`: passed;
   - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 4/4 tests;
   - `cargo test -q -p platform-api client_artifact --lib`: passed, 19/19 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Config Package View Decode Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep config-package creation, scope validation, persistence, query route, and response fields unchanged while moving read-side payload decoding out of `lib.rs`.
+- Code change:
+  - added `client_config_package_artifact_upload_from_payload` to decode `artifact_upload` with the existing default fallback and error code;
+  - added `client_config_package_string_vec` for config-package `asset_library_ids`, `dataset_ids`, and `skill_packs`;
+  - updated `load_client_config_package_view` to call the support helpers and removed the local `value_string_vec`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 19/19 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Scope Ref Validation Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep config-package creation, artifact manifest validation, attach routes, and response/error contracts unchanged while moving shared scope-reference validation out of `lib.rs`.
+- Code change:
+  - moved `validate_v3_client_ref_list` into `crates/platform-api/src/client_artifact_contract_support.rs`;
+  - kept the existing `validation_error` for empty refs and `duplicate_client_scope_ref` for duplicates;
+  - added module tests for empty refs and duplicates after trim.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Upload Bearer Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact upload authorization response/error semantics unchanged while moving the upload-token Bearer parsing helper out of `lib.rs`.
+- Code change:
+  - added `client_artifact_upload_bearer_token` to `crates/platform-api/src/client_artifact_contract_support.rs`;
+  - updated `require_client_artifact_upload_authorization` to call the support helper;
+  - removed the local `bearer_token` helper from `lib.rs`;
+  - added tests for `Bearer`/`bearer`, token trimming, internal-space preservation, missing header, wrong scheme, and empty token.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 23/23 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Ref SQL Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact dataset/asset-library attach route behavior unchanged while moving the field-to-SQL selection out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/client_artifact_ref_support.rs`;
+  - moved dataset/asset-library update SQL selection and unknown-field error construction into `client_artifact_ref_update_sql`;
+  - updated `append_client_artifact_ref` to call the support helper while preserving SQL execution, duplicate append avoidance, and not-found handling.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_ref_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Not-Found Error Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client config package, client artifact, and client artifact file not-found error codes/messages unchanged while moving their constructors out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/client_artifact_error_support.rs`;
+  - moved `client_config_package_not_found`, `client_artifact_not_found`, and `client_artifact_file_not_found` ApiError construction into support helpers;
+  - updated file download, file preview, publish, public publish, load-view, and attach-ref paths to call the shared helpers;
+  - added exact code/message unit tests for all three not-found error constructors.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo test -q -p platform-api client_artifact_error_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 29/29 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact File Index Validation Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact file download and HTML preview file-index validation semantics unchanged while removing duplicate validation blocks from `lib.rs`.
+- Code change:
+  - added `validate_client_artifact_file_index` to `crates/platform-api/src/client_artifact_contract_support.rs`;
+  - updated `download_client_artifact_file` and `preview_client_artifact_html_file` to call the shared helper;
+  - added tests for zero/positive indexes and the exact negative-index error code/message.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact File Record View Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact load-view file response fields unchanged while moving file-record view construction out of `lib.rs`.
+- Code change:
+  - added `client_artifact_file_record_view` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `load_client_artifact_view` to call the helper for file rows;
+  - kept download URL generation, published HTML preview URL gating, and public URL manifest lookup in the same support module;
+  - added a unit test covering download, preview, public URL, size, and sha256 field mapping.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 31/31 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Download Response Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact file download response headers/body/error semantics unchanged while moving response construction out of `lib.rs`.
+- Code change:
+  - added `client_artifact_file_download_response` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `download_client_artifact_file` to call the helper after loading file bytes;
+  - kept `content-type`, `cache-control: no-store`, attachment filename quote stripping, `content-length`, and `client_artifact_download_response_failed` unchanged;
+  - added a unit test covering the download response headers and content length.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 32/32 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact HTML Bytes Sanitizer Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep HTML preview and public HTML publication UTF-8/sanitization behavior unchanged while moving shared byte handling out of `lib.rs`.
+- Code change:
+  - added `sanitize_client_artifact_html_bytes` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `preview_client_artifact_html_file` to use the helper with the existing preview-specific UTF-8 error message;
+  - updated `publish_client_artifact_public_html` to use the helper with the existing public-publish UTF-8 error message;
+  - added tests for sanitizer behavior on UTF-8 HTML bytes and exact non-UTF-8 error code/message.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 34/34 tests;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-17 P5 Client Artifact Public HTML Candidate Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication file selection unchanged while moving the HTML-candidate decision out of `lib.rs`.
+- Code change:
+  - added `ClientArtifactPublicHtmlCandidate` and `select_client_artifact_public_html_candidate` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to map SQL rows into candidates and select through the helper;
+  - kept existing SQL ordering, HTML detection, storage payload handling, and `client_artifact_public_html_not_found` error code/message unchanged;
+  - added tests for selecting the first HTML candidate and rejecting candidate lists without HTML.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 36/36 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Status Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication status gating unchanged while moving the private-published prerequisite check out of `lib.rs`.
+- Code change:
+  - added `ensure_client_artifact_can_publish_public_html` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after reading artifact status;
+  - kept the `client_artifact_not_published` error code and message unchanged;
+  - added a unit test covering accepted `published` status and rejected non-published status.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 37/37 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact HTML Manifest Serialization Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML artifact manifest serialization and error semantics unchanged while moving JSON value construction out of `lib.rs`.
+- Code change:
+  - added `client_artifact_html_artifact_manifest_value` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper before upserting the HTML artifact;
+  - kept `html_artifact_serialize_failed` error code/message unchanged;
+  - added a unit test covering serialized manifest id and public URL payload fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 38/38 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Preview File Loader Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep HTML preview authorization, published/html/size gate, UTF-8 sanitizer, and sandboxed preview response unchanged while moving file query and storage read out of `lib.rs`.
+- Code change:
+  - added `ClientArtifactPreviewFile` and `load_client_artifact_preview_file` to `crates/platform-api/src/client_artifact_view_support.rs`;
+  - updated `preview_client_artifact_html_file` to call the helper after artifact id and file index validation;
+  - preserved tenant filter, trimmed artifact id binding, file index match, `client_artifact_file_not_found` mapping, owner visibility handoff, preview gate handoff, UTF-8 sanitizer, and HTML preview response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Candidate Loader Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving file row query, primary HTML priority ordering, and candidate selection out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `load_client_artifact_public_html_candidate_file` to `crates/platform-api/src/client_artifact_view_support.rs`;
+  - reused existing `ClientArtifactPublicHtmlCandidate` and `select_client_artifact_public_html_candidate` from `client_artifact_publish_support`;
+  - updated `publish_client_artifact_public_html` to call the loader after artifact owner/status checks;
+  - preserved file storage read handoff, UTF-8 sanitizer, public directory write, HTML artifact upsert, manifest public publish marker, public URL, error code, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Artifact Record Loader Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication flow unchanged while moving the artifact main-record query and not-found mapping out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `ClientArtifactPublicHtmlRecord` and `load_client_artifact_public_html_record` to `crates/platform-api/src/client_artifact_view_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the loader after artifact id validation;
+  - preserved owner permission handoff, private-published status gate, candidate file loading, UTF-8 sanitizer, public directory write, HTML artifact upsert, manifest public publish marker, public URL, error code, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Private Publish Record Loader Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep private client artifact publication behavior unchanged while moving the owner/manifest main-record query and not-found mapping out of `publish_client_artifact`.
+- Code change:
+  - added `ClientArtifactPublishRecord` and `load_client_artifact_publish_record` to `crates/platform-api/src/client_artifact_view_support.rs`;
+  - updated `publish_client_artifact` to call the loader after artifact id validation;
+  - preserved owner permission handoff, private publish manifest marker, status update SQL, `rows_affected` not-found guard, response construction, and all error semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_view_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Private Publish Update Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep private client artifact publication behavior unchanged while moving status/manifest update SQL and `rows_affected` not-found protection out of `publish_client_artifact`.
+- Code change:
+  - added `mark_client_artifact_private_published` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact` to call the helper after owner permission and private publish manifest marker construction;
+  - preserved `status='published'`, manifest write, `updated_at = now()`, tenant/artifact filters, storage error mapping, `client_artifact_not_found` fallback, response construction, and public/third-party contracts;
+  - removed the now-unused `client_artifact_error_support::*` import from `lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Manifest Update Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving the final client artifact manifest update SQL out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `update_client_artifact_public_html_manifest` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after HTML artifact upsert and public manifest marker construction;
+  - preserved manifest write, `updated_at = now()`, tenant/artifact filters, storage error mapping, current no-extra-`rows_affected` check behavior, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Artifact Upsert Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving HTML artifact storage upsert construction out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `upsert_client_artifact_public_html_artifact` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after `client_artifact_public_html_artifact_manifest` construction;
+  - preserved `NewHtmlArtifact` fields, source/template/interaction serialized variants, manifest JSON serialization and `html_artifacts().upsert` storage error mapping;
+  - kept public HTML file write, client artifact manifest marker/update, public URL return, response construction, and public/third-party contracts unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML File Write Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving directory creation and `index.html` write out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `write_client_artifact_public_html_file` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after relative directory and artifact root resolution;
+  - preserved `external_channel_generated_artifact_root` use in the handler, relative path generation, directory creation, `index.html` write, `client_artifact_public_publish_failed` error code, error messages, public URL generation, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Candidate Prepare Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving candidate file storage read and UTF-8/sanitizer out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `ClientArtifactPreparedPublicHtmlFile` and `prepare_client_artifact_public_html_candidate` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after public HTML candidate selection;
+  - preserved DB/filesystem storage read behavior, UTF-8 error message, sanitizer, file metadata, sandbox HTML wrapping handoff, public URL generation, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 43/43 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML File Publication Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving sandbox HTML wrapping and relative directory generation out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `ClientArtifactPublicHtmlFilePublication` and `build_client_artifact_public_html_file_publication` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after public HTML candidate preparation;
+  - preserved generated artifact root resolution, file write behavior, public URL generation, HTML artifact manifest construction, manifest public publish marker, response construction, path safety validation, error codes, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 44/44 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Public HTML Metadata Finalize Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep public HTML publication behavior unchanged while moving metadata finalization out of `publish_client_artifact_public_html`.
+- Code change:
+  - added `finalize_client_artifact_public_html_publication` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact_public_html` to call the helper after public HTML file write and public URL construction;
+  - preserved HTML artifact manifest construction, `html_artifacts().upsert`, public manifest marker, client artifact manifest update SQL, response construction, HTML artifact fields, manifest fields, error codes, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 44/44 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Multipart Parser Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact upload behavior unchanged while moving multipart manifest/file parsing out of `create_client_artifact`.
+- Code change:
+  - added `parse_client_artifact_multipart`, `parse_client_artifact_manifest_text`, and `validate_client_artifact_uploaded_file_size` to `crates/platform-api/src/client_artifact_contract_support.rs`;
+  - updated `create_client_artifact` to call the parser immediately after upload authorization;
+  - preserved manifest field name, files field name, ignored unknown fields, manifest-required error, JSON decode error code/message, max file count error, per-file read error, max file size error, downstream manifest validation, scope validation, file order validation, storage selection, DB transaction, and response construction.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 47/47 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Create Persistence Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact upload persistence behavior unchanged while moving artifact/file insert transaction out of `create_client_artifact`.
+- Code change:
+  - added `crates/platform-api/src/client_artifact_create_support.rs`;
+  - added `insert_client_artifact_with_files` for artifact main-record insert, file SHA-256, DB/filesystem storage selection, file-record inserts, and transaction commit;
+  - added `client_artifact_file_sha256_hex` and a unit test;
+  - updated `create_client_artifact` to call the helper after upload authorization, multipart parsing, manifest validation, scope validation, and file-order validation;
+  - preserved artifact id generation in the handler, SQL text, `status='received'`, manifest encoding error code, owner user id binding, storage env handling, file storage semantics, transaction boundaries, final view reload, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_create_support --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 48/48 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Attach Ref Workflow Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact dataset/asset-library attach behavior unchanged while moving shared ref attach workflow out of route handlers.
+- Code change:
+  - added `attach_client_artifact_ref_and_load_view` and `client_artifact_ref_scope_values` to `crates/platform-api/src/client_artifact_ref_support.rs`;
+  - updated `attach_client_artifact_to_dataset` and `attach_client_artifact_to_asset_library` to call the shared helper after session and required-field checks;
+  - preserved required request fields, trim behavior, ref list validation, UUID scope validation, external-id skip behavior, append SQL, duplicate no-op semantics, not-found mapping, final `ClientArtifactView` reload, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_ref_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 50/50 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Private Publish Finalize Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep private client artifact publish behavior unchanged while moving manifest marker and status update finalization out of `publish_client_artifact`.
+- Code change:
+  - added `finalize_client_artifact_private_publication` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact` to call the helper after owner permission check;
+  - preserved session requirement, artifact id validation, publish-record loading, owner check, `published_private` manifest marker, `status='published'` update SQL, `rows_affected` not-found guard, final view reload, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 50/50 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Create Validation/ID Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact upload validation and artifact id behavior unchanged while moving create request validation and id generation out of `create_client_artifact`.
+- Code change:
+  - added `validate_client_artifact_create_request` and `new_client_artifact_id` to `crates/platform-api/src/client_artifact_create_support.rs`;
+  - updated `create_client_artifact` to call the helper after multipart parsing and before persistence;
+  - preserved manifest structure validation, scope validation, file order validation, validation order, `v3ca_` id format, persistence handoff, final view reload, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_create_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Create Upload Orchestration Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact upload create behavior unchanged while moving validation, id generation, persistence, and final view reload out of `create_client_artifact`.
+- Code change:
+  - added `create_client_artifact_from_upload` to `crates/platform-api/src/client_artifact_create_support.rs`;
+  - updated `create_client_artifact` to call the helper after upload authorization and multipart parsing;
+  - preserved upload authorization, multipart parsing, validation order, `v3ca_` id format, artifact/file insert SQL, storage selection, final `ClientArtifactView` reload, `201 Created` response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_create_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-18 P5 Client Artifact Private Publish Orchestration Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep private client artifact publish behavior unchanged while moving publish-record load, owner check, finalize, and final view reload out of `publish_client_artifact`.
+- Code change:
+  - added `publish_client_artifact_private_and_load_view` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `publish_client_artifact` to call the helper after user session, required artifact id validation, and trim;
+  - preserved session requirement, artifact id validation/trim, publish-record loading, owner check not-found semantics, `published_private` manifest marker, `status='published'` update SQL, `rows_affected` not-found guard, final `ClientArtifactView` reload, response construction, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source database write, source sync, object cleanup, P2/P4 real write, static-page generation, service restart, GitHub push, 8-server deployment, or 120 server state was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, filesystem locator, object key, local object path, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-19 P5 Client Artifact HTML Preview Orchestration Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving `platform-api` splitting on the Codex client enterprise-configurator path;
+  - keep client artifact HTML preview behavior unchanged while moving preview file load, owner check, HTML gate, sanitizer, and sandbox response construction out of `preview_client_artifact_html_file`.
+- Code change:
+  - added `client_artifact_html_preview_response_for_user` to `crates/platform-api/src/client_artifact_publish_support.rs`;
+  - updated `preview_client_artifact_html_file` to call the helper after user session, artifact id validation, and file index validation;
+  - preserved session requirement, artifact id validation, file index non-negative validation, tenant/file lookup, owner check not-found semantics, published/html/size gates, UTF-8 error message, sanitizer, CSP/sandbox response headers, and public/third-party contracts.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
   - `cargo check -q -p platform-api`: passed;
   - `git diff --check`: passed with Windows LF/CRLF warnings only.
 - Safety:

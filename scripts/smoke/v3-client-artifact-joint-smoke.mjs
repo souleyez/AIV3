@@ -11,6 +11,11 @@ const DEFAULT_OUTPUT_DIR = 'target/v3-client-artifact-joint-smoke';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MANIFEST_SCHEMA = 'v3.client_artifact_manifest.v1';
 const MANIFEST_SOURCE = 'enterprise-codex-client';
+const DEFAULT_CODEX_CONTROL_BASE_URL = 'https://ad.goods-editor.com';
+const DEFAULT_CODEX_ACTIVATION_ENDPOINT = '/api/codex/clients/activate';
+const DEFAULT_CODEX_HEARTBEAT_ENDPOINT = '/api/codex/clients/heartbeat';
+const DEFAULT_CODEX_REVOKE_ENDPOINT = '/api/codex/clients/self-revoke';
+const DEFAULT_CODEX_ACTIVATION_TOKEN_ENV = 'CODEX_CLIENT_ACTIVATION_TOKEN';
 
 function parseArgs(argv) {
   const args = {
@@ -228,6 +233,16 @@ function buildConfigPackageRequest(args) {
       mode: 'session_token',
       endpoint: '/v1/client-artifacts',
     },
+    codex_control: {
+      base_url: DEFAULT_CODEX_CONTROL_BASE_URL,
+      activation_endpoint: DEFAULT_CODEX_ACTIVATION_ENDPOINT,
+      heartbeat_endpoint: DEFAULT_CODEX_HEARTBEAT_ENDPOINT,
+      revoke_endpoint: DEFAULT_CODEX_REVOKE_ENDPOINT,
+      activation_token_env: DEFAULT_CODEX_ACTIVATION_TOKEN_ENV,
+      terminal_id: `term-smoke-${args.runId}`,
+      terminal_label: 'joint-smoke',
+      session_ttl_seconds: 30 * 24 * 60 * 60,
+    },
     expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     metadata: {
       smoke: true,
@@ -370,6 +385,7 @@ function selfTest(args) {
     user_id: `user-smoke-${args.runId}`,
     client_id: args.clientId,
     artifact_upload: packageRequest.artifact_upload,
+    codex_control: packageRequest.codex_control,
     dataset_ids: packageRequest.dataset_ids,
     asset_library_ids: packageRequest.asset_library_ids,
   };
@@ -379,6 +395,9 @@ function selfTest(args) {
     { filename: 'report.md', contentType: 'text/markdown', content: buildReportMarkdown(args) },
   ];
   validateManifest(manifest, files);
+  assert.equal(packageRequest.codex_control.base_url, DEFAULT_CODEX_CONTROL_BASE_URL);
+  assert.equal(packageRequest.codex_control.activation_token_env, DEFAULT_CODEX_ACTIVATION_TOKEN_ENV);
+  assert.equal(Object.hasOwn(packageRequest.codex_control, 'activation_token'), false);
 
   const simulatedArtifact = {
     artifact_id: `v3ca_${args.runId}`,
@@ -421,6 +440,14 @@ function selfTest(args) {
     package_request: {
       client_id: packageRequest.client_id,
       artifact_upload: packageRequest.artifact_upload,
+      codex_control: {
+        base_url: packageRequest.codex_control.base_url,
+        activation_endpoint: packageRequest.codex_control.activation_endpoint,
+        heartbeat_endpoint: packageRequest.codex_control.heartbeat_endpoint,
+        revoke_endpoint: packageRequest.codex_control.revoke_endpoint,
+        activation_token_env: packageRequest.codex_control.activation_token_env,
+        has_activation_token: Object.hasOwn(packageRequest.codex_control, 'activation_token'),
+      },
       dataset_count: packageRequest.dataset_ids.length,
       asset_library_count: packageRequest.asset_library_ids.length,
     },
@@ -468,6 +495,9 @@ async function executeLive(args) {
   const packageView = packageResponse.package || packageResponse;
   assert.ok(packageView.package_id);
   assert.equal(packageView.artifact_upload?.endpoint, '/v1/client-artifacts');
+  assert.equal(packageView.codex_control?.base_url, DEFAULT_CODEX_CONTROL_BASE_URL);
+  assert.equal(packageView.codex_control?.activation_token_env, DEFAULT_CODEX_ACTIVATION_TOKEN_ENV);
+  assert.equal(Object.hasOwn(packageView.codex_control || {}, 'activation_token'), false);
 
   const fetchedPackage = await fetchJson(
     `${args.baseUrl}/v1/client-config-packages/${encodeURIComponent(packageView.package_id)}`,

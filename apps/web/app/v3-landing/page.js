@@ -3,6 +3,34 @@ export const metadata = {
   description: 'DataMax V3 企业级数据处理助手。',
 };
 
+const DOWNLOAD_LINKS = [
+  {
+    title: 'Codex 镜像源',
+    href: '/downloads/codex/openai-codex-install.ps1',
+    text: 'OpenAI Codex Windows 安装脚本镜像。',
+  },
+  {
+    title: '下载中心',
+    href: '/downloads/codex/',
+    text: '终端安装包、镜像源、校验文件。',
+  },
+  {
+    title: 'V3企业定制agent终端 Windows',
+    href: '/downloads/codex/V3企业定制agent终端-Windows.zip',
+    text: 'Windows 版。',
+  },
+  {
+    title: 'V3企业定制agent终端 macOS',
+    href: '/downloads/codex/V3企业定制agent终端-macOS.zip',
+    text: 'macOS 版。',
+  },
+  {
+    title: 'SHA256 校验',
+    href: '/downloads/codex/SHA256SUMS.txt',
+    text: '文件完整性校验。',
+  },
+];
+
 export default function V3LandingPage() {
   return (
     <main style={{
@@ -10,7 +38,7 @@ export default function V3LandingPage() {
       background: 'linear-gradient(135deg, #07111f 0%, #0b1d33 42%, #f2efe6 42%, #fffaf0 100%)',
       color: '#f8fafc',
       fontFamily: '"Avenir Next", "Segoe UI", sans-serif',
-      overflow: 'hidden',
+      overflowX: 'hidden',
     }}>
       <section style={{
         display: 'grid',
@@ -39,7 +67,7 @@ export default function V3LandingPage() {
             margin: 0,
             fontSize: 'clamp(44px, 6vw, 86px)',
             lineHeight: 0.92,
-            letterSpacing: '-0.07em',
+            letterSpacing: 0,
             maxWidth: 680,
           }}>
             企业级数据处理助手
@@ -54,7 +82,7 @@ export default function V3LandingPage() {
             文档、数据库、网页和业务系统统一接入，自动生成问答、报表、HTML 产物和第三方回调能力。
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-            <a href="/admin/login" style={{
+            <a href="/downloads/codex/" style={{
               color: '#07111f',
               background: '#f8d36f',
               textDecoration: 'none',
@@ -62,6 +90,17 @@ export default function V3LandingPage() {
               borderRadius: 16,
               padding: '14px 20px',
               boxShadow: '0 18px 50px rgba(248, 211, 111, 0.28)',
+            }}>
+              V3企业定制agent终端
+            </a>
+            <a href="/admin/login" style={{
+              color: '#e5edf8',
+              border: '1px solid rgba(229, 237, 248, 0.28)',
+              textDecoration: 'none',
+              fontWeight: 800,
+              borderRadius: 16,
+              padding: '14px 20px',
+              background: 'rgba(255, 255, 255, 0.08)',
             }}>
               管理台登录
             </a>
@@ -108,6 +147,93 @@ export default function V3LandingPage() {
               background: '#fff',
             }}
           />
+        </div>
+      </section>
+      <section style={{
+        width: 'min(1320px, calc(100vw - 40px))',
+        margin: '0 auto',
+        padding: '0 0 56px',
+      }}>
+        <div style={{
+          display: 'grid',
+          gap: 18,
+          padding: 24,
+          borderRadius: 28,
+          border: '1px solid rgba(8, 32, 51, 0.12)',
+          background: 'rgba(255, 250, 240, 0.94)',
+          color: '#0b1d33',
+          boxShadow: '0 28px 80px rgba(7, 17, 31, 0.2)',
+        }}>
+          <div style={{
+            display: 'grid',
+            gap: 8,
+            maxWidth: 820,
+          }}>
+            <span style={{
+              color: '#0f766e',
+              fontSize: 13,
+              fontWeight: 900,
+              letterSpacing: 0,
+            }}>
+              CODEX EXECUTOR MIRROR
+            </span>
+            <h2 style={{
+              margin: 0,
+              color: '#07111f',
+              fontSize: 'clamp(28px, 4vw, 48px)',
+              lineHeight: 1.08,
+              letterSpacing: 0,
+            }}>
+              V3企业定制agent终端
+            </h2>
+            <p style={{
+              margin: 0,
+              color: '#415168',
+              fontSize: 16,
+              fontWeight: 700,
+              lineHeight: 1.7,
+            }}>
+              Codex 镜像源、终端安装包、校验文件。
+            </p>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 12,
+          }}>
+            {DOWNLOAD_LINKS.map((item) => (
+              <a
+                href={item.href}
+                key={item.href}
+                style={{
+                  minWidth: 0,
+                  display: 'grid',
+                  gap: 8,
+                  padding: 18,
+                  border: '1px solid rgba(15, 118, 110, 0.18)',
+                  borderRadius: 18,
+                  background: '#ffffff',
+                  color: '#0b1d33',
+                  textDecoration: 'none',
+                }}
+              >
+                <strong style={{
+                  fontSize: 18,
+                  lineHeight: 1.35,
+                }}>
+                  {item.title}
+                </strong>
+                <span style={{
+                  color: '#607084',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  lineHeight: 1.6,
+                }}>
+                  {item.text}
+                </span>
+              </a>
+            ))}
+          </div>
         </div>
       </section>
     </main>
