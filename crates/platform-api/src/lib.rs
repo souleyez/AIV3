@@ -3,7 +3,6 @@
 mod basic_view_support;
 mod client_artifact_create_support;
 
-use asset_library_asset_supply_support::*;
 use asset_library_auth_support::*;
 use asset_library_create_support::*;
 use asset_library_list_support::*;
@@ -263,6 +262,7 @@ mod codex_orchestrator_access_support;
 mod dataset_output_model_facing;
 mod dataset_output_view_support;
 mod dataset_summary_support;
+mod dataset_update_support;
 mod document_chunk_support;
 mod document_compare_model_facing;
 mod document_detail_model_facing;
@@ -485,6 +485,7 @@ use codex_orchestrator_access_support::*;
 use dataset_output_model_facing::*;
 use dataset_output_view_support::*;
 use dataset_summary_support::*;
+use dataset_update_support::*;
 use document_chunk_support::*;
 use document_compare_model_facing::*;
 use document_detail_model_facing::*;
@@ -3480,7 +3481,7 @@ async fn load_visible_dataset(
     load_visible_dataset_for_user(state, dataset_id, active_secret_binding_ids, None).await
 }
 
-async fn load_visible_dataset_for_user(
+pub(crate) async fn load_visible_dataset_for_user(
     state: &AppState,
     dataset_id: DatasetId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -4648,76 +4649,16 @@ async fn get_asset_library_scope_summary(
     let asset_library_id = parse_asset_library_scope_summary_path(&asset_library_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let asset_library = load_asset_library(&state, asset_library_id).await?;
-    let memberships = state
-        .storage
-        .asset_libraries()
-        .list_dataset_memberships(state.tenant_id, asset_library_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let visible_datasets = filter_visible_datasets(
-        state
-            .storage
-            .datasets()
-            .list_by_tenant(state.tenant_id)
-            .await
-            .map_err(ApiError::from_storage)?,
-        &active_secret_binding_ids,
-        Some(user.id),
-        local_thread_id.as_deref(),
-    )
-    .into_iter()
-    .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
-    .collect::<Vec<_>>();
-    let visible_dataset_ids = visible_datasets
-        .iter()
-        .map(|dataset| dataset.id)
-        .collect::<Vec<_>>();
-    let scope_memberships = memberships
-        .iter()
-        .map(
-            |membership| asset_library_scope_support::AssetLibraryDatasetMembership {
-                dataset_id: membership.dataset_id,
-                role: membership.role.clone(),
-                priority: membership.priority,
-            },
+    Ok(Json(
+        load_asset_library_scope_summary_response(
+            &state,
+            asset_library_id,
+            &active_secret_binding_ids,
+            user.id,
+            local_thread_id.as_deref(),
         )
-        .collect::<Vec<_>>();
-    let scope = asset_library_scope_support::resolve_asset_library_dataset_scope(
-        &scope_memberships,
-        &visible_dataset_ids,
-    );
-    let authorized_dataset_ids = scope.dataset_ids.iter().copied().collect::<BTreeSet<_>>();
-    let visible_memberships = memberships
-        .into_iter()
-        .filter(|membership| authorized_dataset_ids.contains(&membership.dataset_id))
-        .map(asset_library_membership_view)
-        .collect::<Vec<_>>();
-    let datasets = visible_datasets
-        .into_iter()
-        .filter(|dataset| authorized_dataset_ids.contains(&dataset.id))
-        .map(|dataset| dataset_summary(dataset, None))
-        .collect::<Vec<_>>();
-    let (assets, asset_profile_hints) = load_asset_library_authorized_asset_supply(
-        &state,
-        asset_library_id,
-        &authorized_dataset_ids,
-    )
-    .await?;
-
-    Ok(Json(asset_library_scope_summary_response(
-        AssetLibraryScopeSummaryResponseInput {
-            asset_library: asset_library_view(asset_library),
-            memberships: visible_memberships,
-            datasets,
-            dataset_ids: scope.dataset_ids,
-            assets,
-            asset_profile_hints,
-            denied_dataset_count: scope.denied_dataset_ids.len(),
-            membership_count: scope.membership_count,
-            authorized_dataset_count: authorized_dataset_ids.len(),
-        },
-    )))
+        .await?,
+    ))
 }
 
 async fn update_dataset(
@@ -4729,47 +4670,17 @@ async fn update_dataset(
     let dataset_id = parse_dataset_id(&dataset_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let dataset = load_visible_dataset_for_user(
-        &state,
-        dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    ensure_owner_managed_resource(
-        "dataset",
-        dataset.id.to_string(),
-        dataset.owner_user_id,
-        current_user_id,
-    )?;
-
-    let title = trim_optional(request.title);
-    if let Some(title) = title.as_deref() {
-        validate_required("title", title)?;
-    }
-    let description = trim_optional(request.description);
-    let lifecycle = parse_dataset_lifecycle_update(request.lifecycle)?;
-    let metadata_updates = if lifecycle == Some(DatasetLifecycle::Archived) {
-        json!({ "archived_at": Utc::now() })
-    } else {
-        json!({})
-    };
-
-    let updated = state
-        .storage
-        .datasets()
-        .update_state(
-            state.tenant_id,
+    Ok(Json(
+        update_dataset_and_load_summary(
+            &state,
             dataset_id,
-            title.as_deref(),
-            description.as_deref(),
-            lifecycle,
-            &metadata_updates,
+            &active_secret_binding_ids,
+            current_user_id,
+            request,
+            Utc::now(),
         )
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    Ok(Json(dataset_summary(updated, None)))
+        .await?,
+    ))
 }
 
 async fn list_memory_directories(

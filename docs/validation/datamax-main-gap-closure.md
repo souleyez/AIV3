@@ -20632,6 +20632,86 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-19 P3 Main Artifact Task Card Workspace Verification
+
+- Purpose:
+  - verify the main-site artifact task card workspace against the plan close criteria after the current 8-server deployment;
+  - confirm the already-landed `artifactTaskCard` view model, right-side task card UI, selected-file handling, and continue-edit wiring still build and pass P0 self-test coverage.
+- Current implementation evidence:
+  - `apps/web/app/lib/artifact-task-cards.js` normalizes report plans, published reports, static-page drafts, HTML artifacts, Codex customer tasks, and Codex customer artifacts into one task card list;
+  - `apps/web/app/components/InsightPanel.js` renders task cards inside the existing `right-results-card` / `generated-project-card` visual system;
+  - `apps/web/app/HomePageClient.js` passes report/static-page/Codex/html artifact state into the panel and keeps selected static-page/HTML artifact actions available.
+- Local verification:
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack NFT trace warnings only;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`.
+- 8-server verification:
+  - 8-server repo head during verification: `c20ec9160`;
+  - `node --test apps/web/app/lib/artifact-task-cards.test.mjs`: passed, 3/3 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and Turbopack NFT trace warnings only;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`.
+- Remaining manual check:
+  - still useful to click through a real main-site static-page or HTML artifact session and verify selected successful files open/edit as expected, because current self-tests cover model/build/smoke behavior but not browser pointer interactions.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, or 120 server change was performed during this verification.
+
+## 2026-06-19 P5 Asset Library Scope Summary Assembly Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library scope summary assembly out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/asset_library_scope_summary_support.rs`;
+  - added `load_asset_library_scope_summary_response` for asset library loading, membership loading, visible dataset filtering, authorized asset/profile supply loading, and final response construction;
+  - added `authorized_dataset_ids_for_scope_summary` and `asset_library_scope_summary_input_from_records` to keep scope calculation and response input assembly testable;
+  - kept `get_asset_library_scope_summary` responsible for V3 user session auth, path parsing, header parsing, and `Json` response wrapping only;
+  - removed the now-unused `asset_library_asset_supply_support::*` wildcard import from `crates/platform-api/src/lib.rs`;
+  - preserved archived dataset filtering, denied dataset count, membership count, authorized dataset count, asset/profile hint count, response fields, and public API contract.
+- Local verification:
+  - `cargo fmt --check`: passed after `cargo fmt`;
+  - `cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 32/32 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Dataset Update Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset update orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_update_support.rs`;
+  - added `update_dataset_and_load_summary` for visible dataset loading, owner-managed resource check, storage update, and final `DatasetSummary` construction;
+  - added `dataset_update_fields_from_request` for title/description trim, lifecycle parsing, and archive metadata updates;
+  - kept `update_dataset` responsible for path parsing, header parsing, current user lookup, `Utc::now()`, and `Json` response wrapping only;
+  - made `load_visible_dataset_for_user` `pub(crate)` so the support helper can reuse the existing visibility and archived dataset behavior;
+  - preserved blank title no-op semantics from `trim_optional`, invalid lifecycle validation, `archived_at` metadata, owner access control, response fields, and public API contract.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_update_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 32/32 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
