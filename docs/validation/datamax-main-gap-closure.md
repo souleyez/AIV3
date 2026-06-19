@@ -2,6 +2,41 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow Initial Helpers GitHub And 8-server Release
+
+- Scope:
+  - publish the P5 workflow initial runtime parts, execution assembly, shared prompt/memory context, and report default context helper split;
+  - keep the release scoped to `crates/platform-api/src/lib.rs`, `crates/platform-api/src/workflow_initial_context_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation ledger;
+  - exclude known historical line-ending noise in public third-party integration HTML/docs and the archived performance plan.
+- GitHub:
+  - code release commit: `49f92291` (`Split workflow initial execution helpers`);
+  - pushed to `origin/main`.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 3/3 tests;
+  - workflow initial execution regressions for memory directory, dataset output, external source sync, chat session, report render, report plan continue, and static-page draft creation: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- 8-server deployment:
+  - target host: `8服务器` (`8.155.8.7`);
+  - repository: `/srv/aiv3/repo`;
+  - before deploy: `e35865d23`, services active;
+  - `git pull --ff-only`: fast-forwarded to `49f922918`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p ingest-worker -p retrieval-worker -p assistant-run-worker -p static-page-worker`: passed;
+  - restarted `aiv3-platform-api.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-assistant-run-worker.service`, and `aiv3-static-page-worker.service`;
+  - post-restart active checks: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`, and `aiv3-media-worker.service` all active;
+  - public root `https://v3.elepcloud.com/`: 200;
+  - public pure third-party guide: 200;
+  - admin login: 200;
+  - non-mutating external events GET guard: 405;
+  - non-mutating local upload GET guard: 405;
+  - platform-api and worker error logs since deploy: no error-level entries found.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-20 P5 Workflow Initial Runtime, Execution Assembly, Shared Context, And Report Context Helpers Local Verification
 
 - Purpose:
