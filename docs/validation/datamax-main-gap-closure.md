@@ -21178,6 +21178,41 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-20 P5 Workflow Runtime Artifact Helpers GitHub And 8-server Release
+
+- Scope:
+  - formal release for the P5 helper split covering customer Codex artifact output bundles, runtime trace list views, workflow runtime artifact manifests, and workflow runtime artifact manifest loader consolidation;
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping changed.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api customer_codex --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api runtime_trace_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api to_dataset_output_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api to_chat_message_view_prefers_llm_invocation_runtime_over_manifest_runtime --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api completed_chat_session_view_hydrates_latest_message_from_llm_invocations_when_manifest_view_absent --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_execution_query_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --cached --check`: passed;
+  - added-line sensitive scan only matched newly added denylist keywords and safety-note wording; no actual credential or private payload value was found.
+- GitHub:
+  - code commit `4fdd5ca3` was pushed to `main` with message `Split workflow runtime artifact helpers`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `b26bd04eb` to `4fdd5ca33`;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed;
+  - restarted `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`;
+  - `systemctl is-active ...`: all five V3 services returned `active`;
+  - first immediate `http://127.0.0.1:3000/readyz` check hit the short restart window, then retry returned `status=ready`;
+  - `http://127.0.0.1:3100/` returned HTTP 200;
+  - `https://v3.elepcloud.com/` returned HTTP 200 and rewrote to `/v3-landing`.
+- Notes:
+  - `systemctl --failed` showed unrelated non-V3 failed units `codex-web-mirror-update.service`, `home-host-check.service`, and `home-runtime-smoke.service`; the V3 release services were active.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed.
+
 ## 2026-06-20 P5 Workflow Runtime Artifact Manifest Loader Consolidation Local Verification
 
 - Purpose:
