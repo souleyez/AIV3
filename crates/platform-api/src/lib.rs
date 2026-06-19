@@ -273,10 +273,15 @@ mod dataset_summary_support;
 mod dataset_update_support;
 mod document_chunk_list_support;
 mod document_chunk_support;
+mod document_compare_load_support;
 mod document_compare_model_facing;
+mod document_detail_load_support;
 mod document_detail_model_facing;
+mod document_enrichment_run_list_support;
+mod document_media_detail_load_support;
 mod document_media_model_facing;
 mod document_model_facing_support;
+mod document_retrieval_evidence_support;
 mod document_view_support;
 mod external_action_dispatch_transport_support;
 mod external_action_result_callback_support;
@@ -505,11 +510,16 @@ use dataset_summary_support::*;
 use dataset_update_support::*;
 use document_chunk_list_support::*;
 use document_chunk_support::*;
+use document_compare_load_support::*;
 use document_compare_model_facing::*;
+use document_detail_load_support::*;
 use document_detail_model_facing::*;
+use document_enrichment_run_list_support::*;
+use document_media_detail_load_support::*;
 use document_media_model_facing::*;
 #[cfg(test)]
 use document_model_facing_support::format_document_lifecycle_view;
+use document_retrieval_evidence_support::*;
 use document_view_support::*;
 use external_action_dispatch_transport_support::*;
 use external_action_result_callback_support::*;
@@ -3577,7 +3587,7 @@ async fn load_visible_dataset_for_assistant_scope(
     }
 }
 
-async fn load_visible_document_for_user(
+pub(crate) async fn load_visible_document_for_user(
     state: &AppState,
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
@@ -48933,7 +48943,7 @@ async fn build_assistant_run_document_parse_status_supply(
     })])
 }
 
-async fn load_latest_upload_ingest_workflow_snapshots(
+pub(crate) async fn load_latest_upload_ingest_workflow_snapshots(
     state: &AppState,
     dataset_id: DatasetId,
     document_ids: &[DocumentId],
@@ -55208,22 +55218,17 @@ async fn get_document_media_detail(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let document = load_visible_document_for_user_with_local_scope(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-    let chunks = state
-        .storage
-        .document_chunks()
-        .list_by_document_or_canonical(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
 
-    Ok(Json(to_document_media_detail_view(document, chunks)))
+    Ok(Json(
+        load_document_media_detail_view_for_user(
+            &state,
+            document_id,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .await?,
+    ))
 }
 
 async fn compare_documents_route(
@@ -55270,28 +55275,16 @@ async fn list_document_retrieval_evidences(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    load_visible_document_for_user_with_local_scope(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-
-    let mut evidences = state
-        .storage
-        .retrieval_evidences()
-        .list_by_document_or_canonical(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    sort_retrieval_evidences_by_relevance(&mut evidences);
 
     Ok(Json(
-        evidences
-            .into_iter()
-            .map(to_retrieval_evidence_view)
-            .collect(),
+        list_document_retrieval_evidence_views_for_user(
+            &state,
+            document_id,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -55311,30 +55304,17 @@ async fn list_document_enrichment_runs(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    load_visible_document_for_user_with_local_scope(
-        &state,
-        document_id,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .await?;
-
-    let runs = state
-        .storage
-        .document_enrichment_runs()
-        .list_by_document(
-            state.tenant_id,
-            document_id,
-            query.limit.unwrap_or(50).clamp(1, 200),
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
 
     Ok(Json(
-        runs.into_iter()
-            .map(to_document_enrichment_run_view)
-            .collect(),
+        list_document_enrichment_run_views_for_user(
+            &state,
+            document_id,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+            query.limit,
+        )
+        .await?,
     ))
 }
 
@@ -55344,12 +55324,11 @@ async fn load_document_detail_with_state(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<DocumentDetailView, ApiError> {
-    load_document_detail_with_state_and_local_scope(
+    load_document_detail_view_for_user(
         state,
         document_id,
         active_secret_binding_ids,
         current_user_id,
-        None,
     )
     .await
 }
@@ -55361,38 +55340,14 @@ async fn load_document_detail_with_state_and_local_scope(
     current_user_id: Option<UserId>,
     local_thread_id: Option<&str>,
 ) -> std::result::Result<DocumentDetailView, ApiError> {
-    let document = load_visible_document_for_user_with_local_scope(
+    load_document_detail_view_for_user_with_local_scope(
         state,
         document_id,
         active_secret_binding_ids,
         current_user_id,
         local_thread_id,
     )
-    .await?;
-    let chunks = state
-        .storage
-        .document_chunks()
-        .list_by_document_or_canonical(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let mut retrieval_evidences = state
-        .storage
-        .retrieval_evidences()
-        .list_by_document_or_canonical(state.tenant_id, document_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    sort_retrieval_evidences_by_relevance(&mut retrieval_evidences);
-    let workflow_by_document =
-        load_latest_upload_ingest_workflow_snapshots(state, document.dataset_id, &[document.id])
-            .await?;
-    let workflow = workflow_by_document.get(&document.id).cloned();
-
-    Ok(to_document_detail_view(
-        document,
-        chunks,
-        retrieval_evidences,
-        workflow,
-    ))
+    .await
 }
 
 async fn compare_documents_with_state(
@@ -55401,62 +55356,7 @@ async fn compare_documents_with_state(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<CompareDocumentsView, ApiError> {
-    let mut unique_document_ids = Vec::new();
-    for document_id in request.document_ids {
-        if !unique_document_ids
-            .iter()
-            .any(|existing| *existing == document_id)
-        {
-            unique_document_ids.push(document_id);
-        }
-    }
-
-    if unique_document_ids.len() < 2 {
-        return Err(ApiError::bad_request(
-            "compare_documents_requires_multiple_documents",
-            "compare_documents requires at least 2 distinct document_ids".to_string(),
-        ));
-    }
-
-    let mut expected_dataset: Option<(DocumentId, DatasetId)> = None;
-    for document_id in &unique_document_ids {
-        let document = load_visible_document_for_user(
-            state,
-            *document_id,
-            active_secret_binding_ids,
-            current_user_id,
-        )
-        .await?;
-
-        if let Some((expected_document_id, expected_dataset_id)) = expected_dataset {
-            if document.dataset_id != expected_dataset_id {
-                return Err(ApiError::bad_request(
-                    "compare_documents_requires_same_dataset",
-                    format!(
-                        "document {} belongs to dataset {}, which does not match document {} in dataset {}",
-                        document.id, document.dataset_id, expected_document_id, expected_dataset_id
-                    ),
-                ));
-            }
-        } else {
-            expected_dataset = Some((document.id, document.dataset_id));
-        }
-    }
-
-    let mut documents = Vec::with_capacity(unique_document_ids.len());
-    for document_id in unique_document_ids {
-        documents.push(
-            load_document_detail_with_state(
-                state,
-                document_id,
-                active_secret_binding_ids,
-                current_user_id,
-            )
-            .await?,
-        );
-    }
-
-    Ok(to_compare_documents_view(documents))
+    compare_documents_for_user(state, request, active_secret_binding_ids, current_user_id).await
 }
 
 async fn register_document(
@@ -59818,7 +59718,7 @@ async fn document_dataset_membership_response(
     }))
 }
 
-fn to_document_detail_view(
+pub(crate) fn to_document_detail_view(
     document: Document,
     chunks: Vec<DocumentChunk>,
     retrieval_evidences: Vec<RetrievalEvidence>,
@@ -59927,7 +59827,9 @@ fn to_document_media_detail_view(
     view
 }
 
-fn to_compare_documents_view(documents: Vec<DocumentDetailView>) -> CompareDocumentsView {
+pub(crate) fn to_compare_documents_view(
+    documents: Vec<DocumentDetailView>,
+) -> CompareDocumentsView {
     let mut view = CompareDocumentsView {
         documents,
         model_facing: None,

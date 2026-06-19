@@ -20871,6 +20871,112 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
 
+## 2026-06-19 P5 Document Retrieval Evidence List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document retrieval evidence list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/document_retrieval_evidence_support.rs`;
+  - added `list_document_retrieval_evidence_views_for_user` for visible document validation, canonical document retrieval evidence loading, relevance sorting, and final `RetrievalEvidenceView` construction;
+  - added a pure sorted-view helper and module test covering existing relevance ordering by recall score;
+  - reused existing `load_visible_document_for_user_with_local_scope` without changing its implementation;
+  - kept `list_document_retrieval_evidences` responsible for document id parsing, active secret header parsing, current user lookup, local thread header parsing, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_retrieval_evidence_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api retrieval_evidence --lib`: passed, 27/27 tests;
+  - `cargo test -q -p platform-api document_chunk --lib`: passed, 21/21 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Enrichment Run List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document enrichment run list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/document_enrichment_run_list_support.rs`;
+  - added `list_document_enrichment_run_views_for_user` for visible document validation, limit normalization, enrichment run loading, and final `DocumentEnrichmentRunView` construction;
+  - added pure helper tests covering the existing default `50`, `1..200` clamp, order preservation, and id preservation;
+  - reused existing `load_visible_document_for_user_with_local_scope` and `to_document_enrichment_run_view` without changing their implementations;
+  - kept `list_document_enrichment_runs` responsible for document id parsing, active secret header parsing, current user lookup, local thread header parsing, query parsing, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_enrichment_run_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api list_document_enrichment_runs_returns_visible_document_runs --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Detail Load Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document detail loading and view assembly orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving existing wrapper names.
+- Code change:
+  - added `crates/platform-api/src/document_detail_load_support.rs`;
+  - added `load_document_detail_view_for_user` and `load_document_detail_view_for_user_with_local_scope` for visible document validation, canonical chunk loading, canonical retrieval evidence loading, relevance sorting, latest ingest workflow snapshot loading, and final `DocumentDetailView` construction;
+  - kept existing `load_document_detail_with_state` and `load_document_detail_with_state_and_local_scope` as compatibility wrappers;
+  - made existing `load_latest_upload_ingest_workflow_snapshots` and `to_document_detail_view` crate-visible without changing their implementations;
+  - added a pure module test covering detail view assembly, chunk preservation, sorted evidence order, and model-facing summary presence.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_detail_load_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api load_document_detail_returns_document_chunks_and_retrieval_evidences --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Document Media Detail Load Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move document media detail loading out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/document_media_detail_load_support.rs`;
+  - added `load_document_media_detail_view_for_user` for visible document validation, canonical chunk loading, and final `DocumentMediaDetailView` construction;
+  - reused existing `load_visible_document_for_user_with_local_scope` and `to_document_media_detail_view` without changing their implementations;
+  - kept `get_document_media_detail` responsible for document id parsing, active secret header parsing, current user lookup, local thread header parsing, and `Json` response wrapping only;
+  - added a pure module test covering media metadata extraction, transcript preservation, and model-facing summary presence.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_media_detail_load_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api document_media_detail --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Compare Documents Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move compare-documents orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module while preserving existing wrapper names.
+- Code change:
+  - added `crates/platform-api/src/document_compare_load_support.rs`;
+  - added `compare_documents_for_user` for document id de-duplication, distinct document count validation, same-dataset validation, document detail loading, and final `CompareDocumentsView` construction;
+  - kept existing `compare_documents_with_state` as the compatibility wrapper for route and public helper calls;
+  - made existing `load_visible_document_for_user` and `to_compare_documents_view` crate-visible without changing their implementations;
+  - added pure helper tests covering first-seen de-duplication and the two-distinct-documents validation guard.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api document_compare_load_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api compare_documents_returns_multiple_document_details --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
 
 - Purpose:
