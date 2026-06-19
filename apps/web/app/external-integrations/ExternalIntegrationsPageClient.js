@@ -127,6 +127,18 @@ const DOWNLOAD_PACKAGES = [
   },
 ];
 
+const DEFAULT_CODEX_CONTROL_STATUS = {
+  plans: [],
+  overview: null,
+  overviewConfigured: false,
+  plansError: '',
+  overviewError: '',
+  overviewMessage: '',
+  billingUrl: 'https://ad.goods-editor.com/codex/billing',
+  adminUrl: 'https://souleye.cc/codex/quota-admin',
+  updatedAt: null,
+};
+
 async function fetchJson(pathname, options = {}) {
   const headers = { accept: 'application/json', ...(options.headers || {}) };
   let body = options.body;
@@ -148,6 +160,55 @@ async function fetchJson(pathname, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function formatInteger(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return '0';
+  }
+  return number.toLocaleString('zh-CN');
+}
+
+function formatRmbFromCents(value) {
+  const cents = Number(value || 0);
+  if (!Number.isFinite(cents)) {
+    return '0';
+  }
+  return (cents / 100).toLocaleString('zh-CN', {
+    minimumFractionDigits: cents % 100 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function planAmountLabel(plan) {
+  if (Number.isFinite(Number(plan?.amountCents))) {
+    return `￥${formatRmbFromCents(plan.amountCents)}`;
+  }
+  if (Number.isFinite(Number(plan?.amountRmb))) {
+    return `￥${Number(plan.amountRmb).toLocaleString('zh-CN')}`;
+  }
+  return plan?.label || '套餐';
+}
+
+function planDetailLabel(plan) {
+  const units = Number(plan?.includedUnits || plan?.units || 0);
+  const unitLabel = units > 0 ? `${formatInteger(units)} 条额度` : '额度以后台为准';
+  return `${unitLabel} · ${plan?.validityLabel || '有效期以后台为准'}`;
+}
+
+function codexOverviewTotals(overview) {
+  const totals = overview?.totals || {};
+  return {
+    activeTerminals: totals.activeTerminals || 0,
+    terminals: totals.terminals || 0,
+    totalDownloads: totals.totalDownloads || 0,
+    downloadedArtifacts: totals.downloadedArtifacts || 0,
+    monthRechargeAmountCents: totals.monthRechargeAmountCents || 0,
+    totalRechargeAmountCents: totals.totalRechargeAmountCents || 0,
+    monthlyUsageUnits: totals.monthlyUsageUnits || 0,
+    historicalUsageUnits: totals.historicalUsageUnits || 0,
+  };
 }
 
 function metricTotal(integrations, key) {
@@ -312,6 +373,8 @@ export default function ExternalIntegrationsPageClient() {
   const [codexExecutorTasks, setCodexExecutorTasks] = useState([]);
   const [codexExecutorQueueStats, setCodexExecutorQueueStats] = useState(null);
   const [codexExecutorAccessRequired, setCodexExecutorAccessRequired] = useState(false);
+  const [codexControlStatus, setCodexControlStatus] = useState(DEFAULT_CODEX_CONTROL_STATUS);
+  const [codexControlLoading, setCodexControlLoading] = useState(false);
   const [modelGatewayStatus, setModelGatewayStatus] = useState(null);
   const [modelGatewayAccessRequired, setModelGatewayAccessRequired] = useState(false);
   const [selectedCodexExecutorTaskId, setSelectedCodexExecutorTaskId] = useState('');
@@ -522,6 +585,45 @@ export default function ExternalIntegrationsPageClient() {
     } finally {
       setCodexExecutorQueueStatsLoading(false);
     }
+  }
+
+  async function loadCodexControlStatus() {
+    setCodexControlLoading(true);
+    const next = {
+      ...DEFAULT_CODEX_CONTROL_STATUS,
+      updatedAt: new Date().toISOString(),
+    };
+    const [plansResult, overviewResult] = await Promise.allSettled([
+      fetchJson('/api/codex-control/plans'),
+      fetchJson('/api/codex-control/overview?limit=20'),
+    ]);
+
+    if (plansResult.status === 'fulfilled') {
+      const payload = plansResult.value || {};
+      next.plans = Array.isArray(payload.plans) ? payload.plans : [];
+      next.billingUrl = payload.billingUrl || next.billingUrl;
+      next.adminUrl = payload.adminUrl || next.adminUrl;
+    } else {
+      next.plansError = plansResult.reason instanceof Error
+        ? plansResult.reason.message
+        : '套餐读取失败';
+    }
+
+    if (overviewResult.status === 'fulfilled') {
+      const payload = overviewResult.value || {};
+      next.overview = payload.overview || null;
+      next.overviewConfigured = Boolean(payload.configured);
+      next.overviewMessage = payload.message || '';
+      next.billingUrl = payload.billingUrl || next.billingUrl;
+      next.adminUrl = payload.adminUrl || next.adminUrl;
+    } else {
+      next.overviewError = overviewResult.reason instanceof Error
+        ? overviewResult.reason.message
+        : '管理概览读取失败';
+    }
+
+    setCodexControlStatus(next);
+    setCodexControlLoading(false);
   }
 
   async function loadModelGatewayStatus() {
@@ -975,6 +1077,7 @@ export default function ExternalIntegrationsPageClient() {
       setCodexExecutorOpen(true);
     }
     loadIntegrations();
+    loadCodexControlStatus();
     refreshOperationsStatus();
     const timer = window.setInterval(() => {
       loadIntegrations({ silent: true });
@@ -1056,6 +1159,7 @@ export default function ExternalIntegrationsPageClient() {
     waitingResults: integrations.reduce((sum, item) => sum + numberOrZero(item.actionSummary?.waiting_result_count), 0),
     searchEvidenceRequired: integrations.reduce((sum, item) => sum + numberOrZero(item.searchSummary?.required_count), 0),
   };
+  const codexTotals = codexOverviewTotals(codexControlStatus.overview);
 
   useEffect(() => {
     if (!selected?.id || !selectedDatabaseSource.configured) {
@@ -1124,13 +1228,72 @@ export default function ExternalIntegrationsPageClient() {
             通过外部接口、资料库、静态页和 Codex 执行器能力完成业务调用。
           </p>
         </div>
-        <div className="external-download-list">
-          {DOWNLOAD_PACKAGES.map((item) => (
-            <a href={item.href} key={item.href}>
-              <strong>{item.label}</strong>
-              <span>{item.detail}</span>
-            </a>
-          ))}
+        <div className="external-download-side">
+          <div className="external-download-list">
+            {DOWNLOAD_PACKAGES.map((item) => (
+              <a href={item.href} key={item.href}>
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
+              </a>
+            ))}
+          </div>
+          <div className="external-codex-control-panel">
+            <div className="external-codex-control-head">
+              <div>
+                <strong>企业终端套餐</strong>
+                <span>{codexControlLoading ? '检查中' : '由 codex-web 统一计费'}</span>
+              </div>
+              <button type="button" onClick={loadCodexControlStatus} disabled={codexControlLoading}>
+                刷新
+              </button>
+            </div>
+            <div className="external-codex-plan-grid" aria-label="Codex 企业终端套餐">
+              {codexControlStatus.plans.length > 0 ? codexControlStatus.plans.map((plan) => (
+                <a href={codexControlStatus.billingUrl} key={plan.id || plan.label}>
+                  <strong>{plan.title || plan.label || plan.id}</strong>
+                  <span>{planAmountLabel(plan)}</span>
+                  <small>{planDetailLabel(plan)}</small>
+                </a>
+              )) : (
+                <p>{codexControlStatus.plansError || '套餐读取中'}</p>
+              )}
+            </div>
+            <div className="external-codex-metric-grid" aria-label="Codex 企业终端运营摘要">
+              <div>
+                <strong>{formatInteger(codexTotals.totalDownloads)}</strong>
+                <span>下载次数</span>
+              </div>
+              <div>
+                <strong>{formatInteger(codexTotals.activeTerminals)}</strong>
+                <span>激活终端</span>
+              </div>
+              <div>
+                <strong>{formatInteger(codexTotals.terminals)}</strong>
+                <span>终端总数</span>
+              </div>
+              <div>
+                <strong>￥{formatRmbFromCents(codexTotals.totalRechargeAmountCents)}</strong>
+                <span>总充值</span>
+              </div>
+              <div>
+                <strong>￥{formatRmbFromCents(codexTotals.monthRechargeAmountCents)}</strong>
+                <span>本月充值</span>
+              </div>
+              <div>
+                <strong>{formatInteger(codexTotals.monthlyUsageUnits)}</strong>
+                <span>本月流量</span>
+              </div>
+            </div>
+            <p className="external-codex-control-note">
+              {codexControlStatus.overviewConfigured
+                ? '终端、充值和流量明细来自 codex-web 管理概览。'
+                : (codexControlStatus.overviewError || '未配置 V3_CODEX_QUOTA_SERVICE_TOKEN 时，仅展示公开套餐；终端和充值明细仍在 codex-web 管理。')}
+            </p>
+            <div className="external-codex-control-actions">
+              <a href={codexControlStatus.billingUrl}>客户充值页</a>
+              <a href={codexControlStatus.adminUrl}>管理后台</a>
+            </div>
+          </div>
         </div>
       </section>
 

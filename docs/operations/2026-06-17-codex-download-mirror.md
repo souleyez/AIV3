@@ -43,15 +43,17 @@ This is a total concurrent connection cap for the mirror path on the V3 host. A 
 
 ## Current Manifest Packages
 
-Version: `20260617-163249`
+Version: `20260619-165520`
 
 ```text
-33be41cfb2da3ea19290769115558fc9885fd23d50090ccbf73a9ae66411e14c  V3企业定制agent终端-Windows.zip
-bfd2c63b7879c3511bf74f49e7a54bcd25627a432a36b4e117c32146019739ed  V3企业定制agent终端-macOS.zip
+997e000ec6d482cb019c7a6cb3412d3cccbdf9228b9440c2ab920150e3a7579d  V3企业定制agent终端-Windows.zip
+ebcdab966aefec43f7a4a71b0026059ae169e6eb2931307fd18a48349a39e7c7  V3企业定制agent终端-macOS.zip
 ab7d7864801e62f92aa3abf878e3b0aaa8b9f7de03120bc81b029f67281c1842  openai-codex-install.ps1
-f2ff8df0c74616b4484d412df9ee0621f71dd2fff1f83e6693ac053cd595ded5  codex-package-x86_64-pc-windows-msvc.tar.gz
-3e95ceba558ba258dc4ad930905ce595f2bf21dfbcef7613b25965054cdf0f0f  codex-package-aarch64-pc-windows-msvc.tar.gz
-7aac6479f93a8383fb481d3ed16f731d98bf75facfa84b00d88f30ef676b9411  codex-package_SHA256SUMS
+6695999e3681ad9138ecc6dbbed90f2a428b258a56405b2fc6207a5b0a4fa66a  codex-package-x86_64-pc-windows-msvc.tar.gz
+56d1bb8d15471ddc496f513f0638316fcdb78b1fe01052e6d264afe735c93e8e  codex-package-aarch64-pc-windows-msvc.tar.gz
+94062ac8bd49941fae39e6846a4fcb01b8a1ace2c588ccd5e5ffa8fb74013ab5  codex-package_SHA256SUMS
+a37f1688f69b38b1ced056086d233e64784740fe19a2a15e3adc1c6828e1b933  codex-package-aarch64-apple-darwin.tar.gz
+b5bb1af9c823306b682ca8d5c2f18610d5f0c3d5dbe4674b0b5f18eecd3986a7  codex-package-x86_64-apple-darwin.tar.gz
 ```
 
 Legacy files still hosted but no longer listed in `latest.json`:
@@ -95,6 +97,13 @@ systemctl is-active nginx aiv3-web.service aiv3-platform-api.service
 
 Concurrency smoke used four parallel Range downloads; three returned `206`, one returned `503`.
 
+2026-06-19 enterprise-billing client release verification:
+
+- `latest.json` returned public version `20260619-165520`.
+- Windows terminal package returned HTTP `200`, `Content-Length: 5605979`, and `X-Download-Concurrency-Limit: 3`.
+- macOS terminal package returned HTTP `200`, `Content-Length: 11031909`, and `X-Download-Concurrency-Limit: 3`.
+- Windows jump-host fast smoke passed with tenant `v3-jump-smoke-20260619170147`: public package download, private Codex runtime install, terminal activation, heartbeat, quota summary, and temporary revoke all succeeded.
+
 ## Backup Points
 
 - Nginx and previous mirror snapshot: `/srv/backups/codex-download-mirror/20260617T090514`
@@ -103,3 +112,4 @@ Concurrency smoke used four parallel Range downloads; three returned `206`, one 
 - Previous package rename page files: `/srv/backups/codex-download-mirror/20260617T093451-package-rename-pages`
 - Current client activation package snapshot: `/srv/backups/codex-download-mirror/20260617T155424-client-activation-current`
 - Previous client activation package before heartbeat release: `/srv/backups/codex-download-mirror/20260617T163249-terminal-heartbeat`
+- Previous enterprise-billing client package before 20260619 release: `/srv/aiv3-downloads/codex/backup-20260619-170008-enterprise-billing`

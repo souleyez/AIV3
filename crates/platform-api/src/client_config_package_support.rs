@@ -24,6 +24,10 @@ const CODEX_CONTROL_BASE_URL_ENV: &str = "V3_CODEX_CONTROL_BASE_URL";
 const DEFAULT_CODEX_ACTIVATION_ENDPOINT: &str = "/api/codex/clients/activate";
 const DEFAULT_CODEX_HEARTBEAT_ENDPOINT: &str = "/api/codex/clients/heartbeat";
 const DEFAULT_CODEX_REVOKE_ENDPOINT: &str = "/api/codex/clients/self-revoke";
+const DEFAULT_CODEX_PLANS_ENDPOINT: &str = "/api/codex/quotas/plans";
+const DEFAULT_CODEX_QUOTA_SUMMARY_ENDPOINT: &str = "/api/codex/quotas/summary";
+const DEFAULT_CODEX_TERMINAL_SUMMARY_ENDPOINT: &str = "/api/codex/clients/terminal-summary";
+const DEFAULT_CODEX_BILLING_PATH: &str = "/codex/billing";
 const DEFAULT_CODEX_ACTIVATION_TOKEN_ENV: &str = "CODEX_CLIENT_ACTIVATION_TOKEN";
 const DEFAULT_CODEX_SESSION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
@@ -47,12 +51,25 @@ fn default_codex_control_base_url() -> String {
         .unwrap_or_else(|| DEFAULT_CODEX_CONTROL_BASE_URL.to_string())
 }
 
+fn default_codex_control_billing_url(base_url: &str) -> String {
+    format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        DEFAULT_CODEX_BILLING_PATH
+    )
+}
+
 pub(crate) fn default_codex_control_config(terminal_id: &str) -> V3CodexControlConfigView {
+    let base_url = default_codex_control_base_url();
     V3CodexControlConfigView {
-        base_url: Some(default_codex_control_base_url()),
+        billing_url: Some(default_codex_control_billing_url(&base_url)),
+        base_url: Some(base_url),
         activation_endpoint: Some(DEFAULT_CODEX_ACTIVATION_ENDPOINT.to_string()),
         heartbeat_endpoint: Some(DEFAULT_CODEX_HEARTBEAT_ENDPOINT.to_string()),
         revoke_endpoint: Some(DEFAULT_CODEX_REVOKE_ENDPOINT.to_string()),
+        plans_endpoint: Some(DEFAULT_CODEX_PLANS_ENDPOINT.to_string()),
+        quota_summary_endpoint: Some(DEFAULT_CODEX_QUOTA_SUMMARY_ENDPOINT.to_string()),
+        terminal_summary_endpoint: Some(DEFAULT_CODEX_TERMINAL_SUMMARY_ENDPOINT.to_string()),
         activation_token_env: Some(DEFAULT_CODEX_ACTIVATION_TOKEN_ENV.to_string()),
         terminal_id: Some(terminal_id.to_string()),
         terminal_label: None,
@@ -66,12 +83,21 @@ pub(crate) fn resolve_codex_control_config(
 ) -> V3CodexControlConfigView {
     let fallback = default_codex_control_config(terminal_id);
     let input = input.unwrap_or_default();
+    let base_url = trim_optional(input.base_url).or(fallback.base_url);
+    let billing_url = trim_optional(input.billing_url)
+        .or_else(|| base_url.as_deref().map(default_codex_control_billing_url));
     V3CodexControlConfigView {
-        base_url: trim_optional(input.base_url).or(fallback.base_url),
+        base_url,
         activation_endpoint: trim_optional(input.activation_endpoint)
             .or(fallback.activation_endpoint),
         heartbeat_endpoint: trim_optional(input.heartbeat_endpoint).or(fallback.heartbeat_endpoint),
         revoke_endpoint: trim_optional(input.revoke_endpoint).or(fallback.revoke_endpoint),
+        plans_endpoint: trim_optional(input.plans_endpoint).or(fallback.plans_endpoint),
+        quota_summary_endpoint: trim_optional(input.quota_summary_endpoint)
+            .or(fallback.quota_summary_endpoint),
+        terminal_summary_endpoint: trim_optional(input.terminal_summary_endpoint)
+            .or(fallback.terminal_summary_endpoint),
+        billing_url,
         activation_token_env: trim_optional(input.activation_token_env)
             .or(fallback.activation_token_env),
         terminal_id: trim_optional(input.terminal_id).or(fallback.terminal_id),
@@ -116,6 +142,18 @@ pub(crate) fn validate_codex_control_config(
             "codex_control.revoke_endpoint",
             config.revoke_endpoint.as_deref(),
         ),
+        (
+            "codex_control.plans_endpoint",
+            config.plans_endpoint.as_deref(),
+        ),
+        (
+            "codex_control.quota_summary_endpoint",
+            config.quota_summary_endpoint.as_deref(),
+        ),
+        (
+            "codex_control.terminal_summary_endpoint",
+            config.terminal_summary_endpoint.as_deref(),
+        ),
     ] {
         if let Some(path) = value {
             if !path.starts_with('/') {
@@ -124,6 +162,26 @@ pub(crate) fn validate_codex_control_config(
                     format!("{field} must be an absolute path"),
                 ));
             }
+        }
+    }
+    if let Some(billing_url) = config.billing_url.as_deref() {
+        let parsed = Url::parse(billing_url).map_err(|_| {
+            ApiError::bad_request(
+                "invalid_codex_control_billing_url",
+                "codex_control.billing_url must be an absolute http(s) URL".to_string(),
+            )
+        })?;
+        if parsed.scheme() != "https" && parsed.scheme() != "http" {
+            return Err(ApiError::bad_request(
+                "invalid_codex_control_billing_url",
+                "codex_control.billing_url must use http or https".to_string(),
+            ));
+        }
+        if parsed.host_str().unwrap_or_default().is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_codex_control_billing_url",
+                "codex_control.billing_url must include a host".to_string(),
+            ));
         }
     }
     if matches!(config.session_ttl_seconds, Some(value) if value < 0) {
@@ -405,6 +463,22 @@ mod tests {
             DEFAULT_CODEX_REVOKE_ENDPOINT
         );
         assert_eq!(
+            payload["codex_control"]["plans_endpoint"],
+            DEFAULT_CODEX_PLANS_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["quota_summary_endpoint"],
+            DEFAULT_CODEX_QUOTA_SUMMARY_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["terminal_summary_endpoint"],
+            DEFAULT_CODEX_TERMINAL_SUMMARY_ENDPOINT
+        );
+        assert_eq!(
+            payload["codex_control"]["billing_url"],
+            format!("{DEFAULT_CODEX_CONTROL_BASE_URL}{DEFAULT_CODEX_BILLING_PATH}")
+        );
+        assert_eq!(
             payload["codex_control"]["activation_token_env"],
             DEFAULT_CODEX_ACTIVATION_TOKEN_ENV
         );
@@ -478,6 +552,22 @@ mod tests {
             config.activation_token_env.as_deref(),
             Some(DEFAULT_CODEX_ACTIVATION_TOKEN_ENV)
         );
+        assert_eq!(
+            config.plans_endpoint.as_deref(),
+            Some(DEFAULT_CODEX_PLANS_ENDPOINT)
+        );
+        assert_eq!(
+            config.quota_summary_endpoint.as_deref(),
+            Some(DEFAULT_CODEX_QUOTA_SUMMARY_ENDPOINT)
+        );
+        assert_eq!(
+            config.terminal_summary_endpoint.as_deref(),
+            Some(DEFAULT_CODEX_TERMINAL_SUMMARY_ENDPOINT)
+        );
+        assert_eq!(
+            config.billing_url.as_deref(),
+            Some("https://custom.example.com/codex/billing")
+        );
         assert_eq!(config.terminal_id.as_deref(), Some("term-001"));
         assert_eq!(config.terminal_label.as_deref(), Some("Finance PC"));
         validate_codex_control_config(&config).expect("default codex control should be valid");
@@ -491,6 +581,10 @@ mod tests {
                 "activation_endpoint": "/api/codex/clients/activate",
                 "heartbeat_endpoint": "/api/codex/clients/heartbeat",
                 "revoke_endpoint": "/api/codex/clients/self-revoke",
+                "plans_endpoint": "/api/codex/quotas/plans",
+                "quota_summary_endpoint": "/api/codex/quotas/summary",
+                "terminal_summary_endpoint": "/api/codex/clients/terminal-summary",
+                "billing_url": "https://ad.goods-editor.com/codex/billing",
                 "activation_token_env": "CODEX_CLIENT_ACTIVATION_TOKEN",
                 "terminal_id": "term-001",
                 "session_ttl_seconds": 2592000
@@ -504,6 +598,10 @@ mod tests {
         assert_eq!(
             config.base_url.as_deref(),
             Some("https://ad.goods-editor.com")
+        );
+        assert_eq!(
+            config.billing_url.as_deref(),
+            Some("https://ad.goods-editor.com/codex/billing")
         );
         assert_eq!(config.terminal_id.as_deref(), Some("term-001"));
     }

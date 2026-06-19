@@ -50,6 +50,14 @@ pub struct V3CodexControlConfigView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoke_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plans_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_summary_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_summary_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billing_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_token_env: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
