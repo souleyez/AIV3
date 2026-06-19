@@ -20736,6 +20736,76 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, live third-party message, model-provider call, or production data mutation was performed during deployment;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-19 P5 Dataset Secret Binding Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset secret binding create/resolve orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_secret_binding_support.rs`;
+  - added `create_dataset_secret_binding_response` for fingerprint validation, visible dataset loading, local-only binding creation, dataset metadata update to private, active secret id merge, and final `CreateDatasetSecretBindingResponse`;
+  - added `resolve_dataset_secret_bindings_response` for fingerprint validation, binding lookup, duplicate dataset suppression, and final `ResolveDatasetSecretBindingsResponse`;
+  - added private fingerprint and label normalization helpers so trimmed fingerprint storage/query and default `local-browser-key` behavior are tested directly;
+  - kept `create_dataset_secret_binding` responsible for active secret header parsing, current user lookup, `201 Created`, and `Json` response wrapping only;
+  - kept `resolve_dataset_secret_bindings` responsible for `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_secret_binding_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api create_dataset_secret_binding_marks_dataset_private --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api resolve_dataset_secret_bindings_returns_matching_private_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_secret_binding --lib`: passed, 5/5 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Dataset Create Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset create orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_create_support.rs`;
+  - added `validate_create_dataset_required_fields` so `create_dataset` keeps the existing key/title validation before current user lookup;
+  - added `create_dataset_and_load_summary` for create metadata assembly, dataset persistence, optional local secret binding creation, post-create metadata update to private, and final `DatasetSummary` construction;
+  - reused `dataset_secret_binding_support` fingerprint/label helpers to avoid divergent local-key normalization rules;
+  - kept `create_dataset` responsible for current user lookup, `201 Created`, and `Json` response wrapping only;
+  - preserved logged-in default private visibility, anonymous default public visibility, anonymous local-only scope metadata, public warning behavior, secret fingerprint default-private behavior, trim semantics, local thread metadata, response fields, and public API contract.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_create_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api create_dataset --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api dataset_secret_binding --lib`: passed, 5/5 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-19 P5 Dataset List Support Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move dataset list orchestration out of `crates/platform-api/src/lib.rs` into a focused helper module.
+- Code change:
+  - added `crates/platform-api/src/dataset_list_support.rs`;
+  - added `list_visible_dataset_summaries` for default public dataset initialization, tenant dataset loading, visibility filtering, standard list filtering, scope planning enrichment, and final `DatasetSummary` construction;
+  - added a small pure filter helper and module test covering archived datasets plus system external document parse source hiding;
+  - made existing `ensure_default_public_datasets` and `enrich_visible_datasets_for_scope_planning` crate-visible without changing their implementation;
+  - kept `list_datasets` responsible for active secret header parsing, current user lookup, local thread header parsing, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api dataset_list_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api dataset_list --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api create_dataset --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api dataset_secret_binding --lib`: passed, 5/5 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:

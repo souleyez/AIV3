@@ -118,8 +118,6 @@ use contracts::{
     AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView,
     V3ClientArtifactManifestView, V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA, V3_CLIENT_ARTIFACT_SOURCE,
 };
-#[cfg(test)]
-use domain_model::StaticPageRenderOutputId;
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
     AuthSessionMethod, ChatMessage, ChatMessageRole, ChatSession, ChatSessionId,
@@ -127,12 +125,14 @@ use domain_model::{
     DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
     EmailVerificationChallenge, MemoryDirectory, PublishedReport, PublishedReportId,
     PublishedSurface, ReportPlan, ReportPlanId, ReportRenderOutput, RetrievalEvidence,
-    RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId,
+    RetrievalEvidenceId, SecretBindingId, StaticPageDraft, StaticPageDraftId,
     StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus,
     StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession,
     UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
     WorkflowStatus, WorkflowTask,
 };
+#[cfg(test)]
+use domain_model::{SecretScopeLevel, StaticPageRenderOutputId};
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
 };
@@ -175,12 +175,13 @@ use storage::{
     NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
     NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
-    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
-    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    NewReportPlan, NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput,
+    NewUserSession, NewWorkflowTask, PgStorage,
 };
 #[cfg(test)]
 use storage::{
     NewAssetItem, NewAssetLibraryDatasetMembership, NewAssetProfile, NewDatasetAssetMembership,
+    NewSecretBinding,
 };
 use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
@@ -259,8 +260,11 @@ mod client_artifact_view_support;
 mod client_config_package_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
+mod dataset_create_support;
+mod dataset_list_support;
 mod dataset_output_model_facing;
 mod dataset_output_view_support;
+mod dataset_secret_binding_support;
 mod dataset_summary_support;
 mod dataset_update_support;
 mod document_chunk_support;
@@ -482,8 +486,11 @@ use chat_session_titles::*;
 use chat_session_turn_manifest_support::*;
 use code_review_summary_artifact_support::*;
 use codex_orchestrator_access_support::*;
+use dataset_create_support::*;
+use dataset_list_support::*;
 use dataset_output_model_facing::*;
 use dataset_output_view_support::*;
+use dataset_secret_binding_support::*;
 use dataset_summary_support::*;
 use dataset_update_support::*;
 use document_chunk_support::*;
@@ -3317,7 +3324,7 @@ async fn run_model_gateway_profile_probe(
     })
 }
 
-async fn enrich_visible_datasets_for_scope_planning(
+pub(crate) async fn enrich_visible_datasets_for_scope_planning(
     state: &AppState,
     datasets: Vec<Dataset>,
     current_user_id: Option<UserId>,
@@ -4149,7 +4156,9 @@ async fn load_report_plan_with_visible_dataset_for_user(
     Ok(plan)
 }
 
-async fn ensure_default_public_datasets(state: &AppState) -> std::result::Result<(), ApiError> {
+pub(crate) async fn ensure_default_public_datasets(
+    state: &AppState,
+) -> std::result::Result<(), ApiError> {
     let existing = state
         .storage
         .datasets()
@@ -4189,58 +4198,20 @@ async fn create_dataset_secret_binding(
     headers: HeaderMap,
     Json(request): Json<CreateDatasetSecretBindingRequest>,
 ) -> std::result::Result<(StatusCode, Json<CreateDatasetSecretBindingResponse>), ApiError> {
-    validate_required("fingerprint", &request.fingerprint)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let dataset = load_visible_dataset_for_user(
-        &state,
-        request.dataset_id,
-        &active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
-    let label = trim_optional(request.label).unwrap_or_else(|| "local-browser-key".to_string());
-    let binding = state
-        .storage
-        .secret_bindings()
-        .create(
-            state.tenant_id,
-            NewSecretBinding {
-                dataset_id: dataset.id,
-                document_id: None,
-                scope_level: SecretScopeLevel::Dataset,
-                provider_key: label,
-                cipher_text: "local-only".to_string(),
-                fingerprint: request.fingerprint.trim().to_string(),
-            },
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let next_secret_binding_ids =
-        merge_secret_binding_ids(&dataset.default_secret_binding_ids, &[binding.id]);
-    let updated_dataset = state
-        .storage
-        .datasets()
-        .update_metadata(
-            state.tenant_id,
-            dataset.id,
-            &json!({
-                "visibility": DatasetVisibility::Private.as_str(),
-                "default_secret_binding_ids": next_secret_binding_ids,
-            }),
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let active_secret_binding_ids =
-        merge_secret_binding_ids(&active_secret_binding_ids, &[binding.id]);
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateDatasetSecretBindingResponse {
-            dataset: dataset_summary(updated_dataset, None),
-            secret_binding_id: binding.id,
-            active_secret_binding_ids,
-        }),
+        Json(
+            create_dataset_secret_binding_response(
+                &state,
+                &active_secret_binding_ids,
+                current_user_id,
+                request,
+            )
+            .await?,
+        ),
     ))
 }
 
@@ -4248,74 +4219,27 @@ async fn resolve_dataset_secret_bindings(
     State(state): State<AppState>,
     Json(request): Json<ResolveDatasetSecretBindingsRequest>,
 ) -> std::result::Result<Json<ResolveDatasetSecretBindingsResponse>, ApiError> {
-    validate_required("fingerprint", &request.fingerprint)?;
-    let bindings = state
-        .storage
-        .secret_bindings()
-        .list_by_fingerprint(state.tenant_id, request.fingerprint.trim())
-        .await
-        .map_err(ApiError::from_storage)?;
-    let secret_binding_ids: Vec<SecretBindingId> =
-        bindings.iter().map(|binding| binding.id).collect();
-    let mut datasets = Vec::new();
-    for binding in bindings {
-        if datasets
-            .iter()
-            .any(|dataset: &DatasetSummary| dataset.id == binding.dataset_id)
-        {
-            continue;
-        }
-        if let Some(dataset) = state
-            .storage
-            .datasets()
-            .get_by_id(state.tenant_id, binding.dataset_id)
-            .await
-            .map_err(ApiError::from_storage)?
-        {
-            datasets.push(dataset_summary(dataset, None));
-        }
-    }
-
-    Ok(Json(ResolveDatasetSecretBindingsResponse {
-        secret_binding_ids,
-        datasets,
-    }))
+    Ok(Json(
+        resolve_dataset_secret_bindings_response(&state, request).await?,
+    ))
 }
 
 async fn list_datasets(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> std::result::Result<Json<Vec<DatasetSummary>>, ApiError> {
-    ensure_default_public_datasets(&state).await?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let datasets = state
-        .storage
-        .datasets()
-        .list_by_tenant(state.tenant_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    let visible_datasets = filter_visible_datasets(
-        datasets,
-        &active_secret_binding_ids,
-        current_user_id,
-        local_thread_id.as_deref(),
-    )
-    .into_iter()
-    .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
-    .filter(|dataset| !dataset_is_hidden_from_standard_dataset_list(dataset))
-    .collect::<Vec<_>>();
-    let visible_datasets =
-        enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
-            .await?;
 
     Ok(Json(
-        visible_datasets
-            .into_iter()
-            .map(|dataset| dataset_summary(dataset, None))
-            .collect(),
+        list_visible_dataset_summaries(
+            &state,
+            &active_secret_binding_ids,
+            current_user_id,
+            local_thread_id.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -4324,95 +4248,12 @@ async fn create_dataset(
     headers: HeaderMap,
     Json(request): Json<CreateDatasetRequest>,
 ) -> std::result::Result<(StatusCode, Json<DatasetSummary>), ApiError> {
-    validate_required("key", &request.key)?;
-    validate_required("title", &request.title)?;
-
-    let secret_fingerprint = trim_optional(request.secret_fingerprint);
-    let requested_secret_binding_ids = request.secret_binding_ids.clone();
+    validate_create_dataset_required_fields(&request)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let visibility = if requested_secret_binding_ids.is_empty() && secret_fingerprint.is_none() {
-        request.visibility.unwrap_or(if current_user_id.is_some() {
-            DatasetVisibility::Private
-        } else {
-            DatasetVisibility::Public
-        })
-    } else {
-        request.visibility.unwrap_or(DatasetVisibility::Private)
-    };
-    let anonymous_local_only = current_user_id.is_none() && request.local_only;
-    let access_warning = (visibility == DatasetVisibility::Public && !anonymous_local_only)
-        .then(|| PUBLIC_DATASET_WARNING.to_string());
-    let local_thread_id = trim_optional(request.local_thread_id);
-    let mut metadata = Map::new();
-    metadata.insert("visibility".to_string(), json!(visibility.as_str()));
-    metadata.insert(
-        "default_secret_binding_ids".to_string(),
-        json!(requested_secret_binding_ids),
-    );
-    if anonymous_local_only {
-        metadata.insert("local_only".to_string(), json!(true));
-        if let Some(local_thread_id) = local_thread_id.as_deref() {
-            metadata.insert("local_thread_id".to_string(), json!(local_thread_id));
-        }
-    }
-
-    let dataset = state
-        .storage
-        .datasets()
-        .create_with_metadata(
-            state.tenant_id,
-            NewDataset {
-                key: request.key.trim().to_string(),
-                title: request.title.trim().to_string(),
-                description: trim_optional(request.description),
-                owner_user_id: current_user_id,
-            },
-            Value::Object(metadata),
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let dataset = if let Some(fingerprint) = secret_fingerprint {
-        validate_required("secret_fingerprint", &fingerprint)?;
-        let label =
-            trim_optional(request.secret_label).unwrap_or_else(|| "local-browser-key".to_string());
-        let binding = state
-            .storage
-            .secret_bindings()
-            .create(
-                state.tenant_id,
-                NewSecretBinding {
-                    dataset_id: dataset.id,
-                    document_id: None,
-                    scope_level: SecretScopeLevel::Dataset,
-                    provider_key: label,
-                    cipher_text: "local-only".to_string(),
-                    fingerprint,
-                },
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-        let next_secret_binding_ids =
-            merge_secret_binding_ids(&dataset.default_secret_binding_ids, &[binding.id]);
-        state
-            .storage
-            .datasets()
-            .update_metadata(
-                state.tenant_id,
-                dataset.id,
-                &json!({
-                    "visibility": DatasetVisibility::Private.as_str(),
-                    "default_secret_binding_ids": next_secret_binding_ids,
-                }),
-            )
-            .await
-            .map_err(ApiError::from_storage)?
-    } else {
-        dataset
-    };
 
     Ok((
         StatusCode::CREATED,
-        Json(dataset_summary(dataset, access_warning)),
+        Json(create_dataset_and_load_summary(&state, current_user_id, request).await?),
     ))
 }
 
