@@ -2,6 +2,52 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Report Entry And Data Snapshot Helpers GitHub And 8-server Release
+
+- Scope:
+  - release local P5 behavior-preserving helper splits for chat-session report-entry planning/writing and static-page data snapshot construction;
+  - keep public API URL, third-party API contract, auth method, request/response fields, schema, and production data mapping unchanged.
+- Diff audit:
+  - substantive diff was limited to five files:
+    - `crates/platform-api/src/lib.rs`;
+    - `crates/platform-api/src/manifest_service_handoff_support.rs`;
+    - `crates/platform-api/src/static_page_data_snapshot_support.rs`;
+    - `docs/plans/datamax-active-execution-plan.md`;
+    - `docs/validation/datamax-main-gap-closure.md`;
+  - several integration/docs files only showed local LF/CRLF working-copy warnings and were not staged.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_ --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api report_entry_route_enter_report_service_creates_plan_and_execution --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api report_entry_route_stay_material_service_persists_decline_history --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api docs_page_data_snapshot_binds_structure_modules_to_section_title_hints --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_image_prompt_payload_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_design_contract_refresh_support --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- GitHub release:
+  - commit: `12687a85777c0d0a64b4323620a09e64e701e470`;
+  - message: `Split report entry and data snapshot helpers`;
+  - pushed to `origin/main`.
+- 8-server deployment:
+  - host: `8.155.8.7`;
+  - repo: `/srv/aiv3/repo`;
+  - fast-forward: `f2253cb33` -> `12687a857`;
+  - build command: release build for `platform-api`, `ingest-worker`, `retrieval-worker`, `assistant-run-worker`, and `static-page-worker`;
+  - build result: finished successfully;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-assistant-run-worker.service`, and `aiv3-static-page-worker.service`;
+  - post-restart state: platform API, ingest worker, retrieval worker, assistant-run worker, static-page worker, and web service all active;
+  - local health: `http://127.0.0.1:3000/healthz` returned `status=ok`;
+  - local readiness: `http://127.0.0.1:3000/readyz` returned `status=ready`;
+  - public health/readiness: `https://v3.elepcloud.com/healthz` and `https://v3.elepcloud.com/readyz` returned successfully.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, 120-server change, or unrelated file staging was performed;
+  - one release build and service restart cycle was intentionally performed on 8 server for this deployment.
+
 ## 2026-06-20 P5 Static Page Data Snapshot With-evidence Builder Local Verification
 
 - Purpose:

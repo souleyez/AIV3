@@ -370,6 +370,8 @@
 | 304 | P5 static page data snapshot wrapper helper 拆分 | 本地完成。 | 后续继续 P5 行为保持切片，或在用户要求发版时与 P0 一起部署验证。 | `static_page_data_snapshot_support` 新增并承接 `build_static_page_data_snapshot`，把从 payload `assistant_context.evidence_state` 提取证据并调用 data snapshot builder 的薄 wrapper 从 `lib.rs` 下沉；`build_static_page_data_snapshot_with_evidence` 暂保持在 `lib.rs` 并提升为 `pub(crate)` 供 wrapper 调用；static-page draft source、selected_scope、evidence_status、updatedAt、snapshotVersion 和 refresh policy 形态保持不变；`cargo test -q -p platform-api static_page_data_snapshot_support --lib`、design contract refresh、image prompt payload、render queue manifest 模块回归、`cargo fmt --check`、`cargo check -q -p platform-api` 通过；不改变第三方公开契约。 |
 | 305 | P5 static page data snapshot with-evidence builder helper 拆分 | 本地完成。 | 后续继续 P5 行为保持切片，或在用户要求发版时与 P0 一起部署验证。 | `static_page_data_snapshot_support` 新增并承接 `build_static_page_data_snapshot_with_evidence`，把完整 data snapshot 构造从 `lib.rs` 下沉；data source candidates、field candidates、supplemental metrics、docs-page heading binding、module sample/binding quality、structure signals、snapshotVersion、updatedAt、report snapshot、refresh policy 和 validation summary 字段形态保持不变；`cargo test -q -p platform-api static_page_data_snapshot_support --lib`、`static_page_data_snapshot_` 细节回归、docs-page 结构绑定、design contract refresh、image prompt payload、render queue manifest 模块回归、`cargo fmt --check`、`cargo check -q -p platform-api` 通过；不改变第三方公开契约。 |
 
+发布补记：#301-#305 已在 2026-06-20 随提交 `12687a85` 推送 GitHub 并部署到 8 服务器；8 服务器 `/srv/aiv3/repo` fast-forward 到 `12687a85777c0d0a64b4323620a09e64e701e470`，release build 通过，`aiv3-platform-api` 和相关 worker 重启后 `/healthz`、`/readyz` 正常。
+
 ## 2.3 主站产物任务卡工作台升级计划
 
 **Goal:** 将 V3 主站右侧产物列表升级为任务卡工作台：用户发布任务后，任务详情在同一任务卡内持续推进直到拿到结果；点击任务卡进入详情，选择成功文件作为当前编辑对象，并在任务页面继续修改。
