@@ -20007,6 +20007,67 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-19 P5 Client Artifact Public HTML Publish Orchestration Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client artifact public HTML publication orchestration out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/client_artifact_publish_support.rs`.
+- Code change:
+  - added `ClientArtifactPublicHtmlPublishResult` and `publish_client_artifact_public_html_and_load_view`;
+  - moved public HTML record loading, owner check, private-published status check, candidate HTML loading/preparation, sandbox publication construction, generated-artifact file write, public URL construction, HTML artifact finalization, and final `ClientArtifactView` reload behind the helper;
+  - kept the route responsible for V3 user session auth, `artifact_id` required/trim validation, and `PublishClientArtifactPublicHtmlResponse` wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_artifact_publish_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Client Config Package Create Orchestration Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move client config package create orchestration out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/client_config_package_support.rs`.
+- Code change:
+  - added `create_client_config_package_and_load_view`;
+  - moved ref list validation, dataset/asset-library scope validation, artifact upload config validation, tenant/user/client ref normalization, package/terminal id generation, Codex control config resolution/validation, payload construction, SQL insert, and final `ClientConfigPackageView` reload behind the helper;
+  - kept the route responsible for V3 user session auth, `client_id`/`v3_base_url` required validation, and `201 Created` response wrapping only;
+  - removed the now-unused `client_artifact_scope_support::*` import from `lib.rs`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api client_config_package_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api client_artifact --lib`: passed, 51/51 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Create Request Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library create request normalization and storage request construction out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_create_support.rs`;
+  - added `new_asset_library_from_request` for optional field trim/defaulting, visibility normalization, metadata normalization, and `NewAssetLibrary` construction;
+  - kept the route responsible for V3 user session auth, `name` required validation, storage create, and `201 Created` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_create_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 18/18 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:

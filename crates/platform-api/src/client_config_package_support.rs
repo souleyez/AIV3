@@ -1,14 +1,22 @@
+use axum::http::HeaderMap;
 use contracts::{
     ClientConfigPackageView, CreateClientConfigPackageRequest, V3ClientArtifactUploadConfigView,
     V3CodexControlConfigView, V3_CLIENT_CONFIG_SCHEMA,
 };
+use domain_model::UserId;
 use reqwest::Url;
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::env;
+use uuid::Uuid;
 
 use crate::{
-    client_artifact_error_support::client_config_package_not_found_error, ApiError, AppState,
+    client_artifact_contract_support::{
+        validate_client_artifact_upload_config, validate_v3_client_ref_list,
+    },
+    client_artifact_error_support::client_config_package_not_found_error,
+    client_artifact_scope_support::validate_v3_client_scope_refs,
+    ApiError, AppState,
 };
 
 const DEFAULT_CODEX_CONTROL_BASE_URL: &str = "https://ad.goods-editor.com";
@@ -242,6 +250,70 @@ pub(crate) async fn load_client_config_package_view(
         created_at: row.get("created_at"),
         config_package: payload,
     })
+}
+
+pub(crate) async fn create_client_config_package_and_load_view(
+    state: &AppState,
+    headers: &HeaderMap,
+    current_user_id: UserId,
+    request: CreateClientConfigPackageRequest,
+) -> std::result::Result<ClientConfigPackageView, ApiError> {
+    validate_v3_client_ref_list("dataset_ids", &request.dataset_ids)?;
+    validate_v3_client_ref_list("asset_library_ids", &request.asset_library_ids)?;
+    validate_v3_client_ref_list("skill_packs", &request.skill_packs)?;
+    validate_v3_client_scope_refs(
+        state,
+        headers,
+        Some(current_user_id),
+        &request.dataset_ids,
+        &request.asset_library_ids,
+    )
+    .await?;
+
+    let artifact_upload = request
+        .artifact_upload
+        .clone()
+        .unwrap_or_else(default_client_artifact_upload_config);
+    validate_client_artifact_upload_config(&artifact_upload)?;
+
+    let tenant_ref = client_config_ref_or_default(request.tenant_id.as_deref(), state.tenant_id);
+    let user_ref = client_config_ref_or_default(request.user_id.as_deref(), current_user_id);
+    let client_id = request.client_id.trim().to_string();
+    let package_id = format!("v3cp_{}", Uuid::new_v4().simple());
+    let terminal_id = format!("term_{}", package_id.trim_start_matches("v3cp_"));
+    let codex_control = resolve_codex_control_config(request.codex_control.clone(), &terminal_id);
+    validate_codex_control_config(&codex_control)?;
+    let payload = build_client_config_package_payload(
+        &request,
+        &tenant_ref,
+        &user_ref,
+        &client_id,
+        artifact_upload,
+        codex_control,
+    );
+
+    sqlx::query(
+        r#"
+        insert into v3_client_config_packages (
+            package_id, tenant_id, owner_user_id, tenant_ref, user_ref,
+            client_id, package_payload, expires_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        "#,
+    )
+    .bind(&package_id)
+    .bind(state.tenant_id.0)
+    .bind(current_user_id.0)
+    .bind(payload["tenant_id"].as_str().unwrap_or_default())
+    .bind(payload["user_id"].as_str().unwrap_or_default())
+    .bind(&client_id)
+    .bind(&payload)
+    .bind(request.expires_at)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(error.into()))?;
+
+    load_client_config_package_view(state, &package_id).await
 }
 
 #[cfg(test)]

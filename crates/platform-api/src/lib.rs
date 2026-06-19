@@ -3,6 +3,7 @@
 mod basic_view_support;
 mod client_artifact_create_support;
 
+use asset_library_create_support::*;
 use asset_library_validation_support::*;
 use asset_library_view_support::*;
 use assistant_runtime::{
@@ -31,7 +32,6 @@ use client_artifact_contract_support::*;
 use client_artifact_create_support::*;
 use client_artifact_publish_support::*;
 use client_artifact_ref_support::*;
-use client_artifact_scope_support::*;
 use client_artifact_view_support::*;
 use client_config_package_support::*;
 use contracts::{
@@ -169,8 +169,8 @@ use std::{
 use storage::NewModelGatewayProfile;
 use storage::{
     AssetLibraryRecord, LexicalRetrievalQuery, ModelGatewayProfile,
-    ModelGatewayProfileUsageSummary, NewAssetLibrary, NewAssetLibraryDatasetMembership,
-    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    ModelGatewayProfileUsageSummary, NewAssetLibraryDatasetMembership, NewAssistantRun,
+    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
     NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
     NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
@@ -183,6 +183,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod asset_library_create_support;
 mod asset_library_scope_support;
 mod asset_library_validation_support;
 mod asset_library_view_support;
@@ -4441,25 +4442,12 @@ async fn create_asset_library(
 ) -> std::result::Result<(StatusCode, Json<CreateAssetLibraryResponse>), ApiError> {
     let _user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("name", &request.name)?;
-    let domain = trim_optional(request.domain).unwrap_or_else(|| "general".to_string());
-    let visibility =
-        normalize_asset_library_visibility(request.visibility.as_deref().unwrap_or("private"))?;
-    let metadata = normalize_asset_library_metadata(request.metadata)?;
+    let new_asset_library = new_asset_library_from_request(request)?;
 
     let asset_library = state
         .storage
         .asset_libraries()
-        .create(
-            state.tenant_id,
-            NewAssetLibrary {
-                external_id: trim_optional(request.external_id),
-                name: request.name.trim().to_string(),
-                domain,
-                description: trim_optional(request.description),
-                visibility,
-                metadata,
-            },
-        )
+        .create(state.tenant_id, new_asset_library)
         .await
         .map_err(ApiError::from_storage)?;
 
@@ -4479,62 +4467,8 @@ async fn create_client_config_package(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("client_id", &request.client_id)?;
     validate_required("v3_base_url", &request.v3_base_url)?;
-    validate_v3_client_ref_list("dataset_ids", &request.dataset_ids)?;
-    validate_v3_client_ref_list("asset_library_ids", &request.asset_library_ids)?;
-    validate_v3_client_ref_list("skill_packs", &request.skill_packs)?;
-    validate_v3_client_scope_refs(
-        &state,
-        &headers,
-        Some(user.id),
-        &request.dataset_ids,
-        &request.asset_library_ids,
-    )
-    .await?;
-
-    let artifact_upload = request
-        .artifact_upload
-        .clone()
-        .unwrap_or_else(default_client_artifact_upload_config);
-    validate_client_artifact_upload_config(&artifact_upload)?;
-
-    let tenant_ref = client_config_ref_or_default(request.tenant_id.as_deref(), state.tenant_id);
-    let user_ref = client_config_ref_or_default(request.user_id.as_deref(), user.id);
-    let client_id = request.client_id.trim().to_string();
-    let package_id = format!("v3cp_{}", Uuid::new_v4().simple());
-    let terminal_id = format!("term_{}", package_id.trim_start_matches("v3cp_"));
-    let codex_control = resolve_codex_control_config(request.codex_control.clone(), &terminal_id);
-    validate_codex_control_config(&codex_control)?;
-    let payload = build_client_config_package_payload(
-        &request,
-        &tenant_ref,
-        &user_ref,
-        &client_id,
-        artifact_upload,
-        codex_control,
-    );
-
-    sqlx::query(
-        r#"
-        insert into v3_client_config_packages (
-            package_id, tenant_id, owner_user_id, tenant_ref, user_ref,
-            client_id, package_payload, expires_at
-        )
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
-        "#,
-    )
-    .bind(&package_id)
-    .bind(state.tenant_id.0)
-    .bind(user.id.0)
-    .bind(payload["tenant_id"].as_str().unwrap_or_default())
-    .bind(payload["user_id"].as_str().unwrap_or_default())
-    .bind(&client_id)
-    .bind(&payload)
-    .bind(request.expires_at)
-    .execute(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(error.into()))?;
-
-    let package = load_client_config_package_view(&state, &package_id).await?;
+    let package =
+        create_client_config_package_and_load_view(&state, &headers, user.id, request).await?;
     Ok((
         StatusCode::CREATED,
         Json(CreateClientConfigPackageResponse { package }),
@@ -4693,46 +4627,18 @@ async fn publish_client_artifact_public_html(
     let user = require_asset_library_user_session(&state, &headers).await?;
     validate_required("artifact_id", &artifact_id)?;
     let artifact_id = artifact_id.trim().to_string();
-    let artifact = load_client_artifact_public_html_record(&state, &artifact_id).await?;
-    ensure_owner_managed_resource(
-        "client_artifact",
-        artifact_id.clone(),
-        artifact.owner_user_id,
-        Some(user.id),
-    )?;
-    ensure_client_artifact_can_publish_public_html(&artifact.status)?;
-
-    let file =
-        load_client_artifact_public_html_candidate_file(&state, artifact.artifact_db_id).await?;
-    let file = prepare_client_artifact_public_html_candidate(file)?;
-    let publication =
-        build_client_artifact_public_html_file_publication(&artifact_id, &artifact.title, file)?;
-    let artifact_root = external_channel_generated_artifact_root()?;
-    write_client_artifact_public_html_file(
-        &artifact_root,
-        &publication.relative_dir,
-        &publication.public_html,
-    )?;
-    let public_url = external_channel_generated_artifact_public_url(&publication.relative_dir);
-    let published_at = Utc::now();
-    let html_artifact = finalize_client_artifact_public_html_publication(
+    let published = publish_client_artifact_public_html_and_load_view(
         &state,
-        user.id,
         &artifact_id,
-        &artifact.title,
-        artifact.manifest,
-        &publication,
-        &public_url,
-        &artifact.dataset_ids,
-        &artifact.asset_library_ids,
-        published_at,
+        user.id,
+        Utc::now(),
     )
     .await?;
 
     Ok(Json(PublishClientArtifactPublicHtmlResponse {
-        artifact: load_client_artifact_view(&state, &artifact_id).await?,
-        html_artifact,
-        public_url,
+        artifact: published.artifact,
+        html_artifact: published.html_artifact,
+        public_url: published.public_url,
     }))
 }
 

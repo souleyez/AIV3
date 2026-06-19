@@ -16,9 +16,11 @@ use crate::{
         read_client_artifact_file_storage, ClientArtifactFileStorageRecord,
     },
     client_artifact_view_support::{
-        load_client_artifact_preview_file, load_client_artifact_publish_record,
+        load_client_artifact_preview_file, load_client_artifact_public_html_candidate_file,
+        load_client_artifact_public_html_record, load_client_artifact_publish_record,
         load_client_artifact_view,
     },
+    external_channel_generated_artifact_public_url, external_channel_generated_artifact_root,
     html_artifact_summary_support::html_artifact_serialized_variant,
     resource_access::ensure_owner_managed_resource,
     ApiError, AppState,
@@ -53,6 +55,12 @@ pub(crate) struct ClientArtifactPublicHtmlFilePublication {
     pub(crate) size_bytes: i64,
     pub(crate) relative_dir: String,
     pub(crate) public_html: String,
+}
+
+pub(crate) struct ClientArtifactPublicHtmlPublishResult {
+    pub(crate) artifact: ClientArtifactView,
+    pub(crate) html_artifact: HtmlArtifactManifestView,
+    pub(crate) public_url: String,
 }
 
 pub(crate) fn client_artifact_file_download_url(artifact_id: &str, file_index: i32) -> String {
@@ -485,6 +493,54 @@ pub(crate) async fn publish_client_artifact_private_and_load_view(
     )
     .await?;
     load_client_artifact_view(state, artifact_id).await
+}
+
+pub(crate) async fn publish_client_artifact_public_html_and_load_view(
+    state: &AppState,
+    artifact_id: &str,
+    current_user_id: UserId,
+    published_at: DateTime<Utc>,
+) -> std::result::Result<ClientArtifactPublicHtmlPublishResult, ApiError> {
+    let artifact = load_client_artifact_public_html_record(state, artifact_id).await?;
+    ensure_owner_managed_resource(
+        "client_artifact",
+        artifact_id.to_string(),
+        artifact.owner_user_id,
+        Some(current_user_id),
+    )?;
+    ensure_client_artifact_can_publish_public_html(&artifact.status)?;
+
+    let file =
+        load_client_artifact_public_html_candidate_file(state, artifact.artifact_db_id).await?;
+    let file = prepare_client_artifact_public_html_candidate(file)?;
+    let publication =
+        build_client_artifact_public_html_file_publication(artifact_id, &artifact.title, file)?;
+    let artifact_root = external_channel_generated_artifact_root()?;
+    write_client_artifact_public_html_file(
+        &artifact_root,
+        &publication.relative_dir,
+        &publication.public_html,
+    )?;
+    let public_url = external_channel_generated_artifact_public_url(&publication.relative_dir);
+    let html_artifact = finalize_client_artifact_public_html_publication(
+        state,
+        current_user_id,
+        artifact_id,
+        &artifact.title,
+        artifact.manifest,
+        &publication,
+        &public_url,
+        &artifact.dataset_ids,
+        &artifact.asset_library_ids,
+        published_at,
+    )
+    .await?;
+
+    Ok(ClientArtifactPublicHtmlPublishResult {
+        artifact: load_client_artifact_view(state, artifact_id).await?,
+        html_artifact,
+        public_url,
+    })
 }
 
 pub(crate) async fn client_artifact_html_preview_response_for_user(
