@@ -2,6 +2,44 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Workflow View And Context Helpers GitHub And 8-server Release
+
+- Scope:
+  - formal release for the P5 helper split covering workflow transition event publishing, workflow execution view mapping, runtime inspect view assembly, workflow definition view mapping, and workflow initial context seeding;
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping changed.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_transition_event_publish_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api publish_workflow_transition_events_emits_execution_and_task_notifications --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_transition_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api workflow_execution_view_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_visibility_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_execution_child_list_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_runtime_inspect_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api derive_model_facing_summary --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api render_workflow_runtime_pretty_summaries --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_definition_view_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api workflow_initial_context_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api workflow_initial_event_support --lib`: passed, 3/3 tests;
+  - workflow initial execution path regressions for memory directory, dataset output, external source sync, chat session, and static-page draft creation: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - refined added-line sensitive scan: passed.
+- GitHub:
+  - code commit `646a7bd2` was pushed to `main` with message `Split workflow view and context helpers`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `f3fe72b03` to `646a7bd2d`;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed;
+  - restarted `aiv3-platform-api.service`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: HTTP 200, status `ok`;
+  - `http://127.0.0.1:3000/readyz`: HTTP 200, status `ready`;
+  - `http://127.0.0.1:3100/`: HTTP 200;
+  - `https://v3.elepcloud.com/`: HTTP 200.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, web rebuild, web restart, worker restart, or 120 server change was performed.
+
 ## Current 8-Server Baseline
 
 - Date: 2026-06-06 00:12 +08:00.
