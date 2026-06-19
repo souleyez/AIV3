@@ -4,6 +4,9 @@ mod basic_view_support;
 mod client_artifact_create_support;
 
 use asset_library_create_support::*;
+use asset_library_list_support::*;
+use asset_library_membership_support::*;
+use asset_library_scope_summary_support::*;
 use asset_library_validation_support::*;
 use asset_library_view_support::*;
 use assistant_runtime::{
@@ -42,21 +45,20 @@ use contracts::{
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse, AssetItemView,
     AssetLibraryDatasetMembershipResponse, AssetLibraryScopeSummaryResponse,
-    AssetLibraryScopeSummaryView, AssetProfileSupplyHintView, AssistantRunDetailView,
-    AssistantRunExecutorTransportView, AssistantRunMessageView,
-    AttachClientArtifactToAssetLibraryRequest, AttachClientArtifactToAssetLibraryResponse,
-    AttachClientArtifactToDatasetRequest, AttachClientArtifactToDatasetResponse,
-    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
-    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, ClientArtifactView,
-    ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
-    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
-    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
-    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
-    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
-    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
-    CreateAssetLibraryRequest, CreateAssetLibraryResponse, CreateAssistantRunRequest,
-    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
-    CreateClientArtifactResponse, CreateClientConfigPackageRequest,
+    AssetProfileSupplyHintView, AssistantRunDetailView, AssistantRunExecutorTransportView,
+    AssistantRunMessageView, AttachClientArtifactToAssetLibraryRequest,
+    AttachClientArtifactToAssetLibraryResponse, AttachClientArtifactToDatasetRequest,
+    AttachClientArtifactToDatasetResponse, AuthAuditEventView, AuthSessionResponse,
+    BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
+    ClaimLocalDataResponse, ClientArtifactView, ClientConfigPackageView,
+    CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
+    CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
+    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
+    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
+    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
+    ConversationMemoryItemView, CreateAssetLibraryRequest, CreateAssetLibraryResponse,
+    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
+    CreateChatSessionResponse, CreateClientArtifactResponse, CreateClientConfigPackageRequest,
     CreateClientConfigPackageResponse, CreateConversationMemoryItemRequest,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
     CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
@@ -169,21 +171,26 @@ use std::{
 use storage::NewModelGatewayProfile;
 use storage::{
     AssetLibraryRecord, LexicalRetrievalQuery, ModelGatewayProfile,
-    ModelGatewayProfileUsageSummary, NewAssetLibraryDatasetMembership, NewAssistantRun,
-    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
-    NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
-    NewReportPlan, NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob,
-    NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    ModelGatewayProfileUsageSummary, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
+    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
+    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
+    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
+    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
+    NewWorkflowTask, PgStorage,
 };
 #[cfg(test)]
-use storage::{NewAssetItem, NewAssetProfile, NewDatasetAssetMembership};
+use storage::{
+    NewAssetItem, NewAssetLibraryDatasetMembership, NewAssetProfile, NewDatasetAssetMembership,
+};
 use tool_registry::bootstrap_default_tool_registry;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
 mod asset_library_create_support;
+mod asset_library_list_support;
+mod asset_library_membership_support;
+mod asset_library_scope_summary_support;
 mod asset_library_scope_support;
 mod asset_library_validation_support;
 mod asset_library_view_support;
@@ -4422,17 +4429,7 @@ async fn list_asset_libraries(
     headers: HeaderMap,
 ) -> std::result::Result<Json<ListAssetLibrariesResponse>, ApiError> {
     let _user = require_asset_library_user_session(&state, &headers).await?;
-    let asset_libraries = state
-        .storage
-        .asset_libraries()
-        .list_by_tenant(state.tenant_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .into_iter()
-        .map(asset_library_view)
-        .collect();
-
-    Ok(Json(ListAssetLibrariesResponse { asset_libraries }))
+    Ok(Json(list_asset_libraries_response(&state).await?))
 }
 
 async fn create_asset_library(
@@ -4651,51 +4648,17 @@ async fn upsert_asset_library_dataset_membership(
     let user = require_asset_library_user_session(&state, &headers).await?;
     let asset_library_id = parse_asset_library_id(&asset_library_id)?;
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let asset_library = load_asset_library(&state, asset_library_id).await?;
-    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let dataset = load_visible_dataset_for_user(
+    let response = upsert_asset_library_dataset_membership_and_load_response(
         &state,
+        &headers,
+        user.id,
+        asset_library_id,
         dataset_id,
-        &active_secret_binding_ids,
-        Some(user.id),
+        request,
     )
     .await?;
-    ensure_owner_managed_resource(
-        "dataset",
-        dataset.id.to_string(),
-        dataset.owner_user_id,
-        Some(user.id),
-    )?;
-    let role = trim_optional(request.role).unwrap_or_else(|| "member".to_string());
-    validate_required("role", &role)?;
-    let priority = request.priority.unwrap_or(100);
 
-    let membership = state
-        .storage
-        .asset_libraries()
-        .upsert_dataset_membership(
-            state.tenant_id,
-            asset_library_id,
-            NewAssetLibraryDatasetMembership {
-                dataset_id,
-                role,
-                priority,
-            },
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    let asset_library = state
-        .storage
-        .asset_libraries()
-        .get_by_id(state.tenant_id, asset_library.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .unwrap_or(asset_library);
-
-    Ok(Json(AssetLibraryDatasetMembershipResponse {
-        asset_library: asset_library_view(asset_library),
-        membership: asset_library_membership_view(membership),
-    }))
+    Ok(Json(response))
 }
 
 async fn remove_asset_library_dataset_membership(
@@ -4706,42 +4669,16 @@ async fn remove_asset_library_dataset_membership(
     let user = require_asset_library_user_session(&state, &headers).await?;
     let asset_library_id = parse_asset_library_id(&asset_library_id)?;
     let dataset_id = parse_dataset_id(&dataset_id)?;
-    let asset_library = load_asset_library(&state, asset_library_id).await?;
-    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let dataset = load_visible_dataset_for_user(
+    let response = remove_asset_library_dataset_membership_and_load_response(
         &state,
+        &headers,
+        user.id,
+        asset_library_id,
         dataset_id,
-        &active_secret_binding_ids,
-        Some(user.id),
     )
     .await?;
-    ensure_owner_managed_resource(
-        "dataset",
-        dataset.id.to_string(),
-        dataset.owner_user_id,
-        Some(user.id),
-    )?;
 
-    let removed = state
-        .storage
-        .asset_libraries()
-        .remove_dataset_membership(state.tenant_id, asset_library_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .is_some();
-    let asset_library = state
-        .storage
-        .asset_libraries()
-        .get_by_id(state.tenant_id, asset_library.id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .unwrap_or(asset_library);
-
-    Ok(Json(RemoveAssetLibraryDatasetMembershipResponse {
-        asset_library: asset_library_view(asset_library),
-        dataset_id,
-        removed,
-    }))
+    Ok(Json(response))
 }
 
 async fn get_asset_library_scope_summary(
@@ -4809,11 +4746,9 @@ async fn get_asset_library_scope_summary(
         &authorized_dataset_ids,
     )
     .await?;
-    let asset_count = assets.len();
-    let asset_profile_hint_count = asset_profile_hints.len();
 
-    Ok(Json(AssetLibraryScopeSummaryResponse {
-        summary: AssetLibraryScopeSummaryView {
+    Ok(Json(asset_library_scope_summary_response(
+        AssetLibraryScopeSummaryResponseInput {
             asset_library: asset_library_view(asset_library),
             memberships: visible_memberships,
             datasets,
@@ -4823,11 +4758,8 @@ async fn get_asset_library_scope_summary(
             denied_dataset_count: scope.denied_dataset_ids.len(),
             membership_count: scope.membership_count,
             authorized_dataset_count: authorized_dataset_ids.len(),
-            asset_count,
-            asset_profile_hint_count,
-            scope_policy: "asset_library_memberships_intersect_authorized_datasets".to_string(),
         },
-    }))
+    )))
 }
 
 async fn load_asset_library_authorized_asset_supply(

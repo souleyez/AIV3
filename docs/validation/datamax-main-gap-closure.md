@@ -20104,6 +20104,90 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
 
+## 2026-06-19 P5 Asset Library Dataset Membership Upsert Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library dataset membership upsert orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_membership_support.rs`;
+  - added `new_asset_library_dataset_membership_from_request` for role trim/defaulting, priority defaulting, and `NewAssetLibraryDatasetMembership` construction;
+  - added `upsert_asset_library_dataset_membership_and_load_response` for asset library loading, request-scope header parsing, visible dataset loading, owner-managed dataset check, membership upsert, asset library reload, and response view construction;
+  - kept the route responsible for V3 user session auth, path `asset_library_id`/`dataset_id` parsing, and `Json` response wrapping only;
+  - kept legacy behavior where blank role defaults to `member` through `trim_optional`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_membership_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 21/21 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Dataset Membership Remove Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library dataset membership delete orchestration out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - `asset_library_membership_support` now owns shared `load_asset_library_for_dataset_membership`;
+  - added `remove_asset_library_dataset_membership_and_load_response` for asset library loading, request-scope header parsing, visible dataset loading, owner-managed dataset check, membership delete, asset library reload, and response view construction;
+  - kept the route responsible for V3 user session auth, path `asset_library_id`/`dataset_id` parsing, and `Json` response wrapping only;
+  - kept existing `removed` boolean semantics for missing membership deletes.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_membership_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 21/21 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library List Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library list response construction out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_list_support.rs`;
+  - added `list_asset_libraries_response` for tenant asset library list loading, storage error mapping, and `AssetLibraryView` response construction;
+  - kept the route responsible for V3 user session auth and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 21/21 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
+## 2026-06-19 P5 Asset Library Scope Summary Response Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move asset library scope summary response construction out of `crates/platform-api/src/lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/asset_library_scope_summary_support.rs`;
+  - added `ASSET_LIBRARY_SCOPE_POLICY` and `asset_library_scope_summary_response` for scope summary response construction;
+  - moved asset count, asset profile hint count, and scope policy assignment into the helper;
+  - kept the route responsible for V3 user session auth, path parsing, asset library loading, membership scope calculation, visible dataset and membership filtering, authorized asset supply loading, and `Json` response wrapping only.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_scope_summary_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api asset_library_membership_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api asset_library --lib`: passed, 22/22 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed.
+
 ## 2026-06-18 P5 Client Config Package View Loader Helper Local Verification
 
 - Purpose:
