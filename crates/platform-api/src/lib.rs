@@ -32739,7 +32739,7 @@ async fn create_static_page_render_for_draft(
     append_static_page_draft_run_event(
         state,
         &draft,
-        "static_page_render.created",
+        static_page_render_created_event_name(),
         static_page_render_created_event_payload(&draft, &render_output),
     )
     .await?;
@@ -32785,7 +32785,7 @@ async fn create_static_page_render_output_inline(
     append_static_page_draft_run_event(
         state,
         &draft,
-        "static_page_render.created",
+        static_page_render_created_event_name(),
         static_page_render_created_event_payload(&draft, &render_output),
     )
     .await?;

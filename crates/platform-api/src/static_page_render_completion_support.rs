@@ -9,6 +9,37 @@ use crate::static_page_view_support::{
     to_static_page_draft_view, to_static_page_render_output_view,
 };
 
+const STATIC_PAGE_RENDER_CREATED_EVENT: &str = "static_page_render.created";
+const STATIC_PAGE_FINAL_RENDER_OPERATION_TYPE: &str = "request_final_render";
+const STATIC_PAGE_FINAL_RENDER_STATUS: &str = "rendered";
+const STATIC_PAGE_FINAL_RENDER_DIRECT_HTML_SUMMARY: &str =
+    "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。";
+const STATIC_PAGE_FINAL_RENDER_VISUAL_SUMMARY: &str = "最终静态页已根据可视化和模块规划生成。";
+
+pub(crate) fn static_page_render_created_event_name() -> &'static str {
+    STATIC_PAGE_RENDER_CREATED_EVENT
+}
+
+pub(crate) fn static_page_final_render_operation_type() -> &'static str {
+    STATIC_PAGE_FINAL_RENDER_OPERATION_TYPE
+}
+
+pub(crate) fn static_page_final_render_status() -> &'static str {
+    STATIC_PAGE_FINAL_RENDER_STATUS
+}
+
+pub(crate) fn static_page_final_render_direct_html_summary() -> &'static str {
+    STATIC_PAGE_FINAL_RENDER_DIRECT_HTML_SUMMARY
+}
+
+pub(crate) fn static_page_final_render_visual_summary() -> &'static str {
+    STATIC_PAGE_FINAL_RENDER_VISUAL_SUMMARY
+}
+
+pub(crate) fn static_page_final_render_draft_status() -> StaticPageDraftStatus {
+    StaticPageDraftStatus::Rendered
+}
+
 pub(crate) fn static_page_render_response(
     draft: StaticPageDraft,
     render_output: StaticPageRenderOutput,
@@ -40,7 +71,7 @@ pub(crate) fn apply_static_page_final_render_to_draft(
         None,
         render_summary,
     );
-    draft.status = StaticPageDraftStatus::Rendered;
+    draft.status = static_page_final_render_draft_status();
     draft
 }
 
@@ -55,26 +86,43 @@ pub(crate) fn static_page_render_created_event_payload(
     })
 }
 
+pub(crate) fn static_page_final_render_page_payload(
+    render_output: &StaticPageRenderOutput,
+    direct_html: bool,
+) -> Value {
+    json!({
+        "status": static_page_final_render_status(),
+        "renderOutputId": render_output.id,
+        "assetManifest": render_output.asset_manifest,
+        "directHtml": direct_html,
+    })
+}
+
+pub(crate) fn static_page_final_render_operation_payload(
+    render_output: &StaticPageRenderOutput,
+    direct_html: bool,
+) -> Value {
+    json!({
+        "type": static_page_final_render_operation_type(),
+        "finalPage": static_page_final_render_page_payload(render_output, direct_html),
+    })
+}
+
 pub(crate) fn static_page_final_render_operations(
     render_output: &StaticPageRenderOutput,
     direct_html: bool,
 ) -> Vec<Value> {
-    vec![json!({
-        "type": "request_final_render",
-        "finalPage": {
-            "status": "rendered",
-            "renderOutputId": render_output.id,
-            "assetManifest": render_output.asset_manifest,
-            "directHtml": direct_html,
-        }
-    })]
+    vec![static_page_final_render_operation_payload(
+        render_output,
+        direct_html,
+    )]
 }
 
 pub(crate) fn static_page_final_render_summary(direct_html: bool) -> &'static str {
     if direct_html {
-        "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
+        static_page_final_render_direct_html_summary()
     } else {
-        "最终静态页已根据可视化和模块规划生成。"
+        static_page_final_render_visual_summary()
     }
 }
 
@@ -89,6 +137,47 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn render_created_event_name_matches_existing_render_event() {
+        assert_eq!(
+            static_page_render_created_event_name(),
+            "static_page_render.created"
+        );
+    }
+
+    #[test]
+    fn final_render_operation_type_matches_existing_operation() {
+        assert_eq!(
+            static_page_final_render_operation_type(),
+            "request_final_render"
+        );
+    }
+
+    #[test]
+    fn final_render_status_matches_existing_final_page_status() {
+        assert_eq!(static_page_final_render_status(), "rendered");
+    }
+
+    #[test]
+    fn final_render_summary_copy_helpers_match_existing_copy() {
+        assert_eq!(
+            static_page_final_render_direct_html_summary(),
+            "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
+        );
+        assert_eq!(
+            static_page_final_render_visual_summary(),
+            "最终静态页已根据可视化和模块规划生成。"
+        );
+    }
+
+    #[test]
+    fn final_render_draft_status_matches_existing_rendered_status() {
+        assert_eq!(
+            static_page_final_render_draft_status(),
+            StaticPageDraftStatus::Rendered
+        );
+    }
 
     fn draft() -> StaticPageDraft {
         let now = Utc::now();
@@ -148,6 +237,34 @@ mod tests {
             output.asset_manifest
         );
         assert_eq!(operations[0]["finalPage"]["directHtml"], json!(true));
+    }
+
+    #[test]
+    fn final_render_page_payload_preserves_status_manifest_and_direct_html_flag() {
+        let output = render_output();
+
+        let final_page = static_page_final_render_page_payload(&output, false);
+
+        assert_eq!(final_page["status"], json!("rendered"));
+        assert_eq!(final_page["renderOutputId"], json!(output.id));
+        assert_eq!(final_page["assetManifest"], output.asset_manifest);
+        assert_eq!(final_page["directHtml"], json!(false));
+    }
+
+    #[test]
+    fn final_render_operation_payload_preserves_type_and_final_page() {
+        let output = render_output();
+
+        let operation = static_page_final_render_operation_payload(&output, true);
+
+        assert_eq!(operation["type"], json!("request_final_render"));
+        assert_eq!(operation["finalPage"]["status"], json!("rendered"));
+        assert_eq!(operation["finalPage"]["renderOutputId"], json!(output.id));
+        assert_eq!(
+            operation["finalPage"]["assetManifest"],
+            output.asset_manifest
+        );
+        assert_eq!(operation["finalPage"]["directHtml"], json!(true));
     }
 
     #[test]
