@@ -730,7 +730,6 @@ use static_page_render_gate_support::*;
 use static_page_render_output_create_support::*;
 use static_page_render_output_view_support::*;
 use static_page_render_output_workflow_support::*;
-use static_page_render_queue_manifest_support::*;
 use static_page_render_request_support::*;
 use static_page_report_snapshot::*;
 use static_page_revision_artifact_support::*;
@@ -32449,17 +32448,7 @@ async fn create_static_page_image_job_for_draft_with_options(
         .static_page_image_jobs()
         .create(
             state.tenant_id,
-            &NewStaticPageImageJob {
-                draft_id: draft.id,
-                assistant_run_id: draft.assistant_run_id,
-                status: StaticPageImageJobStatus::Queued,
-                queue_position: Some(1),
-                image_prompt_payload,
-                preview_asset_key: None,
-                failure_reason: None,
-                confirmed_at: None,
-                created_at: Utc::now(),
-            },
+            &new_queued_static_page_image_job(&draft, image_prompt_payload, Utc::now()),
         )
         .await
         .map_err(ApiError::from_storage)?;
@@ -32486,19 +32475,12 @@ async fn create_static_page_image_job_for_draft_with_options(
         WorkflowSignal::Start,
     )
     .await?;
-    let (operations, operation_summary) = static_page_image_job_queue_operations(&job, &options);
-    draft.draft_payload = apply_static_page_operations_to_payload(
-        draft.draft_payload,
-        &operations,
-        Some(&operation_summary),
-    );
-    append_static_page_operations_metadata(
-        &mut draft.draft_payload,
-        &operations,
+    draft = apply_static_page_image_job_queue_to_draft(
+        draft,
+        &job,
+        &options,
         request.prompt.as_deref(),
-        &operation_summary,
     );
-    draft.status = StaticPageDraftStatus::Queued;
     let draft = state
         .storage
         .static_page_drafts()
@@ -32542,15 +32524,13 @@ async fn create_static_page_image_job_for_draft_with_options(
         state,
         &draft,
         "static_page_image_job.created",
-        json!({
-            "draft_id": draft.id,
-            "image_job_id": job.id,
-            "status": job.status.as_str(),
-            "queue_position": job.queue_position,
-            "workflow_execution_id": workflow_execution.id,
-            "workflow_task_id": workflow_task_id,
-            "workflow_task_available_at": workflow_task_available_at,
-        }),
+        static_page_image_job_created_event_payload(
+            &draft,
+            &job,
+            &workflow_execution,
+            workflow_task_id,
+            workflow_task_available_at,
+        ),
     )
     .await?;
 
@@ -32590,31 +32570,15 @@ async fn confirm_static_page_image_job(
     }
     let preview_asset_key =
         static_page_confirm_preview_asset_key(request.preview_asset_key.as_deref(), &job);
-    job.status = StaticPageImageJobStatus::Confirmed;
-    job.queue_position = None;
-    job.preview_asset_key = Some(preview_asset_key.clone());
-    job.failure_reason = None;
-    job.confirmed_at = Some(Utc::now());
+    job = apply_static_page_confirm_preview_to_job(job, preview_asset_key.clone(), Utc::now());
     let job = state
         .storage
         .static_page_image_jobs()
         .update(state.tenant_id, &job)
         .await
         .map_err(ApiError::from_storage)?;
-    let mut draft = load_visible_static_page_draft(&state, job.draft_id, current_user_id).await?;
-    let operations = static_page_confirm_preview_operations(&job, &preview_asset_key);
-    draft.draft_payload = apply_static_page_operations_to_payload(
-        draft.draft_payload,
-        &operations,
-        Some("可视化已确认，可以进入最终静态页渲染。"),
-    );
-    append_static_page_operations_metadata(
-        &mut draft.draft_payload,
-        &operations,
-        None,
-        "可视化已确认，可以进入最终静态页渲染。",
-    );
-    draft.status = StaticPageDraftStatus::Confirmed;
+    let draft = load_visible_static_page_draft(&state, job.draft_id, current_user_id).await?;
+    let draft = apply_static_page_confirm_preview_to_draft(draft, &job, &preview_asset_key);
     let draft = state
         .storage
         .static_page_drafts()
@@ -32625,11 +32589,7 @@ async fn confirm_static_page_image_job(
         &state,
         &draft,
         "static_page_image_job.confirmed",
-        json!({
-            "draft_id": draft.id,
-            "image_job_id": job.id,
-            "preview_asset_key": job.preview_asset_key,
-        }),
+        static_page_image_job_confirmed_event_payload(&draft, &job),
     )
     .await?;
 
@@ -32725,18 +32685,13 @@ async fn create_static_page_render_for_draft(
                     ),
                 )
             })?;
-        render_output.status = static_page_render_output_status_for_workflow(
-            &started_execution.status,
-            &render_output.status,
-        );
-        let queue_manifest = build_static_page_render_queue_manifest(
+        render_output = apply_static_page_render_workflow_start_to_output(
             &draft,
+            render_output,
             image_job.as_ref(),
-            Some(&started_execution),
+            &started_execution,
             started.enqueued_tasks.first().map(|task| task.id),
         );
-        render_output.asset_manifest =
-            merge_static_page_render_output_workflow_manifest(&queue_manifest, &started_execution);
         render_output = state
             .storage
             .static_page_render_outputs()
@@ -32747,13 +32702,12 @@ async fn create_static_page_render_for_draft(
             state,
             &draft,
             "static_page_render.queued",
-            json!({
-                "draft_id": draft.id,
-                "render_output_id": render_output.id,
-                "image_job_id": render_output.image_job_id,
-                "workflow_execution_id": workflow_execution.id,
-                "workflow_task_id": started.enqueued_tasks.first().map(|task| task.id),
-            }),
+            static_page_render_queued_event_payload(
+                &draft,
+                &render_output,
+                &workflow_execution,
+                started.enqueued_tasks.first().map(|task| task.id),
+            ),
         )
         .await?;
 

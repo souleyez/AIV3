@@ -1,5 +1,10 @@
-use domain_model::{StaticPageRenderOutputStatus, WorkflowExecution, WorkflowStatus};
+use domain_model::{
+    StaticPageDraft, StaticPageImageJob, StaticPageRenderOutput, StaticPageRenderOutputStatus,
+    WorkflowExecution, WorkflowStatus, WorkflowTaskId,
+};
 use serde_json::{json, Value};
+
+use crate::static_page_render_queue_manifest_support::build_static_page_render_queue_manifest;
 
 pub(crate) fn static_page_render_output_status_for_workflow(
     workflow_status: &WorkflowStatus,
@@ -66,11 +71,52 @@ pub(crate) fn merge_static_page_render_output_workflow_manifest(
     Value::Object(object)
 }
 
+pub(crate) fn static_page_render_queued_event_payload(
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+    workflow_execution: &WorkflowExecution,
+    workflow_task_id: Option<WorkflowTaskId>,
+) -> Value {
+    json!({
+        "draft_id": draft.id,
+        "render_output_id": render_output.id,
+        "image_job_id": render_output.image_job_id,
+        "workflow_execution_id": workflow_execution.id,
+        "workflow_task_id": workflow_task_id,
+    })
+}
+
+pub(crate) fn apply_static_page_render_workflow_start_to_output(
+    draft: &StaticPageDraft,
+    mut render_output: StaticPageRenderOutput,
+    image_job: Option<&StaticPageImageJob>,
+    workflow_execution: &WorkflowExecution,
+    workflow_task_id: Option<WorkflowTaskId>,
+) -> StaticPageRenderOutput {
+    render_output.status = static_page_render_output_status_for_workflow(
+        &workflow_execution.status,
+        &render_output.status,
+    );
+    let queue_manifest = build_static_page_render_queue_manifest(
+        draft,
+        image_job,
+        Some(workflow_execution),
+        workflow_task_id,
+    );
+    render_output.asset_manifest =
+        merge_static_page_render_output_workflow_manifest(&queue_manifest, workflow_execution);
+    render_output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
-    use domain_model::{TenantId, WorkflowExecutionId, WorkflowKind};
+    use domain_model::{
+        AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJobId,
+        StaticPageImageJobStatus, StaticPageRenderOutputId, TenantId, WorkflowExecutionId,
+        WorkflowKind,
+    };
 
     fn workflow_execution(
         status: WorkflowStatus,
@@ -89,6 +135,57 @@ mod tests {
             status,
             attempt: 1,
             context,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn draft() -> StaticPageDraft {
+        let now = Utc::now();
+        StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            title: "经营分析".to_string(),
+            status: StaticPageDraftStatus::Confirmed,
+            selected_scope: json!({"dataset_ids": ["dataset-1"]}),
+            visibility_snapshot: json!({}),
+            source_refs: json!([]),
+            draft_payload: json!({}),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn render_output(draft: &StaticPageDraft) -> StaticPageRenderOutput {
+        StaticPageRenderOutput {
+            id: StaticPageRenderOutputId::new(),
+            tenant_id: draft.tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            owner_user_id: draft.owner_user_id,
+            image_job_id: Some(StaticPageImageJobId::new()),
+            status: StaticPageRenderOutputStatus::Queued,
+            html: String::new(),
+            asset_manifest: json!({"status": "queued"}),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn image_job(draft: &StaticPageDraft) -> StaticPageImageJob {
+        let now = Utc::now();
+        StaticPageImageJob {
+            id: StaticPageImageJobId::new(),
+            tenant_id: draft.tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            status: StaticPageImageJobStatus::Confirmed,
+            queue_position: None,
+            image_prompt_payload: json!({}),
+            preview_asset_key: Some("static-page-previews/preview.png".to_string()),
+            failure_reason: None,
+            confirmed_at: Some(now),
             created_at: now,
             updated_at: now,
         }
@@ -229,5 +326,75 @@ mod tests {
             dead_letter_manifest["workflow"]["lastError"],
             json!("renderer exhausted retries")
         );
+    }
+
+    #[test]
+    fn queued_event_payload_preserves_workflow_and_render_context() {
+        let draft = draft();
+        let output = render_output(&draft);
+        let execution = workflow_execution(WorkflowStatus::Running, "rendering", json!({}));
+        let task_id = WorkflowTaskId::new();
+
+        let payload =
+            static_page_render_queued_event_payload(&draft, &output, &execution, Some(task_id));
+
+        assert_eq!(payload["draft_id"], json!(draft.id));
+        assert_eq!(payload["render_output_id"], json!(output.id));
+        assert_eq!(payload["image_job_id"], json!(output.image_job_id));
+        assert_eq!(payload["workflow_execution_id"], json!(execution.id));
+        assert_eq!(payload["workflow_task_id"], json!(task_id));
+    }
+
+    #[test]
+    fn queued_event_payload_allows_missing_workflow_task_id() {
+        let draft = draft();
+        let output = render_output(&draft);
+        let execution = workflow_execution(WorkflowStatus::Pending, "queued", json!({}));
+
+        let payload = static_page_render_queued_event_payload(&draft, &output, &execution, None);
+
+        assert_eq!(payload["draft_id"], json!(draft.id));
+        assert_eq!(payload["render_output_id"], json!(output.id));
+        assert_eq!(payload["workflow_execution_id"], json!(execution.id));
+        assert_eq!(payload["workflow_task_id"], Value::Null);
+    }
+
+    #[test]
+    fn workflow_start_updates_render_output_status_and_manifest() {
+        let draft = draft();
+        let output = render_output(&draft);
+        let image_job = image_job(&draft);
+        let execution = workflow_execution(WorkflowStatus::Running, "rendering", json!({}));
+        let task_id = WorkflowTaskId::new();
+
+        let updated = apply_static_page_render_workflow_start_to_output(
+            &draft,
+            output,
+            Some(&image_job),
+            &execution,
+            Some(task_id),
+        );
+
+        assert_eq!(updated.status, StaticPageRenderOutputStatus::Rendering);
+        assert_eq!(updated.asset_manifest["status"], json!("rendering"));
+        assert_eq!(updated.asset_manifest["image_job_id"], json!(image_job.id));
+        assert_eq!(
+            updated.asset_manifest["preview_asset_key"],
+            json!("static-page-previews/preview.png")
+        );
+        assert_eq!(
+            updated.asset_manifest["workflow_execution_id"],
+            json!(execution.id)
+        );
+        assert_eq!(updated.asset_manifest["workflow_task_id"], json!(task_id));
+        assert_eq!(
+            updated.asset_manifest["workflow"]["status"],
+            json!("running")
+        );
+        assert_eq!(
+            updated.asset_manifest["workflow"]["executionId"],
+            json!(execution.id)
+        );
+        assert_eq!(updated.asset_manifest["workflow"]["taskId"], json!(task_id));
     }
 }
