@@ -153,10 +153,6 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
-use static_page_runtime::{
-    interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
-    StaticPageIntentOutcome, StaticPageIntentRequest,
-};
 #[cfg(test)]
 use std::fs::File;
 use std::{
@@ -406,6 +402,7 @@ mod static_page_database_aggregate_sample_support;
 mod static_page_database_schema_sample_support;
 mod static_page_dataset_fact_snapshot_sample_support;
 mod static_page_design_contract_refresh_support;
+mod static_page_draft_event_support;
 mod static_page_draft_metadata_support;
 mod static_page_draft_visibility_support;
 mod static_page_dynamic_contract_support;
@@ -417,9 +414,12 @@ mod static_page_field_candidate_support;
 mod static_page_focus_url_support;
 mod static_page_handoff_artifact_support;
 mod static_page_html_response_support;
+mod static_page_image_job_confirm_support;
+mod static_page_image_job_create_support;
 mod static_page_image_prompt_payload_support;
 mod static_page_image_summary_support;
 mod static_page_initial_draft_payload_support;
+mod static_page_intent_runtime_support;
 mod static_page_load_support;
 mod static_page_media_sample_support;
 mod static_page_metric_value_support;
@@ -692,12 +692,12 @@ use sse_support::*;
 use static_page_artifact_stability_support::*;
 use static_page_artifact_summary_support::*;
 use static_page_artifact_url_support::*;
-use static_page_conversation_memory_support::*;
 use static_page_data_quality_artifact_support::*;
 use static_page_data_quality_gate_support::*;
 use static_page_data_snapshot_support::*;
 use static_page_data_source_candidate_support::*;
 use static_page_design_contract_refresh_support::*;
+use static_page_draft_event_support::*;
 use static_page_draft_metadata_support::*;
 use static_page_draft_visibility_support::*;
 use static_page_dynamic_contract_support::*;
@@ -707,9 +707,12 @@ use static_page_field_candidate_support::*;
 use static_page_focus_url_support::*;
 use static_page_handoff_artifact_support::*;
 use static_page_html_response_support::*;
+use static_page_image_job_confirm_support::*;
+use static_page_image_job_create_support::*;
 use static_page_image_prompt_payload_support::*;
 use static_page_image_summary_support::*;
 use static_page_initial_draft_payload_support::*;
+use static_page_intent_runtime_support::*;
 use static_page_load_support::*;
 use static_page_module_binding_support::*;
 use static_page_module_sample_data_support::*;
@@ -771,7 +774,6 @@ const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
-const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
 pub(crate) const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
 pub(crate) const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
 pub(crate) const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
@@ -32370,14 +32372,6 @@ async fn create_static_page_image_job(
     create_static_page_image_job_for_draft(&state, draft, request).await
 }
 
-#[derive(Debug, Default)]
-struct StaticPageImageJobCreateOptions {
-    task_available_at: Option<DateTime<Utc>>,
-    task_payload_patch: Option<Value>,
-    queue_message: Option<String>,
-    operation_summary: Option<String>,
-}
-
 async fn create_static_page_image_job_for_draft(
     state: &AppState,
     draft: StaticPageDraft,
@@ -32486,29 +32480,17 @@ async fn create_static_page_image_job_for_draft_with_options(
         WorkflowSignal::Start,
     )
     .await?;
-    let operations = vec![json!({
-        "type": "queue_image_job",
-        "jobId": job.id,
-        "queuePosition": job.queue_position,
-        "queueMessage": options
-            .queue_message
-            .as_deref()
-            .unwrap_or("资源正在排队，可以联系商务开通高级用户跳过等待。"),
-    })];
-    let operation_summary = options
-        .operation_summary
-        .as_deref()
-        .unwrap_or("可视化任务已进入资源队列。");
+    let (operations, operation_summary) = static_page_image_job_queue_operations(&job, &options);
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
-        Some(operation_summary),
+        Some(&operation_summary),
     );
     append_static_page_operations_metadata(
         &mut draft.draft_payload,
         &operations,
         request.prompt.as_deref(),
-        operation_summary,
+        &operation_summary,
     );
     draft.status = StaticPageDraftStatus::Queued;
     let draft = state
@@ -32600,14 +32582,8 @@ async fn confirm_static_page_image_job(
             "failed image jobs cannot be confirmed".to_string(),
         ));
     }
-    let preview_asset_key = request
-        .preview_asset_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| job.preview_asset_key.clone())
-        .unwrap_or_else(|| format!("static-page-previews/{}.json", job.id));
+    let preview_asset_key =
+        static_page_confirm_preview_asset_key(request.preview_asset_key.as_deref(), &job);
     job.status = StaticPageImageJobStatus::Confirmed;
     job.queue_position = None;
     job.preview_asset_key = Some(preview_asset_key.clone());
@@ -32620,14 +32596,7 @@ async fn confirm_static_page_image_job(
         .await
         .map_err(ApiError::from_storage)?;
     let mut draft = load_visible_static_page_draft(&state, job.draft_id, current_user_id).await?;
-    let operations = vec![json!({
-        "type": "confirm_preview",
-        "previewImage": {
-            "kind": "static-page-effect-preview",
-            "assetKey": preview_asset_key,
-            "imageJobId": job.id,
-        }
-    })];
+    let operations = static_page_confirm_preview_operations(&job, &preview_asset_key);
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
@@ -33016,49 +32985,6 @@ async fn refresh_static_page_draft_data_contract_for_action(
     )
     .await?;
     Ok(updated)
-}
-
-fn refresh_static_page_payload_with_draft_context(payload: &mut Value, draft: &StaticPageDraft) {
-    ensure_json_object(payload);
-    let draft_context = draft.draft_payload.get("assistant_context").cloned();
-    if let Some(object) = payload.as_object_mut() {
-        object
-            .entry("selected_scope".to_string())
-            .or_insert_with(|| draft.selected_scope.clone());
-        match object.get_mut("assistant_context") {
-            Some(context) => {
-                ensure_json_object(context);
-                if let Some(context_object) = context.as_object_mut() {
-                    context_object
-                        .entry("selected_scope".to_string())
-                        .or_insert_with(|| draft.selected_scope.clone());
-                    if let Some(draft_context) = draft_context.as_ref() {
-                        if let Some(evidence_state) = draft_context.get("evidence_state") {
-                            context_object
-                                .entry("evidence_state".to_string())
-                                .or_insert_with(|| evidence_state.clone());
-                        }
-                        if let Some(assistant_run_id) = draft_context.get("assistant_run_id") {
-                            context_object
-                                .entry("assistant_run_id".to_string())
-                                .or_insert_with(|| assistant_run_id.clone());
-                        }
-                    }
-                }
-            }
-            None => {
-                let mut context = draft_context.unwrap_or_else(|| json!({}));
-                ensure_json_object(&mut context);
-                if let Some(context_object) = context.as_object_mut() {
-                    context_object
-                        .entry("selected_scope".to_string())
-                        .or_insert_with(|| draft.selected_scope.clone());
-                }
-                object.insert("assistant_context".to_string(), context);
-            }
-        }
-    }
-    refresh_static_page_payload_design_contract(payload);
 }
 
 async fn list_static_page_render_outputs(
@@ -58909,134 +58835,6 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         "queue_allowed": false,
         "authority": "direct_until_shadow_gate_passes",
     })
-}
-
-async fn append_static_page_draft_run_event(
-    state: &AppState,
-    draft: &StaticPageDraft,
-    event_name: &str,
-    payload: Value,
-) -> std::result::Result<(), ApiError> {
-    state
-        .storage
-        .assistant_runs()
-        .append_event(
-            state.tenant_id,
-            draft.assistant_run_id,
-            &NewAssistantRunEvent {
-                event_name: event_name.to_string(),
-                payload,
-                created_at: Utc::now(),
-            },
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    Ok(())
-}
-
-async fn interpret_static_page_draft_intent_for_api(
-    state: &AppState,
-    draft: &StaticPageDraft,
-    prompt: &str,
-    draft_payload: &Value,
-    messages: Vec<AssistantRunMessageView>,
-) -> std::result::Result<StaticPageIntentOutcome, ApiError> {
-    let run = state
-        .storage
-        .assistant_runs()
-        .get_by_id(state.tenant_id, draft.assistant_run_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "assistant_run_not_found",
-                format!("assistant run {} was not found", draft.assistant_run_id),
-            )
-        })?;
-    let template_reference =
-        static_page_template_reference_payload_for_intent(draft_payload, &draft.source_refs)?;
-    let missing_evidence = static_page_template_missing_evidence_for_intent(
-        draft_payload,
-        &draft.source_refs,
-        &run.evidence_state,
-    )?;
-    let runtime_request = StaticPageIntentRequest {
-        prompt: prompt.to_string(),
-        draft_payload: draft_payload.clone(),
-        assistant_run_id: Some(draft.assistant_run_id.to_string()),
-        startup_briefing: run.startup_briefing.clone(),
-        selected_scope: draft.selected_scope.clone(),
-        evidence_state: run.evidence_state.clone(),
-        template_reference,
-        missing_evidence,
-        conversation_memory_refs: static_page_conversation_memory_refs(&run),
-        messages: messages
-            .into_iter()
-            .map(|message| {
-                json!({
-                    "role": message.role.as_str(),
-                    "content": message.content,
-                })
-            })
-            .collect(),
-    };
-    let runtime_mode = std::env::var("STATIC_PAGE_INTENT_RUNTIME_MODE")
-        .unwrap_or_else(|_| "deterministic".to_string());
-    if runtime_mode != "provider" {
-        return interpret_static_page_intent_deterministic(&runtime_request).map_err(|error| {
-            ApiError::internal(
-                "static_page_intent_runtime_failed",
-                format!("static page deterministic intent failed: {error}"),
-            )
-        });
-    }
-
-    let runtime_provider = std::env::var("STATIC_PAGE_INTENT_RUNTIME_PROVIDER")
-        .unwrap_or_else(|_| "static_page_intent_provider".to_string());
-    let runtime_model = std::env::var("STATIC_PAGE_INTENT_RUNTIME_MODEL")
-        .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL.to_string());
-    let provider_request = runtime_request.clone();
-    let provider_result = tokio::task::spawn_blocking(move || {
-        let provider = build_provider_from_env(
-            "STATIC_PAGE_INTENT",
-            "provider",
-            runtime_provider,
-            bootstrap_default_prompt_registry(),
-        )?;
-        interpret_static_page_intent_with_provider(
-            &provider_request,
-            provider.as_ref(),
-            Some(&runtime_model),
-        )
-    })
-    .await
-    .map_err(|error| {
-        ApiError::internal(
-            "static_page_intent_join_failed",
-            format!("static page intent worker join failed: {error}"),
-        )
-    })?;
-
-    match provider_result {
-        Ok(outcome) => Ok(outcome),
-        Err(error) => {
-            let mut fallback =
-                interpret_static_page_intent_deterministic(&runtime_request).map_err(|fallback| {
-                    ApiError::internal(
-                        "static_page_intent_runtime_failed",
-                        format!(
-                            "static page provider failed ({error}); deterministic fallback also failed: {fallback}"
-                        ),
-                    )
-                })?;
-            fallback.runtime = json!({
-                "source": "provider_fallback",
-                "provider_failure": error.to_string(),
-                "fallback": fallback.runtime,
-            });
-            Ok(fallback)
-        }
-    }
 }
 
 #[derive(Debug)]

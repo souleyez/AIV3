@@ -1,6 +1,9 @@
 use chrono::Utc;
+use domain_model::StaticPageDraft;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
+
+use crate::static_page_design_contract_refresh_support::refresh_static_page_payload_design_contract;
 
 pub(crate) fn build_static_page_preview_contract(
     style_direction: &str,
@@ -221,9 +224,76 @@ pub(crate) fn set_payload_value(payload: &mut Value, key: &str, value: Value) {
     }
 }
 
+pub(crate) fn refresh_static_page_payload_with_draft_context(
+    payload: &mut Value,
+    draft: &StaticPageDraft,
+) {
+    ensure_json_object(payload);
+    let draft_context = draft.draft_payload.get("assistant_context").cloned();
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("selected_scope".to_string())
+            .or_insert_with(|| draft.selected_scope.clone());
+        match object.get_mut("assistant_context") {
+            Some(context) => {
+                ensure_json_object(context);
+                if let Some(context_object) = context.as_object_mut() {
+                    context_object
+                        .entry("selected_scope".to_string())
+                        .or_insert_with(|| draft.selected_scope.clone());
+                    if let Some(draft_context) = draft_context.as_ref() {
+                        if let Some(evidence_state) = draft_context.get("evidence_state") {
+                            context_object
+                                .entry("evidence_state".to_string())
+                                .or_insert_with(|| evidence_state.clone());
+                        }
+                        if let Some(assistant_run_id) = draft_context.get("assistant_run_id") {
+                            context_object
+                                .entry("assistant_run_id".to_string())
+                                .or_insert_with(|| assistant_run_id.clone());
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut context = draft_context.unwrap_or_else(|| json!({}));
+                ensure_json_object(&mut context);
+                if let Some(context_object) = context.as_object_mut() {
+                    context_object
+                        .entry("selected_scope".to_string())
+                        .or_insert_with(|| draft.selected_scope.clone());
+                }
+                object.insert("assistant_context".to_string(), context);
+            }
+        }
+    }
+    refresh_static_page_payload_design_contract(payload);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain_model::{AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, TenantId};
+
+    fn test_draft_with_context(selected_scope: Value, assistant_context: Value) -> StaticPageDraft {
+        let now = Utc::now();
+        StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营分析".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope,
+            visibility_snapshot: json!({}),
+            source_refs: Value::Null,
+            draft_payload: json!({
+                "assistant_context": assistant_context
+            }),
+            created_at: now,
+            updated_at: now,
+        }
+    }
 
     #[test]
     fn preview_contract_marks_active_previous_contract_stale_when_design_changes() {
@@ -364,5 +434,90 @@ mod tests {
             static_page_payload_data_snapshot_validation_summary(&json!({})),
             Value::Null
         );
+    }
+
+    #[test]
+    fn refresh_payload_with_draft_context_preserves_existing_context_and_fills_missing() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": ["dataset-1"]
+        });
+        let draft = test_draft_with_context(
+            selected_scope.clone(),
+            json!({
+                "selected_scope": selected_scope,
+                "evidence_state": {
+                    "status": "supplied"
+                },
+                "assistant_run_id": "run-1"
+            }),
+        );
+        let mut payload = json!({
+            "assistant_context": {
+                "selected_scope": {
+                    "mode": "existing"
+                }
+            },
+            "modules": [
+                { "id": "hero", "title": "总览" }
+            ]
+        });
+
+        refresh_static_page_payload_with_draft_context(&mut payload, &draft);
+
+        assert_eq!(
+            payload["selected_scope"],
+            json!({
+                "mode": "user_selected",
+                "datasets": ["dataset-1"]
+            })
+        );
+        assert_eq!(
+            payload["assistant_context"]["selected_scope"],
+            json!({ "mode": "existing" })
+        );
+        assert_eq!(
+            payload["assistant_context"]["evidence_state"]["status"],
+            json!("supplied")
+        );
+        assert_eq!(
+            payload["assistant_context"]["assistant_run_id"],
+            json!("run-1")
+        );
+        assert!(payload["dataSnapshot"].is_object());
+    }
+
+    #[test]
+    fn refresh_payload_with_draft_context_creates_assistant_context_when_missing() {
+        let selected_scope = json!({
+            "mode": "dataset",
+            "datasets": ["dataset-2"]
+        });
+        let draft = test_draft_with_context(
+            selected_scope.clone(),
+            json!({
+                "evidence_state": {
+                    "status": "empty"
+                }
+            }),
+        );
+        let mut payload = json!({
+            "modules": [
+                { "id": "risk", "title": "风险" }
+            ]
+        });
+
+        refresh_static_page_payload_with_draft_context(&mut payload, &draft);
+
+        assert_eq!(payload["selected_scope"], selected_scope);
+        assert_eq!(
+            payload["assistant_context"]["selected_scope"],
+            selected_scope
+        );
+        assert_eq!(
+            payload["assistant_context"]["evidence_state"]["status"],
+            json!("empty")
+        );
+        assert!(payload["previewContract"].is_object());
     }
 }

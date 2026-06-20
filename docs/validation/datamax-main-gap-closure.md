@@ -2,6 +2,118 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Image Job Confirm Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page image job preview confirmation pure helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_image_job_confirm_support.rs`;
+  - moved preview asset key resolution and `confirm_preview` operation assembly out of `crates/platform-api/src/lib.rs`;
+  - kept failed-job rejection, job status mutation, draft update, and event append inside the existing route flow;
+  - preserved requested asset key trim precedence, existing job asset fallback, default `static-page-previews/{job_id}.json` fallback, and operation `kind` / `assetKey` / `imageJobId` shape.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 24/24 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Image Job Create Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move image job creation options and queue operation payload assembly out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_image_job_create_support.rs`;
+  - moved `StaticPageImageJobCreateOptions` and image-job queue operation/summary assembly out of `crates/platform-api/src/lib.rs`;
+  - kept normal preview queueing and template-prewarm queueing using the same options structure through the support-module re-export;
+  - preserved default customer-visible queue message, default operation summary, custom prewarm queue message/summary, queue position, and job id serialization.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api static_page_template_prewarm --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Payload Draft Context Refresh Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page payload refresh from draft selected scope and assistant context out of `lib.rs`.
+- Code change:
+  - moved `refresh_static_page_payload_with_draft_context` into `crates/platform-api/src/static_page_payload_support.rs`;
+  - kept image-job, render, and data-contract refresh callers using the same helper name through the existing support-module re-export;
+  - preserved existing payload field non-overwrite behavior, missing `selected_scope` and `assistant_context` fill behavior, draft evidence/assistant-run context carryover, and design/data snapshot contract refresh.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_payload_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api static_page_image_payload_refreshes_missing_rows_from_draft_context --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 18/18 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Intent Runtime Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page draft intent runtime wrapper out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_intent_runtime_support.rs`;
+  - moved `interpret_static_page_draft_intent_for_api` and the static-page intent default model constant out of `crates/platform-api/src/lib.rs`;
+  - kept `apply_static_page_draft_intent` and HTML artifact intent callers using the same helper name through the support-module re-export;
+  - preserved runtime request fields, conversation-memory refs, template reference and missing-evidence enrichment, deterministic/provider mode selection, provider fallback shape, join error code, and storage error mapping.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_intent_runtime_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_intent --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api static_page_template_match_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 18/18 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Draft Run Event Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page draft assistant-run event append logic out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_draft_event_support.rs`;
+  - moved `append_static_page_draft_run_event` out of `crates/platform-api/src/lib.rs`;
+  - kept `lib.rs`, `react_agent_tools`, and static-page image/render callers using the same helper name through the support-module re-export;
+  - preserved tenant, assistant-run id, event name, payload, `created_at`, and `ApiError::from_storage` behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo test -q -p platform-api static_page_draft_event_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api assistant_run_react_static_page_preview_and_render_use_current_backend_draft --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Helper Splits GitHub And 8-server Release
 
 - Scope:
