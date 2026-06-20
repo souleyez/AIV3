@@ -2,6 +2,42 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Helper Splits GitHub And 8-server Release
+
+- Scope:
+  - release #309 required-field validation helper split, #310 JSON value array helper split, and #311 static-page load helper split;
+  - keep the release behavior-preserving and avoid public/third-party API contract changes.
+- GitHub:
+  - commit `0a842a08` (`Split platform API helper modules`) was pushed to `origin/main`;
+  - committed files: `crates/platform-api/src/lib.rs`, `crates/platform-api/src/required_field_support.rs`, `crates/platform-api/src/json_value_support.rs`, `crates/platform-api/src/static_page_load_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and `docs/validation/datamax-main-gap-closure.md`.
+- Local release gate before push:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api required_field_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api json_value_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api static_page_load_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api assistant_run_react_static_page_preview_and_render_use_current_backend_draft --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_RELEASE_LINES`.
+- 8-server deployment:
+  - repository: `/srv/aiv3/repo`;
+  - fast-forwarded from `0ae1de3fb` to `0a842a08`;
+  - build command: `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`.
+- Live verification:
+  - `/srv/aiv3/repo` is at `0a842a08` and clean against `origin/main`;
+  - `http://127.0.0.1:3000/healthz`: returned `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: returned `status=ready`;
+  - `systemctl is-active` returned `active` for all restarted services;
+  - `journalctl` error sample for restarted services since 10 minutes ago returned no entries;
+  - `https://v3.elepcloud.com/` returned `HTTP/1.1 200 OK`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed.
+
 ## 2026-06-20 P5 Static Page Load Helper Local Verification
 
 - Purpose:
