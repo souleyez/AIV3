@@ -2,6 +2,46 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Render Queue Helpers GitHub And 8-Server Deployment
+
+- Purpose:
+  - close #371-#376 as one deployable behavior-preserving batch;
+  - publish the verified local static-page render queue helper splits to GitHub and 8 server.
+- Local pre-publish audit:
+  - substantive diff was limited to `crates/platform-api/src/static_page_render_queue_manifest_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and `docs/validation/datamax-main-gap-closure.md`;
+  - five additional working-tree status entries were line-ending/no-content state noise and were not staged;
+  - `git diff --check` passed for the scoped files;
+  - scoped diff secret scan passed.
+- Local verification before publish:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 64/64 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- GitHub:
+  - committed with message `Split static page render queue helpers`;
+  - pushed `origin/main` from `38330f78` to `dd002b37`.
+- 8-server deployment:
+  - pre-deploy remote repo was clean at `38330f781`;
+  - services were active and local `healthz` / `readyz` passed before deploy;
+  - ran `git pull --ff-only` in `/srv/aiv3/repo`, fast-forwarding to `dd002b37a`;
+  - ran `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`: passed;
+  - restarted `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`;
+  - post-deploy `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all active;
+  - post-deploy `http://127.0.0.1:3000/healthz` and `http://127.0.0.1:3000/readyz` passed;
+  - `https://v3.elepcloud.com/`, `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html`, and `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.html` returned 200;
+  - 10-minute error-log sample for the restarted services had no entries.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, 120 server change, or public contract change was performed.
+
 ## 2026-06-20 P5 Static Page Render Queue Image Context Helper Local Verification
 
 - Purpose:
