@@ -64,15 +64,42 @@ pub(crate) fn build_static_page_render_queue_image_context(
     image_job: Option<&StaticPageImageJob>,
 ) -> (Option<StaticPageImageJobId>, Option<String>) {
     (
-        image_job.map(|job| job.id),
-        image_job.and_then(|job| job.preview_asset_key.clone()),
+        build_static_page_render_queue_image_job_id(image_job),
+        build_static_page_render_queue_preview_asset_key(image_job),
     )
+}
+
+pub(crate) fn build_static_page_render_queue_image_job_id(
+    image_job: Option<&StaticPageImageJob>,
+) -> Option<StaticPageImageJobId> {
+    image_job.map(|job| job.id)
+}
+
+pub(crate) fn build_static_page_render_queue_preview_asset_key(
+    image_job: Option<&StaticPageImageJob>,
+) -> Option<String> {
+    image_job.and_then(|job| job.preview_asset_key.clone())
 }
 
 pub(crate) fn build_static_page_render_queue_identity(
     draft: &StaticPageDraft,
 ) -> (StaticPageDraftId, AssistantRunId) {
-    (draft.id, draft.assistant_run_id)
+    (
+        build_static_page_render_queue_draft_id(draft),
+        build_static_page_render_queue_assistant_run_id(draft),
+    )
+}
+
+pub(crate) fn build_static_page_render_queue_draft_id(
+    draft: &StaticPageDraft,
+) -> StaticPageDraftId {
+    draft.id
+}
+
+pub(crate) fn build_static_page_render_queue_assistant_run_id(
+    draft: &StaticPageDraft,
+) -> AssistantRunId {
+    draft.assistant_run_id
 }
 
 pub(crate) fn build_static_page_render_queue_workflow_ids(
@@ -80,9 +107,21 @@ pub(crate) fn build_static_page_render_queue_workflow_ids(
     workflow_task_id: Option<WorkflowTaskId>,
 ) -> (Option<WorkflowExecutionId>, Option<WorkflowTaskId>) {
     (
-        workflow_execution.map(|execution| execution.id),
-        workflow_task_id,
+        build_static_page_render_queue_workflow_execution_id(workflow_execution),
+        build_static_page_render_queue_workflow_task_id(workflow_task_id),
     )
+}
+
+pub(crate) fn build_static_page_render_queue_workflow_execution_id(
+    workflow_execution: Option<&WorkflowExecution>,
+) -> Option<WorkflowExecutionId> {
+    workflow_execution.map(|execution| execution.id)
+}
+
+pub(crate) fn build_static_page_render_queue_workflow_task_id(
+    workflow_task_id: Option<WorkflowTaskId>,
+) -> Option<WorkflowTaskId> {
+    workflow_task_id
 }
 
 pub(crate) fn build_static_page_render_queue_workflow_manifest(
@@ -90,10 +129,12 @@ pub(crate) fn build_static_page_render_queue_workflow_manifest(
     workflow_task_id: Option<WorkflowTaskId>,
 ) -> Value {
     let status = build_static_page_render_queue_workflow_status();
+    let execution_id = build_static_page_render_queue_workflow_execution_id(workflow_execution);
+    let task_id = build_static_page_render_queue_workflow_task_id(workflow_task_id);
     json!({
         "status": status,
-        "executionId": workflow_execution.map(|execution| execution.id),
-        "taskId": workflow_task_id,
+        "executionId": execution_id,
+        "taskId": task_id,
     })
 }
 
@@ -217,12 +258,23 @@ pub(crate) fn build_static_page_queued_export_package_module_counts(
     let Some(items) = modules.as_array() else {
         return (0, 0);
     };
-    let module_count = items.len();
-    let echarts_requested_modules = items
+    let module_count = build_static_page_queued_export_package_module_count(items);
+    let echarts_requested_modules =
+        build_static_page_queued_export_package_echarts_requested_module_count(items);
+    (module_count, echarts_requested_modules)
+}
+
+pub(crate) fn build_static_page_queued_export_package_module_count(items: &[Value]) -> usize {
+    items.len()
+}
+
+pub(crate) fn build_static_page_queued_export_package_echarts_requested_module_count(
+    items: &[Value],
+) -> usize {
+    items
         .iter()
         .filter(|module| static_page_module_chart_runtime(module) == "echarts")
-        .count();
-    (module_count, echarts_requested_modules)
+        .count()
 }
 
 pub(crate) fn build_static_page_queued_export_package_debug(
@@ -507,6 +559,17 @@ mod tests {
     }
 
     #[test]
+    fn render_queue_identity_field_helpers_preserve_draft_and_run_ids() {
+        let draft = draft_with_payload(json!({}));
+
+        assert_eq!(build_static_page_render_queue_draft_id(&draft), draft.id);
+        assert_eq!(
+            build_static_page_render_queue_assistant_run_id(&draft),
+            draft.assistant_run_id
+        );
+    }
+
+    #[test]
     fn render_queue_lifecycle_preserves_status_renderer_and_copy() {
         let (status, renderer, queue_copy) = build_static_page_render_queue_lifecycle();
 
@@ -557,6 +620,26 @@ mod tests {
     }
 
     #[test]
+    fn render_queue_workflow_id_helpers_preserve_optional_values() {
+        let execution = workflow_execution();
+        let task_id = WorkflowTaskId::new();
+
+        assert_eq!(
+            build_static_page_render_queue_workflow_execution_id(Some(&execution)),
+            Some(execution.id)
+        );
+        assert_eq!(
+            build_static_page_render_queue_workflow_execution_id(None),
+            None
+        );
+        assert_eq!(
+            build_static_page_render_queue_workflow_task_id(Some(task_id)),
+            Some(task_id)
+        );
+        assert_eq!(build_static_page_render_queue_workflow_task_id(None), None);
+    }
+
+    #[test]
     fn render_queue_image_context_preserves_optional_job_id_and_preview_asset_key() {
         let draft = draft_with_payload(json!({}));
         let image_job = image_job_for_draft(&draft);
@@ -573,6 +656,23 @@ mod tests {
         );
         assert_eq!(empty_image_job_id, None);
         assert_eq!(empty_preview_asset_key, None);
+    }
+
+    #[test]
+    fn render_queue_image_field_helpers_preserve_optional_values() {
+        let draft = draft_with_payload(json!({}));
+        let image_job = image_job_for_draft(&draft);
+
+        assert_eq!(
+            build_static_page_render_queue_image_job_id(Some(&image_job)),
+            Some(image_job.id)
+        );
+        assert_eq!(build_static_page_render_queue_image_job_id(None), None);
+        assert_eq!(
+            build_static_page_render_queue_preview_asset_key(Some(&image_job)).as_deref(),
+            Some("static-page-previews/preview.png")
+        );
+        assert_eq!(build_static_page_render_queue_preview_asset_key(None), None);
     }
 
     #[test]
@@ -1041,6 +1141,54 @@ mod tests {
         assert_eq!(
             build_static_page_queued_export_package_module_counts(&json!("invalid")),
             (0, 0)
+        );
+    }
+
+    #[test]
+    fn queued_export_package_module_count_preserves_array_len() {
+        let modules = vec![
+            json!({"id": "hero"}),
+            json!({"id": "trend"}),
+            json!({"id": "table"}),
+        ];
+
+        assert_eq!(
+            build_static_page_queued_export_package_module_count(&modules),
+            3
+        );
+        assert_eq!(build_static_page_queued_export_package_module_count(&[]), 0);
+    }
+
+    #[test]
+    fn queued_export_package_echarts_requested_module_count_preserves_runtime_matching() {
+        let modules = vec![
+            json!({
+                "id": "trend",
+                "visualization": {
+                    "chartRuntime": "echarts"
+                }
+            }),
+            json!({
+                "id": "summary",
+                "visualization": {
+                    "type": "text"
+                }
+            }),
+            json!({
+                "id": "advanced",
+                "chartOptions": {
+                    "chartRuntime": "echarts"
+                }
+            }),
+        ];
+
+        assert_eq!(
+            build_static_page_queued_export_package_echarts_requested_module_count(&modules),
+            2
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_echarts_requested_module_count(&[]),
+            0
         );
     }
 
