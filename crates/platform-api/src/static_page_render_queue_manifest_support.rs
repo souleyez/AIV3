@@ -1,3 +1,4 @@
+use domain_model::StaticPageImageJobId;
 use domain_model::{StaticPageDraft, StaticPageImageJob, WorkflowExecution, WorkflowTaskId};
 use serde_json::{json, Value};
 
@@ -16,13 +17,14 @@ pub(crate) fn build_static_page_render_queue_manifest(
     workflow_task_id: Option<WorkflowTaskId>,
 ) -> Value {
     let payload = &draft.draft_payload;
-    let data_snapshot = static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-        .unwrap_or_else(|| build_static_page_data_snapshot(payload, &draft.selected_scope));
+    let data_snapshot =
+        build_static_page_render_queue_data_snapshot(payload, &draft.selected_scope);
     let modules = static_page_payload_modules(payload);
     let export_package =
         build_static_page_queued_export_package_manifest(draft, &modules, &data_snapshot);
     let workflow_manifest =
         build_static_page_render_queue_workflow_manifest(workflow_execution, workflow_task_id);
+    let (image_job_id, preview_asset_key) = build_static_page_render_queue_image_context(image_job);
     json!({
         "draft_id": draft.id,
         "assistant_run_id": draft.assistant_run_id,
@@ -31,16 +33,23 @@ pub(crate) fn build_static_page_render_queue_manifest(
         "workflow_execution_id": workflow_execution.map(|execution| execution.id),
         "workflow_task_id": workflow_task_id,
         "workflow": workflow_manifest,
-        "image_job_id": image_job.map(|job| job.id),
-        "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
-        "visual_spec": static_page_payload_value(payload, &["visualSpec", "visual_spec"])
-            .unwrap_or_else(|| build_static_page_visual_spec("client-delivery")),
-        "render_spec": static_page_payload_value(payload, &["renderSpec", "render_spec"])
-            .unwrap_or_else(build_static_page_render_spec),
+        "image_job_id": image_job_id,
+        "preview_asset_key": preview_asset_key,
+        "visual_spec": build_static_page_render_queue_visual_spec(payload),
+        "render_spec": build_static_page_render_queue_render_spec(payload),
         "data_snapshot": data_snapshot,
         "export_package": export_package,
         "queue_copy": "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
     })
+}
+
+pub(crate) fn build_static_page_render_queue_image_context(
+    image_job: Option<&StaticPageImageJob>,
+) -> (Option<StaticPageImageJobId>, Option<String>) {
+    (
+        image_job.map(|job| job.id),
+        image_job.and_then(|job| job.preview_asset_key.clone()),
+    )
 }
 
 pub(crate) fn build_static_page_render_queue_workflow_manifest(
@@ -54,63 +63,104 @@ pub(crate) fn build_static_page_render_queue_workflow_manifest(
     })
 }
 
+pub(crate) fn build_static_page_render_queue_visual_spec(payload: &Value) -> Value {
+    static_page_payload_value(payload, &["visualSpec", "visual_spec"])
+        .unwrap_or_else(|| build_static_page_visual_spec("client-delivery"))
+}
+
+pub(crate) fn build_static_page_render_queue_render_spec(payload: &Value) -> Value {
+    static_page_payload_value(payload, &["renderSpec", "render_spec"])
+        .unwrap_or_else(build_static_page_render_spec)
+}
+
+pub(crate) fn build_static_page_render_queue_data_snapshot(
+    payload: &Value,
+    selected_scope: &Value,
+) -> Value {
+    static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+        .unwrap_or_else(|| build_static_page_data_snapshot(payload, selected_scope))
+}
+
 pub(crate) fn build_static_page_queued_export_package_manifest(
     draft: &StaticPageDraft,
     modules: &Value,
     data_snapshot: &Value,
 ) -> Value {
-    let module_count = modules.as_array().map(Vec::len).unwrap_or(0);
-    let echarts_requested_modules = modules
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter(|module| static_page_module_chart_runtime(module) == "echarts")
-                .count()
-        })
-        .unwrap_or(0);
+    let (module_count, echarts_requested_modules) =
+        build_static_page_queued_export_package_module_counts(modules);
+    let debug = build_static_page_queued_export_package_debug(
+        module_count,
+        echarts_requested_modules,
+        data_snapshot,
+    );
     json!({
         "kind": "static-page-export-package",
         "version": 1,
         "status": "queued",
         "draft_id": draft.id,
-        "files": [
-            {
-                "path": "index.html",
-                "role": "rendered_static_page",
-                "mime": "text/html"
-            },
-            {
-                "path": "asset-manifest.json",
-                "role": "renderer_manifest",
-                "mime": "application/json"
-            },
-            {
-                "path": "data-snapshot.json",
-                "role": "render_data_snapshot",
-                "mime": "application/json"
-            },
-            {
-                "path": "data.json",
-                "role": "dynamic_data_snapshot",
-                "mime": "application/json"
-            },
-            {
-                "path": "modules.json",
-                "role": "editable_module_plan",
-                "mime": "application/json"
-            }
-        ],
+        "files": build_static_page_queued_export_package_files(),
         "dynamic_page_contract": build_static_page_dynamic_page_contract(),
-        "debug": {
-            "renderer": "static-page-renderer-v1",
-            "module_count": module_count,
-            "echarts_requested_modules": echarts_requested_modules,
-            "data_snapshot_source": data_snapshot.get("source")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-        }
+        "debug": debug
     })
+}
+
+pub(crate) fn build_static_page_queued_export_package_module_counts(
+    modules: &Value,
+) -> (usize, usize) {
+    let Some(items) = modules.as_array() else {
+        return (0, 0);
+    };
+    let module_count = items.len();
+    let echarts_requested_modules = items
+        .iter()
+        .filter(|module| static_page_module_chart_runtime(module) == "echarts")
+        .count();
+    (module_count, echarts_requested_modules)
+}
+
+pub(crate) fn build_static_page_queued_export_package_debug(
+    module_count: usize,
+    echarts_requested_modules: usize,
+    data_snapshot: &Value,
+) -> Value {
+    json!({
+        "renderer": "static-page-renderer-v1",
+        "module_count": module_count,
+        "echarts_requested_modules": echarts_requested_modules,
+        "data_snapshot_source": data_snapshot.get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    })
+}
+
+pub(crate) fn build_static_page_queued_export_package_files() -> Value {
+    json!([
+        {
+            "path": "index.html",
+            "role": "rendered_static_page",
+            "mime": "text/html"
+        },
+        {
+            "path": "asset-manifest.json",
+            "role": "renderer_manifest",
+            "mime": "application/json"
+        },
+        {
+            "path": "data-snapshot.json",
+            "role": "render_data_snapshot",
+            "mime": "application/json"
+        },
+        {
+            "path": "data.json",
+            "role": "dynamic_data_snapshot",
+            "mime": "application/json"
+        },
+        {
+            "path": "modules.json",
+            "role": "editable_module_plan",
+            "mime": "application/json"
+        }
+    ])
 }
 
 #[cfg(test)]
@@ -247,6 +297,162 @@ mod tests {
         assert_eq!(empty_workflow["status"], json!("queued"));
         assert_eq!(empty_workflow["executionId"], Value::Null);
         assert_eq!(empty_workflow["taskId"], Value::Null);
+    }
+
+    #[test]
+    fn render_queue_image_context_preserves_optional_job_id_and_preview_asset_key() {
+        let draft = draft_with_payload(json!({}));
+        let image_job = image_job_for_draft(&draft);
+
+        let (image_job_id, preview_asset_key) =
+            build_static_page_render_queue_image_context(Some(&image_job));
+        let (empty_image_job_id, empty_preview_asset_key) =
+            build_static_page_render_queue_image_context(None);
+
+        assert_eq!(image_job_id, Some(image_job.id));
+        assert_eq!(
+            preview_asset_key.as_deref(),
+            Some("static-page-previews/preview.png")
+        );
+        assert_eq!(empty_image_job_id, None);
+        assert_eq!(empty_preview_asset_key, None);
+    }
+
+    #[test]
+    fn render_queue_spec_helpers_preserve_explicit_and_fallback_specs() {
+        let explicit_payload = json!({
+            "visual_spec": {"styleDirection": "custom-report"},
+            "render_spec": {"renderer": "custom-renderer"}
+        });
+        let fallback_payload = json!({});
+
+        assert_eq!(
+            build_static_page_render_queue_visual_spec(&explicit_payload),
+            json!({"styleDirection": "custom-report"})
+        );
+        assert_eq!(
+            build_static_page_render_queue_render_spec(&explicit_payload),
+            json!({"renderer": "custom-renderer"})
+        );
+
+        let fallback_visual = build_static_page_render_queue_visual_spec(&fallback_payload);
+        let fallback_render = build_static_page_render_queue_render_spec(&fallback_payload);
+
+        assert_eq!(fallback_visual["styleDirection"], json!("client-delivery"));
+        assert_eq!(fallback_visual["typography"]["density"], json!("balanced"));
+        assert_eq!(
+            fallback_render["renderer"],
+            json!("static-page-renderer-v1")
+        );
+        assert_eq!(
+            fallback_render["dynamicData"]["dataFile"],
+            json!("data.json")
+        );
+    }
+
+    #[test]
+    fn render_queue_data_snapshot_helper_preserves_explicit_and_fallback_snapshot() {
+        let explicit_payload = json!({
+            "data_snapshot": {"source": "provided", "snapshotVersion": 7}
+        });
+        let fallback_payload = json!({
+            "modules": [{"id": "summary"}]
+        });
+        let selected_scope = json!({"datasets": ["dataset-a"]});
+
+        assert_eq!(
+            build_static_page_render_queue_data_snapshot(&explicit_payload, &selected_scope),
+            json!({"source": "provided", "snapshotVersion": 7})
+        );
+
+        let fallback_snapshot =
+            build_static_page_render_queue_data_snapshot(&fallback_payload, &selected_scope);
+
+        assert_eq!(fallback_snapshot["source"], json!("static_page_draft"));
+        assert_eq!(fallback_snapshot["selected_scope"], selected_scope);
+        assert_eq!(
+            fallback_snapshot["module_bindings"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            fallback_snapshot["validation_summary"]["moduleCount"],
+            json!(1)
+        );
+    }
+
+    #[test]
+    fn queued_export_package_files_preserve_file_roles_and_order() {
+        let files = build_static_page_queued_export_package_files();
+        let items = files.as_array().expect("files should be an array");
+
+        assert_eq!(items.len(), 5);
+        assert_eq!(items[0]["path"], json!("index.html"));
+        assert_eq!(items[0]["role"], json!("rendered_static_page"));
+        assert_eq!(items[0]["mime"], json!("text/html"));
+        assert_eq!(items[1]["path"], json!("asset-manifest.json"));
+        assert_eq!(items[1]["role"], json!("renderer_manifest"));
+        assert_eq!(items[2]["path"], json!("data-snapshot.json"));
+        assert_eq!(items[2]["role"], json!("render_data_snapshot"));
+        assert_eq!(items[3]["path"], json!("data.json"));
+        assert_eq!(items[3]["role"], json!("dynamic_data_snapshot"));
+        assert_eq!(items[4]["path"], json!("modules.json"));
+        assert_eq!(items[4]["role"], json!("editable_module_plan"));
+        assert!(items
+            .iter()
+            .skip(1)
+            .all(|item| item["mime"] == json!("application/json")));
+    }
+
+    #[test]
+    fn queued_export_package_debug_preserves_renderer_counts_and_snapshot_source() {
+        let debug =
+            build_static_page_queued_export_package_debug(3, 2, &json!({"source": "provided"}));
+        let missing_source_debug = build_static_page_queued_export_package_debug(0, 0, &json!({}));
+
+        assert_eq!(debug["renderer"], json!("static-page-renderer-v1"));
+        assert_eq!(debug["module_count"], json!(3));
+        assert_eq!(debug["echarts_requested_modules"], json!(2));
+        assert_eq!(debug["data_snapshot_source"], json!("provided"));
+        assert_eq!(
+            missing_source_debug["data_snapshot_source"],
+            json!("unknown")
+        );
+    }
+
+    #[test]
+    fn queued_export_package_module_counts_preserve_array_count_echarts_and_fallback() {
+        let modules = json!([
+            {
+                "id": "trend",
+                "visualization": {
+                    "type": "line",
+                    "chartRuntime": "echarts"
+                }
+            },
+            {
+                "id": "summary",
+                "visualization": {
+                    "type": "text"
+                }
+            },
+            {
+                "id": "advanced",
+                "chartOptions": {
+                    "chartRuntime": "echarts"
+                }
+            }
+        ]);
+
+        assert_eq!(
+            build_static_page_queued_export_package_module_counts(&modules),
+            (3, 2)
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_module_counts(&json!("invalid")),
+            (0, 0)
+        );
     }
 
     #[test]
