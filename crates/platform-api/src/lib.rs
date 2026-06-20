@@ -152,7 +152,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
-use static_page_renderer::{render_static_page, StaticPageRenderRequest};
+use static_page_renderer::render_static_page;
 #[cfg(test)]
 use std::fs::File;
 use std::{
@@ -170,8 +170,8 @@ use storage::{
     NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
     NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
-    NewReportPlan, NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput,
-    NewUserSession, NewWorkflowTask, PgStorage,
+    NewReportPlan, NewStaticPageDraft, NewStaticPageImageJob, NewUserSession, NewWorkflowTask,
+    PgStorage,
 };
 #[cfg(test)]
 use storage::{
@@ -432,10 +432,13 @@ mod static_page_payload_support;
 mod static_page_preview_readiness_support;
 mod static_page_prompt_intent_support;
 mod static_page_public_template_update_support;
+mod static_page_render_completion_support;
 mod static_page_render_gate_support;
+mod static_page_render_output_create_support;
 mod static_page_render_output_view_support;
 mod static_page_render_output_workflow_support;
 mod static_page_render_queue_manifest_support;
+mod static_page_render_request_support;
 mod static_page_report_snapshot;
 mod static_page_revision_artifact_support;
 mod static_page_sample_quality_support;
@@ -722,10 +725,13 @@ use static_page_payload_support::*;
 use static_page_preview_readiness_support::*;
 use static_page_prompt_intent_support::*;
 use static_page_public_template_update_support::*;
+use static_page_render_completion_support::*;
 use static_page_render_gate_support::*;
+use static_page_render_output_create_support::*;
 use static_page_render_output_view_support::*;
 use static_page_render_output_workflow_support::*;
 use static_page_render_queue_manifest_support::*;
+use static_page_render_request_support::*;
 use static_page_report_snapshot::*;
 use static_page_revision_artifact_support::*;
 use static_page_sample_quality_support::*;
@@ -32677,21 +32683,7 @@ async fn create_static_page_render_for_draft(
             .static_page_render_outputs()
             .create(
                 state.tenant_id,
-                &NewStaticPageRenderOutput {
-                    draft_id: draft.id,
-                    assistant_run_id: draft.assistant_run_id,
-                    owner_user_id: draft.owner_user_id,
-                    image_job_id: image_job.as_ref().map(|job| job.id),
-                    status: StaticPageRenderOutputStatus::Queued,
-                    html: String::new(),
-                    asset_manifest: build_static_page_render_queue_manifest(
-                        &draft,
-                        image_job.as_ref(),
-                        None,
-                        None,
-                    ),
-                    created_at: Utc::now(),
-                },
+                &new_queued_static_page_render_output(&draft, image_job.as_ref(), Utc::now()),
             )
             .await
             .map_err(ApiError::from_storage)?;
@@ -32767,72 +32759,30 @@ async fn create_static_page_render_for_draft(
 
         return Ok((
             StatusCode::CREATED,
-            Json(CreateStaticPageRenderResponse {
-                render_output: to_static_page_render_output_view(
-                    render_output,
-                    Some(&draft.selected_scope),
-                ),
-                draft: to_static_page_draft_view(draft),
-            }),
+            Json(static_page_render_response(draft, render_output)),
         ));
     }
 
-    let rendered = render_static_page(&StaticPageRenderRequest {
-        draft_id: draft.id.to_string(),
-        assistant_run_id: draft.assistant_run_id.to_string(),
-        title: draft.title.clone(),
-        draft_payload: draft.draft_payload.clone(),
-        selected_scope: draft.selected_scope.clone(),
-        visibility_snapshot: draft.visibility_snapshot.clone(),
-        preview_asset_key: image_job
-            .as_ref()
-            .and_then(|job| job.preview_asset_key.clone()),
-        image_job_id: image_job.as_ref().map(|job| job.id.to_string()),
-    });
+    let rendered = render_static_page(&build_static_page_render_request(
+        &draft,
+        image_job.as_ref(),
+    ));
     let render_output = state
         .storage
         .static_page_render_outputs()
         .create(
             state.tenant_id,
-            &NewStaticPageRenderOutput {
-                draft_id: draft.id,
-                assistant_run_id: draft.assistant_run_id,
-                owner_user_id: draft.owner_user_id,
-                image_job_id: image_job.as_ref().map(|job| job.id),
-                status: StaticPageRenderOutputStatus::Rendered,
-                html: rendered.html,
-                asset_manifest: rendered.asset_manifest,
-                created_at: Utc::now(),
-            },
+            &new_rendered_static_page_render_output(
+                &draft,
+                image_job.as_ref(),
+                rendered.html,
+                rendered.asset_manifest,
+                Utc::now(),
+            ),
         )
         .await
         .map_err(ApiError::from_storage)?;
-    let operations = vec![json!({
-        "type": "request_final_render",
-        "finalPage": {
-            "status": "rendered",
-            "renderOutputId": render_output.id,
-            "assetManifest": render_output.asset_manifest,
-            "directHtml": request.direct_html,
-        }
-    })];
-    let render_summary = if request.direct_html {
-        "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
-    } else {
-        "最终静态页已根据可视化和模块规划生成。"
-    };
-    draft.draft_payload = apply_static_page_operations_to_payload(
-        draft.draft_payload,
-        &operations,
-        Some(render_summary),
-    );
-    append_static_page_operations_metadata(
-        &mut draft.draft_payload,
-        &operations,
-        None,
-        render_summary,
-    );
-    draft.status = StaticPageDraftStatus::Rendered;
+    draft = apply_static_page_final_render_to_draft(draft, &render_output, request.direct_html);
     let draft = state
         .storage
         .static_page_drafts()
@@ -32843,23 +32793,13 @@ async fn create_static_page_render_for_draft(
         state,
         &draft,
         "static_page_render.created",
-        json!({
-            "draft_id": draft.id,
-            "render_output_id": render_output.id,
-            "image_job_id": render_output.image_job_id,
-        }),
+        static_page_render_created_event_payload(&draft, &render_output),
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateStaticPageRenderResponse {
-            render_output: to_static_page_render_output_view(
-                render_output,
-                Some(&draft.selected_scope),
-            ),
-            draft: to_static_page_draft_view(draft),
-        }),
+        Json(static_page_render_response(draft, render_output)),
     ))
 }
 
@@ -32869,62 +32809,26 @@ async fn create_static_page_render_output_inline(
     image_job: Option<StaticPageImageJob>,
     direct_html: bool,
 ) -> std::result::Result<(StaticPageDraft, StaticPageRenderOutputView), ApiError> {
-    let rendered = render_static_page(&StaticPageRenderRequest {
-        draft_id: draft.id.to_string(),
-        assistant_run_id: draft.assistant_run_id.to_string(),
-        title: draft.title.clone(),
-        draft_payload: draft.draft_payload.clone(),
-        selected_scope: draft.selected_scope.clone(),
-        visibility_snapshot: draft.visibility_snapshot.clone(),
-        preview_asset_key: image_job
-            .as_ref()
-            .and_then(|job| job.preview_asset_key.clone()),
-        image_job_id: image_job.as_ref().map(|job| job.id.to_string()),
-    });
+    let rendered = render_static_page(&build_static_page_render_request(
+        &draft,
+        image_job.as_ref(),
+    ));
     let render_output = state
         .storage
         .static_page_render_outputs()
         .create(
             state.tenant_id,
-            &NewStaticPageRenderOutput {
-                draft_id: draft.id,
-                assistant_run_id: draft.assistant_run_id,
-                owner_user_id: draft.owner_user_id,
-                image_job_id: image_job.as_ref().map(|job| job.id),
-                status: StaticPageRenderOutputStatus::Rendered,
-                html: rendered.html,
-                asset_manifest: rendered.asset_manifest,
-                created_at: Utc::now(),
-            },
+            &new_rendered_static_page_render_output(
+                &draft,
+                image_job.as_ref(),
+                rendered.html,
+                rendered.asset_manifest,
+                Utc::now(),
+            ),
         )
         .await
         .map_err(ApiError::from_storage)?;
-    let operations = vec![json!({
-        "type": "request_final_render",
-        "finalPage": {
-            "status": "rendered",
-            "renderOutputId": render_output.id,
-            "assetManifest": render_output.asset_manifest,
-            "directHtml": direct_html,
-        }
-    })];
-    let render_summary = if direct_html {
-        "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
-    } else {
-        "最终静态页已根据可视化和模块规划生成。"
-    };
-    draft.draft_payload = apply_static_page_operations_to_payload(
-        draft.draft_payload,
-        &operations,
-        Some(render_summary),
-    );
-    append_static_page_operations_metadata(
-        &mut draft.draft_payload,
-        &operations,
-        None,
-        render_summary,
-    );
-    draft.status = StaticPageDraftStatus::Rendered;
+    draft = apply_static_page_final_render_to_draft(draft, &render_output, direct_html);
     let draft = state
         .storage
         .static_page_drafts()
@@ -32935,11 +32839,7 @@ async fn create_static_page_render_output_inline(
         state,
         &draft,
         "static_page_render.created",
-        json!({
-            "draft_id": draft.id,
-            "render_output_id": render_output.id,
-            "image_job_id": render_output.image_job_id,
-        }),
+        static_page_render_created_event_payload(&draft, &render_output),
     )
     .await?;
     let selected_scope = draft.selected_scope.clone();
@@ -96524,16 +96424,22 @@ retrieve_evidence:
             json!("month")
         );
 
-        let rendered = render_static_page(&StaticPageRenderRequest {
-            draft_id: draft.id.to_string(),
-            assistant_run_id: draft.assistant_run_id.to_string(),
-            title: draft.title.clone(),
-            draft_payload: draft.draft_payload.clone(),
-            selected_scope: draft.selected_scope.clone(),
-            visibility_snapshot: draft.visibility_snapshot.clone(),
+        let image_job = StaticPageImageJob {
+            id: StaticPageImageJobId::new(),
+            tenant_id: draft.tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            status: StaticPageImageJobStatus::Confirmed,
+            queue_position: None,
+            image_prompt_payload: Value::Null,
             preview_asset_key: Some("previews/static-page-explicit-data.png".to_string()),
-            image_job_id: Some(StaticPageImageJobId::new().to_string()),
-        });
+            failure_reason: None,
+            confirmed_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+        let rendered =
+            render_static_page(&build_static_page_render_request(&draft, Some(&image_job)));
         assert_eq!(rendered.asset_manifest["data_snapshot"], data_snapshot);
         assert_eq!(
             rendered.asset_manifest["dynamic_page_contract"]["data_file"],
