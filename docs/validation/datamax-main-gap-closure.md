@@ -2,6 +2,42 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Workflow Helper Release Verification
+
+- Purpose:
+  - formally release #345-#350 behavior-preserving static-page workflow helper extractions;
+  - confirm GitHub push and 8-server deployment after full diff review.
+- Diff review:
+  - content diff contained only six files: `crates/platform-api/src/lib.rs`, `crates/platform-api/src/static_page_image_job_create_support.rs`, `crates/platform-api/src/static_page_render_output_workflow_support.rs`, `crates/platform-api/src/static_page_render_request_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and `docs/validation/datamax-main-gap-closure.md`;
+  - `git diff --check` on the scoped release files passed;
+  - diff-only secret scan returned no hits.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 38/38 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- GitHub:
+  - commit `aae9bb1f` (`Refactor static page workflow helpers`) was pushed to `origin/main`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `6996ff568` to `aae9bb1f5`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`: passed;
+  - restarted `aiv3-platform-api`, `aiv3-assistant-run-worker`, `aiv3-chat-session-worker`, and `aiv3-static-page-worker`;
+  - all four services reported `active`;
+  - `http://127.0.0.1:3000/healthz`: returned ok;
+  - `http://127.0.0.1:3000/readyz`: returned ready;
+  - `https://v3.elepcloud.com/`: returned 200;
+  - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html`: returned 200.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, 120 server change, or Cloudflare Codex task was performed.
+
 ## 2026-06-20 P5 Static Page Render Submit Action Helper Local Verification
 
 - Purpose:
