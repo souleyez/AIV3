@@ -32404,7 +32404,7 @@ async fn create_static_page_image_job_for_draft_with_options(
         draft = refresh_static_page_draft_data_contract_for_action(
             state,
             draft,
-            "submit_static_page_image_preview",
+            static_page_image_job_submit_action(),
         )
         .await?;
         let enforce_preview_data_quality_gate =
@@ -32438,11 +32438,11 @@ async fn create_static_page_image_job_for_draft_with_options(
         }
     }
 
-    let image_prompt_payload = if request_image_prompt_payload.is_null() {
-        build_static_page_image_prompt_payload(&draft, request.prompt.as_deref())
-    } else {
-        request_image_prompt_payload
-    };
+    let image_prompt_payload = static_page_image_job_prompt_payload(
+        &draft,
+        request_image_prompt_payload,
+        request.prompt.as_deref(),
+    );
     let job = state
         .storage
         .static_page_image_jobs()
@@ -32487,15 +32487,11 @@ async fn create_static_page_image_job_for_draft_with_options(
         .update(state.tenant_id, &draft)
         .await
         .map_err(ApiError::from_storage)?;
-    let mut workflow_task_id = started.enqueued_tasks.first().map(|task| task.id);
-    let mut workflow_task_available_at =
-        started.enqueued_tasks.first().map(|task| task.available_at);
+    let mut workflow_task_context =
+        static_page_image_job_workflow_task_context(started.enqueued_tasks.first());
     for task in &started.enqueued_tasks {
-        let mut task_payload = task.payload.clone();
-        if let Some(patch) = options.task_payload_patch.as_ref() {
-            merge_json_value(&mut task_payload, patch);
-        }
-        if options.task_payload_patch.is_some() || options.task_available_at.is_some() {
+        let task_payload = static_page_image_job_workflow_task_payload(task, &options);
+        if static_page_image_job_should_update_workflow_task(&options) {
             let updated_task = if let Some(available_at) = options.task_available_at {
                 state
                     .storage
@@ -32516,8 +32512,8 @@ async fn create_static_page_image_job_for_draft_with_options(
                     .await
                     .map_err(ApiError::from_storage)?
             };
-            workflow_task_id = Some(updated_task.id);
-            workflow_task_available_at = Some(updated_task.available_at);
+            workflow_task_context.workflow_task_id = Some(updated_task.id);
+            workflow_task_context.workflow_task_available_at = Some(updated_task.available_at);
         }
     }
     append_static_page_draft_run_event(
@@ -32528,17 +32524,15 @@ async fn create_static_page_image_job_for_draft_with_options(
             &draft,
             &job,
             &workflow_execution,
-            workflow_task_id,
-            workflow_task_available_at,
+            workflow_task_context.workflow_task_id,
+            workflow_task_context.workflow_task_available_at,
         ),
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateStaticPageImageJobResponse {
-            image_job: to_static_page_image_job_view(job),
-        }),
+        Json(static_page_image_job_create_response(job)),
     ))
 }
 
