@@ -12,6 +12,8 @@ use crate::static_page_visual_render_spec_support::{
     build_static_page_render_spec, build_static_page_visual_spec,
 };
 
+type StaticPageQueuedExportPackageFileSpec = (&'static str, &'static str, &'static str);
+
 pub(crate) fn build_static_page_render_queue_manifest(
     draft: &StaticPageDraft,
     image_job: Option<&StaticPageImageJob>,
@@ -253,33 +255,126 @@ pub(crate) fn build_static_page_queued_export_package_data_snapshot_source(
 }
 
 pub(crate) fn build_static_page_queued_export_package_files() -> Value {
-    json!([
-        {
-            "path": "index.html",
-            "role": "rendered_static_page",
-            "mime": "text/html"
-        },
-        {
-            "path": "asset-manifest.json",
-            "role": "renderer_manifest",
-            "mime": "application/json"
-        },
-        {
-            "path": "data-snapshot.json",
-            "role": "render_data_snapshot",
-            "mime": "application/json"
-        },
-        {
-            "path": "data.json",
-            "role": "dynamic_data_snapshot",
-            "mime": "application/json"
-        },
-        {
-            "path": "modules.json",
-            "role": "editable_module_plan",
-            "mime": "application/json"
-        }
-    ])
+    build_static_page_queued_export_package_files_from_specs(
+        build_static_page_queued_export_package_file_specs(),
+    )
+}
+
+pub(crate) fn build_static_page_queued_export_package_files_from_specs(
+    specs: &[StaticPageQueuedExportPackageFileSpec],
+) -> Value {
+    Value::Array(
+        specs
+            .iter()
+            .map(|&(path, role, mime)| {
+                build_static_page_queued_export_package_file(path, role, mime)
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn build_static_page_queued_export_package_file_specs(
+) -> &'static [StaticPageQueuedExportPackageFileSpec] {
+    static FILE_SPECS: [StaticPageQueuedExportPackageFileSpec; 5] = [
+        build_static_page_queued_export_package_file_spec(
+            build_static_page_queued_export_package_index_path(),
+            build_static_page_queued_export_package_rendered_page_role(),
+            build_static_page_queued_export_package_html_mime(),
+        ),
+        build_static_page_queued_export_package_file_spec(
+            build_static_page_queued_export_package_asset_manifest_path(),
+            build_static_page_queued_export_package_renderer_manifest_role(),
+            build_static_page_queued_export_package_json_mime(),
+        ),
+        build_static_page_queued_export_package_file_spec(
+            build_static_page_queued_export_package_data_snapshot_path(),
+            build_static_page_queued_export_package_render_data_snapshot_role(),
+            build_static_page_queued_export_package_json_mime(),
+        ),
+        build_static_page_queued_export_package_file_spec(
+            build_static_page_queued_export_package_dynamic_data_path(),
+            build_static_page_queued_export_package_dynamic_data_snapshot_role(),
+            build_static_page_queued_export_package_json_mime(),
+        ),
+        build_static_page_queued_export_package_file_spec(
+            build_static_page_queued_export_package_modules_path(),
+            build_static_page_queued_export_package_editable_module_plan_role(),
+            build_static_page_queued_export_package_json_mime(),
+        ),
+    ];
+    &FILE_SPECS
+}
+
+pub(crate) const fn build_static_page_queued_export_package_file_spec(
+    path: &'static str,
+    role: &'static str,
+    mime: &'static str,
+) -> StaticPageQueuedExportPackageFileSpec {
+    (path, role, mime)
+}
+
+pub(crate) const fn build_static_page_queued_export_package_rendered_page_role() -> &'static str {
+    "rendered_static_page"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_renderer_manifest_role() -> &'static str
+{
+    "renderer_manifest"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_render_data_snapshot_role(
+) -> &'static str {
+    "render_data_snapshot"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_dynamic_data_snapshot_role(
+) -> &'static str {
+    "dynamic_data_snapshot"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_editable_module_plan_role(
+) -> &'static str {
+    "editable_module_plan"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_index_path() -> &'static str {
+    "index.html"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_asset_manifest_path() -> &'static str {
+    "asset-manifest.json"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_data_snapshot_path() -> &'static str {
+    "data-snapshot.json"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_dynamic_data_path() -> &'static str {
+    "data.json"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_modules_path() -> &'static str {
+    "modules.json"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_html_mime() -> &'static str {
+    "text/html"
+}
+
+pub(crate) const fn build_static_page_queued_export_package_json_mime() -> &'static str {
+    "application/json"
+}
+
+pub(crate) fn build_static_page_queued_export_package_file(
+    path: &'static str,
+    role: &'static str,
+    mime: &'static str,
+) -> Value {
+    json!({
+        "path": path,
+        "role": role,
+        "mime": mime
+    })
 }
 
 #[cfg(test)]
@@ -730,6 +825,147 @@ mod tests {
             .iter()
             .skip(1)
             .all(|item| item["mime"] == json!("application/json")));
+    }
+
+    #[test]
+    fn queued_export_package_file_preserves_path_role_and_mime() {
+        let file = build_static_page_queued_export_package_file(
+            "index.html",
+            "rendered_static_page",
+            "text/html",
+        );
+
+        assert_eq!(file["path"], json!("index.html"));
+        assert_eq!(file["role"], json!("rendered_static_page"));
+        assert_eq!(file["mime"], json!("text/html"));
+    }
+
+    #[test]
+    fn queued_export_package_file_specs_preserve_order_and_mimes() {
+        let specs = build_static_page_queued_export_package_file_specs();
+
+        assert_eq!(specs.len(), 5);
+        assert_eq!(
+            specs[0],
+            ("index.html", "rendered_static_page", "text/html")
+        );
+        assert_eq!(
+            specs[1],
+            (
+                "asset-manifest.json",
+                "renderer_manifest",
+                "application/json"
+            )
+        );
+        assert_eq!(
+            specs[2],
+            (
+                "data-snapshot.json",
+                "render_data_snapshot",
+                "application/json"
+            )
+        );
+        assert_eq!(
+            specs[3],
+            ("data.json", "dynamic_data_snapshot", "application/json")
+        );
+        assert_eq!(
+            specs[4],
+            ("modules.json", "editable_module_plan", "application/json")
+        );
+        assert!(specs
+            .iter()
+            .skip(1)
+            .all(|(_, _, mime)| *mime == "application/json"));
+    }
+
+    #[test]
+    fn queued_export_package_file_mimes_preserve_values() {
+        assert_eq!(
+            build_static_page_queued_export_package_html_mime(),
+            "text/html"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_json_mime(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn queued_export_package_file_paths_preserve_values() {
+        assert_eq!(
+            build_static_page_queued_export_package_index_path(),
+            "index.html"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_asset_manifest_path(),
+            "asset-manifest.json"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_data_snapshot_path(),
+            "data-snapshot.json"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_dynamic_data_path(),
+            "data.json"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_modules_path(),
+            "modules.json"
+        );
+    }
+
+    #[test]
+    fn queued_export_package_file_roles_preserve_values() {
+        assert_eq!(
+            build_static_page_queued_export_package_rendered_page_role(),
+            "rendered_static_page"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_renderer_manifest_role(),
+            "renderer_manifest"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_render_data_snapshot_role(),
+            "render_data_snapshot"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_dynamic_data_snapshot_role(),
+            "dynamic_data_snapshot"
+        );
+        assert_eq!(
+            build_static_page_queued_export_package_editable_module_plan_role(),
+            "editable_module_plan"
+        );
+    }
+
+    #[test]
+    fn queued_export_package_file_spec_preserves_tuple_order() {
+        assert_eq!(
+            build_static_page_queued_export_package_file_spec(
+                "index.html",
+                "rendered_static_page",
+                "text/html"
+            ),
+            ("index.html", "rendered_static_page", "text/html")
+        );
+    }
+
+    #[test]
+    fn queued_export_package_files_from_specs_preserve_order_and_fields() {
+        let files = build_static_page_queued_export_package_files_from_specs(&[
+            ("first.html", "primary_page", "text/html"),
+            ("second.json", "secondary_data", "application/json"),
+        ]);
+        let items = files.as_array().expect("files should be an array");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["path"], json!("first.html"));
+        assert_eq!(items[0]["role"], json!("primary_page"));
+        assert_eq!(items[0]["mime"], json!("text/html"));
+        assert_eq!(items[1]["path"], json!("second.json"));
+        assert_eq!(items[1]["role"], json!("secondary_data"));
+        assert_eq!(items[1]["mime"], json!("application/json"));
     }
 
     #[test]

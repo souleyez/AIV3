@@ -2,6 +2,163 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Queued Export Package File Spec Tuple Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file spec tuple construction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageFileSpec`;
+  - added `build_static_page_queued_export_package_file_spec`;
+  - updated `build_static_page_queued_export_package_file_specs` to use the tuple helper;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 34/34 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 88/88 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package File Role Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file roles into dedicated helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_rendered_page_role`;
+  - added `build_static_page_queued_export_package_renderer_manifest_role`;
+  - added `build_static_page_queued_export_package_render_data_snapshot_role`;
+  - added `build_static_page_queued_export_package_dynamic_data_snapshot_role`;
+  - added `build_static_page_queued_export_package_editable_module_plan_role`;
+  - updated `build_static_page_queued_export_package_file_specs` to use the role helpers;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 87/87 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package File Path Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file paths into dedicated helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_index_path`;
+  - added `build_static_page_queued_export_package_asset_manifest_path`;
+  - added `build_static_page_queued_export_package_data_snapshot_path`;
+  - added `build_static_page_queued_export_package_dynamic_data_path`;
+  - added `build_static_page_queued_export_package_modules_path`;
+  - updated `build_static_page_queued_export_package_file_specs` to use the path helpers;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 32/32 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 86/86 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Files From Specs Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file specs to JSON file entry conversion into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_files_from_specs`;
+  - updated `build_static_page_queued_export_package_files` to delegate fixed specs conversion to the helper;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 31/31 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 85/85 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package File MIME Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file MIME values into dedicated helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_html_mime`;
+  - added `build_static_page_queued_export_package_json_mime`;
+  - updated `build_static_page_queued_export_package_file_specs` to use the MIME helpers;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 84/84 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package File Specs Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file specs into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_specs`;
+  - updated `build_static_page_queued_export_package_files` to generate file entries from the specs helper;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 29/29 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 83/83 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package File Entry Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package file entry assembly into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file`;
+  - updated `build_static_page_queued_export_package_files` to build each file entry through the helper;
+  - preserved file order, `path`, `role`, `mime`, export package manifest shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 28/28 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 82/82 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Static Page Render Queue Render Spec Aliases Helper Local Verification
 
 - Purpose:
