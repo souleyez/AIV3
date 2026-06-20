@@ -357,6 +357,7 @@ mod html_artifact_event_support;
 mod html_artifact_static_page_patch_support;
 mod html_artifact_summary_support;
 mod id_parse_support;
+mod json_value_support;
 mod lifecycle_updates;
 mod llm_invocation_view_support;
 mod manifest_runtime_view_support;
@@ -419,6 +420,7 @@ mod static_page_html_response_support;
 mod static_page_image_prompt_payload_support;
 mod static_page_image_summary_support;
 mod static_page_initial_draft_payload_support;
+mod static_page_load_support;
 mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
@@ -642,6 +644,7 @@ use html_artifact_event_support::*;
 use html_artifact_static_page_patch_support::*;
 use html_artifact_summary_support::*;
 use id_parse_support::*;
+use json_value_support::*;
 #[cfg(test)]
 use lifecycle_updates::*;
 #[cfg(test)]
@@ -707,6 +710,7 @@ use static_page_html_response_support::*;
 use static_page_image_prompt_payload_support::*;
 use static_page_image_summary_support::*;
 use static_page_initial_draft_payload_support::*;
+use static_page_load_support::*;
 use static_page_module_binding_support::*;
 use static_page_module_sample_data_support::*;
 use static_page_operation_apply_support::*;
@@ -58905,118 +58909,6 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         "queue_allowed": false,
         "authority": "direct_until_shadow_gate_passes",
     })
-}
-
-pub(crate) fn value_array(value: Value) -> Vec<Value> {
-    match value {
-        Value::Array(items) => items,
-        _ => Vec::new(),
-    }
-}
-
-pub(crate) fn validate_required(
-    field: &'static str,
-    value: &str,
-) -> std::result::Result<(), ApiError> {
-    if value.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "validation_error",
-            format!("{field} must not be empty"),
-        ));
-    }
-
-    Ok(())
-}
-
-async fn load_static_page_draft_or_404(
-    state: &AppState,
-    draft_id: StaticPageDraftId,
-) -> std::result::Result<StaticPageDraft, ApiError> {
-    state
-        .storage
-        .static_page_drafts()
-        .get_by_id(state.tenant_id, draft_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "static_page_draft_not_found",
-                format!("static page draft {} was not found", draft_id),
-            )
-        })
-}
-
-pub(crate) async fn load_visible_static_page_draft(
-    state: &AppState,
-    draft_id: StaticPageDraftId,
-    current_user_id: Option<UserId>,
-) -> std::result::Result<StaticPageDraft, ApiError> {
-    let draft = load_static_page_draft_or_404(state, draft_id).await?;
-    if static_page_owner_is_visible(draft.owner_user_id, current_user_id) {
-        return Ok(draft);
-    }
-    Err(static_page_draft_not_found_error(draft_id))
-}
-
-async fn load_static_page_image_job_or_404(
-    state: &AppState,
-    job_id: StaticPageImageJobId,
-) -> std::result::Result<StaticPageImageJob, ApiError> {
-    state
-        .storage
-        .static_page_image_jobs()
-        .get_by_id(state.tenant_id, job_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| static_page_image_job_not_found_error(job_id))
-}
-
-async fn load_visible_static_page_image_job(
-    state: &AppState,
-    job_id: StaticPageImageJobId,
-    current_user_id: Option<UserId>,
-) -> std::result::Result<StaticPageImageJob, ApiError> {
-    let job = load_static_page_image_job_or_404(state, job_id).await?;
-    load_visible_static_page_draft(state, job.draft_id, current_user_id).await?;
-    Ok(job)
-}
-
-async fn resolve_static_page_render_image_job(
-    state: &AppState,
-    draft: &StaticPageDraft,
-    requested_job_id: Option<StaticPageImageJobId>,
-) -> std::result::Result<Option<StaticPageImageJob>, ApiError> {
-    let job = if let Some(job_id) = requested_job_id {
-        Some(load_static_page_image_job_or_404(state, job_id).await?)
-    } else {
-        state
-            .storage
-            .static_page_image_jobs()
-            .list_by_draft(state.tenant_id, draft.id)
-            .await
-            .map_err(ApiError::from_storage)?
-            .into_iter()
-            .find(|job| static_page_image_job_ready_for_render(draft, job))
-    };
-    let Some(job) = job else {
-        return Err(ApiError::bad_request(
-            "static_page_preview_not_confirmed",
-            "generate an effect preview before rendering the final static page".to_string(),
-        ));
-    };
-    if job.draft_id != draft.id {
-        return Err(ApiError::bad_request(
-            "static_page_image_job_mismatch",
-            "image job does not belong to this static page draft".to_string(),
-        ));
-    }
-    if !static_page_image_job_ready_for_render(draft, &job) {
-        return Err(ApiError::bad_request(
-            "static_page_preview_not_confirmed",
-            "generate an effect preview before rendering the final static page".to_string(),
-        ));
-    }
-    Ok(Some(job))
 }
 
 async fn append_static_page_draft_run_event(

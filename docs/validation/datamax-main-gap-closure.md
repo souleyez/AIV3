@@ -2,6 +2,85 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Load Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page draft/image-job load, owner visibility, and render image-job resolution out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_load_support.rs`;
+  - moved `load_static_page_draft_or_404`, `load_visible_static_page_draft`, `load_visible_static_page_image_job`, and `resolve_static_page_render_image_job` out of `crates/platform-api/src/lib.rs`;
+  - kept `lib.rs`, `react_agent_tools`, and workflow visibility callers using the same helper names through the support-module re-export;
+  - preserved draft/job not-found errors, owner mismatch masking, image-job mismatch, preview-not-confirmed, and preview-ready auto-render behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_load_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_owner_visibility --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_react_static_page_preview_and_render_use_current_backend_draft --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api static_page_draft_can_be_created_under_assistant_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 JSON Value Array Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move common JSON array extraction out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/json_value_support.rs`;
+  - moved `value_array` out of `crates/platform-api/src/lib.rs`;
+  - kept `lib.rs` and sibling support-module callers using the same helper through the new support-module re-export;
+  - preserved `Value::Array` owned item return and non-array empty fallback semantics.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api json_value_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_view_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_conversation_memory_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api workflow_runtime_artifact_manifest_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api required_field_support --lib`: passed, 5/5 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Required Field Validation Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move common required-field non-empty validation beside the required field wrapper helper.
+- Code change:
+  - extended `crates/platform-api/src/required_field_support.rs`;
+  - moved `validate_required` out of `crates/platform-api/src/lib.rs`;
+  - kept `lib.rs` and sibling support-module callers using the same helper through the existing support-module re-export;
+  - preserved trim-based empty detection, `validation_error` code, and `{field} must not be empty` error message.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api required_field_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api asset_library_ --lib`: passed, 32/32 tests;
+  - `cargo test -q -p platform-api client_artifact_contract_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api manifest_service_handoff_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api plan_chat_session_report_entry_update_reuses_suggested_values_for_report_entry --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Static Page Helper Splits GitHub And 8-server Release
 
 - Scope:

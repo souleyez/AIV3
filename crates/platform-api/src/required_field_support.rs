@@ -1,4 +1,18 @@
-use crate::{validate_required, ApiError};
+use crate::ApiError;
+
+pub(crate) fn validate_required(
+    field: &'static str,
+    value: &str,
+) -> std::result::Result<(), ApiError> {
+    if value.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            format!("{field} must not be empty"),
+        ));
+    }
+
+    Ok(())
+}
 
 pub(crate) fn required_field(
     field: &'static str,
@@ -21,6 +35,20 @@ mod tests {
             required_field("title", Some("  Report  ".to_string())).expect("valid field"),
             "Report"
         );
+    }
+
+    #[test]
+    fn validate_required_accepts_trimmed_non_empty_value() {
+        validate_required("title", "  Report  ").expect("non-empty value should pass");
+    }
+
+    #[test]
+    fn validate_required_rejects_blank_value_with_stable_error() {
+        let error = validate_required("title", "   ").expect_err("blank value should fail");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.payload.code, "validation_error");
+        assert_eq!(error.payload.message, "title must not be empty");
     }
 
     #[test]
