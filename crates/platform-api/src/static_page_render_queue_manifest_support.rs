@@ -87,29 +87,74 @@ pub(crate) fn build_static_page_render_queue_workflow_manifest(
     workflow_execution: Option<&WorkflowExecution>,
     workflow_task_id: Option<WorkflowTaskId>,
 ) -> Value {
+    let status = build_static_page_render_queue_workflow_status();
     json!({
-        "status": "queued",
+        "status": status,
         "executionId": workflow_execution.map(|execution| execution.id),
         "taskId": workflow_task_id,
     })
 }
 
+pub(crate) fn build_static_page_render_queue_workflow_status() -> &'static str {
+    "queued"
+}
+
 pub(crate) fn build_static_page_render_queue_visual_spec(payload: &Value) -> Value {
-    static_page_payload_value(payload, &["visualSpec", "visual_spec"])
-        .unwrap_or_else(|| build_static_page_visual_spec("client-delivery"))
+    static_page_payload_value(
+        payload,
+        build_static_page_render_queue_visual_spec_aliases(),
+    )
+    .unwrap_or_else(|| {
+        build_static_page_visual_spec(build_static_page_render_queue_visual_fallback_style())
+    })
+}
+
+pub(crate) fn build_static_page_render_queue_visual_spec_aliases() -> &'static [&'static str] {
+    &["visualSpec", "visual_spec"]
+}
+
+pub(crate) fn build_static_page_render_queue_visual_fallback_style() -> &'static str {
+    "client-delivery"
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec(payload: &Value) -> Value {
-    static_page_payload_value(payload, &["renderSpec", "render_spec"])
-        .unwrap_or_else(build_static_page_render_spec)
+    static_page_payload_value(
+        payload,
+        build_static_page_render_queue_render_spec_aliases(),
+    )
+    .unwrap_or_else(build_static_page_render_queue_render_fallback_spec)
+}
+
+pub(crate) fn build_static_page_render_queue_render_spec_aliases() -> &'static [&'static str] {
+    &["renderSpec", "render_spec"]
+}
+
+pub(crate) fn build_static_page_render_queue_render_fallback_spec() -> Value {
+    build_static_page_render_spec()
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot(
     payload: &Value,
     selected_scope: &Value,
 ) -> Value {
-    static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
-        .unwrap_or_else(|| build_static_page_data_snapshot(payload, selected_scope))
+    static_page_payload_value(
+        payload,
+        build_static_page_render_queue_data_snapshot_aliases(),
+    )
+    .unwrap_or_else(|| {
+        build_static_page_render_queue_fallback_data_snapshot(payload, selected_scope)
+    })
+}
+
+pub(crate) fn build_static_page_render_queue_data_snapshot_aliases() -> &'static [&'static str] {
+    &["dataSnapshot", "data_snapshot"]
+}
+
+pub(crate) fn build_static_page_render_queue_fallback_data_snapshot(
+    payload: &Value,
+    selected_scope: &Value,
+) -> Value {
+    build_static_page_data_snapshot(payload, selected_scope)
 }
 
 pub(crate) fn build_static_page_render_queue_modules(payload: &Value) -> Value {
@@ -396,6 +441,11 @@ mod tests {
     }
 
     #[test]
+    fn render_queue_workflow_status_preserves_queued_value() {
+        assert_eq!(build_static_page_render_queue_workflow_status(), "queued");
+    }
+
+    #[test]
     fn render_queue_workflow_ids_preserve_optional_execution_and_task() {
         let execution = workflow_execution();
         let task_id = WorkflowTaskId::new();
@@ -463,6 +513,44 @@ mod tests {
     }
 
     #[test]
+    fn render_queue_visual_spec_aliases_preserve_order() {
+        assert_eq!(
+            build_static_page_render_queue_visual_spec_aliases(),
+            &["visualSpec", "visual_spec"]
+        );
+    }
+
+    #[test]
+    fn render_queue_visual_fallback_style_preserves_client_delivery() {
+        assert_eq!(
+            build_static_page_render_queue_visual_fallback_style(),
+            "client-delivery"
+        );
+    }
+
+    #[test]
+    fn render_queue_render_spec_aliases_preserve_order() {
+        assert_eq!(
+            build_static_page_render_queue_render_spec_aliases(),
+            &["renderSpec", "render_spec"]
+        );
+    }
+
+    #[test]
+    fn render_queue_render_fallback_spec_preserves_renderer_and_dynamic_data() {
+        let fallback_render = build_static_page_render_queue_render_fallback_spec();
+
+        assert_eq!(
+            fallback_render["renderer"],
+            json!("static-page-renderer-v1")
+        );
+        assert_eq!(
+            fallback_render["dynamicData"]["dataFile"],
+            json!("data.json")
+        );
+    }
+
+    #[test]
     fn render_queue_data_snapshot_helper_preserves_explicit_and_fallback_snapshot() {
         let explicit_payload = json!({
             "data_snapshot": {"source": "provided", "snapshotVersion": 7}
@@ -479,6 +567,38 @@ mod tests {
 
         let fallback_snapshot =
             build_static_page_render_queue_data_snapshot(&fallback_payload, &selected_scope);
+
+        assert_eq!(fallback_snapshot["source"], json!("static_page_draft"));
+        assert_eq!(fallback_snapshot["selected_scope"], selected_scope);
+        assert_eq!(
+            fallback_snapshot["module_bindings"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            fallback_snapshot["validation_summary"]["moduleCount"],
+            json!(1)
+        );
+    }
+
+    #[test]
+    fn render_queue_data_snapshot_aliases_preserve_order() {
+        assert_eq!(
+            build_static_page_render_queue_data_snapshot_aliases(),
+            &["dataSnapshot", "data_snapshot"]
+        );
+    }
+
+    #[test]
+    fn render_queue_fallback_data_snapshot_preserves_static_page_snapshot() {
+        let payload = json!({
+            "modules": [{"id": "summary"}]
+        });
+        let selected_scope = json!({"datasets": ["dataset-a"]});
+
+        let fallback_snapshot =
+            build_static_page_render_queue_fallback_data_snapshot(&payload, &selected_scope);
 
         assert_eq!(fallback_snapshot["source"], json!("static_page_draft"));
         assert_eq!(fallback_snapshot["selected_scope"], selected_scope);
