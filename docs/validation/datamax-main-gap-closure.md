@@ -2,6 +2,281 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Render Queue Export Package Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued render export package assembly entry point into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_render_queue_export_package`;
+  - updated `build_static_page_render_queue_manifest` to delegate `export_package` assembly to the helper;
+  - preserved export package kind, version, status, draft id, files, dynamic page contract, debug module count, ECharts count, data snapshot source, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 74/74 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Render Queue Modules Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued render modules payload extraction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_render_queue_modules`;
+  - updated `build_static_page_render_queue_manifest` to delegate modules payload extraction to the helper;
+  - preserved array modules, empty-array fallback for missing or non-array modules, export package module count and ECharts count inputs, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 19/19 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 73/73 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Debug Renderer Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package debug renderer constant into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_debug_renderer`;
+  - updated `build_static_page_queued_export_package_debug` to delegate `renderer` value to the helper;
+  - preserved `static-page-renderer-v1`, module count, ECharts requested module count, data snapshot source, debug field names, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 72/72 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Data Snapshot Source Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package debug data snapshot source extraction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_data_snapshot_source`;
+  - updated `build_static_page_queued_export_package_debug` to delegate `data_snapshot_source` extraction to the helper;
+  - preserved explicit string source, missing source `unknown` fallback, non-string source `unknown` fallback, debug field names, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 71/71 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Dynamic Contract Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package dynamic page contract assembly into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_dynamic_page_contract`;
+  - updated `build_static_page_queued_export_package_manifest` to delegate `dynamic_page_contract` assembly to the helper;
+  - preserved dynamic contract version, data file, source snapshot file, refresh policy, rendering policy, manifest field names, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 70/70 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Draft ID Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package draft id mapping into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_draft_id`;
+  - updated `build_static_page_queued_export_package_manifest` to delegate `draft_id` mapping to the helper;
+  - preserved draft id, kind, version, status, files, dynamic page contract, debug object, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 15/15 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 69/69 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Queued Export Package Lifecycle Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued export package lifecycle constants into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_lifecycle`;
+  - updated `build_static_page_queued_export_package_manifest` to delegate `kind`, `version`, and `status` values to the helper;
+  - preserved `static-page-export-package`, version 1, queued status, draft id, files, dynamic page contract, debug object, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 68/68 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Render Queue Lifecycle Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued render lifecycle constants into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_render_queue_lifecycle`;
+  - updated `build_static_page_render_queue_manifest` to delegate top-level `status`, `renderer`, and `queue_copy` values to the helper;
+  - preserved queued status, `static-page-renderer-v1`, queue copy text, manifest field names, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 67/67 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Render Queue Identity Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued render top-level draft/run identity assembly into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_render_queue_identity`;
+  - updated `build_static_page_render_queue_manifest` to delegate top-level `draft_id` and `assistant_run_id` extraction to the helper;
+  - preserved draft id, assistant run id, manifest field names, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 66/66 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Render Queue Workflow IDs Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page queued render top-level workflow id assembly into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_render_queue_workflow_ids`;
+  - updated `build_static_page_render_queue_manifest` to delegate top-level `workflow_execution_id` and `workflow_task_id` extraction to the helper;
+  - preserved workflow execution id, workflow task id, no-workflow null output, nested `workflow` object, manifest field names, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 65/65 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Static Page Render Queue Helpers GitHub And 8-Server Deployment
 
 - Purpose:
