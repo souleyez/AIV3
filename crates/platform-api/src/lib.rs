@@ -32397,10 +32397,15 @@ async fn create_static_page_image_job_for_draft_with_options(
     request: CreateStaticPageImageJobRequest,
     options: StaticPageImageJobCreateOptions,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
-    let mut request_image_prompt_payload = request.image_prompt_payload;
+    let CreateStaticPageImageJobRequest {
+        prompt,
+        image_prompt_payload,
+    } = request;
+    let request_prompt = static_page_image_job_request_prompt(&prompt);
+    let mut request_image_prompt_payload = image_prompt_payload;
     let prompt_only_preview =
-        static_page_image_prompt_payload_is_prompt_only(&request_image_prompt_payload);
-    if !prompt_only_preview {
+        static_page_image_job_is_prompt_only_preview(&request_image_prompt_payload);
+    if static_page_image_job_should_refresh_data_contract(prompt_only_preview) {
         draft = refresh_static_page_draft_data_contract_for_action(
             state,
             draft,
@@ -32413,13 +32418,13 @@ async fn create_static_page_image_job_for_draft_with_options(
             if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft)
             {
                 return Err(ApiError::bad_request_with_details(
-                    "static_page_preview_data_quality_gate",
+                    static_page_image_job_preview_data_quality_gate_error_code(),
                     reason,
                     details,
                 ));
             }
         }
-        if !request_image_prompt_payload.is_null() {
+        if static_page_image_job_has_request_prompt_payload(&request_image_prompt_payload) {
             refresh_static_page_payload_with_draft_context(
                 &mut request_image_prompt_payload,
                 &draft,
@@ -32429,7 +32434,7 @@ async fn create_static_page_image_job_for_draft_with_options(
                     static_page_preview_data_quality_gate_for_payload(&request_image_prompt_payload)
                 {
                     return Err(ApiError::bad_request_with_details(
-                        "static_page_preview_data_quality_gate",
+                        static_page_image_job_preview_data_quality_gate_error_code(),
                         reason,
                         details,
                     ));
@@ -32438,11 +32443,8 @@ async fn create_static_page_image_job_for_draft_with_options(
         }
     }
 
-    let image_prompt_payload = static_page_image_job_prompt_payload(
-        &draft,
-        request_image_prompt_payload,
-        request.prompt.as_deref(),
-    );
+    let image_prompt_payload =
+        static_page_image_job_prompt_payload(&draft, request_image_prompt_payload, request_prompt);
     let job = state
         .storage
         .static_page_image_jobs()
@@ -32452,12 +32454,8 @@ async fn create_static_page_image_job_for_draft_with_options(
         )
         .await
         .map_err(ApiError::from_storage)?;
-    let workflow_execution = build_initial_static_page_image_generation_execution(
-        state,
-        &draft,
-        &job,
-        request.prompt.as_deref(),
-    )?;
+    let workflow_execution =
+        build_initial_static_page_image_generation_execution(state, &draft, &job, request_prompt)?;
     let initial_event =
         build_initial_static_page_image_generation_event(&workflow_execution, &draft, &job);
     state
@@ -32475,12 +32473,7 @@ async fn create_static_page_image_job_for_draft_with_options(
         WorkflowSignal::Start,
     )
     .await?;
-    draft = apply_static_page_image_job_queue_to_draft(
-        draft,
-        &job,
-        &options,
-        request.prompt.as_deref(),
-    );
+    draft = apply_static_page_image_job_queue_to_draft(draft, &job, &options, request_prompt);
     let draft = state
         .storage
         .static_page_drafts()
@@ -32492,7 +32485,9 @@ async fn create_static_page_image_job_for_draft_with_options(
     for task in &started.enqueued_tasks {
         let task_payload = static_page_image_job_workflow_task_payload(task, &options);
         if static_page_image_job_should_update_workflow_task(&options) {
-            let updated_task = if let Some(available_at) = options.task_available_at {
+            let updated_task = if let Some(available_at) =
+                static_page_image_job_workflow_task_available_at(&options)
+            {
                 state
                     .storage
                     .workflow_tasks()
@@ -32512,20 +32507,19 @@ async fn create_static_page_image_job_for_draft_with_options(
                     .await
                     .map_err(ApiError::from_storage)?
             };
-            workflow_task_context.workflow_task_id = Some(updated_task.id);
-            workflow_task_context.workflow_task_available_at = Some(updated_task.available_at);
+            workflow_task_context =
+                static_page_image_job_workflow_task_context_from_updated_task(&updated_task);
         }
     }
     append_static_page_draft_run_event(
         state,
         &draft,
-        "static_page_image_job.created",
-        static_page_image_job_created_event_payload(
+        static_page_image_job_created_event_name(),
+        static_page_image_job_created_event_payload_from_context(
             &draft,
             &job,
             &workflow_execution,
-            workflow_task_context.workflow_task_id,
-            workflow_task_context.workflow_task_available_at,
+            workflow_task_context,
         ),
     )
     .await?;

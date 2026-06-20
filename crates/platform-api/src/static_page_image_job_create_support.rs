@@ -1,12 +1,15 @@
 use chrono::{DateTime, Utc};
 use contracts::{CreateStaticPageImageJobResponse, WorkflowTaskView};
 use domain_model::{
-    StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob, WorkflowExecution, WorkflowTaskId,
+    StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob, WorkflowExecution, WorkflowTask,
+    WorkflowTaskId,
 };
 use serde_json::{json, Value};
 use storage::NewStaticPageImageJob;
 
-use crate::static_page_image_prompt_payload_support::build_static_page_image_prompt_payload;
+use crate::static_page_image_prompt_payload_support::{
+    build_static_page_image_prompt_payload, static_page_image_prompt_payload_is_prompt_only,
+};
 use crate::static_page_operation_apply_support::{
     append_static_page_operations_metadata, apply_static_page_operations_to_payload,
 };
@@ -17,6 +20,9 @@ const DEFAULT_STATIC_PAGE_IMAGE_QUEUE_MESSAGE: &str =
     "资源正在排队，可以联系商务开通高级用户跳过等待。";
 const DEFAULT_STATIC_PAGE_IMAGE_OPERATION_SUMMARY: &str = "可视化任务已进入资源队列。";
 const STATIC_PAGE_IMAGE_JOB_SUBMIT_ACTION: &str = "submit_static_page_image_preview";
+const STATIC_PAGE_IMAGE_JOB_CREATED_EVENT: &str = "static_page_image_job.created";
+const STATIC_PAGE_IMAGE_JOB_PREVIEW_DATA_QUALITY_GATE_ERROR: &str =
+    "static_page_preview_data_quality_gate";
 
 #[derive(Debug, Default)]
 pub(crate) struct StaticPageImageJobCreateOptions {
@@ -28,6 +34,36 @@ pub(crate) struct StaticPageImageJobCreateOptions {
 
 pub(crate) fn static_page_image_job_submit_action() -> &'static str {
     STATIC_PAGE_IMAGE_JOB_SUBMIT_ACTION
+}
+
+pub(crate) fn static_page_image_job_request_prompt(prompt: &Option<String>) -> Option<&str> {
+    prompt.as_deref()
+}
+
+pub(crate) fn static_page_image_job_created_event_name() -> &'static str {
+    STATIC_PAGE_IMAGE_JOB_CREATED_EVENT
+}
+
+pub(crate) fn static_page_image_job_preview_data_quality_gate_error_code() -> &'static str {
+    STATIC_PAGE_IMAGE_JOB_PREVIEW_DATA_QUALITY_GATE_ERROR
+}
+
+pub(crate) fn static_page_image_job_is_prompt_only_preview(
+    request_image_prompt_payload: &Value,
+) -> bool {
+    static_page_image_prompt_payload_is_prompt_only(request_image_prompt_payload)
+}
+
+pub(crate) fn static_page_image_job_should_refresh_data_contract(
+    prompt_only_preview: bool,
+) -> bool {
+    !prompt_only_preview
+}
+
+pub(crate) fn static_page_image_job_has_request_prompt_payload(
+    request_image_prompt_payload: &Value,
+) -> bool {
+    !request_image_prompt_payload.is_null()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +78,15 @@ pub(crate) fn static_page_image_job_workflow_task_context(
     StaticPageImageJobWorkflowTaskContext {
         workflow_task_id: task.map(|task| task.id),
         workflow_task_available_at: task.map(|task| task.available_at),
+    }
+}
+
+pub(crate) fn static_page_image_job_workflow_task_context_from_updated_task(
+    task: &WorkflowTask,
+) -> StaticPageImageJobWorkflowTaskContext {
+    StaticPageImageJobWorkflowTaskContext {
+        workflow_task_id: Some(task.id),
+        workflow_task_available_at: Some(task.available_at),
     }
 }
 
@@ -60,6 +105,12 @@ pub(crate) fn static_page_image_job_should_update_workflow_task(
     options: &StaticPageImageJobCreateOptions,
 ) -> bool {
     options.task_payload_patch.is_some() || options.task_available_at.is_some()
+}
+
+pub(crate) fn static_page_image_job_workflow_task_available_at(
+    options: &StaticPageImageJobCreateOptions,
+) -> Option<DateTime<Utc>> {
+    options.task_available_at
 }
 
 pub(crate) fn static_page_image_job_create_response(
@@ -164,6 +215,21 @@ pub(crate) fn static_page_image_job_created_event_payload(
     })
 }
 
+pub(crate) fn static_page_image_job_created_event_payload_from_context(
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+    workflow_execution: &WorkflowExecution,
+    workflow_task_context: StaticPageImageJobWorkflowTaskContext,
+) -> Value {
+    static_page_image_job_created_event_payload(
+        draft,
+        job,
+        workflow_execution,
+        workflow_task_context.workflow_task_id,
+        workflow_task_context.workflow_task_available_at,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -183,6 +249,72 @@ mod tests {
             static_page_image_job_submit_action(),
             "submit_static_page_image_preview"
         );
+    }
+
+    #[test]
+    fn request_prompt_borrows_optional_prompt_text() {
+        assert_eq!(
+            static_page_image_job_request_prompt(&Some("生成经营看板".to_string())),
+            Some("生成经营看板")
+        );
+        assert_eq!(static_page_image_job_request_prompt(&None), None);
+    }
+
+    #[test]
+    fn created_event_name_matches_existing_static_page_image_job_event() {
+        assert_eq!(
+            static_page_image_job_created_event_name(),
+            "static_page_image_job.created"
+        );
+    }
+
+    #[test]
+    fn preview_data_quality_gate_error_code_matches_existing_error_code() {
+        assert_eq!(
+            static_page_image_job_preview_data_quality_gate_error_code(),
+            "static_page_preview_data_quality_gate"
+        );
+    }
+
+    #[test]
+    fn is_prompt_only_preview_accepts_existing_prompt_only_flags() {
+        assert!(static_page_image_job_is_prompt_only_preview(&json!({
+            "promptOnly": true
+        })));
+        assert!(static_page_image_job_is_prompt_only_preview(&json!({
+            "prompt_only": true
+        })));
+    }
+
+    #[test]
+    fn is_prompt_only_preview_preserves_existing_flag_precedence() {
+        assert!(!static_page_image_job_is_prompt_only_preview(&json!({
+            "promptOnly": false,
+            "prompt_only": true
+        })));
+    }
+
+    #[test]
+    fn is_prompt_only_preview_defaults_to_false() {
+        assert!(!static_page_image_job_is_prompt_only_preview(&json!({})));
+        assert!(!static_page_image_job_is_prompt_only_preview(&Value::Null));
+    }
+
+    #[test]
+    fn should_refresh_data_contract_skips_prompt_only_preview() {
+        assert!(!static_page_image_job_should_refresh_data_contract(true));
+        assert!(static_page_image_job_should_refresh_data_contract(false));
+    }
+
+    #[test]
+    fn has_request_prompt_payload_is_false_only_for_null_payload() {
+        assert!(!static_page_image_job_has_request_prompt_payload(
+            &Value::Null
+        ));
+        assert!(static_page_image_job_has_request_prompt_payload(&json!({})));
+        assert!(static_page_image_job_has_request_prompt_payload(&json!({
+            "prompt": "use this payload"
+        })));
     }
 
     fn queued_job(queue_position: Option<i32>) -> StaticPageImageJob {
@@ -261,6 +393,27 @@ mod tests {
         }
     }
 
+    fn updated_workflow_task() -> WorkflowTask {
+        let now = Utc::now();
+        WorkflowTask {
+            id: WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "static_page".to_string(),
+            task_key: "generate_static_page_image".to_string(),
+            payload: json!({}),
+            status: WorkflowTaskStatus::Queued,
+            attempt: 0,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     #[test]
     fn workflow_task_context_preserves_first_task_id_and_available_at() {
         let task = workflow_task();
@@ -277,6 +430,16 @@ mod tests {
 
         assert_eq!(context.workflow_task_id, None);
         assert_eq!(context.workflow_task_available_at, None);
+    }
+
+    #[test]
+    fn workflow_task_context_from_updated_task_uses_updated_task_values() {
+        let task = updated_workflow_task();
+
+        let context = static_page_image_job_workflow_task_context_from_updated_task(&task);
+
+        assert_eq!(context.workflow_task_id, Some(task.id));
+        assert_eq!(context.workflow_task_available_at, Some(task.available_at));
     }
 
     #[test]
@@ -337,6 +500,26 @@ mod tests {
                 ..StaticPageImageJobCreateOptions::default()
             }
         ));
+    }
+
+    #[test]
+    fn workflow_task_available_at_returns_configured_available_at() {
+        let available_at = Utc::now();
+        let options = StaticPageImageJobCreateOptions {
+            task_available_at: Some(available_at),
+            ..StaticPageImageJobCreateOptions::default()
+        };
+
+        assert_eq!(
+            static_page_image_job_workflow_task_available_at(&options),
+            Some(available_at)
+        );
+        assert_eq!(
+            static_page_image_job_workflow_task_available_at(
+                &StaticPageImageJobCreateOptions::default()
+            ),
+            None
+        );
     }
 
     #[test]
@@ -531,5 +714,24 @@ mod tests {
         assert_eq!(payload["workflow_execution_id"], json!(execution.id));
         assert_eq!(payload["workflow_task_id"], Value::Null);
         assert_eq!(payload["workflow_task_available_at"], Value::Null);
+    }
+
+    #[test]
+    fn created_event_payload_from_context_preserves_task_context() {
+        let draft = draft();
+        let job = queued_job(Some(1));
+        let execution = workflow_execution();
+        let task = workflow_task();
+        let context = static_page_image_job_workflow_task_context(Some(&task));
+
+        let payload = static_page_image_job_created_event_payload_from_context(
+            &draft, &job, &execution, context,
+        );
+
+        assert_eq!(payload["workflow_task_id"], json!(task.id));
+        assert_eq!(
+            payload["workflow_task_available_at"],
+            json!(task.available_at)
+        );
     }
 }
