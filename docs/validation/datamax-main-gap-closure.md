@@ -2,6 +2,41 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Render Queue Helpers GitHub And 8-Server Deployment
+
+- Scope:
+  - released P5 behavior-preserving helper splits #377-#386 for `static_page_render_queue_manifest_support`;
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed.
+- Local release gate before commit:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_image_job_confirm_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render_output_workflow_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_output_create_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 74/74 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - scoped `git diff --check`: passed;
+  - scoped secret scan: passed.
+- GitHub:
+  - commit `27405b2c` (`Continue static page render queue helper split`) pushed to `origin/main`.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `e5cbb90e2` to `27405b2ce`;
+  - release build command passed: `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`;
+  - restarted `aiv3-platform-api`, `aiv3-web`, `aiv3-assistant-run-worker`, `aiv3-chat-session-worker`, and `aiv3-static-page-worker`;
+  - all five services reported active;
+  - `http://127.0.0.1:3000/healthz`: returned status `ok`;
+  - `http://127.0.0.1:3000/readyz`: returned status `ready`;
+  - local web root and both public integration docs returned HTTP 200;
+  - `https://v3.elepcloud.com/` and both public integration docs returned HTTP 200;
+  - 10-minute error log sample across platform and worker services returned no entries.
+- Note:
+  - the first post-restart health probe hit `127.0.0.1:3000` before the listener was ready and returned connection refused;
+  - follow-up port inspection showed `platform-api` listening on `127.0.0.1:3000`, and health/ready checks passed.
+
 ## 2026-06-20 P5 Static Page Render Queue Export Package Helper Local Verification
 
 - Purpose:
