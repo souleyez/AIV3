@@ -155,7 +155,7 @@ use sqlx::Row;
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_runtime::{
     interpret_static_page_intent_deterministic, interpret_static_page_intent_with_provider,
-    sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
+    StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 #[cfg(test)]
 use std::fs::File;
@@ -418,6 +418,7 @@ mod static_page_handoff_artifact_support;
 mod static_page_html_response_support;
 mod static_page_image_prompt_payload_support;
 mod static_page_image_summary_support;
+mod static_page_initial_draft_payload_support;
 mod static_page_media_sample_support;
 mod static_page_metric_value_support;
 mod static_page_module_binding_support;
@@ -705,6 +706,7 @@ use static_page_handoff_artifact_support::*;
 use static_page_html_response_support::*;
 use static_page_image_prompt_payload_support::*;
 use static_page_image_summary_support::*;
+use static_page_initial_draft_payload_support::*;
 use static_page_module_binding_support::*;
 use static_page_module_sample_data_support::*;
 use static_page_operation_apply_support::*;
@@ -58926,336 +58928,6 @@ pub(crate) fn validate_required(
     Ok(())
 }
 
-fn build_initial_static_page_draft_payload(run: &AssistantRun, prompt: &str) -> Value {
-    let style_direction = "client-delivery";
-    let visual_spec = build_static_page_visual_spec(style_direction);
-    let render_spec = build_static_page_render_spec();
-    let data_snapshot = build_static_page_data_snapshot_with_evidence(
-        &json!({ "modules": [] }),
-        &run.selected_scope,
-        Some(&run.evidence_state),
-        "assistant_run",
-    );
-    let preview_contract = build_static_page_preview_contract(
-        style_direction,
-        &Value::Array(Vec::new()),
-        &render_spec,
-        &Value::Array(Vec::new()),
-        None,
-    );
-    json!({
-        "version": 1,
-        "status": "draft",
-        "title": derive_static_page_draft_title(prompt),
-        "prompt": prompt,
-        "modules": [],
-        "mobileOrder": [],
-        "styleDirection": style_direction,
-        "style_direction": style_direction,
-        "visualSpec": visual_spec.clone(),
-        "visual_spec": visual_spec,
-        "renderSpec": render_spec.clone(),
-        "render_spec": render_spec,
-        "dataSnapshot": data_snapshot.clone(),
-        "data_snapshot": data_snapshot,
-        "previewContract": preview_contract.clone(),
-        "preview_contract": preview_contract,
-        "data_bindings": [],
-        "assistant_context": {
-            "assistant_run_id": run.id,
-            "selected_scope": run.selected_scope,
-            "evidence_state": run.evidence_state,
-        },
-    })
-}
-
-pub(crate) fn build_static_page_field_candidates(
-    selected_scope: &Value,
-    evidence_state: Option<&Value>,
-) -> Value {
-    const FIELD_CANDIDATE_LIMIT: usize = 24;
-
-    let mut candidates = Vec::new();
-    let mut seen = BTreeSet::new();
-    let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
-    if !selected_dataset_ids.is_empty() {
-        push_static_page_field_candidate(
-            &mut candidates,
-            &mut seen,
-            json!({
-                "sourceId": "dataset",
-                "fieldPath": "dataset.metrics_summary",
-                "label": "数据集指标摘要",
-                "kind": "summary",
-                "recommendedAggregation": Value::Null,
-                "confidence": 0.55,
-                "datasetIds": selected_dataset_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            }),
-            FIELD_CANDIDATE_LIMIT,
-        );
-    }
-
-    let Some(evidence_items) = evidence_state
-        .and_then(|state| state.get("supplied_items"))
-        .and_then(Value::as_array)
-    else {
-        return Value::Array(candidates);
-    };
-
-    for item in evidence_items {
-        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
-            "database_schema_context" => {
-                push_static_page_database_schema_field_candidates(
-                    &mut candidates,
-                    &mut seen,
-                    item,
-                    FIELD_CANDIDATE_LIMIT,
-                );
-            }
-            "database_aggregate" => {
-                push_static_page_database_aggregate_field_candidates(
-                    &mut candidates,
-                    &mut seen,
-                    item,
-                    FIELD_CANDIDATE_LIMIT,
-                );
-            }
-            "dataset_fact_snapshot" => {
-                push_static_page_dataset_fact_snapshot_field_candidates(
-                    &mut candidates,
-                    &mut seen,
-                    item,
-                    FIELD_CANDIDATE_LIMIT,
-                );
-            }
-            "retrieval_evidence" => {
-                let evidence_ref = static_page_evidence_ref(item);
-                let evidence_ids = static_page_evidence_ids(item);
-                push_static_page_field_candidate(
-                    &mut candidates,
-                    &mut seen,
-                    json!({
-                        "sourceId": "evidence",
-                        "fieldPath": "retrieval.summary",
-                        "label": "证据摘要",
-                        "kind": "text",
-                        "recommendedAggregation": Value::Null,
-                        "confidence": 0.72,
-                        "evidenceIds": evidence_ids,
-                        "evidenceRef": evidence_ref,
-                    }),
-                    FIELD_CANDIDATE_LIMIT,
-                );
-                push_static_page_field_candidate(
-                    &mut candidates,
-                    &mut seen,
-                    json!({
-                        "sourceId": "evidence",
-                        "fieldPath": "retrieval.content_excerpt",
-                        "label": "证据原文片段",
-                        "kind": "text",
-                        "recommendedAggregation": Value::Null,
-                        "confidence": 0.70,
-                        "evidenceIds": static_page_evidence_ids(item),
-                        "evidenceRef": static_page_evidence_ref(item),
-                    }),
-                    FIELD_CANDIDATE_LIMIT,
-                );
-                let section_title_hints = static_page_evidence_section_title_hints(item);
-                if !section_title_hints.is_empty() {
-                    push_static_page_field_candidate(
-                        &mut candidates,
-                        &mut seen,
-                        json!({
-                            "sourceId": "evidence",
-                            "fieldPath": "retrieval.section_title_hints",
-                            "label": format!("段落标题：{}", section_title_hints.join(" / ")),
-                            "kind": "section_title",
-                            "recommendedAggregation": Value::Null,
-                            "confidence": 0.74,
-                            "evidenceIds": static_page_evidence_ids(item),
-                            "evidenceRef": static_page_evidence_ref(item),
-                            "sectionTitleHints": section_title_hints,
-                        }),
-                        FIELD_CANDIDATE_LIMIT,
-                    );
-                }
-
-                if let Some(media_context) =
-                    item.get("media_context").filter(|value| value.is_object())
-                {
-                    push_static_page_media_field_candidates(
-                        &mut candidates,
-                        &mut seen,
-                        media_context,
-                        item,
-                        FIELD_CANDIDATE_LIMIT,
-                    );
-                }
-
-                let evidence_text = static_page_evidence_text(item).to_lowercase();
-                for (field_path, label, kind, aggregation, keywords, confidence) in [
-                    (
-                        "orders.amount",
-                        "订单金额/收入",
-                        "metric",
-                        Some("sum"),
-                        &[
-                            "order", "orders", "amount", "revenue", "sales", "gmv", "订单", "金额",
-                            "收入",
-                        ][..],
-                        0.84,
-                    ),
-                    (
-                        "orders.count",
-                        "订单数量",
-                        "metric",
-                        Some("count"),
-                        &["order", "orders", "count", "volume", "订单", "数量", "单量"][..],
-                        0.78,
-                    ),
-                    (
-                        "customers.count",
-                        "客户数量",
-                        "metric",
-                        Some("count"),
-                        &["customer", "customers", "client", "客户", "用户"][..],
-                        0.76,
-                    ),
-                    (
-                        "store.area",
-                        "门店/合同面积",
-                        "metric",
-                        Some("sum"),
-                        &[
-                            "area",
-                            "store_area",
-                            "contract_area",
-                            "leased_area",
-                            "business_area",
-                            "合同面积",
-                            "租赁面积",
-                            "建筑面积",
-                            "经营面积",
-                            "门店面积",
-                            "铺位面积",
-                            "面积",
-                            "坪效",
-                        ][..],
-                        0.82,
-                    ),
-                    (
-                        "traffic.count",
-                        "客流/人流统计",
-                        "metric",
-                        Some("sum"),
-                        &[
-                            "traffic",
-                            "visitor",
-                            "visitors",
-                            "customer_flow",
-                            "footfall",
-                            "passenger",
-                            "客流",
-                            "客流量",
-                            "人流",
-                            "人流量",
-                            "客数",
-                            "进店",
-                            "到店",
-                        ][..],
-                        0.82,
-                    ),
-                    (
-                        "profit.margin",
-                        "利润/毛利",
-                        "metric",
-                        Some("sum"),
-                        &["profit", "margin", "gross", "利润", "毛利"][..],
-                        0.76,
-                    ),
-                    (
-                        "risk.level",
-                        "风险等级",
-                        "dimension",
-                        None,
-                        &["risk", "delay", "warning", "风险", "延期", "预警"][..],
-                        0.80,
-                    ),
-                    (
-                        "time.month",
-                        "月份/时间",
-                        "dimension",
-                        None,
-                        &[
-                            "month", "date", "time", "period", "月份", "日期", "时间", "周期",
-                        ][..],
-                        0.72,
-                    ),
-                    (
-                        "engagement.rate",
-                        "触达/互动",
-                        "metric",
-                        Some("avg"),
-                        &[
-                            "engagement",
-                            "newsletter",
-                            "open",
-                            "click",
-                            "触达",
-                            "互动",
-                            "打开",
-                            "点击",
-                        ][..],
-                        0.70,
-                    ),
-                ] {
-                    if !static_page_text_contains_any(&evidence_text, keywords) {
-                        continue;
-                    }
-                    push_static_page_field_candidate(
-                        &mut candidates,
-                        &mut seen,
-                        json!({
-                            "sourceId": "evidence",
-                            "fieldPath": field_path,
-                            "label": label,
-                            "kind": kind,
-                            "recommendedAggregation": aggregation,
-                            "confidence": confidence,
-                            "evidenceIds": static_page_evidence_ids(item),
-                            "evidenceRef": static_page_evidence_ref(item),
-                        }),
-                        FIELD_CANDIDATE_LIMIT,
-                    );
-                }
-            }
-            "conversation_memory_item" => {
-                push_static_page_field_candidate(
-                    &mut candidates,
-                    &mut seen,
-                    json!({
-                        "sourceId": "conversation_memory",
-                        "fieldPath": "conversation.summary",
-                        "label": "相关历史对话摘要",
-                        "kind": "text",
-                        "recommendedAggregation": Value::Null,
-                        "confidence": 0.66,
-                        "conversationMemoryItemId": item
-                            .get("conversation_memory_item_id")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    }),
-                    FIELD_CANDIDATE_LIMIT,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    Value::Array(candidates)
-}
-
 async fn load_static_page_draft_or_404(
     state: &AppState,
     draft_id: StaticPageDraftId,
@@ -59473,13 +59145,6 @@ async fn interpret_static_page_draft_intent_for_api(
             Ok(fallback)
         }
     }
-}
-
-pub(crate) fn validate_static_page_operations(
-    operations: Vec<Value>,
-) -> std::result::Result<Vec<Value>, ApiError> {
-    sanitize_static_page_operations(operations)
-        .map_err(|error| ApiError::bad_request("invalid_static_page_operation", error.to_string()))
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde_json::{json, Value};
+use static_page_runtime::sanitize_static_page_operations;
 
-use crate::refresh_static_page_payload_design_contract;
 use crate::static_page_module_operation_support::{
     merge_static_page_module, push_static_page_module, remove_static_page_module,
 };
@@ -11,6 +11,7 @@ use crate::static_page_operation_metadata_support::{
 use crate::static_page_payload_support::{
     ensure_json_object, set_payload_string, set_payload_value,
 };
+use crate::{refresh_static_page_payload_design_contract, ApiError};
 
 pub(crate) fn apply_static_page_operations_to_payload(
     mut payload: Value,
@@ -27,6 +28,13 @@ pub(crate) fn apply_static_page_operations_to_payload(
     }
     refresh_static_page_payload_design_contract(&mut payload);
     payload
+}
+
+pub(crate) fn validate_static_page_operations(
+    operations: Vec<Value>,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    sanitize_static_page_operations(operations)
+        .map_err(|error| ApiError::bad_request("invalid_static_page_operation", error.to_string()))
 }
 
 pub(crate) fn apply_static_page_operation_to_payload(payload: &mut Value, operation: &Value) {
@@ -318,6 +326,33 @@ pub(crate) fn append_static_page_operations_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_safe_static_page_operations_and_preserves_shape() {
+        let operations = validate_static_page_operations(vec![json!({
+            "type": "queue_image_job",
+            "queuePosition": 2
+        })])
+        .expect("safe operation should validate");
+
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0]["type"], json!("queue_image_job"));
+        assert_eq!(operations[0]["queuePosition"], json!(2));
+    }
+
+    #[test]
+    fn validate_static_page_operations_maps_runtime_error_to_api_error() {
+        let error = validate_static_page_operations(vec![json!({
+            "type": "run_shell"
+        })])
+        .expect_err("unknown operation should be rejected");
+
+        assert_eq!(error.payload.code, "invalid_static_page_operation");
+        assert!(error
+            .payload
+            .message
+            .contains("unsupported static page operation type"));
+    }
 
     #[test]
     fn applies_module_visualization_binding_order_and_summary() {

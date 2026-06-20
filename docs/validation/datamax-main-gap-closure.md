@@ -2,6 +2,84 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Operation Validator Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page operation sanitizer/API-error mapping beside operation application helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_operation_apply_support.rs`;
+  - moved `validate_static_page_operations` out of `crates/platform-api/src/lib.rs`;
+  - kept append operations route, ReAct static-page update conversion, storage, response, and runtime orchestration in `lib.rs`;
+  - preserved safe operation shape and the `invalid_static_page_operation` API error code for unsupported or unsafe operations.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_operation_apply_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api html_artifact_static_page_patch_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_react_static_page_update_arguments_become_sanitized_operations --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_builds_interactive_handoff_artifact --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_initial_draft_payload_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_field_candidate_support --lib`: passed, 6/6 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Initial Draft Payload Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static-page initial draft payload assembly out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/static_page_initial_draft_payload_support.rs`;
+  - moved `build_initial_static_page_draft_payload` out of `crates/platform-api/src/lib.rs`;
+  - kept route, storage, response, and assistant-run orchestration in `lib.rs`;
+  - preserved title derivation, prompt passthrough, style/render spec aliases, data snapshot aliases, preview contract aliases, empty module/mobile/data-binding defaults, assistant context, and `assistant_run` data snapshot source.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_initial_draft_payload_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_draft_builds_interactive_handoff_artifact --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_field_candidate_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_ --lib`: passed, 16/16 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-20 P5 Static Page Field Candidates Builder Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - keep static-page field candidate orchestration beside the field-candidate push helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_field_candidate_support.rs`;
+  - moved `build_static_page_field_candidates` out of `crates/platform-api/src/lib.rs`;
+  - kept `lib.rs` callers using the same helper through the existing support-module import;
+  - preserved selected dataset summary, database schema, database aggregate, dataset fact snapshot, retrieval summary/content/section-title, media context, keyword-derived field, and conversation-memory candidate semantics.
+- Local verification:
+  - `cargo fmt`: applied;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_field_candidate_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_ --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: no whitespace errors; local LF/CRLF warnings only;
+  - added-line sensitive-shape scan: `NO_SECRET_SHAPES_IN_ADDED_LINES`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Report Entry And Data Snapshot Helpers GitHub And 8-server Release
 
 - Scope:
