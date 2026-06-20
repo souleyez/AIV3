@@ -29,6 +29,14 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+- Release verification:
+  - committed and pushed `562a549f` (`Split static page image request prompt helper`) to GitHub `main`;
+  - 8-server `/srv/aiv3/repo` fast-forwarded from `c4366ab69` to `562a549f4`;
+  - remote release build passed with `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`;
+  - restarted `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`; all four reported `active`;
+  - first immediate health probe hit `curl: (7) Failed to connect to 127.0.0.1 port 3000`, consistent with checking before the listener was ready; retry confirmed `127.0.0.1:3000` listening and `healthz`/`readyz` returning ok/ready;
+  - public `https://v3.elepcloud.com/`, pure third-party guide, and full third-party API guide returned HTTP 200;
+  - 10-minute error log sample for the four restarted services returned no entries.
 
 ## 2026-06-20 P5 Static Page Image Job Created Event Payload Context Helper Local Verification
 
