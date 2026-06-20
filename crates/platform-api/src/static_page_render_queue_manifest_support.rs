@@ -21,6 +21,8 @@ pub(crate) fn build_static_page_render_queue_manifest(
     let modules = static_page_payload_modules(payload);
     let export_package =
         build_static_page_queued_export_package_manifest(draft, &modules, &data_snapshot);
+    let workflow_manifest =
+        build_static_page_render_queue_workflow_manifest(workflow_execution, workflow_task_id);
     json!({
         "draft_id": draft.id,
         "assistant_run_id": draft.assistant_run_id,
@@ -28,11 +30,7 @@ pub(crate) fn build_static_page_render_queue_manifest(
         "renderer": "static-page-renderer-v1",
         "workflow_execution_id": workflow_execution.map(|execution| execution.id),
         "workflow_task_id": workflow_task_id,
-        "workflow": {
-            "status": "queued",
-            "executionId": workflow_execution.map(|execution| execution.id),
-            "taskId": workflow_task_id,
-        },
+        "workflow": workflow_manifest,
         "image_job_id": image_job.map(|job| job.id),
         "preview_asset_key": image_job.and_then(|job| job.preview_asset_key.clone()),
         "visual_spec": static_page_payload_value(payload, &["visualSpec", "visual_spec"])
@@ -42,6 +40,17 @@ pub(crate) fn build_static_page_render_queue_manifest(
         "data_snapshot": data_snapshot,
         "export_package": export_package,
         "queue_copy": "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
+    })
+}
+
+pub(crate) fn build_static_page_render_queue_workflow_manifest(
+    workflow_execution: Option<&WorkflowExecution>,
+    workflow_task_id: Option<WorkflowTaskId>,
+) -> Value {
+    json!({
+        "status": "queued",
+        "executionId": workflow_execution.map(|execution| execution.id),
+        "taskId": workflow_task_id,
     })
 }
 
@@ -221,6 +230,23 @@ mod tests {
             manifest["export_package"]["debug"]["data_snapshot_source"],
             json!("provided")
         );
+    }
+
+    #[test]
+    fn render_queue_workflow_manifest_preserves_status_execution_and_task() {
+        let execution = workflow_execution();
+        let task_id = WorkflowTaskId::new();
+
+        let workflow =
+            build_static_page_render_queue_workflow_manifest(Some(&execution), Some(task_id));
+        let empty_workflow = build_static_page_render_queue_workflow_manifest(None, None);
+
+        assert_eq!(workflow["status"], json!("queued"));
+        assert_eq!(workflow["executionId"], json!(execution.id));
+        assert_eq!(workflow["taskId"], json!(task_id));
+        assert_eq!(empty_workflow["status"], json!("queued"));
+        assert_eq!(empty_workflow["executionId"], Value::Null);
+        assert_eq!(empty_workflow["taskId"], Value::Null);
     }
 
     #[test]

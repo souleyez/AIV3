@@ -11,6 +11,7 @@ pub(crate) fn build_static_page_render_request(
     draft: &StaticPageDraft,
     image_job: Option<&StaticPageImageJob>,
 ) -> StaticPageRenderRequest {
+    let (preview_asset_key, image_job_id) = static_page_render_request_image_context(image_job);
     StaticPageRenderRequest {
         draft_id: draft.id.to_string(),
         assistant_run_id: draft.assistant_run_id.to_string(),
@@ -18,9 +19,18 @@ pub(crate) fn build_static_page_render_request(
         draft_payload: draft.draft_payload.clone(),
         selected_scope: draft.selected_scope.clone(),
         visibility_snapshot: draft.visibility_snapshot.clone(),
-        preview_asset_key: image_job.and_then(|job| job.preview_asset_key.clone()),
-        image_job_id: image_job.map(|job| job.id.to_string()),
+        preview_asset_key,
+        image_job_id,
     }
+}
+
+pub(crate) fn static_page_render_request_image_context(
+    image_job: Option<&StaticPageImageJob>,
+) -> (Option<String>, Option<String>) {
+    (
+        image_job.and_then(|job| job.preview_asset_key.clone()),
+        image_job.map(|job| job.id.to_string()),
+    )
 }
 
 #[cfg(test)]
@@ -97,6 +107,25 @@ mod tests {
             Some("static-page-previews/image.json")
         );
         assert_eq!(request.image_job_id, Some(job.id.to_string()));
+    }
+
+    #[test]
+    fn render_request_image_context_preserves_optional_preview_and_job_id() {
+        let draft = draft();
+        let job = image_job(&draft);
+
+        let (preview_asset_key, image_job_id) =
+            static_page_render_request_image_context(Some(&job));
+        let (direct_preview_asset_key, direct_image_job_id) =
+            static_page_render_request_image_context(None);
+
+        assert_eq!(
+            preview_asset_key.as_deref(),
+            Some("static-page-previews/image.json")
+        );
+        assert_eq!(image_job_id, Some(job.id.to_string()));
+        assert_eq!(direct_preview_asset_key, None);
+        assert_eq!(direct_image_job_id, None);
     }
 
     #[test]

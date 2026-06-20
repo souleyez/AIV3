@@ -66,13 +66,19 @@ pub(crate) fn apply_static_page_final_render_to_draft(
     render_output: &StaticPageRenderOutput,
     direct_html: bool,
 ) -> StaticPageDraft {
-    let operations = static_page_final_render_operations(render_output, direct_html);
-    let render_summary = static_page_final_render_summary(direct_html);
-    draft.draft_payload =
-        static_page_final_render_apply_payload(draft.draft_payload, &operations, render_summary);
-    static_page_final_render_append_metadata(&mut draft.draft_payload, &operations, render_summary);
-    static_page_final_render_mark_draft_status(&mut draft);
+    static_page_final_render_complete_draft(&mut draft, render_output, direct_html);
     draft
+}
+
+pub(crate) fn static_page_final_render_complete_draft(
+    draft: &mut StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+    direct_html: bool,
+) {
+    let (operations, render_summary) =
+        static_page_final_render_operations_and_summary(render_output, direct_html);
+    static_page_final_render_update_draft_payload(draft, &operations, render_summary);
+    static_page_final_render_mark_draft_status(draft);
 }
 
 pub(crate) fn static_page_final_render_mark_draft_status(draft: &mut StaticPageDraft) {
@@ -95,14 +101,37 @@ pub(crate) fn static_page_final_render_append_metadata(
     append_static_page_operations_metadata(draft_payload, operations, None, render_summary);
 }
 
+pub(crate) fn static_page_final_render_update_draft_payload(
+    draft: &mut StaticPageDraft,
+    operations: &[Value],
+    render_summary: &str,
+) {
+    let draft_payload = std::mem::replace(&mut draft.draft_payload, Value::Null);
+    draft.draft_payload =
+        static_page_final_render_apply_payload(draft_payload, operations, render_summary);
+    static_page_final_render_append_metadata(&mut draft.draft_payload, operations, render_summary);
+}
+
 pub(crate) fn static_page_render_created_event_payload(
     draft: &StaticPageDraft,
     render_output: &StaticPageRenderOutput,
 ) -> Value {
+    static_page_render_created_event_ids_payload(
+        draft.id,
+        render_output.id,
+        render_output.image_job_id,
+    )
+}
+
+pub(crate) fn static_page_render_created_event_ids_payload(
+    draft_id: domain_model::StaticPageDraftId,
+    render_output_id: domain_model::StaticPageRenderOutputId,
+    image_job_id: Option<domain_model::StaticPageImageJobId>,
+) -> Value {
     json!({
-        "draft_id": draft.id,
-        "render_output_id": render_output.id,
-        "image_job_id": render_output.image_job_id,
+        "draft_id": draft_id,
+        "render_output_id": render_output_id,
+        "image_job_id": image_job_id,
     })
 }
 
@@ -136,6 +165,16 @@ pub(crate) fn static_page_final_render_operations(
         render_output,
         direct_html,
     )]
+}
+
+pub(crate) fn static_page_final_render_operations_and_summary(
+    render_output: &StaticPageRenderOutput,
+    direct_html: bool,
+) -> (Vec<Value>, &'static str) {
+    (
+        static_page_final_render_operations(render_output, direct_html),
+        static_page_final_render_summary(direct_html),
+    )
 }
 
 pub(crate) fn static_page_final_render_summary(direct_html: bool) -> &'static str {
@@ -321,6 +360,27 @@ mod tests {
     }
 
     #[test]
+    fn final_render_operations_and_summary_preserves_direct_html_choice() {
+        let output = render_output();
+
+        let (visual_operations, visual_summary) =
+            static_page_final_render_operations_and_summary(&output, false);
+        let (direct_operations, direct_summary) =
+            static_page_final_render_operations_and_summary(&output, true);
+
+        assert_eq!(
+            visual_operations[0]["finalPage"]["directHtml"],
+            json!(false)
+        );
+        assert_eq!(visual_summary, "最终静态页已根据可视化和模块规划生成。");
+        assert_eq!(direct_operations[0]["finalPage"]["directHtml"], json!(true));
+        assert_eq!(
+            direct_summary,
+            "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
+        );
+    }
+
+    #[test]
     fn final_render_apply_payload_preserves_final_page_and_summary() {
         let draft = draft();
         let output = render_output();
@@ -354,6 +414,60 @@ mod tests {
         assert_eq!(
             payload["operations"][0]["finalPage"]["renderOutputId"],
             json!(output.id)
+        );
+    }
+
+    #[test]
+    fn final_render_update_draft_payload_preserves_payload_metadata_and_status() {
+        let mut draft = draft();
+        let output = render_output();
+        let operations = static_page_final_render_operations(&output, false);
+        let summary = static_page_final_render_summary(false);
+
+        static_page_final_render_update_draft_payload(&mut draft, &operations, summary);
+
+        assert_eq!(draft.status, StaticPageDraftStatus::Confirmed);
+        assert_eq!(
+            draft.draft_payload["finalPage"]["renderOutputId"],
+            json!(output.id)
+        );
+        assert_eq!(
+            draft.draft_payload["finalPage"]["assetManifest"],
+            output.asset_manifest
+        );
+        assert_eq!(draft.draft_payload["finalPage"]["directHtml"], json!(false));
+        assert_eq!(draft.draft_payload["modelSummary"], json!(summary));
+        assert_eq!(draft.draft_payload["lastOperationSummary"], json!(summary));
+        assert_eq!(
+            draft.draft_payload["operations"][0]["type"],
+            json!("request_final_render")
+        );
+    }
+
+    #[test]
+    fn final_render_complete_draft_preserves_payload_metadata_and_rendered_status() {
+        let mut draft = draft();
+        let output = render_output();
+
+        static_page_final_render_complete_draft(&mut draft, &output, true);
+
+        assert_eq!(draft.status, StaticPageDraftStatus::Rendered);
+        assert_eq!(
+            draft.draft_payload["finalPage"]["renderOutputId"],
+            json!(output.id)
+        );
+        assert_eq!(
+            draft.draft_payload["finalPage"]["assetManifest"],
+            output.asset_manifest
+        );
+        assert_eq!(draft.draft_payload["finalPage"]["directHtml"], json!(true));
+        assert_eq!(
+            draft.draft_payload["lastOperationSummary"],
+            json!("最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。")
+        );
+        assert_eq!(
+            draft.draft_payload["operations"][0]["type"],
+            json!("request_final_render")
         );
     }
 
@@ -407,6 +521,23 @@ mod tests {
 
         assert_eq!(payload["draft_id"], json!(draft.id));
         assert_eq!(payload["render_output_id"], json!(output.id));
+        assert_eq!(payload["image_job_id"], json!(image_job_id));
+    }
+
+    #[test]
+    fn render_created_event_ids_payload_preserves_event_field_names() {
+        let draft_id = StaticPageDraftId::new();
+        let render_output_id = StaticPageRenderOutputId::new();
+        let image_job_id = StaticPageImageJobId::new();
+
+        let payload = static_page_render_created_event_ids_payload(
+            draft_id,
+            render_output_id,
+            Some(image_job_id),
+        );
+
+        assert_eq!(payload["draft_id"], json!(draft_id));
+        assert_eq!(payload["render_output_id"], json!(render_output_id));
         assert_eq!(payload["image_job_id"], json!(image_job_id));
     }
 

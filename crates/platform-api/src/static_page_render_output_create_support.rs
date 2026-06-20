@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use domain_model::{StaticPageDraft, StaticPageImageJob, StaticPageRenderOutputStatus};
+use domain_model::{
+    StaticPageDraft, StaticPageImageJob, StaticPageImageJobId, StaticPageRenderOutputStatus,
+};
 use serde_json::Value;
 use storage::NewStaticPageRenderOutput;
 
@@ -10,16 +12,14 @@ pub(crate) fn new_queued_static_page_render_output(
     image_job: Option<&StaticPageImageJob>,
     created_at: DateTime<Utc>,
 ) -> NewStaticPageRenderOutput {
-    NewStaticPageRenderOutput {
-        draft_id: draft.id,
-        assistant_run_id: draft.assistant_run_id,
-        owner_user_id: draft.owner_user_id,
-        image_job_id: image_job.map(|job| job.id),
-        status: StaticPageRenderOutputStatus::Queued,
-        html: String::new(),
-        asset_manifest: build_static_page_render_queue_manifest(draft, image_job, None, None),
+    new_static_page_render_output(
+        draft,
+        image_job,
+        StaticPageRenderOutputStatus::Queued,
+        String::new(),
+        build_static_page_render_queue_manifest(draft, image_job, None, None),
         created_at,
-    }
+    )
 }
 
 pub(crate) fn new_rendered_static_page_render_output(
@@ -29,16 +29,40 @@ pub(crate) fn new_rendered_static_page_render_output(
     asset_manifest: Value,
     created_at: DateTime<Utc>,
 ) -> NewStaticPageRenderOutput {
+    new_static_page_render_output(
+        draft,
+        image_job,
+        StaticPageRenderOutputStatus::Rendered,
+        html,
+        asset_manifest,
+        created_at,
+    )
+}
+
+pub(crate) fn new_static_page_render_output(
+    draft: &StaticPageDraft,
+    image_job: Option<&StaticPageImageJob>,
+    status: StaticPageRenderOutputStatus,
+    html: String,
+    asset_manifest: Value,
+    created_at: DateTime<Utc>,
+) -> NewStaticPageRenderOutput {
     NewStaticPageRenderOutput {
         draft_id: draft.id,
         assistant_run_id: draft.assistant_run_id,
         owner_user_id: draft.owner_user_id,
-        image_job_id: image_job.map(|job| job.id),
-        status: StaticPageRenderOutputStatus::Rendered,
+        image_job_id: static_page_render_output_image_job_id(image_job),
+        status,
         html,
         asset_manifest,
         created_at,
     }
+}
+
+pub(crate) fn static_page_render_output_image_job_id(
+    image_job: Option<&StaticPageImageJob>,
+) -> Option<StaticPageImageJobId> {
+    image_job.map(|job| job.id)
 }
 
 #[cfg(test)]
@@ -120,6 +144,50 @@ mod tests {
             output.asset_manifest["preview_asset_key"],
             json!("static-page-previews/preview.json")
         );
+    }
+
+    #[test]
+    fn render_output_image_job_id_preserves_optional_job_id() {
+        let draft = draft();
+        let job = image_job(&draft);
+
+        assert_eq!(
+            static_page_render_output_image_job_id(Some(&job)),
+            Some(job.id)
+        );
+        assert_eq!(static_page_render_output_image_job_id(None), None);
+    }
+
+    #[test]
+    fn render_output_constructor_preserves_common_fields_status_html_and_manifest() {
+        let draft = draft();
+        let job = image_job(&draft);
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 6, 20, 10, 3, 0)
+            .single()
+            .expect("valid timestamp");
+        let manifest = json!({
+            "renderer": "static-page-renderer-v1",
+            "files": ["index.html"]
+        });
+
+        let output = new_static_page_render_output(
+            &draft,
+            Some(&job),
+            StaticPageRenderOutputStatus::Rendered,
+            "<html>ok</html>".to_string(),
+            manifest.clone(),
+            created_at,
+        );
+
+        assert_eq!(output.draft_id, draft.id);
+        assert_eq!(output.assistant_run_id, draft.assistant_run_id);
+        assert_eq!(output.owner_user_id, draft.owner_user_id);
+        assert_eq!(output.image_job_id, Some(job.id));
+        assert_eq!(output.status, StaticPageRenderOutputStatus::Rendered);
+        assert_eq!(output.html, "<html>ok</html>");
+        assert_eq!(output.asset_manifest, manifest);
+        assert_eq!(output.created_at, created_at);
     }
 
     #[test]
