@@ -2,6 +2,45 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-20 P5 Static Page Helper Splits GitHub And 8-server Release
+
+- Scope:
+  - released P5 behavior-preserving static-page helper splits #306-#308;
+  - included `build_static_page_field_candidates`, `build_initial_static_page_draft_payload`, and `validate_static_page_operations` helper boundaries;
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed.
+- GitHub:
+  - repository: `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3`;
+  - branch: `main`;
+  - commit: `778c631e` (`Split static page helper boundaries`);
+  - pushed to `origin/main`.
+- Local pre-release verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_field_candidate_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page_initial_draft_payload_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_operation_apply_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_draft_builds_interactive_handoff_artifact --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api static_page_data_snapshot_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_data_snapshot_ --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api html_artifact_static_page_patch_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_react_static_page_update_arguments_become_sanitized_operations --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check` and `git diff --cached --check`: no whitespace errors, local LF/CRLF warnings only;
+  - staged diff sensitive-shape scan: `NO_SECRET_SHAPES_IN_STAGED_DIFF`.
+- 8-server deployment:
+  - server: `8.155.8.7`;
+  - repo: `/srv/aiv3/repo`;
+  - fast-forwarded from `f5eb7e328` to `778c631ee`;
+  - `cargo fmt --check`: passed on server;
+  - `CC=clang CXX=clang++ cargo build -q --manifest-path /srv/aiv3/repo/Cargo.toml -p platform-api --release`: passed;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`;
+  - `systemctl is-active` returned `active` for all five services;
+  - `curl -fsS http://127.0.0.1:3000/healthz`: returned `{"service":"platform-api","status":"ok",...}`;
+  - `curl -fsS http://127.0.0.1:3000/readyz`: returned `{"service":"platform-api","status":"ready",...}`;
+  - remote repo status after deployment: clean.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed during deployment.
+
 ## 2026-06-20 P5 Static Page Operation Validator Helper Local Verification
 
 - Purpose:
