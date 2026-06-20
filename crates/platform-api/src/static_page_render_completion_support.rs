@@ -1,4 +1,4 @@
-use contracts::CreateStaticPageRenderResponse;
+use contracts::{CreateStaticPageRenderResponse, StaticPageDraftView, StaticPageRenderOutputView};
 use domain_model::{StaticPageDraft, StaticPageDraftStatus, StaticPageRenderOutput};
 use serde_json::{json, Value};
 
@@ -45,12 +45,20 @@ pub(crate) fn static_page_render_response(
     render_output: StaticPageRenderOutput,
 ) -> CreateStaticPageRenderResponse {
     CreateStaticPageRenderResponse {
-        render_output: to_static_page_render_output_view(
-            render_output,
-            Some(&draft.selected_scope),
-        ),
-        draft: to_static_page_draft_view(draft),
+        render_output: static_page_render_output_view_for_response(&draft, render_output),
+        draft: static_page_draft_view_for_response(draft),
     }
+}
+
+pub(crate) fn static_page_draft_view_for_response(draft: StaticPageDraft) -> StaticPageDraftView {
+    to_static_page_draft_view(draft)
+}
+
+pub(crate) fn static_page_render_output_view_for_response(
+    draft: &StaticPageDraft,
+    render_output: StaticPageRenderOutput,
+) -> StaticPageRenderOutputView {
+    to_static_page_render_output_view(render_output, Some(&draft.selected_scope))
 }
 
 pub(crate) fn apply_static_page_final_render_to_draft(
@@ -60,19 +68,31 @@ pub(crate) fn apply_static_page_final_render_to_draft(
 ) -> StaticPageDraft {
     let operations = static_page_final_render_operations(render_output, direct_html);
     let render_summary = static_page_final_render_summary(direct_html);
-    draft.draft_payload = apply_static_page_operations_to_payload(
-        draft.draft_payload,
-        &operations,
-        Some(render_summary),
-    );
-    append_static_page_operations_metadata(
-        &mut draft.draft_payload,
-        &operations,
-        None,
-        render_summary,
-    );
-    draft.status = static_page_final_render_draft_status();
+    draft.draft_payload =
+        static_page_final_render_apply_payload(draft.draft_payload, &operations, render_summary);
+    static_page_final_render_append_metadata(&mut draft.draft_payload, &operations, render_summary);
+    static_page_final_render_mark_draft_status(&mut draft);
     draft
+}
+
+pub(crate) fn static_page_final_render_mark_draft_status(draft: &mut StaticPageDraft) {
+    draft.status = static_page_final_render_draft_status();
+}
+
+pub(crate) fn static_page_final_render_apply_payload(
+    draft_payload: Value,
+    operations: &[Value],
+    render_summary: &str,
+) -> Value {
+    apply_static_page_operations_to_payload(draft_payload, operations, Some(render_summary))
+}
+
+pub(crate) fn static_page_final_render_append_metadata(
+    draft_payload: &mut Value,
+    operations: &[Value],
+    render_summary: &str,
+) {
+    append_static_page_operations_metadata(draft_payload, operations, None, render_summary);
 }
 
 pub(crate) fn static_page_render_created_event_payload(
@@ -129,7 +149,7 @@ pub(crate) fn static_page_final_render_summary(direct_html: bool) -> &'static st
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use contracts::StaticPageRenderOutputStatusView;
+    use contracts::{StaticPageDraftStatusView, StaticPageRenderOutputStatusView};
     use domain_model::{
         AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJobId,
         StaticPageRenderOutputId, StaticPageRenderOutputStatus, TenantId,
@@ -220,6 +240,39 @@ mod tests {
     }
 
     #[test]
+    fn draft_view_for_response_preserves_draft_fields() {
+        let draft = draft();
+        let draft_id = draft.id;
+        let assistant_run_id = draft.assistant_run_id;
+        let title = draft.title.clone();
+        let selected_scope = draft.selected_scope.clone();
+        let visibility_snapshot = draft.visibility_snapshot.clone();
+        let source_refs = draft.source_refs.clone();
+        let draft_payload = draft.draft_payload.clone();
+
+        let view = static_page_draft_view_for_response(draft);
+
+        assert_eq!(view.id, draft_id);
+        assert_eq!(view.assistant_run_id, assistant_run_id);
+        assert_eq!(view.title, title);
+        assert_eq!(view.status, StaticPageDraftStatusView::Confirmed);
+        assert_eq!(view.selected_scope, selected_scope);
+        assert_eq!(view.visibility_snapshot, visibility_snapshot);
+        assert_eq!(view.source_refs, source_refs);
+        assert_eq!(view.draft_payload, draft_payload);
+    }
+
+    #[test]
+    fn final_render_mark_draft_status_sets_rendered_status() {
+        let mut draft = draft();
+        draft.status = StaticPageDraftStatus::Confirmed;
+
+        static_page_final_render_mark_draft_status(&mut draft);
+
+        assert_eq!(draft.status, StaticPageDraftStatus::Rendered);
+    }
+
+    #[test]
     fn final_render_operations_preserve_output_manifest_and_direct_html_flag() {
         let output = render_output();
 
@@ -265,6 +318,43 @@ mod tests {
             output.asset_manifest
         );
         assert_eq!(operation["finalPage"]["directHtml"], json!(true));
+    }
+
+    #[test]
+    fn final_render_apply_payload_preserves_final_page_and_summary() {
+        let draft = draft();
+        let output = render_output();
+        let operations = static_page_final_render_operations(&output, false);
+        let summary = static_page_final_render_summary(false);
+
+        let payload =
+            static_page_final_render_apply_payload(draft.draft_payload, &operations, summary);
+
+        assert_eq!(payload["finalPage"]["renderOutputId"], json!(output.id));
+        assert_eq!(payload["finalPage"]["assetManifest"], output.asset_manifest);
+        assert_eq!(payload["finalPage"]["directHtml"], json!(false));
+        assert_eq!(payload["modelSummary"], json!(summary));
+        assert_eq!(payload["model_summary"], json!(summary));
+    }
+
+    #[test]
+    fn final_render_append_metadata_preserves_operations_and_summary() {
+        let output = render_output();
+        let operations = static_page_final_render_operations(&output, true);
+        let summary = static_page_final_render_summary(true);
+        let mut payload = json!({});
+
+        static_page_final_render_append_metadata(&mut payload, &operations, summary);
+
+        assert_eq!(payload["lastOperationSummary"], json!(summary));
+        assert_eq!(
+            payload["operations"][0]["type"],
+            json!("request_final_render")
+        );
+        assert_eq!(
+            payload["operations"][0]["finalPage"]["renderOutputId"],
+            json!(output.id)
+        );
     }
 
     #[test]
@@ -318,6 +408,36 @@ mod tests {
         assert_eq!(payload["draft_id"], json!(draft.id));
         assert_eq!(payload["render_output_id"], json!(output.id));
         assert_eq!(payload["image_job_id"], json!(image_job_id));
+    }
+
+    #[test]
+    fn render_output_view_for_response_uses_draft_scope_for_external_urls() {
+        let mut draft = draft();
+        draft.selected_scope = json!({
+            "type": "external_channel",
+            "channelConnectionId": "generic-chat-main"
+        });
+        let mut output = render_output();
+        output.draft_id = draft.id;
+        output.assistant_run_id = draft.assistant_run_id;
+        let output_id = output.id;
+
+        let view = static_page_render_output_view_for_response(&draft, output);
+
+        assert_eq!(
+            view.html_download_url,
+            Some(format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}/download",
+                output_id
+            ))
+        );
+        assert_eq!(
+            view.html_preview_url,
+            Some(format!(
+                "/v1/external/channels/generic-chat-main/static-page-renders/{}/preview",
+                output_id
+            ))
+        );
     }
 
     #[test]
