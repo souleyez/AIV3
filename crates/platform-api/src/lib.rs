@@ -32604,8 +32604,12 @@ async fn create_static_page_render_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageRenderRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
-    draft = refresh_static_page_draft_data_contract_for_action(state, draft, "render_static_page")
-        .await?;
+    draft = refresh_static_page_draft_data_contract_for_action(
+        state,
+        draft,
+        static_page_render_submit_action(),
+    )
+    .await?;
     let image_job = if request.direct_html {
         None
     } else {
@@ -32673,12 +32677,13 @@ async fn create_static_page_render_for_draft(
                     ),
                 )
             })?;
+        let workflow_task_id = static_page_render_first_workflow_task_id(&started.enqueued_tasks);
         render_output = apply_static_page_render_workflow_start_to_output(
             &draft,
             render_output,
             image_job.as_ref(),
             &started_execution,
-            started.enqueued_tasks.first().map(|task| task.id),
+            workflow_task_id,
         );
         render_output = state
             .storage
@@ -32689,12 +32694,12 @@ async fn create_static_page_render_for_draft(
         append_static_page_draft_run_event(
             state,
             &draft,
-            "static_page_render.queued",
+            static_page_render_queued_event_name(),
             static_page_render_queued_event_payload(
                 &draft,
                 &render_output,
                 &workflow_execution,
-                started.enqueued_tasks.first().map(|task| task.id),
+                workflow_task_id,
             ),
         )
         .await?;
@@ -56221,28 +56226,12 @@ fn build_initial_static_page_image_generation_execution(
         WorkflowKind::StaticPageImageGeneration,
         Utc::now(),
     )?;
-    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
-    context.insert(
-        "static_page_draft_id".to_string(),
-        Value::String(draft.id.to_string()),
+    let context = static_page_image_generation_workflow_context(
+        workflow_initial_context_with_retries(&initial.runtime_state),
+        draft,
+        job,
+        prompt,
     );
-    context.insert(
-        "static_page_image_job_id".to_string(),
-        Value::String(job.id.to_string()),
-    );
-    context.insert(
-        "assistant_run_id".to_string(),
-        Value::String(draft.assistant_run_id.to_string()),
-    );
-    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        context.insert("prompt".to_string(), Value::String(prompt.to_string()));
-    }
-    if let Some(prewarm_key) = static_page_template_prewarm_key_from_source_refs(&draft.source_refs)
-    {
-        context.insert("prewarm_key".to_string(), Value::String(prewarm_key));
-        context.insert("low_load_only".to_string(), Value::Bool(true));
-        context.insert("customer_visible".to_string(), Value::Bool(false));
-    }
 
     Ok(workflow_initial_execution_from_parts(
         initial,
@@ -56264,31 +56253,12 @@ fn build_initial_static_page_render_execution(
         WorkflowKind::StaticPageRender,
         Utc::now(),
     )?;
-    let mut context = workflow_initial_context_with_retries(&initial.runtime_state);
-    context.insert(
-        "static_page_draft_id".to_string(),
-        Value::String(draft.id.to_string()),
+    let context = static_page_render_workflow_context(
+        workflow_initial_context_with_retries(&initial.runtime_state),
+        draft,
+        render_output,
+        image_job,
     );
-    context.insert(
-        "static_page_render_output_id".to_string(),
-        Value::String(render_output.id.to_string()),
-    );
-    context.insert(
-        "assistant_run_id".to_string(),
-        Value::String(draft.assistant_run_id.to_string()),
-    );
-    if let Some(job) = image_job {
-        context.insert(
-            "static_page_image_job_id".to_string(),
-            Value::String(job.id.to_string()),
-        );
-        if let Some(preview_asset_key) = job.preview_asset_key.as_ref() {
-            context.insert(
-                "preview_asset_key".to_string(),
-                Value::String(preview_asset_key.clone()),
-            );
-        }
-    }
 
     Ok(workflow_initial_execution_from_parts(
         initial,

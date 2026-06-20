@@ -1,6 +1,12 @@
 use domain_model::{StaticPageDraft, StaticPageImageJob};
 use static_page_renderer::StaticPageRenderRequest;
 
+const STATIC_PAGE_RENDER_SUBMIT_ACTION: &str = "render_static_page";
+
+pub(crate) fn static_page_render_submit_action() -> &'static str {
+    STATIC_PAGE_RENDER_SUBMIT_ACTION
+}
+
 pub(crate) fn build_static_page_render_request(
     draft: &StaticPageDraft,
     image_job: Option<&StaticPageImageJob>,
@@ -27,6 +33,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn render_submit_action_matches_existing_data_contract_action() {
+        assert_eq!(static_page_render_submit_action(), "render_static_page");
+    }
 
     fn draft() -> StaticPageDraft {
         let now = Utc::now();

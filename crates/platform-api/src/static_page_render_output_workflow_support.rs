@@ -1,10 +1,17 @@
+use contracts::WorkflowTaskView;
 use domain_model::{
     StaticPageDraft, StaticPageImageJob, StaticPageRenderOutput, StaticPageRenderOutputStatus,
     WorkflowExecution, WorkflowStatus, WorkflowTaskId,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::static_page_render_queue_manifest_support::build_static_page_render_queue_manifest;
+
+const STATIC_PAGE_RENDER_QUEUED_EVENT: &str = "static_page_render.queued";
+
+pub(crate) fn static_page_render_queued_event_name() -> &'static str {
+    STATIC_PAGE_RENDER_QUEUED_EVENT
+}
 
 pub(crate) fn static_page_render_output_status_for_workflow(
     workflow_status: &WorkflowStatus,
@@ -86,6 +93,45 @@ pub(crate) fn static_page_render_queued_event_payload(
     })
 }
 
+pub(crate) fn static_page_render_workflow_context(
+    mut context: Map<String, Value>,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutput,
+    image_job: Option<&StaticPageImageJob>,
+) -> Map<String, Value> {
+    context.insert(
+        "static_page_draft_id".to_string(),
+        Value::String(draft.id.to_string()),
+    );
+    context.insert(
+        "static_page_render_output_id".to_string(),
+        Value::String(render_output.id.to_string()),
+    );
+    context.insert(
+        "assistant_run_id".to_string(),
+        Value::String(draft.assistant_run_id.to_string()),
+    );
+    if let Some(job) = image_job {
+        context.insert(
+            "static_page_image_job_id".to_string(),
+            Value::String(job.id.to_string()),
+        );
+        if let Some(preview_asset_key) = job.preview_asset_key.as_ref() {
+            context.insert(
+                "preview_asset_key".to_string(),
+                Value::String(preview_asset_key.clone()),
+            );
+        }
+    }
+    context
+}
+
+pub(crate) fn static_page_render_first_workflow_task_id(
+    tasks: &[WorkflowTaskView],
+) -> Option<WorkflowTaskId> {
+    tasks.first().map(|task| task.id)
+}
+
 pub(crate) fn apply_static_page_render_workflow_start_to_output(
     draft: &StaticPageDraft,
     mut render_output: StaticPageRenderOutput,
@@ -115,7 +161,7 @@ mod tests {
     use domain_model::{
         AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJobId,
         StaticPageImageJobStatus, StaticPageRenderOutputId, TenantId, WorkflowExecutionId,
-        WorkflowKind,
+        WorkflowKind, WorkflowTaskStatus,
     };
 
     fn workflow_execution(
@@ -189,6 +235,99 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    fn workflow_task() -> WorkflowTaskView {
+        let now = Utc::now();
+        WorkflowTaskView {
+            id: WorkflowTaskId::new(),
+            queue: "static_page".to_string(),
+            task_key: "render_static_page".to_string(),
+            logical_queue: None,
+            logical_task_key: None,
+            remote_task_id: None,
+            next_poll_at: None,
+            payload: json!({}),
+            status: WorkflowTaskStatus::Queued,
+            attempt: 0,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            error: None,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn queued_event_name_matches_existing_render_event() {
+        assert_eq!(
+            static_page_render_queued_event_name(),
+            "static_page_render.queued"
+        );
+    }
+
+    #[test]
+    fn render_workflow_context_preserves_runtime_and_render_fields() {
+        let draft = draft();
+        let render_output = render_output(&draft);
+        let image_job = image_job(&draft);
+        let mut context = Map::new();
+        context.insert("retries_remaining".to_string(), json!(2));
+
+        let context =
+            static_page_render_workflow_context(context, &draft, &render_output, Some(&image_job));
+
+        assert_eq!(context["retries_remaining"], json!(2));
+        assert_eq!(context["static_page_draft_id"], json!(draft.id.to_string()));
+        assert_eq!(
+            context["static_page_render_output_id"],
+            json!(render_output.id.to_string())
+        );
+        assert_eq!(
+            context["assistant_run_id"],
+            json!(draft.assistant_run_id.to_string())
+        );
+        assert_eq!(
+            context["static_page_image_job_id"],
+            json!(image_job.id.to_string())
+        );
+        assert_eq!(
+            context["preview_asset_key"],
+            json!("static-page-previews/preview.png")
+        );
+    }
+
+    #[test]
+    fn render_workflow_context_allows_direct_html_without_image_job() {
+        let draft = draft();
+        let render_output = render_output(&draft);
+
+        let context = static_page_render_workflow_context(Map::new(), &draft, &render_output, None);
+
+        assert_eq!(context["static_page_draft_id"], json!(draft.id.to_string()));
+        assert_eq!(
+            context["static_page_render_output_id"],
+            json!(render_output.id.to_string())
+        );
+        assert!(!context.contains_key("static_page_image_job_id"));
+        assert!(!context.contains_key("preview_asset_key"));
+    }
+
+    #[test]
+    fn first_workflow_task_id_uses_first_enqueued_task() {
+        let first_task = workflow_task();
+        let second_task = workflow_task();
+
+        assert_eq!(
+            static_page_render_first_workflow_task_id(&[first_task.clone(), second_task]),
+            Some(first_task.id)
+        );
+    }
+
+    #[test]
+    fn first_workflow_task_id_allows_empty_task_list() {
+        assert_eq!(static_page_render_first_workflow_task_id(&[]), None);
     }
 
     #[test]

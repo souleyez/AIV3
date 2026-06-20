@@ -4,7 +4,7 @@ use domain_model::{
     StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob, WorkflowExecution, WorkflowTask,
     WorkflowTaskId,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use storage::NewStaticPageImageJob;
 
 use crate::static_page_image_prompt_payload_support::{
@@ -14,6 +14,7 @@ use crate::static_page_operation_apply_support::{
     append_static_page_operations_metadata, apply_static_page_operations_to_payload,
 };
 use crate::static_page_payload_support::merge_json_value;
+use crate::static_page_template_prewarm_support::static_page_template_prewarm_key_from_source_refs;
 use crate::static_page_view_support::to_static_page_image_job_view;
 
 const DEFAULT_STATIC_PAGE_IMAGE_QUEUE_MESSAGE: &str =
@@ -113,6 +114,36 @@ pub(crate) fn static_page_image_job_workflow_task_available_at(
     options.task_available_at
 }
 
+pub(crate) fn static_page_image_generation_workflow_context(
+    mut context: Map<String, Value>,
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+    prompt: Option<&str>,
+) -> Map<String, Value> {
+    context.insert(
+        "static_page_draft_id".to_string(),
+        Value::String(draft.id.to_string()),
+    );
+    context.insert(
+        "static_page_image_job_id".to_string(),
+        Value::String(job.id.to_string()),
+    );
+    context.insert(
+        "assistant_run_id".to_string(),
+        Value::String(draft.assistant_run_id.to_string()),
+    );
+    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
+        context.insert("prompt".to_string(), Value::String(prompt.to_string()));
+    }
+    if let Some(prewarm_key) = static_page_template_prewarm_key_from_source_refs(&draft.source_refs)
+    {
+        context.insert("prewarm_key".to_string(), Value::String(prewarm_key));
+        context.insert("low_load_only".to_string(), Value::Bool(true));
+        context.insert("customer_visible".to_string(), Value::Bool(false));
+    }
+    context
+}
+
 pub(crate) fn static_page_image_job_create_response(
     job: StaticPageImageJob,
 ) -> CreateStaticPageImageJobResponse {
@@ -133,19 +164,30 @@ pub(crate) fn static_page_image_job_prompt_payload(
     }
 }
 
+pub(crate) fn static_page_image_job_queue_message(
+    options: &StaticPageImageJobCreateOptions,
+) -> &str {
+    options
+        .queue_message
+        .as_deref()
+        .unwrap_or(DEFAULT_STATIC_PAGE_IMAGE_QUEUE_MESSAGE)
+}
+
+pub(crate) fn static_page_image_job_operation_summary(
+    options: &StaticPageImageJobCreateOptions,
+) -> &str {
+    options
+        .operation_summary
+        .as_deref()
+        .unwrap_or(DEFAULT_STATIC_PAGE_IMAGE_OPERATION_SUMMARY)
+}
+
 pub(crate) fn static_page_image_job_queue_operations(
     job: &StaticPageImageJob,
     options: &StaticPageImageJobCreateOptions,
 ) -> (Vec<Value>, String) {
-    let queue_message = options
-        .queue_message
-        .as_deref()
-        .unwrap_or(DEFAULT_STATIC_PAGE_IMAGE_QUEUE_MESSAGE);
-    let operation_summary = options
-        .operation_summary
-        .as_deref()
-        .unwrap_or(DEFAULT_STATIC_PAGE_IMAGE_OPERATION_SUMMARY)
-        .to_string();
+    let queue_message = static_page_image_job_queue_message(options);
+    let operation_summary = static_page_image_job_operation_summary(options).to_string();
     (
         vec![json!({
             "type": "queue_image_job",
@@ -523,6 +565,60 @@ mod tests {
     }
 
     #[test]
+    fn image_generation_workflow_context_preserves_runtime_and_image_fields() {
+        let draft = draft();
+        let job = queued_job(Some(1));
+        let mut context = Map::new();
+        context.insert("retries_remaining".to_string(), json!(3));
+        context.insert("stage_context".to_string(), json!("queued"));
+
+        let context = static_page_image_generation_workflow_context(
+            context,
+            &draft,
+            &job,
+            Some("  生成经营看板  "),
+        );
+
+        assert_eq!(context["retries_remaining"], json!(3));
+        assert_eq!(context["stage_context"], json!("queued"));
+        assert_eq!(context["static_page_draft_id"], json!(draft.id.to_string()));
+        assert_eq!(
+            context["static_page_image_job_id"],
+            json!(job.id.to_string())
+        );
+        assert_eq!(
+            context["assistant_run_id"],
+            json!(draft.assistant_run_id.to_string())
+        );
+        assert_eq!(context["prompt"], json!("生成经营看板"));
+        assert!(!context.contains_key("prewarm_key"));
+        assert!(!context.contains_key("low_load_only"));
+        assert!(!context.contains_key("customer_visible"));
+    }
+
+    #[test]
+    fn image_generation_workflow_context_adds_prewarm_flags_and_skips_blank_prompt() {
+        let mut draft = draft();
+        draft.source_refs = json!({
+            "prewarm": {
+                "key": "static-page-template-prewarm:test"
+            }
+        });
+        let job = queued_job(None);
+
+        let context =
+            static_page_image_generation_workflow_context(Map::new(), &draft, &job, Some("   "));
+
+        assert!(!context.contains_key("prompt"));
+        assert_eq!(
+            context["prewarm_key"],
+            json!("static-page-template-prewarm:test")
+        );
+        assert_eq!(context["low_load_only"], json!(true));
+        assert_eq!(context["customer_visible"], json!(false));
+    }
+
+    #[test]
     fn create_response_wraps_image_job_view() {
         let job = queued_job(Some(5));
 
@@ -570,6 +666,42 @@ mod tests {
         );
 
         assert_eq!(payload, request_payload);
+    }
+
+    #[test]
+    fn queue_message_uses_default_or_custom_copy() {
+        assert_eq!(
+            static_page_image_job_queue_message(&StaticPageImageJobCreateOptions::default()),
+            DEFAULT_STATIC_PAGE_IMAGE_QUEUE_MESSAGE
+        );
+
+        let options = StaticPageImageJobCreateOptions {
+            queue_message: Some("低负载时自动预热模板，客户不可见。".to_string()),
+            ..StaticPageImageJobCreateOptions::default()
+        };
+
+        assert_eq!(
+            static_page_image_job_queue_message(&options),
+            "低负载时自动预热模板，客户不可见。"
+        );
+    }
+
+    #[test]
+    fn operation_summary_uses_default_or_custom_copy() {
+        assert_eq!(
+            static_page_image_job_operation_summary(&StaticPageImageJobCreateOptions::default()),
+            DEFAULT_STATIC_PAGE_IMAGE_OPERATION_SUMMARY
+        );
+
+        let options = StaticPageImageJobCreateOptions {
+            operation_summary: Some("静态页模板预热任务已进入低优先级队列。".to_string()),
+            ..StaticPageImageJobCreateOptions::default()
+        };
+
+        assert_eq!(
+            static_page_image_job_operation_summary(&options),
+            "静态页模板预热任务已进入低优先级队列。"
+        );
     }
 
     #[test]
