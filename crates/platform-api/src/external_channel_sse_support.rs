@@ -37,6 +37,10 @@ use crate::{
 
 pub(crate) const EXTERNAL_CHANNEL_SSE_SCHEMA_V1: &str = "v3.external_channel.sse.v1";
 pub(crate) const EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: &str = "_stream_dedupe_key";
+pub(crate) type ExternalChannelStaticPageSseProgressPayload =
+    (&'static str, Value, String, String, Option<AssistantRunId>);
+pub(crate) type ExternalChannelStaticPageSseContinuePollingPayload =
+    (Value, String, String, Option<AssistantRunId>);
 
 pub(crate) fn external_channel_sse_envelope(
     run_id: Option<AssistantRunId>,
@@ -964,7 +968,7 @@ pub(crate) fn external_channel_static_page_preview_public_url(asset_ref: &str) -
 
 pub(crate) fn external_channel_static_page_sse_progress_payload(
     response: ExternalChannelEventResponse,
-) -> (&'static str, Value, String, String, Option<AssistantRunId>) {
+) -> ExternalChannelStaticPageSseProgressPayload {
     let status = external_channel_static_page_sse_status(&response);
     let progress_key = external_channel_static_page_sse_progress_key(&response);
     let text = external_channel_static_page_sse_progress_text(&response);
@@ -1038,7 +1042,7 @@ pub(crate) fn external_channel_static_page_sse_progress_events(
 
 pub(crate) fn external_channel_static_page_sse_continue_polling_payload(
     response: ExternalChannelEventResponse,
-) -> (Value, String, String, Option<AssistantRunId>) {
+) -> ExternalChannelStaticPageSseContinuePollingPayload {
     let status = external_channel_static_page_sse_status(&response);
     let progress_key = external_channel_static_page_sse_progress_key(&response);
     let public_response = external_channel_public_response(response);
@@ -1867,8 +1871,9 @@ mod tests {
         response.assistant_run_id = Some(AssistantRunId::new());
         response.idempotency_key = "generic:tenant:static-page-progress".to_string();
 
-        let (event_name, payload, text, dedupe_key, run_id) =
+        let fields: ExternalChannelStaticPageSseProgressPayload =
             external_channel_static_page_sse_progress_payload(response);
+        let (event_name, payload, text, dedupe_key, run_id) = fields;
 
         assert_eq!(event_name, "external_channel.static_page_published");
         assert_eq!(payload["sequence"], json!(90));
@@ -1953,8 +1958,9 @@ mod tests {
         response.assistant_run_id = Some(AssistantRunId::new());
         response.idempotency_key = "generic:tenant:static-page-timeout".to_string();
 
-        let (payload, text, dedupe_key, run_id) =
+        let fields: ExternalChannelStaticPageSseContinuePollingPayload =
             external_channel_static_page_sse_continue_polling_payload(response);
+        let (payload, text, dedupe_key, run_id) = fields;
 
         assert_eq!(payload["schema"], json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1));
         assert_eq!(

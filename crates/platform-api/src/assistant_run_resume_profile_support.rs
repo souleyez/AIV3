@@ -3,6 +3,8 @@ use std::cmp::Ordering;
 
 use crate::{degree_rank, escape_markdown_table_cell, normalize_document_entity_value};
 
+type ResumeProfileGenderCounts = (usize, usize, usize);
+
 pub(crate) fn assistant_run_resume_profile_table<F>(
     rows: &[Value],
     title: &str,
@@ -165,7 +167,7 @@ pub(crate) fn resume_profile_gender_sort_rank(row: &Value) -> usize {
     }
 }
 
-pub(crate) fn resume_profile_gender_counts(rows: &[Value]) -> (usize, usize, usize) {
+pub(crate) fn resume_profile_gender_counts(rows: &[Value]) -> ResumeProfileGenderCounts {
     let mut male_count = 0;
     let mut female_count = 0;
     let mut unknown_count = 0;
@@ -264,7 +266,8 @@ mod tests {
             json!({}),
         ];
 
-        assert_eq!(resume_profile_gender_counts(&rows), (1, 1, 2));
+        let counts: ResumeProfileGenderCounts = resume_profile_gender_counts(&rows);
+        assert_eq!(counts, (1, 1, 2));
         assert_eq!(resume_profile_gender_sort_rank(&rows[0]), 0);
         assert_eq!(resume_profile_year_span(&rows[0]), Some(5));
         assert_eq!(resume_profile_year_span_string(&rows[1]), "-");

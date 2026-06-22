@@ -3,6 +3,8 @@ use static_page_renderer::StaticPageRenderRequest;
 
 const STATIC_PAGE_RENDER_SUBMIT_ACTION: &str = "render_static_page";
 
+type StaticPageRenderRequestImageContext = (Option<String>, Option<String>);
+
 pub(crate) fn static_page_render_submit_action() -> &'static str {
     STATIC_PAGE_RENDER_SUBMIT_ACTION
 }
@@ -26,7 +28,7 @@ pub(crate) fn build_static_page_render_request(
 
 pub(crate) fn static_page_render_request_image_context(
     image_job: Option<&StaticPageImageJob>,
-) -> (Option<String>, Option<String>) {
+) -> StaticPageRenderRequestImageContext {
     (
         image_job.and_then(|job| job.preview_asset_key.clone()),
         image_job.map(|job| job.id.to_string()),
@@ -114,10 +116,12 @@ mod tests {
         let draft = draft();
         let job = image_job(&draft);
 
-        let (preview_asset_key, image_job_id) =
+        let image_context: StaticPageRenderRequestImageContext =
             static_page_render_request_image_context(Some(&job));
-        let (direct_preview_asset_key, direct_image_job_id) =
+        let (preview_asset_key, image_job_id) = image_context;
+        let direct_image_context: StaticPageRenderRequestImageContext =
             static_page_render_request_image_context(None);
+        let (direct_preview_asset_key, direct_image_job_id) = direct_image_context;
 
         assert_eq!(
             preview_asset_key.as_deref(),

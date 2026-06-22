@@ -16,6 +16,8 @@ const STATIC_PAGE_FINAL_RENDER_DIRECT_HTML_SUMMARY: &str =
     "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。";
 const STATIC_PAGE_FINAL_RENDER_VISUAL_SUMMARY: &str = "最终静态页已根据可视化和模块规划生成。";
 
+type StaticPageFinalRenderOperationsAndSummary = (Vec<Value>, &'static str);
+
 pub(crate) fn static_page_render_created_event_name() -> &'static str {
     STATIC_PAGE_RENDER_CREATED_EVENT
 }
@@ -170,7 +172,7 @@ pub(crate) fn static_page_final_render_operations(
 pub(crate) fn static_page_final_render_operations_and_summary(
     render_output: &StaticPageRenderOutput,
     direct_html: bool,
-) -> (Vec<Value>, &'static str) {
+) -> StaticPageFinalRenderOperationsAndSummary {
     (
         static_page_final_render_operations(render_output, direct_html),
         static_page_final_render_summary(direct_html),
@@ -363,10 +365,12 @@ mod tests {
     fn final_render_operations_and_summary_preserves_direct_html_choice() {
         let output = render_output();
 
-        let (visual_operations, visual_summary) =
+        let visual_fields: StaticPageFinalRenderOperationsAndSummary =
             static_page_final_render_operations_and_summary(&output, false);
-        let (direct_operations, direct_summary) =
+        let (visual_operations, visual_summary) = visual_fields;
+        let direct_fields: StaticPageFinalRenderOperationsAndSummary =
             static_page_final_render_operations_and_summary(&output, true);
+        let (direct_operations, direct_summary) = direct_fields;
 
         assert_eq!(
             visual_operations[0]["finalPage"]["directHtml"],

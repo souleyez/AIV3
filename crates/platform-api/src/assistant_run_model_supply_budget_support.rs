@@ -10,7 +10,11 @@ use crate::{
     ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT,
 };
 
-pub(crate) fn assistant_run_model_budgeted_supply_items(items: &[Value]) -> (Vec<Value>, Value) {
+type AssistantRunModelBudgetedSupplyItems = (Vec<Value>, Value);
+
+pub(crate) fn assistant_run_model_budgeted_supply_items(
+    items: &[Value],
+) -> AssistantRunModelBudgetedSupplyItems {
     let bucket_order = [
         "document_status",
         "structured_fact",
@@ -133,7 +137,9 @@ mod tests {
             items.push(item("retrieval_evidence", index));
         }
 
-        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let fields: AssistantRunModelBudgetedSupplyItems =
+            assistant_run_model_budgeted_supply_items(&items);
+        let (model_items, budget) = fields;
         let database_count = model_items
             .iter()
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_aggregate"))
@@ -168,7 +174,9 @@ mod tests {
             item("retrieval_evidence", 3),
         ];
 
-        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let fields: AssistantRunModelBudgetedSupplyItems =
+            assistant_run_model_budgeted_supply_items(&items);
+        let (model_items, budget) = fields;
 
         assert_eq!(
             model_items
@@ -184,7 +192,9 @@ mod tests {
     fn budget_labels_missing_type_as_unknown_other() {
         let items = vec![json!({"summary": "missing type"})];
 
-        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let fields: AssistantRunModelBudgetedSupplyItems =
+            assistant_run_model_budgeted_supply_items(&items);
+        let (model_items, budget) = fields;
 
         assert_eq!(model_items.len(), 1);
         assert_eq!(budget["included_by_type"]["unknown"], json!(1));
@@ -204,7 +214,9 @@ mod tests {
             items.push(item("retrieval_evidence", index));
         }
 
-        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let fields: AssistantRunModelBudgetedSupplyItems =
+            assistant_run_model_budgeted_supply_items(&items);
+        let (model_items, budget) = fields;
         let asset_profile_count = model_items
             .iter()
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_profile_hint"))

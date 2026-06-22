@@ -10,6 +10,7 @@ use storage::{
 const FACT_INDEX_FACT_LIMIT: usize = 256;
 pub const ENTITY_ROWS_BY_TYPE_SNAPSHOT_KIND: &str = "entity_rows_by_type";
 pub const ENTITY_ROWS_BY_TYPE_SNAPSHOT_KEY: &str = "default";
+pub type DatasetEntityRowsSnapshotManifest = (Value, i64, i64);
 const DATASET_ENTITY_FACT_TYPES: &[&str] = &[
     "organization",
     "person",
@@ -210,7 +211,7 @@ pub fn build_dataset_entity_rows_snapshot_manifest(
     dataset_id: DatasetId,
     created_at: DateTime<Utc>,
     aggregates_by_type: &BTreeMap<String, Vec<DocumentFactAggregate>>,
-) -> (Value, i64, i64) {
+) -> DatasetEntityRowsSnapshotManifest {
     let mut source_fact_count = 0_i64;
     let mut source_document_ids = BTreeSet::<DocumentId>::new();
     let mut rows_by_type = serde_json::Map::new();
@@ -1019,12 +1020,12 @@ mod tests {
             }],
         );
 
-        let (manifest, source_fact_count, source_document_count) =
-            build_dataset_entity_rows_snapshot_manifest(
-                dataset_id,
-                Utc::now(),
-                &aggregates_by_type,
-            );
+        let fields: DatasetEntityRowsSnapshotManifest = build_dataset_entity_rows_snapshot_manifest(
+            dataset_id,
+            Utc::now(),
+            &aggregates_by_type,
+        );
+        let (manifest, source_fact_count, source_document_count) = fields;
 
         assert_eq!(source_fact_count, 4);
         assert_eq!(source_document_count, 2);

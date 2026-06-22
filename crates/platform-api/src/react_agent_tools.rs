@@ -52,6 +52,8 @@ const ASSISTANT_RUN_WEB_SEARCH_QUERY_MAX_CHARS: usize = 180;
 const ASSISTANT_RUN_WEB_SEARCH_TITLE_MAX_CHARS: usize = 180;
 const ASSISTANT_RUN_WEB_SEARCH_SNIPPET_MAX_CHARS: usize = 700;
 
+type AnswerQualityGatePremiumBudget = (usize, usize);
+
 #[derive(Clone, Debug)]
 pub(crate) struct AssistantRunReactToolResult {
     pub(crate) observation: Value,
@@ -4021,7 +4023,7 @@ async fn upgrade_parse_vlm_result(
     })
 }
 
-fn answer_quality_gate_premium_budget(evidence_state: &Value) -> (usize, usize) {
+fn answer_quality_gate_premium_budget(evidence_state: &Value) -> AnswerQualityGatePremiumBudget {
     let Some(gate) = answer_quality_gate_value(evidence_state) else {
         return (0, 0);
     };
@@ -5824,7 +5826,9 @@ mod tests {
             }
         });
 
-        assert_eq!(answer_quality_gate_premium_budget(&evidence_state), (1, 0));
+        let budget: AnswerQualityGatePremiumBudget =
+            answer_quality_gate_premium_budget(&evidence_state);
+        assert_eq!(budget, (1, 0));
         assert!(upgrade_parse_vlm_evidence_suggests_recovery(
             &evidence_state,
             None
@@ -5836,7 +5840,9 @@ mod tests {
 
         mark_answer_quality_gate_vlm_upgrade_used(&mut evidence_state, &document_id);
 
-        assert_eq!(answer_quality_gate_premium_budget(&evidence_state), (1, 1));
+        let budget: AnswerQualityGatePremiumBudget =
+            answer_quality_gate_premium_budget(&evidence_state);
+        assert_eq!(budget, (1, 1));
         assert!(answer_quality_gate_vlm_document_already_used(
             &evidence_state,
             &document_id

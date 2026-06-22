@@ -28557,10 +28557,12 @@ fn external_channel_capability_payload_search_text(payload: &Value) -> String {
     parts.join(" ").to_ascii_lowercase()
 }
 
+type ExternalChannelCapabilityRiskProfile = (&'static str, bool, &'static str, Vec<&'static str>);
+
 fn external_channel_capability_risk_profile(
     capability: ExternalChannelModelToolCapability,
     payload: &Value,
-) -> (&'static str, bool, &'static str, Vec<&'static str>) {
+) -> ExternalChannelCapabilityRiskProfile {
     let text = external_channel_capability_payload_search_text(payload);
     let has_any = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
 
@@ -28842,10 +28844,13 @@ fn external_channel_message_outreach_payload_target_conversation(
     }
 }
 
+type ExternalChannelMessageOutreachRiskProfile =
+    (&'static str, &'static str, &'static str, Vec<&'static str>);
+
 fn external_channel_message_outreach_risk_profile(
     message: &ExternalBotMessageView,
     payload: &Value,
-) -> (&'static str, &'static str, &'static str, Vec<&'static str>) {
+) -> ExternalChannelMessageOutreachRiskProfile {
     let search_text = external_channel_capability_payload_search_text(payload);
     let compact = search_text.to_ascii_lowercase();
     let target_conversation =
@@ -42977,6 +42982,8 @@ struct AssistantRunPointListRow {
     type_label: String,
 }
 
+type AssistantRunFloorLocation = (String, String);
+
 fn assistant_run_prompt_requests_point_list_table(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     let has_point_subject = prompt_contains_any(
@@ -43050,7 +43057,7 @@ fn assistant_run_point_type_label(name: &str) -> String {
     }
 }
 
-fn assistant_run_split_floor_location(name: &str) -> (String, String) {
+fn assistant_run_split_floor_location(name: &str) -> AssistantRunFloorLocation {
     let mut split_at = 0usize;
     for (index, ch) in name.char_indices() {
         if ch.is_ascii_alphanumeric() {
@@ -46707,10 +46714,12 @@ fn assistant_run_database_field_role(mapping: &MySqlTableMapping, column: &str) 
     })
 }
 
+type AssistantRunDatabaseColumnRole = (&'static str, u8);
+
 fn assistant_run_database_column_role(
     mapping: &MySqlTableMapping,
     column: &str,
-) -> (&'static str, u8) {
+) -> AssistantRunDatabaseColumnRole {
     if mapping.id_column == column {
         return ("primary_key", 96);
     }
@@ -59333,6 +59342,28 @@ mod tests {
     }
 
     #[test]
+    fn database_column_role_preserves_role_and_confidence_heuristics() {
+        let mapping = traffic_area_mapping_for_test();
+
+        let primary: AssistantRunDatabaseColumnRole =
+            assistant_run_database_column_role(&mapping, "storecode");
+        let entity: AssistantRunDatabaseColumnRole =
+            assistant_run_database_column_role(&mapping, "areaname");
+        let time: AssistantRunDatabaseColumnRole =
+            assistant_run_database_column_role(&mapping, "txdate");
+        let metric: AssistantRunDatabaseColumnRole =
+            assistant_run_database_column_role(&mapping, "up");
+        let unknown: AssistantRunDatabaseColumnRole =
+            assistant_run_database_column_role(&mapping, "unmapped_column");
+
+        assert_eq!(primary, ("primary_key", 96));
+        assert_eq!(entity, ("entity", 92));
+        assert_eq!(time, ("time", 90));
+        assert_eq!(metric, ("metric", 88));
+        assert_eq!(unknown, ("unknown", 42));
+    }
+
+    #[test]
     fn database_aggregate_heuristics_support_count_and_down_metric() {
         let mapping = traffic_area_mapping_for_test();
 
@@ -67696,6 +67727,28 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_capability_risk_profile_preserves_confirmation_rules() {
+        let critical: ExternalChannelCapabilityRiskProfile =
+            external_channel_capability_risk_profile(
+                ExternalChannelModelToolCapability::IntegrationSetupAnalysis,
+                &json!({"reason": "需要发布到外部并调整权限"}),
+            );
+        assert_eq!(critical.0, "critical");
+        assert!(critical.1);
+        assert_eq!(critical.2, "permission_or_external_publish_requires_human");
+        assert!(critical.3.iter().any(|item| item.contains("权限")));
+
+        let read_only: ExternalChannelCapabilityRiskProfile =
+            external_channel_capability_risk_profile(
+                ExternalChannelModelToolCapability::CollectionSetupAnalysis,
+                &json!({"reason": "只读检查当前状态"}),
+            );
+        assert_eq!(read_only.0, "low");
+        assert!(!read_only.1);
+        assert_eq!(read_only.2, "read_only_status_or_planning");
+    }
+
+    #[test]
     fn external_channel_model_tool_request_integration_requires_confirmation() {
         let request = external_channel_model_tool_request(
             r#"<V3_TOOL_REQUEST>{"tool":"integration_setup_analysis","intent":"plan","reason":"用户要求接入外部系统并确认接口字段"}</V3_TOOL_REQUEST>"#,
@@ -67781,6 +67834,48 @@ mod tests {
             json!("chat-risk-room")
         );
         assert_eq!(card["target_summary"]["recipient_count"], json!(1));
+    }
+
+    #[test]
+    fn external_channel_message_outreach_risk_profile_preserves_host_routing_rules() {
+        let message = sample_external_bot_message();
+
+        let same_conversation: ExternalChannelMessageOutreachRiskProfile =
+            external_channel_message_outreach_risk_profile(
+                &message,
+                &json!({"reason": "任务完成后通知当前会话用户"}),
+            );
+        assert_eq!(same_conversation.0, "low");
+        assert_eq!(
+            same_conversation.1,
+            "outbound_channel_policy_not_configured"
+        );
+        assert_eq!(
+            same_conversation.2,
+            "message_outreach_confirmation_required"
+        );
+
+        let cross_conversation: ExternalChannelMessageOutreachRiskProfile =
+            external_channel_message_outreach_risk_profile(
+                &message,
+                &json!({
+                    "reason": "主动通知其他会话用户",
+                    "target_conversation_external_id": "other-chat-room"
+                }),
+            );
+        assert_eq!(cross_conversation.0, "medium");
+        assert_eq!(
+            cross_conversation.1,
+            "new_recipient_or_conversation_requires_confirmation"
+        );
+
+        let sensitive: ExternalChannelMessageOutreachRiskProfile =
+            external_channel_message_outreach_risk_profile(
+                &message,
+                &json!({"reason": "报表完成后通知用户查看链接"}),
+            );
+        assert_eq!(sensitive.0, "high");
+        assert_eq!(sensitive.1, "sensitive_content_requires_permission_review");
     }
 
     #[test]
@@ -69625,15 +69720,17 @@ mod tests {
         );
     }
 
-    async fn create_external_static_page_auto_publish_fixture(
-        state: &AppState,
-        preview_asset_key: Option<&str>,
-    ) -> (
+    type ExternalStaticPageAutoPublishFixture = (
         AssistantRun,
         StaticPageDraft,
         StaticPageImageJob,
         WorkflowExecution,
-    ) {
+    );
+
+    async fn create_external_static_page_auto_publish_fixture(
+        state: &AppState,
+        preview_asset_key: Option<&str>,
+    ) -> ExternalStaticPageAutoPublishFixture {
         create_external_static_page_auto_publish_fixture_with_runtime_manifest(
             state,
             preview_asset_key,
@@ -69646,12 +69743,7 @@ mod tests {
         state: &AppState,
         preview_asset_key: Option<&str>,
         runtime_manifest: Value,
-    ) -> (
-        AssistantRun,
-        StaticPageDraft,
-        StaticPageImageJob,
-        WorkflowExecution,
-    ) {
+    ) -> ExternalStaticPageAutoPublishFixture {
         let now = Utc::now();
         let dataset_id = DatasetId::new();
         let run = state
@@ -69805,8 +69897,9 @@ mod tests {
             }),
         )
         .await;
-        let (run, _, _, execution) =
+        let fixture: ExternalStaticPageAutoPublishFixture =
             create_external_static_page_auto_publish_fixture(&state, None).await;
+        let (run, _, _, execution) = fixture;
 
         maybe_enqueue_external_static_page_publish_after_image_ready(
             &state.storage,
@@ -78840,6 +78933,16 @@ retrieve_evidence:
         assert!(prompt_requests_document_entity_scan(
             "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
         ));
+    }
+
+    #[test]
+    fn assistant_run_split_floor_location_preserves_floor_prefix_and_location() {
+        let prefixed: AssistantRunFloorLocation = assistant_run_split_floor_location("3F东区电梯");
+        assert_eq!(prefixed, ("3F".to_string(), "东区电梯".to_string()));
+
+        let unprefixed: AssistantRunFloorLocation =
+            assistant_run_split_floor_location("东区观光梯");
+        assert_eq!(unprefixed, ("".to_string(), "东区观光梯".to_string()));
     }
 
     #[test]

@@ -10,6 +10,8 @@ use crate::{
     static_page_template_prewarm_support::STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY,
 };
 
+type WorkflowTaskDurationPercentiles = (Option<u64>, Option<u64>);
+
 pub(crate) fn to_workflow_task_view(task: WorkflowTask) -> WorkflowTaskView {
     let logical_queue = workflow_task_logical_queue(&task);
     let logical_task_key = workflow_task_logical_task_key(&task);
@@ -329,7 +331,7 @@ fn workflow_task_finished_duration_ms(task: &WorkflowTaskView) -> Option<u64> {
     (duration_ms >= 0).then_some(duration_ms as u64)
 }
 
-fn workflow_task_duration_percentiles(samples: &[u64]) -> (Option<u64>, Option<u64>) {
+fn workflow_task_duration_percentiles(samples: &[u64]) -> WorkflowTaskDurationPercentiles {
     let mut sorted = samples.to_vec();
     sorted.sort_unstable();
     (
@@ -448,5 +450,15 @@ mod tests {
         assert_eq!(queue.succeeded_duration_p50_ms, Some(5_000));
         assert_eq!(queue.task_keys[0].logical_task_key, "logical_key");
         assert_eq!(queue.task_keys[0].retrying, 1);
+    }
+
+    #[test]
+    fn workflow_task_duration_percentiles_preserve_p50_and_p95_order() {
+        let percentiles: WorkflowTaskDurationPercentiles =
+            workflow_task_duration_percentiles(&[5_000, 1_000, 2_000]);
+        let (p50_ms, p95_ms) = percentiles;
+
+        assert_eq!(p50_ms, Some(2_000));
+        assert_eq!(p95_ms, Some(5_000));
     }
 }

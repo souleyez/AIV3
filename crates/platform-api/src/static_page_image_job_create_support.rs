@@ -25,6 +25,8 @@ const STATIC_PAGE_IMAGE_JOB_CREATED_EVENT: &str = "static_page_image_job.created
 const STATIC_PAGE_IMAGE_JOB_PREVIEW_DATA_QUALITY_GATE_ERROR: &str =
     "static_page_preview_data_quality_gate";
 
+type StaticPageImageJobQueueOperations = (Vec<Value>, String);
+
 #[derive(Debug, Default)]
 pub(crate) struct StaticPageImageJobCreateOptions {
     pub(crate) task_available_at: Option<DateTime<Utc>>,
@@ -185,7 +187,7 @@ pub(crate) fn static_page_image_job_operation_summary(
 pub(crate) fn static_page_image_job_queue_operations(
     job: &StaticPageImageJob,
     options: &StaticPageImageJobCreateOptions,
-) -> (Vec<Value>, String) {
+) -> StaticPageImageJobQueueOperations {
     let queue_message = static_page_image_job_queue_message(options);
     let operation_summary = static_page_image_job_operation_summary(options).to_string();
     (
@@ -708,10 +710,11 @@ mod tests {
     fn queue_operations_use_default_customer_queue_copy() {
         let job = queued_job(Some(3));
 
-        let (operations, summary) = static_page_image_job_queue_operations(
+        let fields: StaticPageImageJobQueueOperations = static_page_image_job_queue_operations(
             &job,
             &StaticPageImageJobCreateOptions::default(),
         );
+        let (operations, summary) = fields;
 
         assert_eq!(summary, DEFAULT_STATIC_PAGE_IMAGE_OPERATION_SUMMARY);
         assert_eq!(operations.len(), 1);
@@ -733,7 +736,9 @@ mod tests {
             ..StaticPageImageJobCreateOptions::default()
         };
 
-        let (operations, summary) = static_page_image_job_queue_operations(&job, &options);
+        let fields: StaticPageImageJobQueueOperations =
+            static_page_image_job_queue_operations(&job, &options);
+        let (operations, summary) = fields;
 
         assert_eq!(summary, "静态页模板预热任务已进入低优先级队列。");
         assert_eq!(operations[0]["queuePosition"], Value::Null);

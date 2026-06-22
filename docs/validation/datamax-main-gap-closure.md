@@ -2,6 +2,2704 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-22 P5 Static-Page Render Queue Workflow Status Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue workflow manifest status scalar parameters with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - reused `StaticPageRenderQueueLifecycleScalar`;
+  - updated workflow manifest from-fields and payload-fields helpers to use the named lifecycle scalar instead of inline `&str` for status;
+  - updated workflow manifest tests to bind status input through the alias;
+  - preserved workflow status `queued`, executionId/taskId mapping, empty workflow null fields, workflow manifest JSON shape, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_workflow_manifest_from_fields_preserves_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_manifest_payload_fields_preserve_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_manifest_fields_from_fields_preserve_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Workflow Manifest Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue workflow manifest Value signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueWorkflowManifestValue`;
+  - updated workflow context tuple fields, workflow context-from-fields helper, workflow manifest builder, workflow manifest-from-fields helper, and workflow manifest payload helper to use the named Value alias where applicable;
+  - updated workflow manifest/context tests to bind workflow manifest input and output through the alias;
+  - preserved workflow status `queued`, executionId/taskId mapping, empty workflow null fields, top-level workflow_execution_id/workflow_task_id values, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_workflow_manifest_from_fields_preserves_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_manifest_payload_fields_preserve_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_context_from_fields_preserves_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_context_preserves_manifest_and_top_level_ids --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Data Context Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue data context Value pair signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueDataSnapshotValue`;
+  - added `StaticPageRenderQueueExportPackageValue`;
+  - updated render queue data context tuple fields, data snapshot fallback helpers, data context-from-fields helper, and data context export package helpers to use named Value aliases where applicable;
+  - updated data context tests to bind data snapshot and export package input/output through the aliases;
+  - preserved `dataSnapshot`/`data_snapshot` alias lookup, fallback data snapshot, export package draft id, module count, ECharts count, source/unknown fallback, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_data_context_preserves_snapshot_and_export_package --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_context_from_fields_preserves_snapshot_and_export_package --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_context_fields_from_payload_preserve_snapshot_and_export_package --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_context_export_package_preserves_modules_and_debug_counts --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Specs Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue specs Value pair signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueVisualSpecValue`;
+  - added `StaticPageRenderQueueRenderSpecValue`;
+  - updated render queue specs tuple fields, specs-from-fields helper, visual spec fallback helpers, and render spec fallback helpers to use named Value aliases where applicable;
+  - updated specs tests to bind visual/render spec input and output through the aliases;
+  - preserved explicit visual/render spec priority, `client-delivery` fallback, `static-page-renderer-v1` render fallback, dynamic data file, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_specs_from_fields_preserve_visual_and_render_specs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_specs_from_payload_preserve_explicit_and_fallback_specs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_spec_helpers_preserve_explicit_and_fallback_specs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Debug Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package debug scalar signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageDebugRenderer`;
+  - added `StaticPageQueuedExportPackageDataSnapshotSource`;
+  - reused `StaticPageQueuedExportPackageModuleCount`;
+  - updated queued export package debug tuple fields and helper parameters for renderer, module count, ECharts-requested module count, and data snapshot source to use named aliases instead of inline `&str`/`&'static str`/`usize` signatures where applicable;
+  - updated debug/from-fields/payload/source tests to bind input and output through the aliases;
+  - preserved renderer `static-page-renderer-v1`, module count, ECharts count, source value, `unknown` fallback, debug JSON shape, and export package manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_debug_from_fields_preserves_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_debug_payload_fields_preserve_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_debug_fields_from_fields_preserve_tuple_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_data_snapshot_source_preserves_string_and_unknown_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_data_snapshot_source_from_optional_preserves_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Manifest Lifecycle Field Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - propagate named lifecycle scalar aliases through static-page queued export package base context and manifest field helpers.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - reused `StaticPageQueuedExportPackageLifecycleScalar`;
+  - reused `StaticPageQueuedExportPackageVersion`;
+  - updated queued export package base context and manifest field tuple aliases and builder parameters to use named lifecycle aliases instead of inline `&'static str`/`u64` signatures where applicable;
+  - updated base context and manifest field tests to bind kind/version/status inputs through the aliases;
+  - preserved `static-page-export-package` kind, version 1, `queued` status, files, dynamic page contract, debug fields, manifest JSON shape, and base context shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_base_context_from_fields_preserves_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_base_context_fields_from_fields_preserves_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_manifest_fields_from_fields_preserve_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Visual Fallback Style Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue visual fallback style scalar signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueVisualFallbackStyle`;
+  - updated visual fallback style and fallback visual spec field helpers to use the named alias instead of inline `&'static str` signatures where applicable;
+  - updated visual fallback style tests to bind helper output through the alias;
+  - preserved `client-delivery` style, fallback visual spec JSON, explicit visual/render spec priority, and render queue manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_visual_fallback_style_preserves_client_delivery --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_visual_fallback_spec_from_fields_preserves_style --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_spec_helpers_preserve_explicit_and_fallback_specs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package File Spec Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package file spec scalar signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageFilePath`;
+  - added `StaticPageQueuedExportPackageFileRole`;
+  - added `StaticPageQueuedExportPackageFileMime`;
+  - updated queued export package file spec construction/extraction helpers and file builder helpers to use named aliases instead of inline `&'static str` signatures where applicable;
+  - updated file spec field helper tests to bind path/role/mime output through the aliases;
+  - preserved index/asset-manifest/data-snapshot/data/modules file order, roles, MIME values, file payload JSON shape, and export package manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_file_spec_field_helpers_preserve_tuple_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_file_fields_preserve_path_role_and_mime_tuple --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_file_specs_preserve_order_and_mimes --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_files_preserve_file_roles_and_order --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Module Count Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package module count scalar signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageModuleCount`;
+  - updated module count, ECharts-requested module count, and module count tuple fields to use the named alias instead of inline `usize` signatures where applicable;
+  - added a direct module count scalar test that binds helper output through the alias;
+  - preserved total module counting, ECharts runtime detection, empty module `(0,0)` fallback, debug context values, and export package JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_module_count_helpers_preserve_scalar_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_module_counts_from_items_fields_preserve_counts --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_empty_module_counts_fields_preserve_zero_pair --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_debug_context_from_fields_preserves_debug_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Lifecycle Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package lifecycle scalar signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageLifecycleScalar`;
+  - added `StaticPageQueuedExportPackageVersion`;
+  - updated queued export package kind, version, status, lifecycle fields, and lifecycle-from-fields helpers to use named aliases instead of inline `&'static str`/`u64` signatures where applicable;
+  - updated lifecycle field helper tests to bind kind/version/status helper output through the aliases;
+  - preserved static-page-export-package kind, version 1, queued status, manifest lifecycle shape, and export package JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_lifecycle_field_helpers_preserve_fixed_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_kind_fields_preserve_fixed_value --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_version_fields_preserve_fixed_value --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_status_fields_match_top_level_status --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Lifecycle Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue lifecycle scalar signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueLifecycleScalar`;
+  - updated render queue status, renderer, queue copy, workflow status, lifecycle fields, and workflow manifest status fields to use the named alias instead of inline `&'static str` signatures where applicable;
+  - updated lifecycle scalar tests to bind helper output through the alias;
+  - preserved queued status, static-page-renderer-v1 renderer, background queue copy text, workflow manifest status, and render queue JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_lifecycle_field_helpers_preserve_fixed_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_status_preserves_queued_value --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_workflow_status_matches_top_level_status --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Payload Alias List Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue payload alias-list return signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueuePayloadAliasList`;
+  - updated visualSpec, renderSpec, and dataSnapshot alias-list helpers to return the named alias instead of inline `&'static [&'static str]` signatures;
+  - updated alias-order tests to bind helper output through the alias;
+  - preserved camelCase/snake_case lookup order, fallback spec/data snapshot behavior, render queue manifest JSON shape, and static-page render enqueue semantics.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_visual_spec_aliases_preserve_order --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_render_spec_aliases_preserve_order --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_snapshot_aliases_preserve_order --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Static Page Auto Publish Fixture Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the external static-page auto-publish test fixture tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/lib.rs` test module;
+  - added `ExternalStaticPageAutoPublishFixture`;
+  - updated external static-page auto-publish fixture helpers to return the named alias instead of inline tuple signatures;
+  - updated an existing no-preview test to bind fixture output through the alias;
+  - preserved no-preview no-Codex behavior, preview enqueue-once behavior, runtime manifest propagation, and existing fixture creation semantics.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_static_page_image_success_without_preview_does_not_enqueue_codex --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_static_page_image_success_with_preview_enqueues_codex_once --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_static_page_image_success --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Channel Message Outreach Risk Profile Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the external channel message outreach risk profile tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/lib.rs`;
+  - added `ExternalChannelMessageOutreachRiskProfile`;
+  - updated message outreach risk profile helper to return the named alias instead of an inline tuple signature;
+  - added a direct module test that binds low/medium/high outputs through the alias;
+  - preserved same-conversation low, new-recipient/cross-conversation medium, cross-channel medium, sensitive content high, host-controlled confirmation, and no-direct-send behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_message_outreach_risk_profile_preserves_host_routing_rules --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_model_tool_request_message_outreach_requires_host_routing --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_model_tool_request_message_outreach_new_recipient_requires_confirmation --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_model_tool_request_message_outreach_sensitive_content_requires_review --lib`: passed, 1/1 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Channel Capability Risk Profile Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the external channel model capability risk profile tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/lib.rs`;
+  - added `ExternalChannelCapabilityRiskProfile`;
+  - updated capability risk profile helper to return the named alias instead of an inline tuple signature;
+  - added a direct module test that binds critical/read-only outputs through the alias;
+  - preserved permission/publish critical, credential/login high, public API/auth high, new source/integration medium, read-only low, and default confirmation behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_capability_risk_profile_preserves_confirmation_rules --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_model_tool_request_collection_requires_confirmation --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_model_tool_request_integration_requires_confirmation --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api external_channel_capability --lib`: passed, 4/4 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Assistant-Run Database Column Role Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the assistant-run database column role tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/lib.rs`;
+  - added `AssistantRunDatabaseColumnRole`;
+  - updated database column role helper to return the named alias instead of an inline tuple signature;
+  - added a direct module test that binds role/confidence output through the alias;
+  - preserved primary key, title entity, time dimension, metric, category dimension, metadata/content column, and unknown fallback behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api database_column_role_preserves_role_and_confidence_heuristics --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api database_schema_context_summarizes_traffic_field_roles --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api database_aggregate_heuristics --lib`: passed, 6/6 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Assistant-Run Floor Location Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the assistant-run floor/location split tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/lib.rs`;
+  - added `AssistantRunFloorLocation`;
+  - updated assistant-run point-list floor/location split helper to return the named alias instead of an inline tuple signature;
+  - added a direct module test that binds the helper output through the alias;
+  - preserved ASCII floor prefix detection, no-prefix fallback, point-list row generation, point type labeling, and document entity scan trigger behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_split_floor_location_preserves_floor_prefix_and_location --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api assistant_run_document_entity_scan_detects_elevator_point_lists --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api point_list --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Channel Static Page SSE Payload Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace external channel static page SSE progress/continue polling tuple signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/external_channel_sse_support.rs`;
+  - added `ExternalChannelStaticPageSseProgressPayload`;
+  - added `ExternalChannelStaticPageSseContinuePollingPayload`;
+  - updated static page SSE progress and continue polling payload helpers to return named aliases instead of inline tuple signatures;
+  - preserved event names, sequence values, status, text, dedupe key, assistant run id, status_url, poll_after_seconds, public artifact link, card pruning, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: passed, 28/28 tests;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: passed, 34/34 tests;
+  - `cargo test -q -p platform-api external_channel_public_stream --lib`: passed, 3/3 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Answer Quality Gate Premium Budget Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the answer quality gate premium budget tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/react_agent_tools.rs`;
+  - added `AnswerQualityGatePremiumBudget`;
+  - updated answer quality gate premium budget helper to return the named alias instead of an inline tuple signature;
+  - preserved snake_case/camelCase budget lookup, missing gate fallback, premium action budget exhausted behavior, VLM upgrade usage marking, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api upgrade_parse_vlm_helpers_require_budget_and_mark_usage --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api react --lib`: passed, 86/86 tests;
+  - `cargo test -q -p platform-api answer_quality_gate --lib`: passed, 14/14 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Dataset Entity Rows Snapshot Manifest Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the dataset entity rows snapshot manifest tuple signature with a named alias.
+- Code change:
+  - extended `crates/platform-api/src/fact_index.rs`;
+  - added `DatasetEntityRowsSnapshotManifest`;
+  - updated dataset entity rows snapshot manifest builder to return the named alias instead of an inline tuple signature;
+  - preserved manifest schema, entity_rows_by_type, row_count_by_type, source_fact_count, source_document_count, model_note, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api fact_index --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api dataset_entity_scan --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api dataset_fact_snapshot --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Workflow Task Duration Percentiles Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the workflow task duration percentiles tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/workflow_task_view_support.rs`;
+  - added `WorkflowTaskDurationPercentiles`;
+  - updated duration percentile helper to return the named alias instead of an inline tuple signature;
+  - added a direct module test that destructures the alias into p50/p95 values;
+  - preserved sample sorting, percentile_latency inputs, retrying detection, queue/key summary fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api workflow_task_view_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api workflow_task --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api workflow_execution --lib`: passed, 18/18 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Assistant-Run Resume Profile Gender Counts Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the assistant-run resume profile gender counts tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/assistant_run_resume_profile_support.rs`;
+  - added `ResumeProfileGenderCounts`;
+  - updated resume profile gender counts helper to return the named alias instead of an inline tuple signature;
+  - preserved male/female/unknown count order, gender sort rank behavior, year span helpers, degree rank behavior, and resume profile output shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_resume_profile_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api resume_profile --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api dataset_entity_scan --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Assistant-Run Model Supply Budget Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the assistant-run model supply budget tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/assistant_run_model_supply_budget_support.rs`;
+  - added `AssistantRunModelBudgetedSupplyItems`;
+  - updated model supply budget helper to return the named alias instead of an inline tuple signature;
+  - preserved bucket quotas, original order after bucket selection, included/omitted budget accounting, unknown type fallback, asset profile bucket behavior, model_rule text, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_model --lib`: passed, 15/15 tests;
+  - `cargo test -q -p platform-api assistant_run_supply --lib`: passed, 14/14 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Final Render Operations Summary Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page final render operations and summary tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_completion_support.rs`;
+  - added `StaticPageFinalRenderOperationsAndSummary`;
+  - updated final render operations and summary helper to return the named alias instead of an inline tuple signature;
+  - preserved request_final_render operation payload, finalPage fields, directHtml flag, visual/direct HTML summary copy, draft final render mutation inputs, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_completion_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job Queue Operations Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page image job queue operations tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_image_job_create_support.rs`;
+  - added `StaticPageImageJobQueueOperations`;
+  - updated image job queue operations helper to return the named alias instead of an inline tuple signature;
+  - preserved queue_image_job operation payload, queueMessage, queuePosition, default/custom operation summary, draft queue mutation inputs, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_image_job_create_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Request Image Context Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page render request image context tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_request_support.rs`;
+  - added `StaticPageRenderRequestImageContext`;
+  - updated render request image context helper to return the named alias instead of an inline tuple signature;
+  - preserved preview asset key, image job id, direct HTML no-image-context behavior, render request fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_request_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output Alias And Link Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the remaining static page render output view alias/link tuple signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageRenderOutputViewDownloadAliasFields`;
+  - added `StaticPageRenderOutputViewPreviewAliasFields`;
+  - added `StaticPageRenderOutputViewRetryableErrorReasonAliasFields`;
+  - added `StaticPageRenderOutputViewLinkFields`;
+  - updated download alias, preview alias, retryable reason alias, and link fields helpers to return named aliases instead of inline tuple signatures;
+  - preserved download URL aliases, preview URL aliases, retryable reason aliases, derived download/preview links, render output view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Content Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page render output view content fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageRenderOutputViewContentFields`;
+  - updated render output view content fields helper to return the named alias instead of an inline tuple signature;
+  - preserved HTML, asset manifest, render output view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Identity Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page render output view identity fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageRenderOutputViewIdentityFields`;
+  - updated render output view identity fields helper to return the named alias instead of an inline tuple signature;
+  - preserved render output id, draft id, assistant run id, image job id, render output view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Timestamp Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page image job view timestamp fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageImageJobViewTimestampFields`;
+  - updated image job view timestamp fields helper to return the named alias instead of an inline tuple signature;
+  - preserved created_at, updated_at, image job view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Detail Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page image job view detail fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageImageJobViewDetailFields`;
+  - updated image job view detail fields helper to return the named alias instead of an inline tuple signature;
+  - preserved queue position, image prompt payload, preview asset key, failure reason, confirmed_at, image job view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Identity Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page image job view identity fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageImageJobViewIdentityFields`;
+  - updated image job view identity fields helper to return the named alias instead of an inline tuple signature;
+  - preserved image job id, draft id, assistant run id, image job view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Timestamp Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page template view timestamp fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageTemplateViewTimestampFields`;
+  - updated template view timestamp fields helper to return the named alias instead of an inline tuple signature;
+  - preserved created_at, updated_at, template view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Context Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page template view context fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageTemplateViewContextFields`;
+  - updated template view context fields helper to return the named alias instead of an inline tuple signature;
+  - preserved selected scope, source refs, template view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Identity Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page template view identity fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageTemplateViewIdentityFields`;
+  - updated template view identity fields helper to return the named alias instead of an inline tuple signature;
+  - preserved generated template id, draft id, assistant run id, title, template view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Timestamp Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page draft view timestamp fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageDraftViewTimestampFields`;
+  - updated draft view timestamp fields helper to return the named alias instead of an inline tuple signature;
+  - preserved created_at, updated_at, draft view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Payload Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page draft view payload fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageDraftViewPayloadFields`;
+  - updated draft view payload fields helper to return the named alias instead of an inline tuple signature;
+  - preserved selected scope, visibility snapshot, source refs, draft payload, draft view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Identity Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the static page draft view identity fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageDraftViewIdentityFields`;
+  - updated draft view identity fields helper to return the named alias instead of an inline tuple signature;
+  - preserved draft id, assistant run id, title, draft view public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package File From Spec Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package file-from-spec fields tuple signature with the existing named file spec alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - updated `build_static_page_queued_export_package_file_from_spec_fields` to return existing `StaticPageQueuedExportPackageFileSpec` instead of an inline tuple signature;
+  - preserved path, role, mime order and values, file entry JSON, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Export Package Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue export package fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueExportPackageFields<'a>`;
+  - updated render queue export package fields helper to return the named alias instead of an inline tuple signature;
+  - preserved draft, modules, data snapshot references, queued export package manifest, debug counts, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Workflow Manifest Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue workflow manifest fields tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueWorkflowManifestFields`;
+  - updated render queue workflow manifest fields and workflow manifest fields-from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved queued status, workflow execution id, workflow task id, None fallback behavior, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Workflow Ids Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue workflow ids tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueWorkflowIdsFields`;
+  - updated render queue workflow ids, workflow ids fields, and workflow ids from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved workflow execution id, workflow task id, None fallback behavior, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Workflow Context Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue workflow context tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueWorkflowContextFields`;
+  - updated render queue workflow context, workflow context fields, and workflow context from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved workflow manifest, workflow execution id, workflow task id, None fallback behavior, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Identity Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue identity tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueIdentityFields`;
+  - updated render queue identity, identity fields, and identity from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved draft id, assistant run id, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Image Context Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue image context tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueImageContextFields`;
+  - updated render queue image context, image context fields, and image context from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved image job id, preview asset key, None fallback behavior, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Lifecycle Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue lifecycle tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueLifecycleFields`;
+  - updated render queue lifecycle, lifecycle fields, and lifecycle from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved queued status, renderer name, queue copy, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Data Context Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue data context tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueDataContextFields`;
+  - updated render queue data context, data context fields, from-payload, and from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved data snapshot lookup, fallback data snapshot, export package, module count, echarts requested module count, data snapshot source, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Render Queue Specs Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the render queue specs tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueSpecsFields`;
+  - updated render queue specs, from-payload, payload-fields, and from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved visual spec, render spec, snake/camel payload aliases, fallback visual spec, fallback render spec, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package Module Counts Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package module count tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageModuleCounts`;
+  - updated debug context counts, module counts, optional items counts, items counts, empty counts, and counts from-fields helpers to return the named alias instead of inline tuple signatures;
+  - preserved module count, echarts requested module count, invalid modules fallback, empty items fallback, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package Lifecycle Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package lifecycle tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageLifecycleFields`;
+  - updated `build_static_page_queued_export_package_lifecycle`, `build_static_page_queued_export_package_lifecycle_fields`, and `build_static_page_queued_export_package_lifecycle_from_fields` to return the named alias instead of inline tuple signatures;
+  - preserved export package kind, version, status, render queue status consistency, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package Debug Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package debug fields tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageDebugFields<'a>`;
+  - updated `build_static_page_queued_export_package_debug_fields` and `build_static_page_queued_export_package_debug_fields_from_fields` to return the named alias instead of inline tuple signatures;
+  - preserved renderer, module count, echarts requested module count, data snapshot source, unknown fallback behavior, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package Base Context Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package base context tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageBaseContextFields`;
+  - updated `build_static_page_queued_export_package_base_context`, `build_static_page_queued_export_package_base_context_fields`, `build_static_page_queued_export_package_base_context_fields_from_fields`, and `build_static_page_queued_export_package_base_context_from_fields` to return the named alias instead of inline tuple signatures;
+  - preserved export package kind, version, status, draft id, files, dynamic page contract, data file, source snapshot file, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Queued Export Package Manifest Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the queued export package manifest fields tuple signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageManifestFields`;
+  - updated `build_static_page_queued_export_package_manifest_fields`, `build_static_page_queued_export_package_manifest_context_fields`, and `build_static_page_queued_export_package_manifest_fields_from_fields` to return the named alias instead of inline tuple signatures;
+  - preserved export package kind, version, status, draft id, files, dynamic page contract, debug module count, echarts requested module count, data snapshot source, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Queue Manifest Fields Tuple Alias Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace the long static page render queue manifest fields tuple signature with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueManifestFields`;
+  - updated `build_static_page_render_queue_manifest_fields` to return the named alias instead of an inline long tuple signature;
+  - preserved manifest draft/run id, status, renderer, workflow ids and manifest, image job context, visual spec, render spec, data snapshot, export package, queue copy, public response fields, and JSON object shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page View Fields Tuple Aliases Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace long static page view fields tuple signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `StaticPageDraftViewFields`, `StaticPageTemplateViewFields`, `StaticPageImageJobViewFields`, and `StaticPageRenderOutputViewFields`;
+  - updated the four view fields helpers to return the named aliases instead of inline long tuple signatures;
+  - preserved draft, template, image job, and render output view field order, values, None fallback behavior, URL aliases, retryable reason aliases, HTML content, asset manifest, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 33/33 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view field collection into a dedicated helper before final from-fields assembly.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_fields`;
+  - updated `to_static_page_render_output_view` to collect existing render output view fields through the helper, then pass them to `static_page_render_output_view_from_fields`;
+  - preserved output id, draft id, assistant run id, image job id, status, HTML, download URL aliases, preview URL aliases, retryable reason aliases, asset manifest, created_at, public response fields, and response behavior;
+  - preserved external channel URL alias encoding behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 32/32 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 239/239 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view field collection into a dedicated helper before final from-fields assembly.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_fields`;
+  - updated `to_static_page_image_job_view` to collect existing image job view fields through the helper, then pass them to `static_page_image_job_view_from_fields`;
+  - preserved image job id, draft id, assistant run id, status, queue position, image prompt payload, preview asset key, failure reason, confirmed_at, created_at, updated_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 31/31 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 238/238 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 62/62 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view field collection into a dedicated helper before final from-fields assembly.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_fields`;
+  - updated `to_static_page_template_view` to collect existing template view fields through the helper, then pass them to `static_page_template_view_from_fields`;
+  - preserved template id, draft id, assistant run id, title, public URL, preview URL, dataset artifact key, template reference, selected scope, source refs, created_at, updated_at, public response fields, and response behavior;
+  - preserved unpublished draft `None` fallback behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 30/30 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 238/238 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 61/61 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view field collection into a dedicated helper before final from-fields assembly.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_fields`;
+  - updated `to_static_page_draft_view` to collect existing draft view fields through the helper, then pass them to `static_page_draft_view_from_fields`;
+  - preserved draft id, assistant run id, title, status, selected scope, visibility snapshot, source refs, draft payload, created_at, updated_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 29/29 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 238/238 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 61/61 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View From Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view final struct assembly into a dedicated from-fields helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_from_fields`;
+  - updated `to_static_page_render_output_view` to collect existing render output view fields through the helper before returning the same response view;
+  - preserved output id, draft id, assistant run id, image job id, status, HTML, download URL aliases, preview URL aliases, retryable reason aliases, asset manifest, created_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 28/28 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 238/238 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 61/61 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View From Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view final struct assembly into a dedicated from-fields helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_from_fields`;
+  - updated `to_static_page_image_job_view` to collect existing image job view fields through the helper before returning the same response view;
+  - preserved image job id, draft id, assistant run id, status, queue position, image prompt payload, preview asset key, failure reason, confirmed_at, created_at, updated_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 27/27 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 237/237 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 61/61 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View From Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view final struct assembly into a dedicated from-fields helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_from_fields`;
+  - updated `to_static_page_template_view` to collect existing template view fields through the helper before returning the same response view;
+  - preserved template id, draft id, assistant run id, title, public URL, preview URL, dataset artifact key, template reference, selected scope, source refs, created_at, updated_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 237/237 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View From Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view final struct assembly into a dedicated from-fields helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_from_fields`;
+  - updated `to_static_page_draft_view` to collect existing draft view fields through the helper before returning the same response view;
+  - preserved draft id, assistant run id, title, status, selected scope, visibility snapshot, source refs, draft payload, created_at, updated_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 25/25 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 237/237 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Retryable Error Reason Alias Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view retryable error reason alias field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_retryable_error_reason_alias_fields`;
+  - updated `to_static_page_render_output_view` to collect `retryable_error_reason` and `retryable_error_reason_camel` through the helper before populating the existing response view;
+  - preserved retryable reason value, None fallback, download URL aliases, preview URL aliases, HTML content, asset manifest, created_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 24/24 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 237/237 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Preview Alias Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view preview URL alias field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_preview_alias_fields`;
+  - updated `to_static_page_render_output_view` to collect `html_preview_url` and `html_preview_url_camel` through the helper before populating the existing response view;
+  - preserved preview URL value, None fallback, download URL aliases, retryable error reason aliases, HTML content, asset manifest, created_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 23/23 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 236/236 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Download Alias Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view download URL alias field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_download_alias_fields`;
+  - updated `to_static_page_render_output_view` to collect `html_download_url`, `html_download_url_camel`, `download_url`, and `download_url_camel` through the helper before populating the existing response view;
+  - preserved download URL value, None fallback, preview URL aliases, retryable error reason aliases, HTML content, asset manifest, created_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 22/22 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 235/235 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Timestamp Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view timestamp field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_timestamp_fields`;
+  - updated `to_static_page_render_output_view` to collect created_at through the helper before populating the existing response view;
+  - preserved created_at, output identity fields, HTML content, asset manifest, status view mapping, download/preview URL aliases, retryable error reason aliases, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 21/21 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 234/234 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Content Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view content field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_content_fields`;
+  - updated `to_static_page_render_output_view` to collect HTML and asset manifest through the helper before populating the existing response view;
+  - preserved HTML content, asset manifest, output identity fields, status view mapping, download/preview URL aliases, retryable error reason aliases, created_at, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 20/20 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 233/233 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Identity Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view identity field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_identity_fields`;
+  - updated `to_static_page_render_output_view` to collect output id, draft id, assistant run id, and image job id through the helper before populating the existing response view;
+  - preserved output id, draft id, assistant run id, image job id, status view mapping, HTML payload, download/preview URL aliases, retryable error reason aliases, asset manifest, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 19/19 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 232/232 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Timestamp Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view timestamp field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_timestamp_fields`;
+  - updated `to_static_page_image_job_view` to collect created_at and updated_at through the helper before populating the existing response view;
+  - preserved created_at, updated_at, job identity fields, detail fields, status view mapping, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 18/18 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 60/60 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Detail Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view detail field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_detail_fields`;
+  - updated `to_static_page_image_job_view` to collect queue position, image prompt payload, preview asset key, failure reason, and confirmed_at through the helper before populating the existing response view;
+  - preserved queue position, image prompt payload, preview asset key, failure reason, confirmed_at, job identity fields, status view mapping, timestamps, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 59/59 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Identity Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view identity field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_identity_fields`;
+  - updated `to_static_page_image_job_view` to collect job id, draft id, and assistant run id through the helper before populating the existing response view;
+  - preserved job id, draft id, assistant run id, status view mapping, queue position, prompt payload, preview asset key, failure reason, confirmation timestamp, timestamps, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 58/58 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Timestamp Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view timestamp field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_timestamp_fields`;
+  - updated `to_static_page_template_view` to collect created_at and updated_at through the helper before populating the existing response view;
+  - preserved created_at, updated_at, generated id, context fields, artifact fields, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 15/15 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Context Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view context field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_context_fields`;
+  - updated `to_static_page_template_view` to collect selected scope and source refs through the helper before populating the existing response view;
+  - preserved selected scope, source refs, generated id, artifact fields, timestamps, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Identity Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view identity field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_identity_fields`;
+  - updated `to_static_page_template_view` to collect generated template id, draft id, assistant run id, and title through the helper before populating the existing response view;
+  - preserved generated static page id format, draft id, assistant run id, title, artifact fields, selected scope/source refs, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Timestamp Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view timestamp field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_timestamp_fields`;
+  - updated `to_static_page_draft_view` to collect created_at and updated_at through the helper before populating the existing response view;
+  - preserved created_at, updated_at, draft identity fields, payload fields, status view mapping, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Payload Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view payload field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_payload_fields`;
+  - updated `to_static_page_draft_view` to collect selected scope, visibility snapshot, source refs, and draft payload through the helper before populating the existing response view;
+  - preserved selected scope, visibility snapshot, source refs, draft payload, draft identity fields, status view mapping, timestamps, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Identity Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view identity field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_identity_fields`;
+  - updated `to_static_page_draft_view` to collect draft id, assistant run id, and title through the helper before populating the existing response view;
+  - preserved draft id, assistant run id, title, status view mapping, selected scope, visibility snapshot, source refs, draft payload, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Status Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view status mapping into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_status`;
+  - updated `to_static_page_render_output_view` to resolve render output status through the helper before populating the existing response view;
+  - preserved queued/rendering/rendered/failed/cancelled status view mapping, HTML payload, download/preview URL aliases, retryable error reason aliases, asset manifest, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 231/231 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Draft View Status Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page draft view status mapping into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_draft_view_status`;
+  - updated `to_static_page_draft_view` to resolve draft status through the helper before populating the existing response view;
+  - preserved draft/planned/queued/previewed/confirmed/rendered/archived status view mapping, selected scope, visibility snapshot, source refs, draft payload, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 230/230 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Image Job View Status Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page image job view status mapping into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_image_job_view_status`;
+  - updated `to_static_page_image_job_view` to resolve image job status through the helper before populating the existing response view;
+  - preserved status view mapping, queue position, prompt payload, preview asset key, failure reason, confirmation timestamp, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 230/230 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 57/57 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Template View Artifact Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page template view artifact field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_template_view_artifact_fields`;
+  - updated `to_static_page_template_view` to collect public URL, preview URL, dataset artifact key, and generated template reference through the helper before populating the existing response view;
+  - preserved unpublished draft `None` behavior, generated template reference id, selected scope/source refs, preview and dataset artifact fields, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 230/230 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Output View Link Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move static page render output view link and retryable reason collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_view_support.rs`;
+  - added `static_page_render_output_view_link_fields`;
+  - updated `to_static_page_render_output_view` to collect html download URL, html preview URL, and retryable error reason through the helper before populating the existing response view;
+  - preserved snake/camel download aliases, preview aliases, retryable error reason aliases, URL encoding, public response fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_view_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 230/230 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package single file entry field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_fields`;
+  - updated `build_static_page_queued_export_package_file` to collect path, role, and mime through the helper before building the existing file JSON;
+  - preserved path/role/mime tuple order, JSON payload fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 175/175 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 229/229 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Module Counts Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package module counts entry field extraction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_module_counts_fields`;
+  - updated `build_static_page_queued_export_package_module_counts` to delegate modules-to-optional-items extraction to the helper before counting;
+  - preserved module count, ECharts requested module count, invalid modules fallback, debug fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 174/174 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 228/228 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Spec Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file spec tuple construction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_spec_fields`;
+  - updated `build_static_page_queued_export_package_file_spec` to delegate tuple construction to the helper;
+  - preserved path/role/mime tuple order, file specs manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 173/173 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 227/227 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Lifecycle Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package lifecycle field collection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_lifecycle_fields`;
+  - updated `build_static_page_queued_export_package_lifecycle` to collect kind, version, and status through the helper before delegating to `build_static_page_queued_export_package_lifecycle_from_fields`;
+  - preserved kind/version/status fixed values, lifecycle tuple order, manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 172/172 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 226/226 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Debug Renderer Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug renderer delegation into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_debug_renderer_fields`;
+  - updated `build_static_page_queued_export_package_debug_renderer` to delegate renderer resolution to the helper;
+  - preserved renderer value via `build_static_page_render_queue_renderer()`, debug renderer field, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 171/171 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 225/225 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Draft ID Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package draft id delegation into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_draft_id_fields`;
+  - updated `build_static_page_queued_export_package_draft_id` to delegate draft id resolution to the helper;
+  - preserved draft id value via `build_static_page_render_queue_draft_id()`, manifest draft id field, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 170/170 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 224/224 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Status Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package status delegation into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_status_fields`;
+  - updated `build_static_page_queued_export_package_status` to delegate status resolution to the helper;
+  - preserved `queued` status via `build_static_page_render_queue_status()`, lifecycle tuple order, manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 169/169 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 223/223 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Version Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package version fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_version_fields`;
+  - updated `build_static_page_queued_export_package_version` to delegate fixed version value to the helper;
+  - preserved version `1`, lifecycle tuple order, manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 169/169 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 223/223 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Kind Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package kind fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_kind_fields`;
+  - updated `build_static_page_queued_export_package_kind` to delegate fixed kind value to the helper;
+  - preserved `static-page-export-package` value, lifecycle tuple order, manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 169/169 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 223/223 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Editable Module Plan Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package editable module plan role fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_editable_module_plan_role_fields`;
+  - updated `build_static_page_queued_export_package_editable_module_plan_role` to delegate fixed role value to the helper;
+  - preserved `editable_module_plan` value, file manifest role fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 166/166 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 220/220 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Dynamic Data Snapshot Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package dynamic data snapshot role fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_dynamic_data_snapshot_role_fields`;
+  - updated `build_static_page_queued_export_package_dynamic_data_snapshot_role` to delegate fixed role value to the helper;
+  - preserved `dynamic_data_snapshot` value, file manifest role fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 166/166 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 220/220 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Render Data Snapshot Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package render data snapshot role fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_render_data_snapshot_role_fields`;
+  - updated `build_static_page_queued_export_package_render_data_snapshot_role` to delegate fixed role value to the helper;
+  - preserved `render_data_snapshot` value, file manifest role fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 166/166 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 220/220 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Renderer Manifest Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package renderer manifest role fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_renderer_manifest_role_fields`;
+  - updated `build_static_page_queued_export_package_renderer_manifest_role` to delegate fixed role value to the helper;
+  - preserved `renderer_manifest` value, file manifest role fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 166/166 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 220/220 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Rendered Page Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package rendered page role fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_rendered_page_role_fields`;
+  - updated `build_static_page_queued_export_package_rendered_page_role` to delegate fixed role value to the helper;
+  - preserved `rendered_static_page` value, file manifest role fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 166/166 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 220/220 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Modules Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package modules path fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_modules_path_fields`;
+  - updated `build_static_page_queued_export_package_modules_path` to delegate fixed path value to the helper;
+  - preserved `modules.json` value, file manifest path fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 161/161 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 215/215 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Dynamic Data Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package dynamic data path fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_dynamic_data_path_fields`;
+  - updated `build_static_page_queued_export_package_dynamic_data_path` to delegate fixed path value to the helper;
+  - preserved `data.json` value, file manifest path fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 161/161 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 215/215 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Data Snapshot Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package data snapshot path fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_data_snapshot_path_fields`;
+  - updated `build_static_page_queued_export_package_data_snapshot_path` to delegate fixed path value to the helper;
+  - preserved `data-snapshot.json` value, file manifest path fields, and response behavior.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 161/161 tests;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 215/215 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Asset Manifest Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package asset manifest path fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_asset_manifest_path_fields`;
+  - updated `build_static_page_queued_export_package_asset_manifest_path` to delegate fixed path value to the helper;
+  - preserved `asset-manifest.json` value, file manifest path fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 158/158 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 212/212 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Index Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package index path fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_index_path_fields`;
+  - updated `build_static_page_queued_export_package_index_path` to delegate fixed path value to the helper;
+  - preserved `index.html` value, file manifest path fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 157/157 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 211/211 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package JSON MIME Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package JSON MIME fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_json_mime_fields`;
+  - updated `build_static_page_queued_export_package_json_mime` to delegate fixed MIME value to the helper;
+  - preserved `application/json` value, file manifest MIME fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 156/156 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 210/210 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package HTML MIME Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package HTML MIME fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_html_mime_fields`;
+  - updated `build_static_page_queued_export_package_html_mime` to delegate fixed MIME value to the helper;
+  - preserved `text/html` value, file manifest MIME fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 155/155 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 209/209 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Spec Mime Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file spec mime tuple access into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_spec_mime_fields`;
+  - updated `build_static_page_queued_export_package_file_spec_mime` to delegate tuple mime access to the helper;
+  - preserved mime value, file spec tuple order, file manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 154/154 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 208/208 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Spec Role Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file spec role tuple access into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_spec_role_fields`;
+  - updated `build_static_page_queued_export_package_file_spec_role` to delegate tuple role access to the helper;
+  - preserved role value, file spec tuple order, file manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 153/153 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 207/207 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Spec Path Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file spec path tuple access into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_spec_path_fields`;
+  - updated `build_static_page_queued_export_package_file_spec_path` to delegate tuple path access to the helper;
+  - preserved path value, file spec tuple order, file manifest fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 152/152 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 206/206 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Payload Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package single file entry JSON payload construction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_payload_fields`;
+  - updated `build_static_page_queued_export_package_file_from_fields` to delegate path/role/mime JSON payload construction to the helper;
+  - preserved path/role/mime field names and values, file entry shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 151/151 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 205/205 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package File Entries From Specs Fields Entries Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file specs to file entries mapping into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_file_entries_from_specs_fields_entries`;
+  - updated `build_static_page_queued_export_package_file_entries_from_specs_fields` to delegate specs-to-entries mapping to the helper;
+  - preserved file entry order, path/role/mime fields, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 150/150 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 204/204 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Files From Entries Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package file entries passthrough into a dedicated helper before `Value::Array` wrapping.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_files_from_entries_fields`;
+  - updated `build_static_page_queued_export_package_files_from_entries` to delegate entries passthrough to the helper before wrapping;
+  - preserved file entry order, path/role/mime fields, array wrapping, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 149/149 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 203/203 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Unknown Data Snapshot Source Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug unknown data snapshot source fixed value into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_unknown_data_snapshot_source_fields`;
+  - updated `build_static_page_queued_export_package_unknown_data_snapshot_source` to delegate the fixed fallback value to the helper;
+  - preserved unknown fallback string, downstream debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 148/148 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 202/202 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Data Snapshot Source From Optional Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug optional data snapshot source fallback selection into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_data_snapshot_source_from_optional_fields`;
+  - updated `build_static_page_queued_export_package_data_snapshot_source_from_optional` to delegate optional source fallback selection to the helper;
+  - preserved Some source passthrough, None unknown fallback, downstream debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 147/147 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 201/201 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Data Snapshot Source Value Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug data snapshot source field read and `as_str` conversion into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_data_snapshot_source_value_fields`;
+  - updated `build_static_page_queued_export_package_data_snapshot_source_value` to delegate the field read and string conversion to the helper;
+  - preserved string source extraction, missing/non-string None handling, unknown fallback, downstream debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 146/146 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 200/200 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Data Snapshot Source Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug data snapshot source optional string extraction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_data_snapshot_source_fields`;
+  - updated `build_static_page_queued_export_package_data_snapshot_source` to delegate optional string extraction to the helper before fallback handling;
+  - preserved string source extraction, missing/non-string None fallback, unknown fallback value, downstream debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 145/145 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 199/199 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Debug Payload Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug JSON object construction into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_debug_payload_fields`;
+  - updated `build_static_page_queued_export_package_debug_from_fields` to delegate final JSON object construction to the helper;
+  - preserved renderer, module_count, echarts_requested_modules, data_snapshot_source field names and values, debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 144/144 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 198/198 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Debug Fields From-Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package debug field tuple passthrough into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_debug_fields_from_fields`;
+  - updated `build_static_page_queued_export_package_debug_fields` to delegate renderer/count/source tuple passthrough to the helper;
+  - preserved renderer name, module count, ECharts requested module count, data snapshot source/fallback, downstream debug object shape, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 143/143 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 197/197 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package ECharts Module Predicate Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package single-module ECharts runtime predicate into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_module_requests_echarts_fields`;
+  - updated `build_static_page_queued_export_package_module_requests_echarts` to delegate runtime predicate evaluation to the helper;
+  - preserved `static_page_module_chart_runtime` matching, visualization/chartOptions ECharts runtime support, non-ECharts filtering, downstream requested module counts, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 142/142 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 196/196 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package ECharts Requested Module Count Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package ECharts requested module count filtering into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_echarts_requested_module_count_fields`;
+  - updated `build_static_page_queued_export_package_echarts_requested_module_count` to delegate filtering/counting to the helper;
+  - preserved visualization/chartOptions ECharts runtime matching, non-ECharts filtering, empty array zero count, downstream debug counts, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 141/141 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 195/195 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Queued Export Package Module Count Fields Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move queued export package module count array length calculation into a dedicated helper.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `build_static_page_queued_export_package_module_count_fields`;
+  - updated `build_static_page_queued_export_package_module_count` to delegate array length calculation to the helper;
+  - preserved normal array length, empty array zero count, downstream module count/ECharts requested count behavior, and response behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 140/140 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 194/194 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static Page Render Queue Manifest Support Local Recovery Verification
+
+- Purpose:
+  - restore readable local validation evidence after `docs/plans/datamax-active-execution-plan.md` and this ledger were found to contain NUL bytes;
+  - keep the active plan and validation ledger aligned with the current working-tree code state;
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts.
+- Recovery action:
+  - restored `docs/plans/datamax-active-execution-plan.md` from `HEAD`;
+  - restored `docs/validation/datamax-main-gap-closure.md` from `HEAD`;
+  - added a consolidated local recovery record for completed helper slices through `#502`;
+  - advanced the active plan next pointer to `#503`.
+- Code state:
+  - current `crates/platform-api/src/static_page_render_queue_manifest_support.rs` includes helper extraction through `build_static_page_queued_export_package_empty_module_counts_fields`;
+  - latest local slice moved queued export package non-array module count fallback field preparation into `build_static_page_queued_export_package_empty_module_counts_fields`;
+  - module count `0`, ECharts requested count `0`, non-array fallback, downstream debug counts, and response behavior remain unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 139/139 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 193/193 tests;
+  - `cargo test -q -p platform-api static_page_image --lib`: passed, 56/56 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed;
+  - target diff secret scan: `NO_SECRET_MATCH_TARGET_DIFF`.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-20 P5 Static Page Render Queue Identity Field Helper Local Verification
 
 - Purpose:
