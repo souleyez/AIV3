@@ -47,6 +47,8 @@ type StaticPageRenderQueueLifecycleFields = (
     StaticPageRenderQueueLifecycleScalar,
 );
 type StaticPageRenderQueueManifestValue = Value;
+type StaticPageRenderQueuePayloadValue = Value;
+type StaticPageRenderQueueSelectedScopeValue = Value;
 type StaticPageRenderQueueImageContextFields = (Option<StaticPageImageJobId>, Option<String>);
 type StaticPageRenderQueueIdentityFields = (StaticPageDraftId, AssistantRunId);
 type StaticPageRenderQueueWorkflowManifestValue = Value;
@@ -76,6 +78,10 @@ type StaticPageRenderQueueDataSnapshotValue = Value;
 type StaticPageRenderQueueDataSnapshotOption = Option<StaticPageRenderQueueDataSnapshotValue>;
 type StaticPageRenderQueueExportPackageValue = Value;
 type StaticPageQueuedExportPackageModuleValue = Value;
+type StaticPageQueuedExportPackageModuleItems<'a> =
+    &'a [StaticPageQueuedExportPackageModuleValue];
+type StaticPageQueuedExportPackageModuleItemsOption<'a> =
+    Option<StaticPageQueuedExportPackageModuleItems<'a>>;
 type StaticPageQueuedExportPackageFilesValue = Value;
 type StaticPageQueuedExportPackageDynamicPageContractValue = Value;
 type StaticPageQueuedExportPackageDebugValue = Value;
@@ -270,13 +276,13 @@ pub(crate) fn build_static_page_render_queue_manifest_payload_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_specs(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueSpecsFields {
     build_static_page_render_queue_specs_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_specs_from_payload(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueSpecsFields {
     let (visual_spec, render_spec) =
         build_static_page_render_queue_specs_from_payload_fields(payload);
@@ -284,7 +290,7 @@ pub(crate) fn build_static_page_render_queue_specs_from_payload(
 }
 
 pub(crate) fn build_static_page_render_queue_specs_from_payload_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueSpecsFields {
     let visual_spec = build_static_page_render_queue_visual_spec(payload);
     let render_spec = build_static_page_render_queue_render_spec(payload);
@@ -314,7 +320,7 @@ pub(crate) fn build_static_page_render_queue_data_context_fields(
 
 pub(crate) fn build_static_page_render_queue_data_context_fields_from_payload(
     draft: &StaticPageDraft,
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueDataContextFields {
     let data_snapshot =
         build_static_page_render_queue_data_snapshot(payload, &draft.selected_scope);
@@ -325,7 +331,7 @@ pub(crate) fn build_static_page_render_queue_data_context_fields_from_payload(
 
 pub(crate) fn build_static_page_render_queue_data_context_export_package(
     draft: &StaticPageDraft,
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
     data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageRenderQueueExportPackageValue {
     let modules = build_static_page_render_queue_data_context_export_package_fields(payload);
@@ -337,7 +343,7 @@ pub(crate) fn build_static_page_render_queue_data_context_export_package(
 }
 
 pub(crate) fn build_static_page_render_queue_data_context_export_package_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules(payload)
 }
@@ -601,7 +607,7 @@ pub(crate) fn build_static_page_render_queue_workflow_status(
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueVisualSpecValue {
     build_static_page_render_queue_visual_spec_from_optional(
         build_static_page_render_queue_visual_spec_fields(payload),
@@ -609,7 +615,7 @@ pub(crate) fn build_static_page_render_queue_visual_spec(
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueVisualSpecOption {
     build_static_page_render_queue_visual_spec_from_payload(payload)
 }
@@ -627,13 +633,13 @@ pub(crate) fn build_static_page_render_queue_visual_spec_from_optional_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_payload(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueVisualSpecOption {
     build_static_page_render_queue_visual_spec_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_payload_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueVisualSpecOption {
     static_page_payload_value(
         payload,
@@ -665,7 +671,7 @@ pub(crate) fn build_static_page_render_queue_visual_fallback_spec_from_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueRenderSpecValue {
     build_static_page_render_queue_render_spec_from_optional(
         build_static_page_render_queue_render_spec_fields(payload),
@@ -673,7 +679,7 @@ pub(crate) fn build_static_page_render_queue_render_spec(
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueRenderSpecOption {
     build_static_page_render_queue_render_spec_from_payload(payload)
 }
@@ -691,13 +697,13 @@ pub(crate) fn build_static_page_render_queue_render_spec_from_optional_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_payload(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueRenderSpecOption {
     build_static_page_render_queue_render_spec_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_payload_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueRenderSpecOption {
     static_page_payload_value(
         payload,
@@ -721,8 +727,8 @@ pub(crate) fn build_static_page_render_queue_render_fallback_spec_from_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot(
-    payload: &Value,
-    selected_scope: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
+    selected_scope: &StaticPageRenderQueueSelectedScopeValue,
 ) -> StaticPageRenderQueueDataSnapshotValue {
     build_static_page_render_queue_data_snapshot_from_optional(
         build_static_page_render_queue_data_snapshot_fields(payload),
@@ -732,15 +738,15 @@ pub(crate) fn build_static_page_render_queue_data_snapshot(
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueDataSnapshotOption {
     build_static_page_render_queue_data_snapshot_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional(
     data_snapshot: StaticPageRenderQueueDataSnapshotOption,
-    payload: &Value,
-    selected_scope: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
+    selected_scope: &StaticPageRenderQueueSelectedScopeValue,
 ) -> StaticPageRenderQueueDataSnapshotValue {
     build_static_page_render_queue_data_snapshot_from_optional_fields(
         data_snapshot,
@@ -751,8 +757,8 @@ pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional(
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional_fields(
     data_snapshot: StaticPageRenderQueueDataSnapshotOption,
-    payload: &Value,
-    selected_scope: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
+    selected_scope: &StaticPageRenderQueueSelectedScopeValue,
 ) -> StaticPageRenderQueueDataSnapshotValue {
     data_snapshot.unwrap_or_else(|| {
         build_static_page_render_queue_fallback_data_snapshot(payload, selected_scope)
@@ -760,13 +766,13 @@ pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional_fields(
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_payload(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueDataSnapshotOption {
     build_static_page_render_queue_data_snapshot_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_payload_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueDataSnapshotOption {
     static_page_payload_value(
         payload,
@@ -780,21 +786,21 @@ pub(crate) fn build_static_page_render_queue_data_snapshot_aliases(
 }
 
 pub(crate) fn build_static_page_render_queue_fallback_data_snapshot(
-    payload: &Value,
-    selected_scope: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
+    selected_scope: &StaticPageRenderQueueSelectedScopeValue,
 ) -> StaticPageRenderQueueDataSnapshotValue {
     build_static_page_render_queue_fallback_data_snapshot_from_fields(payload, selected_scope)
 }
 
 pub(crate) fn build_static_page_render_queue_fallback_data_snapshot_from_fields(
-    payload: &Value,
-    selected_scope: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
+    selected_scope: &StaticPageRenderQueueSelectedScopeValue,
 ) -> StaticPageRenderQueueDataSnapshotValue {
     build_static_page_data_snapshot(payload, selected_scope)
 }
 
 pub(crate) fn build_static_page_render_queue_modules(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_value(
         build_static_page_render_queue_modules_fields(payload),
@@ -802,19 +808,19 @@ pub(crate) fn build_static_page_render_queue_modules(
 }
 
 pub(crate) fn build_static_page_render_queue_modules_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_modules_from_payload(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_modules_from_payload_fields(
-    payload: &Value,
+    payload: &StaticPageRenderQueuePayloadValue,
 ) -> StaticPageRenderQueueModulesValue {
     static_page_payload_modules(payload)
 }
@@ -1166,26 +1172,26 @@ pub(crate) fn build_static_page_queued_export_package_module_counts(
     )
 }
 
-pub(crate) fn build_static_page_queued_export_package_module_counts_fields(
-    modules: &StaticPageRenderQueueModulesValue,
-) -> Option<&[Value]> {
+pub(crate) fn build_static_page_queued_export_package_module_counts_fields<'a>(
+    modules: &'a StaticPageRenderQueueModulesValue,
+) -> StaticPageQueuedExportPackageModuleItemsOption<'a> {
     build_static_page_queued_export_package_module_items(modules)
 }
 
-pub(crate) fn build_static_page_queued_export_package_module_items(
-    modules: &StaticPageRenderQueueModulesValue,
-) -> Option<&[Value]> {
+pub(crate) fn build_static_page_queued_export_package_module_items<'a>(
+    modules: &'a StaticPageRenderQueueModulesValue,
+) -> StaticPageQueuedExportPackageModuleItemsOption<'a> {
     build_static_page_queued_export_package_module_items_fields(modules)
 }
 
-pub(crate) fn build_static_page_queued_export_package_module_items_fields(
-    modules: &StaticPageRenderQueueModulesValue,
-) -> Option<&[Value]> {
+pub(crate) fn build_static_page_queued_export_package_module_items_fields<'a>(
+    modules: &'a StaticPageRenderQueueModulesValue,
+) -> StaticPageQueuedExportPackageModuleItemsOption<'a> {
     modules.as_array().map(Vec::as_slice)
 }
 
-pub(crate) fn build_static_page_queued_export_package_module_counts_from_optional_items(
-    items: Option<&[Value]>,
+pub(crate) fn build_static_page_queued_export_package_module_counts_from_optional_items<'a>(
+    items: StaticPageQueuedExportPackageModuleItemsOption<'a>,
 ) -> StaticPageQueuedExportPackageModuleCounts {
     let items =
         build_static_page_queued_export_package_module_counts_from_optional_items_fields(items);
@@ -1195,14 +1201,16 @@ pub(crate) fn build_static_page_queued_export_package_module_counts_from_optiona
     build_static_page_queued_export_package_module_counts_from_items(items)
 }
 
-pub(crate) fn build_static_page_queued_export_package_module_counts_from_optional_items_fields(
-    items: Option<&[Value]>,
-) -> Option<&[Value]> {
+pub(crate) fn build_static_page_queued_export_package_module_counts_from_optional_items_fields<
+    'a,
+>(
+    items: StaticPageQueuedExportPackageModuleItemsOption<'a>,
+) -> StaticPageQueuedExportPackageModuleItemsOption<'a> {
     items
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_counts_from_items(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCounts {
     let (module_count, echarts_requested_modules) =
         build_static_page_queued_export_package_module_counts_from_items_fields(items);
@@ -1213,7 +1221,7 @@ pub(crate) fn build_static_page_queued_export_package_module_counts_from_items(
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_counts_from_items_fields(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCounts {
     let module_count = build_static_page_queued_export_package_module_count(items);
     let echarts_requested_modules =
@@ -1244,25 +1252,25 @@ pub(crate) fn build_static_page_queued_export_package_module_counts_from_fields(
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_count(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCount {
     build_static_page_queued_export_package_module_count_fields(items)
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_count_fields(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCount {
     items.len()
 }
 
 pub(crate) fn build_static_page_queued_export_package_echarts_requested_module_count(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCount {
     build_static_page_queued_export_package_echarts_requested_module_count_fields(items)
 }
 
 pub(crate) fn build_static_page_queued_export_package_echarts_requested_module_count_fields(
-    items: &[Value],
+    items: StaticPageQueuedExportPackageModuleItems<'_>,
 ) -> StaticPageQueuedExportPackageModuleCount {
     items
         .iter()
@@ -1747,7 +1755,7 @@ mod tests {
         StaticPageImageJobStatus, TenantId, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
     };
 
-    fn draft_with_payload(payload: Value) -> StaticPageDraft {
+    fn draft_with_payload(payload: StaticPageRenderQueuePayloadValue) -> StaticPageDraft {
         StaticPageDraft {
             id: StaticPageDraftId::new(),
             tenant_id: TenantId::new(),
@@ -2075,11 +2083,11 @@ mod tests {
 
     #[test]
     fn render_queue_specs_preserve_visual_and_render_specs() {
-        let explicit_payload = json!({
+        let explicit_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"theme": "dark"},
             "renderSpec": {"runtime": "safe-echarts"}
         });
-        let fallback_payload = json!({});
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let fields: StaticPageRenderQueueSpecsFields =
             build_static_page_render_queue_specs(&explicit_payload);
@@ -2104,11 +2112,11 @@ mod tests {
 
     #[test]
     fn render_queue_specs_from_payload_fields_preserve_visual_and_render_specs() {
-        let explicit_payload = json!({
+        let explicit_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"theme": "dark"},
             "renderSpec": {"runtime": "safe-echarts"}
         });
-        let fallback_payload = json!({});
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let fields: StaticPageRenderQueueSpecsFields =
             build_static_page_render_queue_specs_from_payload_fields(&explicit_payload);
@@ -2239,7 +2247,7 @@ mod tests {
     #[test]
     fn render_queue_data_context_fields_from_payload_preserve_snapshot_and_export_package() {
         let draft = draft_with_payload(json!({}));
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "dataSnapshot": {"source": "provided"},
             "modules": [
                 {
@@ -2273,7 +2281,7 @@ mod tests {
     #[test]
     fn render_queue_data_context_export_package_preserves_modules_and_debug_counts() {
         let draft = draft_with_payload(json!({}));
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {
                     "id": "trend",
@@ -2307,18 +2315,19 @@ mod tests {
 
     #[test]
     fn render_queue_data_context_export_package_fields_preserve_modules_and_fallback() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {"id": "trend"},
                 {"id": "summary"}
             ]
         });
+        let invalid_payload: StaticPageRenderQueuePayloadValue = json!({
+            "modules": "invalid"
+        });
 
         let modules = build_static_page_render_queue_data_context_export_package_fields(&payload);
         let fallback_modules =
-            build_static_page_render_queue_data_context_export_package_fields(&json!({
-                "modules": "invalid"
-            }));
+            build_static_page_render_queue_data_context_export_package_fields(&invalid_payload);
 
         assert_eq!(modules.as_array().map(Vec::len), Some(2));
         assert_eq!(modules[0]["id"], json!("trend"));
@@ -2844,11 +2853,11 @@ mod tests {
 
     #[test]
     fn render_queue_spec_helpers_preserve_explicit_and_fallback_specs() {
-        let explicit_payload = json!({
+        let explicit_payload: StaticPageRenderQueuePayloadValue = json!({
             "visual_spec": {"styleDirection": "custom-report"},
             "render_spec": {"renderer": "custom-renderer"}
         });
-        let fallback_payload = json!({});
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         assert_eq!(
             build_static_page_render_queue_visual_spec(&explicit_payload),
@@ -2876,18 +2885,19 @@ mod tests {
 
     #[test]
     fn render_queue_visual_spec_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"styleDirection": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_fields(&camel_payload);
         let snake_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_fields(&snake_payload);
         let missing_visual: StaticPageRenderQueueVisualSpecOption =
-            build_static_page_render_queue_visual_spec_fields(&json!({}));
+            build_static_page_render_queue_visual_spec_fields(&missing_payload);
 
         assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
         assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
@@ -2896,18 +2906,19 @@ mod tests {
 
     #[test]
     fn render_queue_render_spec_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "renderSpec": {"renderer": "camel-renderer"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_fields(&camel_payload);
         let snake_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_fields(&snake_payload);
         let missing_render: StaticPageRenderQueueRenderSpecOption =
-            build_static_page_render_queue_render_spec_fields(&json!({}));
+            build_static_page_render_queue_render_spec_fields(&missing_payload);
 
         assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
         assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
@@ -2916,11 +2927,11 @@ mod tests {
 
     #[test]
     fn render_queue_specs_from_payload_preserve_explicit_and_fallback_specs() {
-        let explicit_payload = json!({
+        let explicit_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"styleDirection": "custom-report"},
             "renderSpec": {"renderer": "custom-renderer"}
         });
-        let fallback_payload = json!({});
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let (explicit_visual, explicit_render): (
             StaticPageRenderQueueVisualSpecValue,
@@ -2950,18 +2961,19 @@ mod tests {
 
     #[test]
     fn render_queue_visual_spec_from_payload_preserves_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"styleDirection": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_from_payload(&camel_payload);
         let snake_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_from_payload(&snake_payload);
         let missing_visual: StaticPageRenderQueueVisualSpecOption =
-            build_static_page_render_queue_visual_spec_from_payload(&json!({}));
+            build_static_page_render_queue_visual_spec_from_payload(&missing_payload);
 
         assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
         assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
@@ -2970,18 +2982,19 @@ mod tests {
 
     #[test]
     fn render_queue_visual_spec_from_payload_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "visualSpec": {"styleDirection": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_from_payload_fields(&camel_payload);
         let snake_visual: StaticPageRenderQueueVisualSpecOption =
             build_static_page_render_queue_visual_spec_from_payload_fields(&snake_payload);
         let missing_visual: StaticPageRenderQueueVisualSpecOption =
-            build_static_page_render_queue_visual_spec_from_payload_fields(&json!({}));
+            build_static_page_render_queue_visual_spec_from_payload_fields(&missing_payload);
 
         assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
         assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
@@ -3054,18 +3067,19 @@ mod tests {
 
     #[test]
     fn render_queue_render_spec_from_payload_preserves_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "renderSpec": {"renderer": "camel-renderer"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_from_payload(&camel_payload);
         let snake_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_from_payload(&snake_payload);
         let missing_render: StaticPageRenderQueueRenderSpecOption =
-            build_static_page_render_queue_render_spec_from_payload(&json!({}));
+            build_static_page_render_queue_render_spec_from_payload(&missing_payload);
 
         assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
         assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
@@ -3074,18 +3088,19 @@ mod tests {
 
     #[test]
     fn render_queue_render_spec_from_payload_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "renderSpec": {"renderer": "camel-renderer"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_from_payload_fields(&camel_payload);
         let snake_render: StaticPageRenderQueueRenderSpecOption =
             build_static_page_render_queue_render_spec_from_payload_fields(&snake_payload);
         let missing_render: StaticPageRenderQueueRenderSpecOption =
-            build_static_page_render_queue_render_spec_from_payload_fields(&json!({}));
+            build_static_page_render_queue_render_spec_from_payload_fields(&missing_payload);
 
         assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
         assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
@@ -3168,13 +3183,14 @@ mod tests {
 
     #[test]
     fn render_queue_data_snapshot_helper_preserves_explicit_and_fallback_snapshot() {
-        let explicit_payload = json!({
+        let explicit_payload: StaticPageRenderQueuePayloadValue = json!({
             "data_snapshot": {"source": "provided", "snapshotVersion": 7}
         });
-        let fallback_payload = json!({
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [{"id": "summary"}]
         });
-        let selected_scope = json!({"datasets": ["dataset-a"]});
+        let selected_scope: StaticPageRenderQueueSelectedScopeValue =
+            json!({"datasets": ["dataset-a"]});
 
         assert_eq!(
             build_static_page_render_queue_data_snapshot(&explicit_payload, &selected_scope),
@@ -3200,18 +3216,19 @@ mod tests {
 
     #[test]
     fn render_queue_data_snapshot_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "dataSnapshot": {"source": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_fields(&camel_payload);
         let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_fields(&snake_payload);
         let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
-            build_static_page_render_queue_data_snapshot_fields(&json!({}));
+            build_static_page_render_queue_data_snapshot_fields(&missing_payload);
 
         assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
         assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
@@ -3228,18 +3245,19 @@ mod tests {
 
     #[test]
     fn render_queue_data_snapshot_from_payload_preserves_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "dataSnapshot": {"source": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_from_payload(&camel_payload);
         let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_from_payload(&snake_payload);
         let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
-            build_static_page_render_queue_data_snapshot_from_payload(&json!({}));
+            build_static_page_render_queue_data_snapshot_from_payload(&missing_payload);
 
         assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
         assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
@@ -3248,18 +3266,19 @@ mod tests {
 
     #[test]
     fn render_queue_data_snapshot_from_payload_fields_preserve_alias_lookup_and_missing() {
-        let camel_payload = json!({
+        let camel_payload: StaticPageRenderQueuePayloadValue = json!({
             "dataSnapshot": {"source": "camel"}
         });
-        let snake_payload = json!({
+        let snake_payload: StaticPageRenderQueuePayloadValue = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
         let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_from_payload_fields(&camel_payload);
         let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
             build_static_page_render_queue_data_snapshot_from_payload_fields(&snake_payload);
         let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
-            build_static_page_render_queue_data_snapshot_from_payload_fields(&json!({}));
+            build_static_page_render_queue_data_snapshot_from_payload_fields(&missing_payload);
 
         assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
         assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
@@ -3272,10 +3291,11 @@ mod tests {
             json!({"source": "provided"});
         let explicit_option: StaticPageRenderQueueDataSnapshotOption =
             Some(explicit_snapshot.clone());
-        let fallback_payload = json!({
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [{"id": "summary"}]
         });
-        let selected_scope = json!({"datasets": ["dataset-a"]});
+        let selected_scope: StaticPageRenderQueueSelectedScopeValue =
+            json!({"datasets": ["dataset-a"]});
 
         assert_eq!(
             build_static_page_render_queue_data_snapshot_from_optional(
@@ -3312,10 +3332,11 @@ mod tests {
             json!({"source": "provided"});
         let explicit_option: StaticPageRenderQueueDataSnapshotOption =
             Some(explicit_snapshot.clone());
-        let fallback_payload = json!({
+        let fallback_payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [{"id": "summary"}]
         });
-        let selected_scope = json!({"datasets": ["dataset-a"]});
+        let selected_scope: StaticPageRenderQueueSelectedScopeValue =
+            json!({"datasets": ["dataset-a"]});
 
         assert_eq!(
             build_static_page_render_queue_data_snapshot_from_optional_fields(
@@ -3348,10 +3369,11 @@ mod tests {
 
     #[test]
     fn render_queue_fallback_data_snapshot_preserves_static_page_snapshot() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [{"id": "summary"}]
         });
-        let selected_scope = json!({"datasets": ["dataset-a"]});
+        let selected_scope: StaticPageRenderQueueSelectedScopeValue =
+            json!({"datasets": ["dataset-a"]});
 
         let fallback_snapshot =
             build_static_page_render_queue_fallback_data_snapshot(&payload, &selected_scope);
@@ -3372,10 +3394,11 @@ mod tests {
 
     #[test]
     fn render_queue_fallback_data_snapshot_from_fields_preserves_static_page_snapshot() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [{"id": "summary"}]
         });
-        let selected_scope = json!({"datasets": ["dataset-a"]});
+        let selected_scope: StaticPageRenderQueueSelectedScopeValue =
+            json!({"datasets": ["dataset-a"]});
 
         let fallback_snapshot = build_static_page_render_queue_fallback_data_snapshot_from_fields(
             &payload,
@@ -3398,12 +3421,14 @@ mod tests {
 
     #[test]
     fn render_queue_modules_preserve_array_and_empty_fallback() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {"id": "summary"},
                 {"id": "trend"}
             ]
         });
+        let invalid_payload: StaticPageRenderQueuePayloadValue = json!({"modules": "invalid"});
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let modules: StaticPageRenderQueueModulesValue =
             build_static_page_render_queue_modules(&payload);
@@ -3416,23 +3441,25 @@ mod tests {
             ])
         );
         assert_eq!(
-            build_static_page_render_queue_modules(&json!({"modules": "invalid"})),
+            build_static_page_render_queue_modules(&invalid_payload),
             json!([])
         );
         assert_eq!(
-            build_static_page_render_queue_modules(&json!({})),
+            build_static_page_render_queue_modules(&missing_payload),
             json!([])
         );
     }
 
     #[test]
     fn render_queue_modules_fields_preserve_array_and_empty_fallback() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {"id": "summary"},
                 {"id": "trend"}
             ]
         });
+        let invalid_payload: StaticPageRenderQueuePayloadValue = json!({"modules": "invalid"});
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let modules: StaticPageRenderQueueModulesValue =
             build_static_page_render_queue_modules_fields(&payload);
@@ -3445,23 +3472,25 @@ mod tests {
             ])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_fields(&json!({"modules": "invalid"})),
+            build_static_page_render_queue_modules_fields(&invalid_payload),
             json!([])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_fields(&json!({})),
+            build_static_page_render_queue_modules_fields(&missing_payload),
             json!([])
         );
     }
 
     #[test]
     fn render_queue_modules_from_payload_preserves_array_and_empty_fallback() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {"id": "summary"},
                 {"id": "trend"}
             ]
         });
+        let invalid_payload: StaticPageRenderQueuePayloadValue = json!({"modules": "invalid"});
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let modules: StaticPageRenderQueueModulesValue =
             build_static_page_render_queue_modules_from_payload(&payload);
@@ -3474,23 +3503,25 @@ mod tests {
             ])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload(&json!({"modules": "invalid"})),
+            build_static_page_render_queue_modules_from_payload(&invalid_payload),
             json!([])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload(&json!({})),
+            build_static_page_render_queue_modules_from_payload(&missing_payload),
             json!([])
         );
     }
 
     #[test]
     fn render_queue_modules_from_payload_fields_preserve_array_and_empty_fallback() {
-        let payload = json!({
+        let payload: StaticPageRenderQueuePayloadValue = json!({
             "modules": [
                 {"id": "summary"},
                 {"id": "trend"}
             ]
         });
+        let invalid_payload: StaticPageRenderQueuePayloadValue = json!({"modules": "invalid"});
+        let missing_payload: StaticPageRenderQueuePayloadValue = json!({});
 
         let modules: StaticPageRenderQueueModulesValue =
             build_static_page_render_queue_modules_from_payload_fields(&payload);
@@ -3503,13 +3534,11 @@ mod tests {
             ])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload_fields(
-                &json!({"modules": "invalid"})
-            ),
+            build_static_page_render_queue_modules_from_payload_fields(&invalid_payload),
             json!([])
         );
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload_fields(&json!({})),
+            build_static_page_render_queue_modules_from_payload_fields(&missing_payload),
             json!([])
         );
     }
@@ -3719,7 +3748,7 @@ mod tests {
                 "id": "summary"
             }
         ]);
-        let items = modules
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules
             .as_array()
             .map(Vec::as_slice)
             .expect("module array should resolve to items");
@@ -3740,7 +3769,7 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_counts_from_items_fields_preserve_counts() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -3760,9 +3789,11 @@ mod tests {
                 }
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         let counts: StaticPageQueuedExportPackageModuleCounts =
-            build_static_page_queued_export_package_module_counts_from_items_fields(&modules);
+            build_static_page_queued_export_package_module_counts_from_items_fields(items);
         let (module_count, echarts_requested_modules): (
             StaticPageQueuedExportPackageModuleCount,
             StaticPageQueuedExportPackageModuleCount,
@@ -3770,13 +3801,13 @@ mod tests {
         assert_eq!(module_count, 3);
         assert_eq!(echarts_requested_modules, 2);
         let empty_counts: StaticPageQueuedExportPackageModuleCounts =
-            build_static_page_queued_export_package_module_counts_from_items_fields(&[]);
+            build_static_page_queued_export_package_module_counts_from_items_fields(empty_items);
         assert_eq!(empty_counts, (0, 0));
     }
 
     #[test]
     fn queued_export_package_module_count_helpers_preserve_scalar_values() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -3787,11 +3818,12 @@ mod tests {
                 "id": "summary"
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
 
         let module_count: StaticPageQueuedExportPackageModuleCount =
-            build_static_page_queued_export_package_module_count(&modules);
+            build_static_page_queued_export_package_module_count(items);
         let echarts_count: StaticPageQueuedExportPackageModuleCount =
-            build_static_page_queued_export_package_echarts_requested_module_count(&modules);
+            build_static_page_queued_export_package_echarts_requested_module_count(items);
 
         assert_eq!(module_count, 2);
         assert_eq!(echarts_count, 1);
@@ -5190,7 +5222,7 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_counts_from_optional_items_preserve_counts_and_fallback() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -5204,11 +5236,13 @@ mod tests {
                 }
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let optional_items: StaticPageQueuedExportPackageModuleItemsOption<'_> = Some(items);
 
         let counts: StaticPageQueuedExportPackageModuleCounts =
-            build_static_page_queued_export_package_module_counts_from_optional_items(Some(
-                modules.as_slice(),
-            ));
+            build_static_page_queued_export_package_module_counts_from_optional_items(
+                optional_items,
+            );
         assert_eq!(counts, (2, 1));
         let fallback_counts: StaticPageQueuedExportPackageModuleCounts =
             build_static_page_queued_export_package_module_counts_from_optional_items(None);
@@ -5224,7 +5258,7 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_counts_from_items_preserve_counts() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -5244,12 +5278,14 @@ mod tests {
                 }
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         let counts: StaticPageQueuedExportPackageModuleCounts =
-            build_static_page_queued_export_package_module_counts_from_items(&modules);
+            build_static_page_queued_export_package_module_counts_from_items(items);
         assert_eq!(counts, (3, 2));
         let empty_counts: StaticPageQueuedExportPackageModuleCounts =
-            build_static_page_queued_export_package_module_counts_from_items(&[]);
+            build_static_page_queued_export_package_module_counts_from_items(empty_items);
         assert_eq!(empty_counts, (0, 0));
     }
 
@@ -5265,33 +5301,40 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_count_preserves_array_len() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({"id": "hero"}),
             json!({"id": "trend"}),
             json!({"id": "table"}),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         assert_eq!(
-            build_static_page_queued_export_package_module_count(&modules),
+            build_static_page_queued_export_package_module_count(items),
             3
         );
-        assert_eq!(build_static_page_queued_export_package_module_count(&[]), 0);
+        assert_eq!(
+            build_static_page_queued_export_package_module_count(empty_items),
+            0
+        );
     }
 
     #[test]
     fn queued_export_package_module_count_fields_preserve_array_len() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({"id": "hero"}),
             json!({"id": "trend"}),
             json!({"id": "table"}),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         assert_eq!(
-            build_static_page_queued_export_package_module_count_fields(&modules),
+            build_static_page_queued_export_package_module_count_fields(items),
             3
         );
         assert_eq!(
-            build_static_page_queued_export_package_module_count_fields(&[]),
+            build_static_page_queued_export_package_module_count_fields(empty_items),
             0
         );
     }
@@ -5364,7 +5407,7 @@ mod tests {
 
     #[test]
     fn queued_export_package_echarts_requested_module_count_preserves_runtime_matching() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -5384,20 +5427,22 @@ mod tests {
                 }
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         assert_eq!(
-            build_static_page_queued_export_package_echarts_requested_module_count(&modules),
+            build_static_page_queued_export_package_echarts_requested_module_count(items),
             2
         );
         assert_eq!(
-            build_static_page_queued_export_package_echarts_requested_module_count(&[]),
+            build_static_page_queued_export_package_echarts_requested_module_count(empty_items),
             0
         );
     }
 
     #[test]
     fn queued_export_package_echarts_requested_module_count_fields_preserve_runtime_matching() {
-        let modules = vec![
+        let modules: Vec<StaticPageQueuedExportPackageModuleValue> = vec![
             json!({
                 "id": "trend",
                 "visualization": {
@@ -5417,13 +5462,17 @@ mod tests {
                 }
             }),
         ];
+        let items: StaticPageQueuedExportPackageModuleItems<'_> = modules.as_slice();
+        let empty_items: StaticPageQueuedExportPackageModuleItems<'_> = &[];
 
         assert_eq!(
-            build_static_page_queued_export_package_echarts_requested_module_count_fields(&modules),
+            build_static_page_queued_export_package_echarts_requested_module_count_fields(items),
             2
         );
         assert_eq!(
-            build_static_page_queued_export_package_echarts_requested_module_count_fields(&[]),
+            build_static_page_queued_export_package_echarts_requested_module_count_fields(
+                empty_items
+            ),
             0
         );
     }
