@@ -2,6 +2,43 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-22 P5 Helper Support Release and 8-Server Deployment Verification
+
+- Scope:
+  - release P5 helper split slices #643-#647;
+  - keep public and third-party API contracts unchanged.
+- GitHub:
+  - committed and pushed `333e0916 Refactor platform API support helpers` to `origin/main`;
+  - staged files were limited to the platform helper modules, `lib.rs`, and the active plan/validation documents;
+  - staged secret scan returned `NO_SECRET_MATCH_STAGED`.
+- Local verification before release:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api markdown_table_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api json_value_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api media_field_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api hash_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_synthetic_response_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_gate --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api assistant_run_resume_profile --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api external_conversation_timeline --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_media_sample --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api external_action_dispatch_transport_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api external_channel_temporary_dataset_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- 8-server deployment:
+  - `/srv/aiv3/repo` was clean before deployment and fast-forwarded from `7bfca84d1` to `333e09165`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`: passed;
+  - restarted `aiv3-platform-api`, `aiv3-web`, `aiv3-assistant-run-worker`, `aiv3-chat-session-worker`, and `aiv3-static-page-worker`;
+  - all five services returned `active`;
+  - `http://127.0.0.1:3000/healthz` and `http://127.0.0.1:3000/readyz` returned platform-api ok/ready JSON;
+  - `https://v3.elepcloud.com/`, `/admin/login`, `/external-integrations/pure-third-party-integration-guide.zh-CN.html`, and `/external-integrations/third-party-integration-api.zh-CN.html` returned HTTP 200;
+  - 10-minute error log sample for the five services returned no entries.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production data mapping, source sync, object cleanup, P2 real backfill, static-page generation, prewarm enablement, or production data mutation was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-22 P5 Assistant-Run Synthetic Response Helper Local Verification
 
 - Purpose:
