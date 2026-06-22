@@ -142,15 +142,14 @@ use external_source_connectors::{
 use futures_util::{stream, Stream, StreamExt};
 use llm_gateway::{
     build_provider_from_env, build_provider_from_profile_env, model_gateway_profile_env_prefix,
-    render_runtime_manifest, resolve_runtime_selection_from_env, LlmFinishReason, LlmProviderError,
-    LlmProviderFailureKind, LlmRequest, LlmResponse, LlmRuntimeMetadata, LlmRuntimeMode,
-    LlmRuntimeSelection, LlmStreamDelta, ModelGatewayPoolConfig, ModelProviderProfile,
-    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
+    render_runtime_manifest, resolve_runtime_selection_from_env, LlmProviderError,
+    LlmProviderFailureKind, LlmRequest, LlmResponse, LlmRuntimeSelection, LlmStreamDelta,
+    ModelGatewayPoolConfig, ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT,
+    MODEL_LANE_ASSISTANT_REACT_JSON,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use sqlx::Row;
 use static_page_renderer::render_static_page;
 #[cfg(test)]
@@ -235,6 +234,7 @@ mod assistant_run_structured_fact_context_support;
 mod assistant_run_supply_dedupe_support;
 mod assistant_run_supply_quality_support;
 mod assistant_run_supply_recovery_support;
+mod assistant_run_synthetic_response_support;
 mod assistant_run_text_support;
 mod assistant_run_view_support;
 mod assistant_run_xinbai_report_link_support;
@@ -347,6 +347,7 @@ mod external_system_user;
 mod external_template_html_artifact_support;
 pub mod external_wecom;
 pub mod fact_index;
+mod hash_support;
 mod html_artifact_collection_support;
 mod html_artifact_download_support;
 mod html_artifact_event_support;
@@ -358,6 +359,8 @@ mod lifecycle_updates;
 mod llm_invocation_view_support;
 mod manifest_runtime_view_support;
 mod manifest_service_handoff_support;
+mod markdown_table_support;
+mod media_field_support;
 mod memory_directory_list_support;
 mod memory_directory_scope;
 mod memory_directory_view_support;
@@ -517,6 +520,7 @@ use assistant_run_structured_fact_context_support::*;
 use assistant_run_supply_dedupe_support::*;
 use assistant_run_supply_quality_support::*;
 use assistant_run_supply_recovery_support::*;
+use assistant_run_synthetic_response_support::*;
 pub(crate) use assistant_run_text_support::*;
 use assistant_run_view_support::*;
 use assistant_run_xinbai_report_link_support::*;
@@ -641,6 +645,7 @@ use external_observability::{
 pub(crate) use external_requested_skills_support::*;
 use external_system_user::*;
 use external_template_html_artifact_support::*;
+use hash_support::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
 use html_artifact_event_support::*;
@@ -653,6 +658,8 @@ use lifecycle_updates::*;
 #[cfg(test)]
 use llm_invocation_view_support::*;
 use manifest_service_handoff_support::*;
+use markdown_table_support::*;
+use media_field_support::*;
 use memory_directory_list_support::*;
 use memory_directory_view_support::*;
 use memory_directory_visibility_support::*;
@@ -2670,14 +2677,6 @@ async fn enforce_email_challenge_rate_limit(
     }
 
     Ok(())
-}
-
-pub(crate) fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    format!("{:x}", hasher.finalize())
 }
 
 async fn create_auth_session(
@@ -34407,52 +34406,6 @@ fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) 
     assistant_run_request_output_format(request).as_deref() == Some("json")
 }
 
-fn assistant_run_direct_answer_response(output_text: String) -> LlmResponse {
-    LlmResponse {
-        output_text,
-        runtime: LlmRuntimeMetadata {
-            mode: LlmRuntimeMode::Placeholder,
-            provider: "platform_direct_answer".to_string(),
-            model: "dataset-entity-scan-direct-v1".to_string(),
-            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
-            request_id: None,
-            finish_reason: Some(LlmFinishReason::Stop),
-            provider_failure: None,
-            latency_ms: Some(0),
-            usage: None,
-            system_prompt_key: None,
-            system_prompt_version: None,
-            tool_trace_count: 0,
-        },
-        tool_calls: Vec::new(),
-    }
-}
-
-fn assistant_run_answer_quality_synthetic_response(output_text: String) -> LlmResponse {
-    LlmResponse {
-        output_text,
-        runtime: LlmRuntimeMetadata {
-            mode: LlmRuntimeMode::Placeholder,
-            provider: "platform_answer_quality_gate".to_string(),
-            model: "synthetic-candidate-answer".to_string(),
-            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
-            request_id: None,
-            finish_reason: Some(LlmFinishReason::Stop),
-            provider_failure: None,
-            latency_ms: Some(0),
-            usage: None,
-            system_prompt_key: None,
-            system_prompt_version: None,
-            tool_trace_count: 0,
-        },
-        tool_calls: Vec::new(),
-    }
-}
-
-pub(crate) fn escape_markdown_table_cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', " ")
-}
-
 fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
     let item_type = item.get("type").and_then(Value::as_str).unwrap_or("item");
     let source = item
@@ -48642,21 +48595,6 @@ fn compact_parse_quality_candidate_report(value: &Value) -> Option<Value> {
     }
 }
 
-fn value_at_any_key<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
-    keys.iter().find_map(|key| value.get(*key))
-}
-
-fn copy_json_fields(source: &Value, target: &mut Map<String, Value>, keys: &[&str]) {
-    for key in keys {
-        if let Some(value) = value_at_any_key(source, &[*key])
-            .filter(|value| !value.is_null())
-            .cloned()
-        {
-            target.insert((*key).to_string(), value);
-        }
-    }
-}
-
 fn assistant_run_document_ingest_summary(document: &Document) -> Value {
     let Some(ingest) = document
         .metadata
@@ -57217,26 +57155,6 @@ fn media_provider_evidence_from_value(
     })
 }
 
-pub(crate) fn media_string_field(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
-    })
-}
-
-pub(crate) fn media_numeric_field(value: &Value, keys: &[&str]) -> Option<f64> {
-    keys.iter().find_map(|key| {
-        value.get(*key).and_then(|item| {
-            item.as_f64()
-                .or_else(|| item.as_str().and_then(|text| text.parse::<f64>().ok()))
-        })
-    })
-}
-
 struct RankedRetrievalEvidence<'a> {
     evidence: &'a RetrievalEvidence,
     score: f64,
@@ -60525,6 +60443,7 @@ mod tests {
         use aes::Aes256;
         use base64::{engine::general_purpose, Engine as _};
         use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+        use sha2::{Digest, Sha256};
 
         let key = Sha256::digest(encrypt_key.as_bytes());
         let iv = [0x24u8; 16];
@@ -76810,7 +76729,7 @@ mod tests {
                 model: "assistant-run-primary-v1".to_string(),
                 lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
                 request_id: None,
-                finish_reason: Some(LlmFinishReason::ContentFilter),
+                finish_reason: Some(llm_gateway::LlmFinishReason::ContentFilter),
                 provider_failure: None,
                 latency_ms: None,
                 usage: None,
