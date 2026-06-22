@@ -2,6 +2,99 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-22 P5 External Image Structured Extract Payload Normalize Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party image structured-extract payload normalization out of `lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/external_image_structured_extract_record_support.rs`;
+  - moved `normalize_external_image_structured_extract_payload` into the helper module;
+  - kept the helper available through the crate root for existing success and failure image-extract flows;
+  - preserved output type, status selection, extraction id, schema, normalized records, record count, visible row count, review flag, confidence, notes, failure reason, attachments, and source fields.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_record_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_normalizes_common_order_aliases --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, image model runtime, retry policy, output field name, status label, payment method label, production data mapping, or model behavior policy was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Image Structured Extract Normalized Record Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party image structured-extract normalized record construction out of `lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/external_image_structured_extract_record_support.rs`;
+  - moved `external_image_structured_extract_normalize_record` into the helper module;
+  - kept the helper available through the crate root for existing payload normalization;
+  - preserved row index handling, recharge amount raw/numeric fields, pay amount raw/numeric fields, payment method normalization, order number aliases, status normalization, created time aliases, and raw record retention.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_record_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_normalizes_common_order_aliases --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, image model runtime, retry policy, output field name, status label, payment method label, production data mapping, or model behavior policy was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Image Structured Extract Payload Quality Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party image structured-extract raw-record and quality helper logic out of `lib.rs`.
+- Code change:
+  - extended `crates/platform-api/src/external_image_structured_extract_record_support.rs`;
+  - moved raw record extraction, visible row count parsing, retry-needed detection, and payload quality scoring into the helper module;
+  - kept helpers available through the crate root for existing retry prompt, provider retry selection, payload normalization, and tests;
+  - preserved `records`/`orders`/`rows`/`items`/`data` array priority, object fallback, `visible_row_count`/`row_count`/`detected_row_count` aliases, missing-row retry behavior, missing required-field retry behavior, and per-field quality scoring.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_record_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_retry_detects_missing_visible_rows --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract_normalizes_common_order_aliases --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, image model runtime, retry policy, output field name, status label, payment method label, production data mapping, or model behavior policy was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 External Image Structured Extract Record Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move third-party image structured-extract record normalization helpers out of `lib.rs`.
+- Code change:
+  - added `crates/platform-api/src/external_image_structured_extract_record_support.rs`;
+  - moved record text lookup, record number lookup, amount string parsing, status normalization, and payment method normalization into the new module;
+  - kept helpers available through the crate root for existing image structured-extract payload normalization and retry-quality checks;
+  - preserved alias lookup order, string trimming, numeric-to-string behavior, amount cleanup, `success`/`processing`/`failed`/`cancelled` status labels, and `alipay`/`wechat_pay`/`bank_card` payment method labels.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_record_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_normalizes_common_order_aliases --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract_retry_detects_missing_visible_rows --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api external_image_structured_extract --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, image model runtime, retry policy, output field name, status label, payment method label, production data mapping, or model behavior policy was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-22 P5 Helper Support Release and 8-Server Deployment Verification
 
 - Scope:
