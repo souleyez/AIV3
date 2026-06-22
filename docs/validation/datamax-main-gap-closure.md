@@ -2,6 +2,221 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-22 P5 Static-Page Queued Export Package Module Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace queued export package single-module ECharts runtime helper `Value` inputs with a named module alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageModuleValue`;
+  - updated queued export package module ECharts runtime helpers to accept the named module alias instead of inline `&Value`;
+  - updated module ECharts tests to bind visualization, chartOptions, and non-ECharts module inputs through the alias;
+  - preserved `visualization.chartRuntime`, `chartOptions.chartRuntime`, module count/ECharts requested module count, debug shape, and render queue manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_module_requests_echarts_preserves_runtime_matching --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_module_requests_echarts_fields_preserve_runtime_matching --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_echarts_requested_module_count_preserves_runtime_matching --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Data Snapshot Option Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace render queue data snapshot optional `Value` signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueDataSnapshotOption`;
+  - updated data snapshot fields, from-payload, from-payload-fields, from-optional, and from-optional-fields helpers to use the named option alias instead of inline `Option<Value>`;
+  - updated data snapshot tests to bind fields/from-payload/from-optional inputs and outputs through the option alias;
+  - preserved dataSnapshot/data_snapshot alias lookup order, fallback data snapshot generation, selected_scope, module_bindings, validation_summary, and render queue manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_data_snapshot_fields_preserve_alias_lookup_and_missing --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_snapshot_from_payload_preserves_alias_lookup_and_missing --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_data_snapshot_from_optional_preserves_explicit_and_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Spec Option Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace render queue visual/render spec optional `Value` signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueVisualSpecOption`;
+  - added `StaticPageRenderQueueRenderSpecOption`;
+  - updated visual/render spec fields, from-payload, from-payload-fields, from-optional, and from-optional-fields helpers to use the named option aliases instead of inline `Option<Value>`;
+  - updated visual/render spec tests to bind fields/from-payload/from-optional inputs and outputs through the option aliases;
+  - preserved visualSpec/visual_spec and renderSpec/render_spec alias lookup order, missing-value fallbacks, renderer/dynamicData defaults, and render queue manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_visual_spec_fields_preserve_alias_lookup_and_missing --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_visual_spec_from_optional_preserves_explicit_and_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_render_spec_from_optional_preserves_explicit_and_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Data Snapshot Source Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace queued export package data snapshot source helper `Value` inputs with the existing named data snapshot alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - reused `StaticPageRenderQueueDataSnapshotValue`;
+  - updated queued export package data snapshot source, fields, value, and value-fields helpers to accept the named data snapshot alias instead of inline `&Value`;
+  - updated data snapshot source tests to bind provided, missing, and non-string snapshots through the alias;
+  - preserved `source` string extraction, missing/non-string `unknown` fallback, debug `data_snapshot_source` field, export package manifest shape, and render queue manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_data_snapshot_source_preserves_string_and_unknown_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_data_snapshot_source_fields_preserve_optional_string --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_data_snapshot_source_value_fields_preserve_string_and_missing --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Files/File Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package file object and file entries signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageFileValue`;
+  - added `StaticPageQueuedExportPackageFileEntriesValue`;
+  - updated queued export package files, files-from-specs, files-from-entries, file entries from specs, file-from-spec, file, file-from-fields, and file payload helpers to use named aliases where applicable;
+  - updated files/file/from-specs/from-entries tests to bind file object, file entries, and files array outputs through aliases;
+  - preserved the five default files, file ordering, path/role/mime fields, HTML/JSON MIME values, dynamic data and modules file declarations, files JSON array shape, and export package manifest shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_files_preserve_file_roles_and_order --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_files_from_specs_fields_preserve_order_and_fields --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_file_payload_fields_preserve_path_role_and_mime --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Queued Export Package Manifest/Base Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page queued export package manifest/base `Value` signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageQueuedExportPackageFilesValue`;
+  - added `StaticPageQueuedExportPackageDynamicPageContractValue`;
+  - added `StaticPageQueuedExportPackageDebugValue`;
+  - updated queued export package base context, manifest fields, manifest context fields, manifest from-fields/payload-fields, files helper, dynamic page contract helper, debug helper, module count/debug context ingress, and export package manifest ingress to use named aliases where applicable;
+  - completed alias propagation for `StaticPageRenderQueueModulesValue` and `StaticPageRenderQueueDataSnapshotValue` through the manifest fields/context fields handoff;
+  - updated base context, manifest fields, and payload tests to bind files/dynamic/debug/module/data inputs and outputs through aliases;
+  - preserved files list, dynamic page contract, debug renderer, module counts, ECharts count, data snapshot source, export package manifest JSON shape, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api queued_export_package_base_context_from_fields_preserves_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_manifest_fields_preserve_base_context_and_debug --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api queued_export_package_manifest_payload_fields_preserve_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Modules Value Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue modules `Value` signatures with a named local alias.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueModulesValue`;
+  - updated render queue modules helpers, from-value helpers, data context export package handoff, render queue export package fields, and render queue export package manifest ingress to use the named modules alias where applicable;
+  - reused `StaticPageRenderQueueDataSnapshotValue` and `StaticPageRenderQueueExportPackageValue` on adjacent data snapshot/export package boundaries;
+  - updated modules and render queue export package tests to bind module inputs and outputs through the alias;
+  - preserved modules array extraction, invalid/missing modules empty-array fallback, export package debug module counts, ECharts count, data snapshot source, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_modules_preserve_array_and_empty_fallback --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_modules_from_value_preserves_array_and_empty_values --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_export_package_fields_preserve_inputs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
+## 2026-06-22 P5 Static-Page Render Queue Manifest Top-Level Value/Scalar Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - replace static-page render queue top-level manifest `Value` and scalar signatures with named local aliases.
+- Code change:
+  - extended `crates/platform-api/src/static_page_render_queue_manifest_support.rs`;
+  - added `StaticPageRenderQueueManifestValue`;
+  - reused `StaticPageRenderQueueLifecycleScalar`, `StaticPageRenderQueueWorkflowManifestValue`, `StaticPageRenderQueueVisualSpecValue`, `StaticPageRenderQueueRenderSpecValue`, `StaticPageRenderQueueDataSnapshotValue`, and `StaticPageRenderQueueExportPackageValue`;
+  - updated the top-level manifest fields tuple, manifest builder, and payload-fields helper to use named aliases instead of inline `&str` or `Value` signatures;
+  - updated manifest from-fields and payload-fields tests to bind top-level inputs and outputs through the aliases;
+  - preserved queued status, renderer, queue copy, workflow/image/spec/data/export package fields, and render queue manifest JSON shape.
+- Local verification:
+  - `cargo fmt`: executed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api render_queue_manifest_from_fields_preserves_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_manifest_payload_fields_preserve_object_shape --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api render_queue_manifest_fields_preserve_existing_specs_and_job_refs --lib`: passed, 1/1 tests;
+  - `cargo test -q -p platform-api static_page_render_queue_manifest_support --lib`: passed, 176/176 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed without warnings;
+  - `git diff --check`: passed; output only contained existing CRLF worktree warnings.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production logic, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, GitHub push, 8-server deployment, or 120 server change was performed during local verification.
+
 ## 2026-06-22 P5 Static-Page Render Queue Workflow Status Scalar Local Verification
 
 - Purpose:

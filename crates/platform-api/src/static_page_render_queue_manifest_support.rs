@@ -46,6 +46,7 @@ type StaticPageRenderQueueLifecycleFields = (
     StaticPageRenderQueueLifecycleScalar,
     StaticPageRenderQueueLifecycleScalar,
 );
+type StaticPageRenderQueueManifestValue = Value;
 type StaticPageRenderQueueImageContextFields = (Option<StaticPageImageJobId>, Option<String>);
 type StaticPageRenderQueueIdentityFields = (StaticPageDraftId, AssistantRunId);
 type StaticPageRenderQueueWorkflowManifestValue = Value;
@@ -60,17 +61,31 @@ type StaticPageRenderQueueWorkflowManifestFields = (
     Option<WorkflowExecutionId>,
     Option<WorkflowTaskId>,
 );
-type StaticPageRenderQueueExportPackageFields<'a> = (&'a StaticPageDraft, &'a Value, &'a Value);
 type StaticPageRenderQueuePayloadAliasList = &'static [&'static str];
 type StaticPageRenderQueueVisualFallbackStyle = &'static str;
+type StaticPageRenderQueueModulesValue = Value;
 type StaticPageRenderQueueVisualSpecValue = Value;
 type StaticPageRenderQueueRenderSpecValue = Value;
+type StaticPageRenderQueueVisualSpecOption = Option<StaticPageRenderQueueVisualSpecValue>;
+type StaticPageRenderQueueRenderSpecOption = Option<StaticPageRenderQueueRenderSpecValue>;
 type StaticPageRenderQueueSpecsFields = (
     StaticPageRenderQueueVisualSpecValue,
     StaticPageRenderQueueRenderSpecValue,
 );
 type StaticPageRenderQueueDataSnapshotValue = Value;
+type StaticPageRenderQueueDataSnapshotOption = Option<StaticPageRenderQueueDataSnapshotValue>;
 type StaticPageRenderQueueExportPackageValue = Value;
+type StaticPageQueuedExportPackageModuleValue = Value;
+type StaticPageQueuedExportPackageFilesValue = Value;
+type StaticPageQueuedExportPackageDynamicPageContractValue = Value;
+type StaticPageQueuedExportPackageDebugValue = Value;
+type StaticPageQueuedExportPackageFileValue = Value;
+type StaticPageQueuedExportPackageFileEntriesValue = Vec<StaticPageQueuedExportPackageFileValue>;
+type StaticPageRenderQueueExportPackageFields<'a> = (
+    &'a StaticPageDraft,
+    &'a StaticPageRenderQueueModulesValue,
+    &'a StaticPageRenderQueueDataSnapshotValue,
+);
 type StaticPageRenderQueueDataContextFields = (
     StaticPageRenderQueueDataSnapshotValue,
     StaticPageRenderQueueExportPackageValue,
@@ -80,33 +95,33 @@ type StaticPageQueuedExportPackageBaseContextFields = (
     StaticPageQueuedExportPackageVersion,
     StaticPageQueuedExportPackageLifecycleScalar,
     StaticPageDraftId,
-    Value,
-    Value,
+    StaticPageQueuedExportPackageFilesValue,
+    StaticPageQueuedExportPackageDynamicPageContractValue,
 );
 type StaticPageQueuedExportPackageManifestFields = (
     StaticPageQueuedExportPackageLifecycleScalar,
     StaticPageQueuedExportPackageVersion,
     StaticPageQueuedExportPackageLifecycleScalar,
     StaticPageDraftId,
-    Value,
-    Value,
-    Value,
+    StaticPageQueuedExportPackageFilesValue,
+    StaticPageQueuedExportPackageDynamicPageContractValue,
+    StaticPageQueuedExportPackageDebugValue,
 );
 type StaticPageRenderQueueManifestFields = (
     StaticPageDraftId,
     AssistantRunId,
-    &'static str,
-    &'static str,
+    StaticPageRenderQueueLifecycleScalar,
+    StaticPageRenderQueueLifecycleScalar,
     Option<WorkflowExecutionId>,
     Option<WorkflowTaskId>,
-    Value,
+    StaticPageRenderQueueWorkflowManifestValue,
     Option<StaticPageImageJobId>,
     Option<String>,
-    Value,
-    Value,
-    Value,
-    Value,
-    &'static str,
+    StaticPageRenderQueueVisualSpecValue,
+    StaticPageRenderQueueRenderSpecValue,
+    StaticPageRenderQueueDataSnapshotValue,
+    StaticPageRenderQueueExportPackageValue,
+    StaticPageRenderQueueLifecycleScalar,
 );
 
 pub(crate) fn build_static_page_render_queue_manifest(
@@ -114,7 +129,7 @@ pub(crate) fn build_static_page_render_queue_manifest(
     image_job: Option<&StaticPageImageJob>,
     workflow_execution: Option<&WorkflowExecution>,
     workflow_task_id: Option<WorkflowTaskId>,
-) -> Value {
+) -> StaticPageRenderQueueManifestValue {
     let (
         draft_id,
         assistant_run_id,
@@ -189,19 +204,19 @@ pub(crate) fn build_static_page_render_queue_manifest_fields(
 pub(crate) fn build_static_page_render_queue_manifest_from_fields(
     draft_id: StaticPageDraftId,
     assistant_run_id: AssistantRunId,
-    status: &str,
-    renderer: &str,
+    status: StaticPageRenderQueueLifecycleScalar,
+    renderer: StaticPageRenderQueueLifecycleScalar,
     workflow_execution_id: Option<WorkflowExecutionId>,
     workflow_task_id_value: Option<WorkflowTaskId>,
-    workflow_manifest: Value,
+    workflow_manifest: StaticPageRenderQueueWorkflowManifestValue,
     image_job_id: Option<StaticPageImageJobId>,
     preview_asset_key: Option<String>,
-    visual_spec: Value,
-    render_spec: Value,
-    data_snapshot: Value,
-    export_package: Value,
-    queue_copy: &str,
-) -> Value {
+    visual_spec: StaticPageRenderQueueVisualSpecValue,
+    render_spec: StaticPageRenderQueueRenderSpecValue,
+    data_snapshot: StaticPageRenderQueueDataSnapshotValue,
+    export_package: StaticPageRenderQueueExportPackageValue,
+    queue_copy: StaticPageRenderQueueLifecycleScalar,
+) -> StaticPageRenderQueueManifestValue {
     build_static_page_render_queue_manifest_payload_fields(
         draft_id,
         assistant_run_id,
@@ -223,19 +238,19 @@ pub(crate) fn build_static_page_render_queue_manifest_from_fields(
 pub(crate) fn build_static_page_render_queue_manifest_payload_fields(
     draft_id: StaticPageDraftId,
     assistant_run_id: AssistantRunId,
-    status: &str,
-    renderer: &str,
+    status: StaticPageRenderQueueLifecycleScalar,
+    renderer: StaticPageRenderQueueLifecycleScalar,
     workflow_execution_id: Option<WorkflowExecutionId>,
     workflow_task_id_value: Option<WorkflowTaskId>,
-    workflow_manifest: Value,
+    workflow_manifest: StaticPageRenderQueueWorkflowManifestValue,
     image_job_id: Option<StaticPageImageJobId>,
     preview_asset_key: Option<String>,
-    visual_spec: Value,
-    render_spec: Value,
-    data_snapshot: Value,
-    export_package: Value,
-    queue_copy: &str,
-) -> Value {
+    visual_spec: StaticPageRenderQueueVisualSpecValue,
+    render_spec: StaticPageRenderQueueRenderSpecValue,
+    data_snapshot: StaticPageRenderQueueDataSnapshotValue,
+    export_package: StaticPageRenderQueueExportPackageValue,
+    queue_copy: StaticPageRenderQueueLifecycleScalar,
+) -> StaticPageRenderQueueManifestValue {
     json!({
         "draft_id": draft_id,
         "assistant_run_id": assistant_run_id,
@@ -311,7 +326,7 @@ pub(crate) fn build_static_page_render_queue_data_context_fields_from_payload(
 pub(crate) fn build_static_page_render_queue_data_context_export_package(
     draft: &StaticPageDraft,
     payload: &Value,
-    data_snapshot: &Value,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageRenderQueueExportPackageValue {
     let modules = build_static_page_render_queue_data_context_export_package_fields(payload);
     build_static_page_render_queue_data_context_export_package_from_fields(
@@ -323,14 +338,14 @@ pub(crate) fn build_static_page_render_queue_data_context_export_package(
 
 pub(crate) fn build_static_page_render_queue_data_context_export_package_fields(
     payload: &Value,
-) -> Value {
+) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_data_context_export_package_from_fields(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageRenderQueueExportPackageValue {
     build_static_page_render_queue_export_package(draft, modules, data_snapshot)
 }
@@ -593,31 +608,33 @@ pub(crate) fn build_static_page_render_queue_visual_spec(
     )
 }
 
-pub(crate) fn build_static_page_render_queue_visual_spec_fields(payload: &Value) -> Option<Value> {
+pub(crate) fn build_static_page_render_queue_visual_spec_fields(
+    payload: &Value,
+) -> StaticPageRenderQueueVisualSpecOption {
     build_static_page_render_queue_visual_spec_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_optional(
-    visual_spec: Option<Value>,
+    visual_spec: StaticPageRenderQueueVisualSpecOption,
 ) -> StaticPageRenderQueueVisualSpecValue {
     build_static_page_render_queue_visual_spec_from_optional_fields(visual_spec)
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_optional_fields(
-    visual_spec: Option<Value>,
+    visual_spec: StaticPageRenderQueueVisualSpecOption,
 ) -> StaticPageRenderQueueVisualSpecValue {
     visual_spec.unwrap_or_else(build_static_page_render_queue_visual_fallback_spec)
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_payload(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueVisualSpecOption {
     build_static_page_render_queue_visual_spec_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_visual_spec_from_payload_fields(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueVisualSpecOption {
     static_page_payload_value(
         payload,
         build_static_page_render_queue_visual_spec_aliases(),
@@ -655,31 +672,33 @@ pub(crate) fn build_static_page_render_queue_render_spec(
     )
 }
 
-pub(crate) fn build_static_page_render_queue_render_spec_fields(payload: &Value) -> Option<Value> {
+pub(crate) fn build_static_page_render_queue_render_spec_fields(
+    payload: &Value,
+) -> StaticPageRenderQueueRenderSpecOption {
     build_static_page_render_queue_render_spec_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_optional(
-    render_spec: Option<Value>,
+    render_spec: StaticPageRenderQueueRenderSpecOption,
 ) -> StaticPageRenderQueueRenderSpecValue {
     build_static_page_render_queue_render_spec_from_optional_fields(render_spec)
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_optional_fields(
-    render_spec: Option<Value>,
+    render_spec: StaticPageRenderQueueRenderSpecOption,
 ) -> StaticPageRenderQueueRenderSpecValue {
     render_spec.unwrap_or_else(build_static_page_render_queue_render_fallback_spec)
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_payload(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueRenderSpecOption {
     build_static_page_render_queue_render_spec_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_render_spec_from_payload_fields(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueRenderSpecOption {
     static_page_payload_value(
         payload,
         build_static_page_render_queue_render_spec_aliases(),
@@ -714,12 +733,12 @@ pub(crate) fn build_static_page_render_queue_data_snapshot(
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_fields(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueDataSnapshotOption {
     build_static_page_render_queue_data_snapshot_from_payload(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional(
-    data_snapshot: Option<Value>,
+    data_snapshot: StaticPageRenderQueueDataSnapshotOption,
     payload: &Value,
     selected_scope: &Value,
 ) -> StaticPageRenderQueueDataSnapshotValue {
@@ -731,7 +750,7 @@ pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional(
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional_fields(
-    data_snapshot: Option<Value>,
+    data_snapshot: StaticPageRenderQueueDataSnapshotOption,
     payload: &Value,
     selected_scope: &Value,
 ) -> StaticPageRenderQueueDataSnapshotValue {
@@ -742,13 +761,13 @@ pub(crate) fn build_static_page_render_queue_data_snapshot_from_optional_fields(
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_payload(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueDataSnapshotOption {
     build_static_page_render_queue_data_snapshot_from_payload_fields(payload)
 }
 
 pub(crate) fn build_static_page_render_queue_data_snapshot_from_payload_fields(
     payload: &Value,
-) -> Option<Value> {
+) -> StaticPageRenderQueueDataSnapshotOption {
     static_page_payload_value(
         payload,
         build_static_page_render_queue_data_snapshot_aliases(),
@@ -774,37 +793,49 @@ pub(crate) fn build_static_page_render_queue_fallback_data_snapshot_from_fields(
     build_static_page_data_snapshot(payload, selected_scope)
 }
 
-pub(crate) fn build_static_page_render_queue_modules(payload: &Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules(
+    payload: &Value,
+) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_value(
         build_static_page_render_queue_modules_fields(payload),
     )
 }
 
-pub(crate) fn build_static_page_render_queue_modules_fields(payload: &Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules_fields(
+    payload: &Value,
+) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_payload(payload)
 }
 
-pub(crate) fn build_static_page_render_queue_modules_from_payload(payload: &Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules_from_payload(
+    payload: &Value,
+) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_payload_fields(payload)
 }
 
-pub(crate) fn build_static_page_render_queue_modules_from_payload_fields(payload: &Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules_from_payload_fields(
+    payload: &Value,
+) -> StaticPageRenderQueueModulesValue {
     static_page_payload_modules(payload)
 }
 
-pub(crate) fn build_static_page_render_queue_modules_from_value(modules: Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules_from_value(
+    modules: StaticPageRenderQueueModulesValue,
+) -> StaticPageRenderQueueModulesValue {
     build_static_page_render_queue_modules_from_value_fields(modules)
 }
 
-pub(crate) fn build_static_page_render_queue_modules_from_value_fields(modules: Value) -> Value {
+pub(crate) fn build_static_page_render_queue_modules_from_value_fields(
+    modules: StaticPageRenderQueueModulesValue,
+) -> StaticPageRenderQueueModulesValue {
     modules
 }
 
 pub(crate) fn build_static_page_render_queue_export_package(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
-) -> Value {
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageRenderQueueExportPackageValue {
     let (draft, modules, data_snapshot) =
         build_static_page_render_queue_export_package_fields(draft, modules, data_snapshot);
     build_static_page_render_queue_export_package_from_fields(draft, modules, data_snapshot)
@@ -812,25 +843,25 @@ pub(crate) fn build_static_page_render_queue_export_package(
 
 pub(crate) fn build_static_page_render_queue_export_package_fields<'a>(
     draft: &'a StaticPageDraft,
-    modules: &'a Value,
-    data_snapshot: &'a Value,
+    modules: &'a StaticPageRenderQueueModulesValue,
+    data_snapshot: &'a StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageRenderQueueExportPackageFields<'a> {
     (draft, modules, data_snapshot)
 }
 
 pub(crate) fn build_static_page_render_queue_export_package_from_fields(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
-) -> Value {
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageRenderQueueExportPackageValue {
     build_static_page_queued_export_package_manifest(draft, modules, data_snapshot)
 }
 
 pub(crate) fn build_static_page_queued_export_package_manifest(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
-) -> Value {
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageRenderQueueExportPackageValue {
     let (kind, version, status, draft_id, files, dynamic_page_contract, debug) =
         build_static_page_queued_export_package_manifest_fields(draft, modules, data_snapshot);
     build_static_page_queued_export_package_manifest_from_fields(
@@ -846,8 +877,8 @@ pub(crate) fn build_static_page_queued_export_package_manifest(
 
 pub(crate) fn build_static_page_queued_export_package_manifest_fields(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageQueuedExportPackageManifestFields {
     let (kind, version, status, draft_id, files, dynamic_page_contract, debug) =
         build_static_page_queued_export_package_manifest_context_fields(
@@ -868,8 +899,8 @@ pub(crate) fn build_static_page_queued_export_package_manifest_fields(
 
 pub(crate) fn build_static_page_queued_export_package_manifest_context_fields(
     draft: &StaticPageDraft,
-    modules: &Value,
-    data_snapshot: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageQueuedExportPackageManifestFields {
     let debug = build_static_page_queued_export_package_debug_context(modules, data_snapshot);
     let (kind, version, status, draft_id, files, dynamic_page_contract) =
@@ -890,9 +921,9 @@ pub(crate) fn build_static_page_queued_export_package_manifest_fields_from_field
     version: StaticPageQueuedExportPackageVersion,
     status: StaticPageQueuedExportPackageLifecycleScalar,
     draft_id: StaticPageDraftId,
-    files: Value,
-    dynamic_page_contract: Value,
-    debug: Value,
+    files: StaticPageQueuedExportPackageFilesValue,
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
+    debug: StaticPageQueuedExportPackageDebugValue,
 ) -> StaticPageQueuedExportPackageManifestFields {
     (
         kind,
@@ -910,10 +941,10 @@ pub(crate) fn build_static_page_queued_export_package_manifest_from_fields(
     version: StaticPageQueuedExportPackageVersion,
     status: StaticPageQueuedExportPackageLifecycleScalar,
     draft_id: StaticPageDraftId,
-    files: Value,
-    dynamic_page_contract: Value,
-    debug: Value,
-) -> Value {
+    files: StaticPageQueuedExportPackageFilesValue,
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
+    debug: StaticPageQueuedExportPackageDebugValue,
+) -> StaticPageRenderQueueExportPackageValue {
     build_static_page_queued_export_package_manifest_payload_fields(
         kind,
         version,
@@ -930,10 +961,10 @@ pub(crate) fn build_static_page_queued_export_package_manifest_payload_fields(
     version: StaticPageQueuedExportPackageVersion,
     status: StaticPageQueuedExportPackageLifecycleScalar,
     draft_id: StaticPageDraftId,
-    files: Value,
-    dynamic_page_contract: Value,
-    debug: Value,
-) -> Value {
+    files: StaticPageQueuedExportPackageFilesValue,
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
+    debug: StaticPageQueuedExportPackageDebugValue,
+) -> StaticPageRenderQueueExportPackageValue {
     json!({
         "kind": kind,
         "version": version,
@@ -982,8 +1013,8 @@ pub(crate) fn build_static_page_queued_export_package_base_context_fields_from_f
     version: StaticPageQueuedExportPackageVersion,
     status: StaticPageQueuedExportPackageLifecycleScalar,
     draft_id: StaticPageDraftId,
-    files: Value,
-    dynamic_page_contract: Value,
+    files: StaticPageQueuedExportPackageFilesValue,
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
 ) -> StaticPageQueuedExportPackageBaseContextFields {
     build_static_page_queued_export_package_base_context_from_fields(
         kind,
@@ -1000,8 +1031,8 @@ pub(crate) fn build_static_page_queued_export_package_base_context_from_fields(
     version: StaticPageQueuedExportPackageVersion,
     status: StaticPageQueuedExportPackageLifecycleScalar,
     draft_id: StaticPageDraftId,
-    files: Value,
-    dynamic_page_contract: Value,
+    files: StaticPageQueuedExportPackageFilesValue,
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
 ) -> StaticPageQueuedExportPackageBaseContextFields {
     (
         kind,
@@ -1014,9 +1045,9 @@ pub(crate) fn build_static_page_queued_export_package_base_context_from_fields(
 }
 
 pub(crate) fn build_static_page_queued_export_package_debug_context(
-    modules: &Value,
-    data_snapshot: &Value,
-) -> Value {
+    modules: &StaticPageRenderQueueModulesValue,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageQueuedExportPackageDebugValue {
     let (module_count, echarts_requested_modules) =
         build_static_page_queued_export_package_debug_context_fields(modules);
     build_static_page_queued_export_package_debug_context_from_fields(
@@ -1027,7 +1058,7 @@ pub(crate) fn build_static_page_queued_export_package_debug_context(
 }
 
 pub(crate) fn build_static_page_queued_export_package_debug_context_fields(
-    modules: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
 ) -> StaticPageQueuedExportPackageModuleCounts {
     build_static_page_queued_export_package_module_counts(modules)
 }
@@ -1035,8 +1066,8 @@ pub(crate) fn build_static_page_queued_export_package_debug_context_fields(
 pub(crate) fn build_static_page_queued_export_package_debug_context_from_fields(
     module_count: StaticPageQueuedExportPackageModuleCount,
     echarts_requested_modules: StaticPageQueuedExportPackageModuleCount,
-    data_snapshot: &Value,
-) -> Value {
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageQueuedExportPackageDebugValue {
     build_static_page_queued_export_package_debug(
         module_count,
         echarts_requested_modules,
@@ -1109,24 +1140,26 @@ pub(crate) fn build_static_page_queued_export_package_draft_id_fields(
     build_static_page_render_queue_draft_id(draft)
 }
 
-pub(crate) fn build_static_page_queued_export_package_dynamic_page_contract() -> Value {
+pub(crate) fn build_static_page_queued_export_package_dynamic_page_contract(
+) -> StaticPageQueuedExportPackageDynamicPageContractValue {
     build_static_page_queued_export_package_dynamic_page_contract_from_fields(
         build_static_page_queued_export_package_dynamic_page_contract_fields(),
     )
 }
 
-pub(crate) fn build_static_page_queued_export_package_dynamic_page_contract_fields() -> Value {
+pub(crate) fn build_static_page_queued_export_package_dynamic_page_contract_fields(
+) -> StaticPageQueuedExportPackageDynamicPageContractValue {
     build_static_page_dynamic_page_contract()
 }
 
 pub(crate) fn build_static_page_queued_export_package_dynamic_page_contract_from_fields(
-    dynamic_page_contract: Value,
-) -> Value {
+    dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue,
+) -> StaticPageQueuedExportPackageDynamicPageContractValue {
     dynamic_page_contract
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_counts(
-    modules: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
 ) -> StaticPageQueuedExportPackageModuleCounts {
     build_static_page_queued_export_package_module_counts_from_optional_items(
         build_static_page_queued_export_package_module_counts_fields(modules),
@@ -1134,19 +1167,19 @@ pub(crate) fn build_static_page_queued_export_package_module_counts(
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_counts_fields(
-    modules: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
 ) -> Option<&[Value]> {
     build_static_page_queued_export_package_module_items(modules)
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_items(
-    modules: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
 ) -> Option<&[Value]> {
     build_static_page_queued_export_package_module_items_fields(modules)
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_items_fields(
-    modules: &Value,
+    modules: &StaticPageRenderQueueModulesValue,
 ) -> Option<&[Value]> {
     modules.as_array().map(Vec::as_slice)
 }
@@ -1238,13 +1271,13 @@ pub(crate) fn build_static_page_queued_export_package_echarts_requested_module_c
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_requests_echarts(
-    module: &Value,
+    module: &StaticPageQueuedExportPackageModuleValue,
 ) -> bool {
     build_static_page_queued_export_package_module_requests_echarts_fields(module)
 }
 
 pub(crate) fn build_static_page_queued_export_package_module_requests_echarts_fields(
-    module: &Value,
+    module: &StaticPageQueuedExportPackageModuleValue,
 ) -> bool {
     static_page_module_chart_runtime(module) == "echarts"
 }
@@ -1252,8 +1285,8 @@ pub(crate) fn build_static_page_queued_export_package_module_requests_echarts_fi
 pub(crate) fn build_static_page_queued_export_package_debug(
     module_count: StaticPageQueuedExportPackageModuleCount,
     echarts_requested_modules: StaticPageQueuedExportPackageModuleCount,
-    data_snapshot: &Value,
-) -> Value {
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
+) -> StaticPageQueuedExportPackageDebugValue {
     let (renderer, module_count, echarts_requested_modules, data_snapshot_source) =
         build_static_page_queued_export_package_debug_fields(
             module_count,
@@ -1271,7 +1304,7 @@ pub(crate) fn build_static_page_queued_export_package_debug(
 pub(crate) fn build_static_page_queued_export_package_debug_fields<'a>(
     module_count: StaticPageQueuedExportPackageModuleCount,
     echarts_requested_modules: StaticPageQueuedExportPackageModuleCount,
-    data_snapshot: &'a Value,
+    data_snapshot: &'a StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageQueuedExportPackageDebugFields<'a> {
     build_static_page_queued_export_package_debug_fields_from_fields(
         build_static_page_queued_export_package_debug_renderer(),
@@ -1300,7 +1333,7 @@ pub(crate) fn build_static_page_queued_export_package_debug_from_fields(
     module_count: StaticPageQueuedExportPackageModuleCount,
     echarts_requested_modules: StaticPageQueuedExportPackageModuleCount,
     data_snapshot_source: StaticPageQueuedExportPackageDataSnapshotSource<'_>,
-) -> Value {
+) -> StaticPageQueuedExportPackageDebugValue {
     build_static_page_queued_export_package_debug_payload_fields(
         renderer,
         module_count,
@@ -1314,7 +1347,7 @@ pub(crate) fn build_static_page_queued_export_package_debug_payload_fields(
     module_count: StaticPageQueuedExportPackageModuleCount,
     echarts_requested_modules: StaticPageQueuedExportPackageModuleCount,
     data_snapshot_source: StaticPageQueuedExportPackageDataSnapshotSource<'_>,
-) -> Value {
+) -> StaticPageQueuedExportPackageDebugValue {
     json!({
         "renderer": renderer,
         "module_count": module_count,
@@ -1334,7 +1367,7 @@ pub(crate) fn build_static_page_queued_export_package_debug_renderer_fields(
 }
 
 pub(crate) fn build_static_page_queued_export_package_data_snapshot_source(
-    data_snapshot: &Value,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> StaticPageQueuedExportPackageDataSnapshotSource<'_> {
     build_static_page_queued_export_package_data_snapshot_source_from_optional(
         build_static_page_queued_export_package_data_snapshot_source_fields(data_snapshot),
@@ -1342,19 +1375,19 @@ pub(crate) fn build_static_page_queued_export_package_data_snapshot_source(
 }
 
 pub(crate) fn build_static_page_queued_export_package_data_snapshot_source_fields(
-    data_snapshot: &Value,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> Option<StaticPageQueuedExportPackageDataSnapshotSource<'_>> {
     build_static_page_queued_export_package_data_snapshot_source_value(data_snapshot)
 }
 
 pub(crate) fn build_static_page_queued_export_package_data_snapshot_source_value(
-    data_snapshot: &Value,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> Option<StaticPageQueuedExportPackageDataSnapshotSource<'_>> {
     build_static_page_queued_export_package_data_snapshot_source_value_fields(data_snapshot)
 }
 
 pub(crate) fn build_static_page_queued_export_package_data_snapshot_source_value_fields(
-    data_snapshot: &Value,
+    data_snapshot: &StaticPageRenderQueueDataSnapshotValue,
 ) -> Option<StaticPageQueuedExportPackageDataSnapshotSource<'_>> {
     data_snapshot.get("source").and_then(Value::as_str)
 }
@@ -1383,7 +1416,8 @@ pub(crate) fn build_static_page_queued_export_package_unknown_data_snapshot_sour
     "unknown"
 }
 
-pub(crate) fn build_static_page_queued_export_package_files() -> Value {
+pub(crate) fn build_static_page_queued_export_package_files(
+) -> StaticPageQueuedExportPackageFilesValue {
     build_static_page_queued_export_package_files_from_specs(
         build_static_page_queued_export_package_files_fields(),
     )
@@ -1396,7 +1430,7 @@ pub(crate) fn build_static_page_queued_export_package_files_fields(
 
 pub(crate) fn build_static_page_queued_export_package_files_from_specs(
     specs: &[StaticPageQueuedExportPackageFileSpec],
-) -> Value {
+) -> StaticPageQueuedExportPackageFilesValue {
     build_static_page_queued_export_package_files_from_entries(
         build_static_page_queued_export_package_files_from_specs_fields(specs),
     )
@@ -1404,37 +1438,37 @@ pub(crate) fn build_static_page_queued_export_package_files_from_specs(
 
 pub(crate) fn build_static_page_queued_export_package_files_from_specs_fields(
     specs: &[StaticPageQueuedExportPackageFileSpec],
-) -> Vec<Value> {
+) -> StaticPageQueuedExportPackageFileEntriesValue {
     build_static_page_queued_export_package_file_entries_from_specs(specs)
 }
 
 pub(crate) fn build_static_page_queued_export_package_files_from_entries(
-    entries: Vec<Value>,
-) -> Value {
+    entries: StaticPageQueuedExportPackageFileEntriesValue,
+) -> StaticPageQueuedExportPackageFilesValue {
     Value::Array(build_static_page_queued_export_package_files_from_entries_fields(entries))
 }
 
 pub(crate) fn build_static_page_queued_export_package_files_from_entries_fields(
-    entries: Vec<Value>,
-) -> Vec<Value> {
+    entries: StaticPageQueuedExportPackageFileEntriesValue,
+) -> StaticPageQueuedExportPackageFileEntriesValue {
     entries
 }
 
 pub(crate) fn build_static_page_queued_export_package_file_entries_from_specs(
     specs: &[StaticPageQueuedExportPackageFileSpec],
-) -> Vec<Value> {
+) -> StaticPageQueuedExportPackageFileEntriesValue {
     build_static_page_queued_export_package_file_entries_from_specs_fields(specs)
 }
 
 pub(crate) fn build_static_page_queued_export_package_file_entries_from_specs_fields(
     specs: &[StaticPageQueuedExportPackageFileSpec],
-) -> Vec<Value> {
+) -> StaticPageQueuedExportPackageFileEntriesValue {
     build_static_page_queued_export_package_file_entries_from_specs_fields_entries(specs)
 }
 
 pub(crate) fn build_static_page_queued_export_package_file_entries_from_specs_fields_entries(
     specs: &[StaticPageQueuedExportPackageFileSpec],
-) -> Vec<Value> {
+) -> StaticPageQueuedExportPackageFileEntriesValue {
     specs
         .iter()
         .map(|&spec| build_static_page_queued_export_package_file_from_spec(spec))
@@ -1496,7 +1530,7 @@ pub(crate) const fn build_static_page_queued_export_package_file_spec_fields(
 
 pub(crate) fn build_static_page_queued_export_package_file_from_spec(
     spec: StaticPageQueuedExportPackageFileSpec,
-) -> Value {
+) -> StaticPageQueuedExportPackageFileValue {
     let (path, role, mime) = build_static_page_queued_export_package_file_from_spec_fields(spec);
     build_static_page_queued_export_package_file(path, role, mime)
 }
@@ -1671,7 +1705,7 @@ pub(crate) fn build_static_page_queued_export_package_file(
     path: StaticPageQueuedExportPackageFilePath,
     role: StaticPageQueuedExportPackageFileRole,
     mime: StaticPageQueuedExportPackageFileMime,
-) -> Value {
+) -> StaticPageQueuedExportPackageFileValue {
     let (path, role, mime) = build_static_page_queued_export_package_file_fields(path, role, mime);
     build_static_page_queued_export_package_file_from_fields(path, role, mime)
 }
@@ -1688,7 +1722,7 @@ pub(crate) fn build_static_page_queued_export_package_file_from_fields(
     path: StaticPageQueuedExportPackageFilePath,
     role: StaticPageQueuedExportPackageFileRole,
     mime: StaticPageQueuedExportPackageFileMime,
-) -> Value {
+) -> StaticPageQueuedExportPackageFileValue {
     build_static_page_queued_export_package_file_payload_fields(path, role, mime)
 }
 
@@ -1696,7 +1730,7 @@ pub(crate) fn build_static_page_queued_export_package_file_payload_fields(
     path: StaticPageQueuedExportPackageFilePath,
     role: StaticPageQueuedExportPackageFileRole,
     mime: StaticPageQueuedExportPackageFileMime,
-) -> Value {
+) -> StaticPageQueuedExportPackageFileValue {
     json!({
         "path": path,
         "role": role,
@@ -1910,36 +1944,41 @@ mod tests {
         let workflow_execution_id = WorkflowExecutionId::new();
         let workflow_task_id = WorkflowTaskId::new();
         let image_job_id = StaticPageImageJobId::new();
-        let workflow_manifest = json!({
+        let status: StaticPageRenderQueueLifecycleScalar = "queued";
+        let renderer: StaticPageRenderQueueLifecycleScalar = "static-page-renderer-v1";
+        let workflow_manifest: StaticPageRenderQueueWorkflowManifestValue = json!({
             "status": "queued",
             "executionId": workflow_execution_id,
             "taskId": workflow_task_id
         });
-        let visual_spec = json!({"theme": "dark"});
-        let render_spec = json!({"runtime": "safe-echarts"});
-        let data_snapshot = json!({"source": "provided"});
-        let export_package = json!({
+        let visual_spec: StaticPageRenderQueueVisualSpecValue = json!({"theme": "dark"});
+        let render_spec: StaticPageRenderQueueRenderSpecValue = json!({"runtime": "safe-echarts"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
+        let export_package: StaticPageRenderQueueExportPackageValue = json!({
             "kind": "static-page-export-package",
             "version": 1,
             "status": "queued"
         });
+        let queue_copy: StaticPageRenderQueueLifecycleScalar =
+            "最终静态页正在后台制作，可以继续聊天或修改其他内容。";
 
-        let manifest = build_static_page_render_queue_manifest_from_fields(
-            draft_id,
-            assistant_run_id,
-            "queued",
-            "static-page-renderer-v1",
-            Some(workflow_execution_id),
-            Some(workflow_task_id),
-            workflow_manifest.clone(),
-            Some(image_job_id),
-            Some("static-page-previews/preview.png".to_string()),
-            visual_spec.clone(),
-            render_spec.clone(),
-            data_snapshot.clone(),
-            export_package.clone(),
-            "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
-        );
+        let manifest: StaticPageRenderQueueManifestValue =
+            build_static_page_render_queue_manifest_from_fields(
+                draft_id,
+                assistant_run_id,
+                status,
+                renderer,
+                Some(workflow_execution_id),
+                Some(workflow_task_id),
+                workflow_manifest.clone(),
+                Some(image_job_id),
+                Some("static-page-previews/preview.png".to_string()),
+                visual_spec.clone(),
+                render_spec.clone(),
+                data_snapshot.clone(),
+                export_package.clone(),
+                queue_copy,
+            );
 
         assert_eq!(manifest["draft_id"], json!(draft_id));
         assert_eq!(manifest["assistant_run_id"], json!(assistant_run_id));
@@ -1973,36 +2012,41 @@ mod tests {
         let workflow_execution_id = WorkflowExecutionId::new();
         let workflow_task_id = WorkflowTaskId::new();
         let image_job_id = StaticPageImageJobId::new();
-        let workflow_manifest = json!({
+        let status: StaticPageRenderQueueLifecycleScalar = "queued";
+        let renderer: StaticPageRenderQueueLifecycleScalar = "static-page-renderer-v1";
+        let workflow_manifest: StaticPageRenderQueueWorkflowManifestValue = json!({
             "status": "queued",
             "executionId": workflow_execution_id,
             "taskId": workflow_task_id
         });
-        let visual_spec = json!({"theme": "dark"});
-        let render_spec = json!({"runtime": "safe-echarts"});
-        let data_snapshot = json!({"source": "provided"});
-        let export_package = json!({
+        let visual_spec: StaticPageRenderQueueVisualSpecValue = json!({"theme": "dark"});
+        let render_spec: StaticPageRenderQueueRenderSpecValue = json!({"runtime": "safe-echarts"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
+        let export_package: StaticPageRenderQueueExportPackageValue = json!({
             "kind": "static-page-export-package",
             "version": 1,
             "status": "queued"
         });
+        let queue_copy: StaticPageRenderQueueLifecycleScalar =
+            "最终静态页正在后台制作，可以继续聊天或修改其他内容。";
 
-        let manifest = build_static_page_render_queue_manifest_payload_fields(
-            draft_id,
-            assistant_run_id,
-            "queued",
-            "static-page-renderer-v1",
-            Some(workflow_execution_id),
-            Some(workflow_task_id),
-            workflow_manifest.clone(),
-            Some(image_job_id),
-            Some("static-page-previews/preview.png".to_string()),
-            visual_spec.clone(),
-            render_spec.clone(),
-            data_snapshot.clone(),
-            export_package.clone(),
-            "最终静态页正在后台制作，可以继续聊天或修改其他内容。",
-        );
+        let manifest: StaticPageRenderQueueManifestValue =
+            build_static_page_render_queue_manifest_payload_fields(
+                draft_id,
+                assistant_run_id,
+                status,
+                renderer,
+                Some(workflow_execution_id),
+                Some(workflow_task_id),
+                workflow_manifest.clone(),
+                Some(image_job_id),
+                Some("static-page-previews/preview.png".to_string()),
+                visual_spec.clone(),
+                render_spec.clone(),
+                data_snapshot.clone(),
+                export_package.clone(),
+                queue_copy,
+            );
 
         assert_eq!(manifest["draft_id"], json!(draft_id));
         assert_eq!(manifest["assistant_run_id"], json!(assistant_run_id));
@@ -2838,19 +2882,16 @@ mod tests {
         let snake_payload = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let camel_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_fields(&camel_payload);
+        let snake_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_fields(&snake_payload);
+        let missing_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_fields(&camel_payload),
-            Some(json!({"styleDirection": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_fields(&snake_payload),
-            Some(json!({"styleDirection": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
+        assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
+        assert_eq!(missing_visual, None);
     }
 
     #[test]
@@ -2861,19 +2902,16 @@ mod tests {
         let snake_payload = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let camel_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_fields(&camel_payload);
+        let snake_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_fields(&snake_payload);
+        let missing_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_render_spec_fields(&camel_payload),
-            Some(json!({"renderer": "camel-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_fields(&snake_payload),
-            Some(json!({"renderer": "snake-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
+        assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
+        assert_eq!(missing_render, None);
     }
 
     #[test]
@@ -2918,19 +2956,16 @@ mod tests {
         let snake_payload = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let camel_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload(&camel_payload);
+        let snake_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload(&snake_payload);
+        let missing_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload(&camel_payload),
-            Some(json!({"styleDirection": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload(&snake_payload),
-            Some(json!({"styleDirection": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload(&json!({})),
-            None
-        );
+        assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
+        assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
+        assert_eq!(missing_visual, None);
     }
 
     #[test]
@@ -2941,27 +2976,26 @@ mod tests {
         let snake_payload = json!({
             "visual_spec": {"styleDirection": "snake"}
         });
+        let camel_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload_fields(&camel_payload);
+        let snake_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload_fields(&snake_payload);
+        let missing_visual: StaticPageRenderQueueVisualSpecOption =
+            build_static_page_render_queue_visual_spec_from_payload_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload_fields(&camel_payload),
-            Some(json!({"styleDirection": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload_fields(&snake_payload),
-            Some(json!({"styleDirection": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_visual_spec_from_payload_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_visual, Some(json!({"styleDirection": "camel"})));
+        assert_eq!(snake_visual, Some(json!({"styleDirection": "snake"})));
+        assert_eq!(missing_visual, None);
     }
 
     #[test]
     fn render_queue_visual_spec_from_optional_preserves_explicit_and_fallback() {
-        let explicit_visual = json!({"styleDirection": "explicit"});
+        let explicit_visual: StaticPageRenderQueueVisualSpecValue =
+            json!({"styleDirection": "explicit"});
+        let explicit_option: StaticPageRenderQueueVisualSpecOption = Some(explicit_visual.clone());
 
         assert_eq!(
-            build_static_page_render_queue_visual_spec_from_optional(Some(explicit_visual.clone())),
+            build_static_page_render_queue_visual_spec_from_optional(explicit_option),
             explicit_visual
         );
         assert_eq!(
@@ -2972,12 +3006,12 @@ mod tests {
 
     #[test]
     fn render_queue_visual_spec_from_optional_fields_preserves_explicit_and_fallback() {
-        let explicit_visual = json!({"styleDirection": "explicit"});
+        let explicit_visual: StaticPageRenderQueueVisualSpecValue =
+            json!({"styleDirection": "explicit"});
+        let explicit_option: StaticPageRenderQueueVisualSpecOption = Some(explicit_visual.clone());
 
         assert_eq!(
-            build_static_page_render_queue_visual_spec_from_optional_fields(Some(
-                explicit_visual.clone()
-            )),
+            build_static_page_render_queue_visual_spec_from_optional_fields(explicit_option),
             explicit_visual
         );
         assert_eq!(
@@ -3026,19 +3060,16 @@ mod tests {
         let snake_payload = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let camel_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload(&camel_payload);
+        let snake_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload(&snake_payload);
+        let missing_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload(&camel_payload),
-            Some(json!({"renderer": "camel-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload(&snake_payload),
-            Some(json!({"renderer": "snake-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload(&json!({})),
-            None
-        );
+        assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
+        assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
+        assert_eq!(missing_render, None);
     }
 
     #[test]
@@ -3049,27 +3080,26 @@ mod tests {
         let snake_payload = json!({
             "render_spec": {"renderer": "snake-renderer"}
         });
+        let camel_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload_fields(&camel_payload);
+        let snake_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload_fields(&snake_payload);
+        let missing_render: StaticPageRenderQueueRenderSpecOption =
+            build_static_page_render_queue_render_spec_from_payload_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload_fields(&camel_payload),
-            Some(json!({"renderer": "camel-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload_fields(&snake_payload),
-            Some(json!({"renderer": "snake-renderer"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_render_spec_from_payload_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_render, Some(json!({"renderer": "camel-renderer"})));
+        assert_eq!(snake_render, Some(json!({"renderer": "snake-renderer"})));
+        assert_eq!(missing_render, None);
     }
 
     #[test]
     fn render_queue_render_spec_from_optional_preserves_explicit_and_fallback() {
-        let explicit_render = json!({"renderer": "custom-renderer"});
+        let explicit_render: StaticPageRenderQueueRenderSpecValue =
+            json!({"renderer": "custom-renderer"});
+        let explicit_option: StaticPageRenderQueueRenderSpecOption = Some(explicit_render.clone());
 
         assert_eq!(
-            build_static_page_render_queue_render_spec_from_optional(Some(explicit_render.clone())),
+            build_static_page_render_queue_render_spec_from_optional(explicit_option),
             explicit_render
         );
 
@@ -3087,12 +3117,12 @@ mod tests {
 
     #[test]
     fn render_queue_render_spec_from_optional_fields_preserves_explicit_and_fallback() {
-        let explicit_render = json!({"renderer": "custom-renderer"});
+        let explicit_render: StaticPageRenderQueueRenderSpecValue =
+            json!({"renderer": "custom-renderer"});
+        let explicit_option: StaticPageRenderQueueRenderSpecOption = Some(explicit_render.clone());
 
         assert_eq!(
-            build_static_page_render_queue_render_spec_from_optional_fields(Some(
-                explicit_render.clone()
-            )),
+            build_static_page_render_queue_render_spec_from_optional_fields(explicit_option),
             explicit_render
         );
 
@@ -3176,19 +3206,16 @@ mod tests {
         let snake_payload = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_fields(&camel_payload);
+        let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_fields(&snake_payload);
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_fields(&camel_payload),
-            Some(json!({"source": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_fields(&snake_payload),
-            Some(json!({"source": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
+        assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
+        assert_eq!(missing_snapshot, None);
     }
 
     #[test]
@@ -3207,19 +3234,16 @@ mod tests {
         let snake_payload = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload(&camel_payload);
+        let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload(&snake_payload);
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload(&camel_payload),
-            Some(json!({"source": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload(&snake_payload),
-            Some(json!({"source": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload(&json!({})),
-            None
-        );
+        assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
+        assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
+        assert_eq!(missing_snapshot, None);
     }
 
     #[test]
@@ -3230,24 +3254,24 @@ mod tests {
         let snake_payload = json!({
             "data_snapshot": {"source": "snake"}
         });
+        let camel_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload_fields(&camel_payload);
+        let snake_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload_fields(&snake_payload);
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotOption =
+            build_static_page_render_queue_data_snapshot_from_payload_fields(&json!({}));
 
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload_fields(&camel_payload),
-            Some(json!({"source": "camel"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload_fields(&snake_payload),
-            Some(json!({"source": "snake"}))
-        );
-        assert_eq!(
-            build_static_page_render_queue_data_snapshot_from_payload_fields(&json!({})),
-            None
-        );
+        assert_eq!(camel_snapshot, Some(json!({"source": "camel"})));
+        assert_eq!(snake_snapshot, Some(json!({"source": "snake"})));
+        assert_eq!(missing_snapshot, None);
     }
 
     #[test]
     fn render_queue_data_snapshot_from_optional_preserves_explicit_and_fallback() {
-        let explicit_snapshot = json!({"source": "provided"});
+        let explicit_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let explicit_option: StaticPageRenderQueueDataSnapshotOption =
+            Some(explicit_snapshot.clone());
         let fallback_payload = json!({
             "modules": [{"id": "summary"}]
         });
@@ -3255,7 +3279,7 @@ mod tests {
 
         assert_eq!(
             build_static_page_render_queue_data_snapshot_from_optional(
-                Some(explicit_snapshot.clone()),
+                explicit_option,
                 &fallback_payload,
                 &selected_scope,
             ),
@@ -3284,7 +3308,10 @@ mod tests {
 
     #[test]
     fn render_queue_data_snapshot_from_optional_fields_preserve_explicit_and_fallback() {
-        let explicit_snapshot = json!({"source": "provided"});
+        let explicit_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let explicit_option: StaticPageRenderQueueDataSnapshotOption =
+            Some(explicit_snapshot.clone());
         let fallback_payload = json!({
             "modules": [{"id": "summary"}]
         });
@@ -3292,7 +3319,7 @@ mod tests {
 
         assert_eq!(
             build_static_page_render_queue_data_snapshot_from_optional_fields(
-                Some(explicit_snapshot.clone()),
+                explicit_option,
                 &fallback_payload,
                 &selected_scope,
             ),
@@ -3378,8 +3405,11 @@ mod tests {
             ]
         });
 
+        let modules: StaticPageRenderQueueModulesValue =
+            build_static_page_render_queue_modules(&payload);
+
         assert_eq!(
-            build_static_page_render_queue_modules(&payload),
+            modules,
             json!([
                 {"id": "summary"},
                 {"id": "trend"}
@@ -3404,8 +3434,11 @@ mod tests {
             ]
         });
 
+        let modules: StaticPageRenderQueueModulesValue =
+            build_static_page_render_queue_modules_fields(&payload);
+
         assert_eq!(
-            build_static_page_render_queue_modules_fields(&payload),
+            modules,
             json!([
                 {"id": "summary"},
                 {"id": "trend"}
@@ -3430,8 +3463,11 @@ mod tests {
             ]
         });
 
+        let modules: StaticPageRenderQueueModulesValue =
+            build_static_page_render_queue_modules_from_payload(&payload);
+
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload(&payload),
+            modules,
             json!([
                 {"id": "summary"},
                 {"id": "trend"}
@@ -3456,8 +3492,11 @@ mod tests {
             ]
         });
 
+        let modules: StaticPageRenderQueueModulesValue =
+            build_static_page_render_queue_modules_from_payload_fields(&payload);
+
         assert_eq!(
-            build_static_page_render_queue_modules_from_payload_fields(&payload),
+            modules,
             json!([
                 {"id": "summary"},
                 {"id": "trend"}
@@ -3477,7 +3516,7 @@ mod tests {
 
     #[test]
     fn render_queue_modules_from_value_preserves_array_and_empty_values() {
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {"id": "summary"},
             {"id": "trend"}
         ]);
@@ -3494,7 +3533,7 @@ mod tests {
 
     #[test]
     fn render_queue_modules_from_value_fields_preserve_array_and_empty_values() {
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {"id": "summary"},
             {"id": "trend"}
         ]);
@@ -3512,7 +3551,7 @@ mod tests {
     #[test]
     fn render_queue_export_package_preserves_manifest_fields_and_debug_counts() {
         let draft = draft_with_payload(json!({}));
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {
                 "id": "trend",
                 "visualization": {
@@ -3523,9 +3562,9 @@ mod tests {
                 "id": "summary"
             }
         ]);
-        let data_snapshot = json!({"source": "provided"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
 
-        let export_package =
+        let export_package: StaticPageRenderQueueExportPackageValue =
             build_static_page_render_queue_export_package(&draft, &modules, &data_snapshot);
 
         assert_eq!(export_package["kind"], json!("static-page-export-package"));
@@ -3546,7 +3585,7 @@ mod tests {
     #[test]
     fn render_queue_export_package_fields_preserve_inputs() {
         let draft = draft_with_payload(json!({}));
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {
                 "id": "trend",
                 "visualization": {
@@ -3554,7 +3593,7 @@ mod tests {
                 }
             }
         ]);
-        let data_snapshot = json!({"source": "provided"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
 
         let fields: StaticPageRenderQueueExportPackageFields<'_> =
             build_static_page_render_queue_export_package_fields(&draft, &modules, &data_snapshot);
@@ -3568,7 +3607,7 @@ mod tests {
     #[test]
     fn render_queue_export_package_from_fields_preserves_manifest_fields_and_debug_counts() {
         let draft = draft_with_payload(json!({}));
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {
                 "id": "trend",
                 "visualization": {
@@ -3579,13 +3618,14 @@ mod tests {
                 "id": "summary"
             }
         ]);
-        let data_snapshot = json!({"source": "provided"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
 
-        let export_package = build_static_page_render_queue_export_package_from_fields(
-            &draft,
-            &modules,
-            &data_snapshot,
-        );
+        let export_package: StaticPageRenderQueueExportPackageValue =
+            build_static_page_render_queue_export_package_from_fields(
+                &draft,
+                &modules,
+                &data_snapshot,
+            );
 
         assert_eq!(export_package["kind"], json!("static-page-export-package"));
         assert_eq!(export_package["version"], json!(1));
@@ -3809,10 +3849,10 @@ mod tests {
         let version: StaticPageQueuedExportPackageVersion = 1;
         let status: StaticPageQueuedExportPackageLifecycleScalar = "queued";
         let draft_id = StaticPageDraftId::new();
-        let files = json!([
+        let files: StaticPageQueuedExportPackageFilesValue = json!([
             {"path": "index.html", "role": "rendered_static_page", "mime": "text/html"}
         ]);
-        let dynamic_page_contract = json!({
+        let dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue = json!({
             "data_file": "data.json",
             "source_snapshot_file": "data-snapshot.json"
         });
@@ -3849,10 +3889,10 @@ mod tests {
         let version: StaticPageQueuedExportPackageVersion = 1;
         let status: StaticPageQueuedExportPackageLifecycleScalar = "queued";
         let draft_id = StaticPageDraftId::new();
-        let files = json!([
+        let files: StaticPageQueuedExportPackageFilesValue = json!([
             {"path": "index.html", "role": "rendered_static_page", "mime": "text/html"}
         ]);
-        let dynamic_page_contract = json!({
+        let dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue = json!({
             "data_file": "data.json",
             "source_snapshot_file": "data-snapshot.json"
         });
@@ -3906,26 +3946,28 @@ mod tests {
     #[test]
     fn queued_export_package_manifest_from_fields_preserves_object_shape() {
         let draft_id = StaticPageDraftId::new();
-        let files = json!([
+        let files: StaticPageQueuedExportPackageFilesValue = json!([
             {"path": "index.html", "role": "rendered_static_page", "mime": "text/html"}
         ]);
-        let dynamic_page_contract = json!({"version": 1, "data_file": "data.json"});
-        let debug = json!({
+        let dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue =
+            json!({"version": 1, "data_file": "data.json"});
+        let debug: StaticPageQueuedExportPackageDebugValue = json!({
             "renderer": "static-page-renderer-v1",
             "module_count": 2,
             "echarts_requested_modules": 1,
             "data_snapshot_source": "provided"
         });
 
-        let export_package = build_static_page_queued_export_package_manifest_from_fields(
-            "static-page-export-package",
-            1,
-            "queued",
-            draft_id,
-            files.clone(),
-            dynamic_page_contract.clone(),
-            debug.clone(),
-        );
+        let export_package: StaticPageRenderQueueExportPackageValue =
+            build_static_page_queued_export_package_manifest_from_fields(
+                "static-page-export-package",
+                1,
+                "queued",
+                draft_id,
+                files.clone(),
+                dynamic_page_contract.clone(),
+                debug.clone(),
+            );
 
         assert_eq!(export_package["kind"], json!("static-page-export-package"));
         assert_eq!(export_package["version"], json!(1));
@@ -3942,26 +3984,28 @@ mod tests {
     #[test]
     fn queued_export_package_manifest_payload_fields_preserve_object_shape() {
         let draft_id = StaticPageDraftId::new();
-        let files = json!([
+        let files: StaticPageQueuedExportPackageFilesValue = json!([
             {"path": "index.html", "role": "rendered_static_page", "mime": "text/html"}
         ]);
-        let dynamic_page_contract = json!({"version": 1, "data_file": "data.json"});
-        let debug = json!({
+        let dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue =
+            json!({"version": 1, "data_file": "data.json"});
+        let debug: StaticPageQueuedExportPackageDebugValue = json!({
             "renderer": "static-page-renderer-v1",
             "module_count": 2,
             "echarts_requested_modules": 1,
             "data_snapshot_source": "provided"
         });
 
-        let export_package = build_static_page_queued_export_package_manifest_payload_fields(
-            "static-page-export-package",
-            1,
-            "queued",
-            draft_id,
-            files.clone(),
-            dynamic_page_contract.clone(),
-            debug.clone(),
-        );
+        let export_package: StaticPageRenderQueueExportPackageValue =
+            build_static_page_queued_export_package_manifest_payload_fields(
+                "static-page-export-package",
+                1,
+                "queued",
+                draft_id,
+                files.clone(),
+                dynamic_page_contract.clone(),
+                debug.clone(),
+            );
 
         assert_eq!(export_package["kind"], json!("static-page-export-package"));
         assert_eq!(export_package["version"], json!(1));
@@ -3978,7 +4022,7 @@ mod tests {
     #[test]
     fn queued_export_package_manifest_fields_preserve_base_context_and_debug() {
         let draft = draft_with_payload(json!({}));
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {
                 "id": "trend",
                 "visualization": {
@@ -3987,7 +4031,7 @@ mod tests {
             },
             {"id": "summary"}
         ]);
-        let data_snapshot = json!({"source": "provided"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
 
         let fields: StaticPageQueuedExportPackageManifestFields =
             build_static_page_queued_export_package_manifest_fields(
@@ -4014,7 +4058,7 @@ mod tests {
     #[test]
     fn queued_export_package_manifest_context_fields_preserve_base_context_and_debug() {
         let draft = draft_with_payload(json!({}));
-        let modules = json!([
+        let modules: StaticPageRenderQueueModulesValue = json!([
             {
                 "id": "trend",
                 "visualization": {
@@ -4023,7 +4067,7 @@ mod tests {
             },
             {"id": "summary"}
         ]);
-        let data_snapshot = json!({"source": "provided"});
+        let data_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": "provided"});
 
         let (kind, version, status, draft_id, files, dynamic_page_contract, debug) =
             build_static_page_queued_export_package_manifest_context_fields(
@@ -4052,11 +4096,12 @@ mod tests {
         let version: StaticPageQueuedExportPackageVersion = 1;
         let status: StaticPageQueuedExportPackageLifecycleScalar = "queued";
         let draft_id = StaticPageDraftId::new();
-        let files = json!([
+        let files: StaticPageQueuedExportPackageFilesValue = json!([
             {"path": "index.html", "role": "rendered_static_page", "mime": "text/html"}
         ]);
-        let dynamic_page_contract = json!({"version": 1, "data_file": "data.json"});
-        let debug = json!({
+        let dynamic_page_contract: StaticPageQueuedExportPackageDynamicPageContractValue =
+            json!({"version": 1, "data_file": "data.json"});
+        let debug: StaticPageQueuedExportPackageDebugValue = json!({
             "renderer": "static-page-renderer-v1",
             "module_count": 2,
             "echarts_requested_modules": 1,
@@ -4249,7 +4294,8 @@ mod tests {
 
     #[test]
     fn queued_export_package_files_preserve_file_roles_and_order() {
-        let files = build_static_page_queued_export_package_files();
+        let files: StaticPageQueuedExportPackageFilesValue =
+            build_static_page_queued_export_package_files();
         let items = files.as_array().expect("files should be an array");
 
         assert_eq!(items.len(), 5);
@@ -4307,11 +4353,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_preserves_path_role_and_mime() {
-        let file = build_static_page_queued_export_package_file(
-            "index.html",
-            "rendered_static_page",
-            "text/html",
-        );
+        let file: StaticPageQueuedExportPackageFileValue =
+            build_static_page_queued_export_package_file(
+                "index.html",
+                "rendered_static_page",
+                "text/html",
+            );
 
         assert_eq!(file["path"], json!("index.html"));
         assert_eq!(file["role"], json!("rendered_static_page"));
@@ -4332,11 +4379,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_from_fields_preserves_path_role_and_mime() {
-        let file = build_static_page_queued_export_package_file_from_fields(
-            "index.html",
-            "rendered_static_page",
-            "text/html",
-        );
+        let file: StaticPageQueuedExportPackageFileValue =
+            build_static_page_queued_export_package_file_from_fields(
+                "index.html",
+                "rendered_static_page",
+                "text/html",
+            );
 
         assert_eq!(file["path"], json!("index.html"));
         assert_eq!(file["role"], json!("rendered_static_page"));
@@ -4345,11 +4393,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_payload_fields_preserve_path_role_and_mime() {
-        let file = build_static_page_queued_export_package_file_payload_fields(
-            "index.html",
-            "rendered_static_page",
-            "text/html",
-        );
+        let file: StaticPageQueuedExportPackageFileValue =
+            build_static_page_queued_export_package_file_payload_fields(
+                "index.html",
+                "rendered_static_page",
+                "text/html",
+            );
 
         assert_eq!(file["path"], json!("index.html"));
         assert_eq!(file["role"], json!("rendered_static_page"));
@@ -4616,11 +4665,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_from_spec_preserves_path_role_and_mime() {
-        let file = build_static_page_queued_export_package_file_from_spec((
-            "index.html",
-            "rendered_static_page",
-            "text/html",
-        ));
+        let file: StaticPageQueuedExportPackageFileValue =
+            build_static_page_queued_export_package_file_from_spec((
+                "index.html",
+                "rendered_static_page",
+                "text/html",
+            ));
 
         assert_eq!(file["path"], json!("index.html"));
         assert_eq!(file["role"], json!("rendered_static_page"));
@@ -4692,10 +4742,11 @@ mod tests {
 
     #[test]
     fn queued_export_package_files_from_specs_preserve_order_and_fields() {
-        let files = build_static_page_queued_export_package_files_from_specs(&[
-            ("first.html", "primary_page", "text/html"),
-            ("second.json", "secondary_data", "application/json"),
-        ]);
+        let files: StaticPageQueuedExportPackageFilesValue =
+            build_static_page_queued_export_package_files_from_specs(&[
+                ("first.html", "primary_page", "text/html"),
+                ("second.json", "secondary_data", "application/json"),
+            ]);
         let items = files.as_array().expect("files should be an array");
 
         assert_eq!(items.len(), 2);
@@ -4709,10 +4760,11 @@ mod tests {
 
     #[test]
     fn queued_export_package_files_from_specs_fields_preserve_order_and_fields() {
-        let items = build_static_page_queued_export_package_files_from_specs_fields(&[
-            ("first.html", "primary_page", "text/html"),
-            ("second.json", "secondary_data", "application/json"),
-        ]);
+        let items: StaticPageQueuedExportPackageFileEntriesValue =
+            build_static_page_queued_export_package_files_from_specs_fields(&[
+                ("first.html", "primary_page", "text/html"),
+                ("second.json", "secondary_data", "application/json"),
+            ]);
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["path"], json!("first.html"));
@@ -4725,10 +4777,11 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_entries_from_specs_preserve_order_and_fields() {
-        let items = build_static_page_queued_export_package_file_entries_from_specs(&[
-            ("first.html", "primary_page", "text/html"),
-            ("second.json", "secondary_data", "application/json"),
-        ]);
+        let items: StaticPageQueuedExportPackageFileEntriesValue =
+            build_static_page_queued_export_package_file_entries_from_specs(&[
+                ("first.html", "primary_page", "text/html"),
+                ("second.json", "secondary_data", "application/json"),
+            ]);
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["path"], json!("first.html"));
@@ -4741,10 +4794,11 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_entries_from_specs_fields_preserve_order_and_fields() {
-        let items = build_static_page_queued_export_package_file_entries_from_specs_fields(&[
-            ("first.html", "primary_page", "text/html"),
-            ("second.json", "secondary_data", "application/json"),
-        ]);
+        let items: StaticPageQueuedExportPackageFileEntriesValue =
+            build_static_page_queued_export_package_file_entries_from_specs_fields(&[
+                ("first.html", "primary_page", "text/html"),
+                ("second.json", "secondary_data", "application/json"),
+            ]);
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["path"], json!("first.html"));
@@ -4757,7 +4811,7 @@ mod tests {
 
     #[test]
     fn queued_export_package_file_entries_from_specs_fields_entries_preserve_order_and_fields() {
-        let items =
+        let items: StaticPageQueuedExportPackageFileEntriesValue =
             build_static_page_queued_export_package_file_entries_from_specs_fields_entries(&[
                 ("first.html", "primary_page", "text/html"),
                 ("second.json", "secondary_data", "application/json"),
@@ -4774,10 +4828,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_files_from_entries_preserve_array_order() {
-        let files = build_static_page_queued_export_package_files_from_entries(vec![
+        let entries: StaticPageQueuedExportPackageFileEntriesValue = vec![
             json!({"path": "first.html", "role": "primary_page", "mime": "text/html"}),
             json!({"path": "second.json", "role": "secondary_data", "mime": "application/json"}),
-        ]);
+        ];
+        let files: StaticPageQueuedExportPackageFilesValue =
+            build_static_page_queued_export_package_files_from_entries(entries);
         let items = files.as_array().expect("files should be an array");
 
         assert_eq!(items.len(), 2);
@@ -4791,10 +4847,12 @@ mod tests {
 
     #[test]
     fn queued_export_package_files_from_entries_fields_preserve_array_order() {
-        let items = build_static_page_queued_export_package_files_from_entries_fields(vec![
+        let entries: StaticPageQueuedExportPackageFileEntriesValue = vec![
             json!({"path": "first.html", "role": "primary_page", "mime": "text/html"}),
             json!({"path": "second.json", "role": "secondary_data", "mime": "application/json"}),
-        ]);
+        ];
+        let items: StaticPageQueuedExportPackageFileEntriesValue =
+            build_static_page_queued_export_package_files_from_entries_fields(entries);
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["path"], json!("first.html"));
@@ -4924,36 +4982,42 @@ mod tests {
 
     #[test]
     fn queued_export_package_data_snapshot_source_preserves_string_and_unknown_fallback() {
-        let provided_snapshot = json!({"source": "provided"});
+        let provided_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({});
+        let non_string_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": 123});
         let source: StaticPageQueuedExportPackageDataSnapshotSource<'_> =
             build_static_page_queued_export_package_data_snapshot_source(&provided_snapshot);
 
         assert_eq!(source, "provided");
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source(&json!({})),
+            build_static_page_queued_export_package_data_snapshot_source(&missing_snapshot),
             "unknown"
         );
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source(&json!({"source": 123})),
+            build_static_page_queued_export_package_data_snapshot_source(&non_string_snapshot),
             "unknown"
         );
     }
 
     #[test]
     fn queued_export_package_data_snapshot_source_fields_preserve_optional_string() {
+        let provided_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({});
+        let non_string_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": 123});
+
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source_fields(
-                &json!({"source": "provided"})
-            ),
+            build_static_page_queued_export_package_data_snapshot_source_fields(&provided_snapshot),
             Some("provided")
         );
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source_fields(&json!({})),
+            build_static_page_queued_export_package_data_snapshot_source_fields(&missing_snapshot),
             None
         );
         assert_eq!(
             build_static_page_queued_export_package_data_snapshot_source_fields(
-                &json!({"source": 123})
+                &non_string_snapshot
             ),
             None
         );
@@ -4961,19 +5025,22 @@ mod tests {
 
     #[test]
     fn queued_export_package_data_snapshot_source_value_preserves_string_and_missing() {
+        let provided_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({});
+        let non_string_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": 123});
+
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source_value(
-                &json!({"source": "provided"})
-            ),
+            build_static_page_queued_export_package_data_snapshot_source_value(&provided_snapshot),
             Some("provided")
         );
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source_value(&json!({})),
+            build_static_page_queued_export_package_data_snapshot_source_value(&missing_snapshot),
             None
         );
         assert_eq!(
             build_static_page_queued_export_package_data_snapshot_source_value(
-                &json!({"source": 123})
+                &non_string_snapshot
             ),
             None
         );
@@ -4981,19 +5048,26 @@ mod tests {
 
     #[test]
     fn queued_export_package_data_snapshot_source_value_fields_preserve_string_and_missing() {
+        let provided_snapshot: StaticPageRenderQueueDataSnapshotValue =
+            json!({"source": "provided"});
+        let missing_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({});
+        let non_string_snapshot: StaticPageRenderQueueDataSnapshotValue = json!({"source": 123});
+
         assert_eq!(
             build_static_page_queued_export_package_data_snapshot_source_value_fields(
-                &json!({"source": "provided"})
+                &provided_snapshot
             ),
             Some("provided")
         );
         assert_eq!(
-            build_static_page_queued_export_package_data_snapshot_source_value_fields(&json!({})),
+            build_static_page_queued_export_package_data_snapshot_source_value_fields(
+                &missing_snapshot
+            ),
             None
         );
         assert_eq!(
             build_static_page_queued_export_package_data_snapshot_source_value_fields(
-                &json!({"source": 123})
+                &non_string_snapshot
             ),
             None
         );
@@ -5224,19 +5298,19 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_requests_echarts_preserves_runtime_matching() {
-        let visualization_echarts = json!({
+        let visualization_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "trend",
             "visualization": {
                 "chartRuntime": "echarts"
             }
         });
-        let chart_options_echarts = json!({
+        let chart_options_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "advanced",
             "chartOptions": {
                 "chartRuntime": "echarts"
             }
         });
-        let non_echarts = json!({
+        let non_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "summary",
             "visualization": {
                 "type": "text"
@@ -5254,19 +5328,19 @@ mod tests {
 
     #[test]
     fn queued_export_package_module_requests_echarts_fields_preserve_runtime_matching() {
-        let visualization_echarts = json!({
+        let visualization_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "trend",
             "visualization": {
                 "chartRuntime": "echarts"
             }
         });
-        let chart_options_echarts = json!({
+        let chart_options_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "advanced",
             "chartOptions": {
                 "chartRuntime": "echarts"
             }
         });
-        let non_echarts = json!({
+        let non_echarts: StaticPageQueuedExportPackageModuleValue = json!({
             "id": "summary",
             "visualization": {
                 "type": "text"
