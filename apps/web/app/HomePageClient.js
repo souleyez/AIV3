@@ -482,49 +482,42 @@ export default function HomePageClient() {
     ),
     [backendHtmlArtifacts, staticPageDraftItems, reportRenderOutputs, selectedReportPlan],
   );
-  const visibleArtifactTaskRefSets = useMemo(() => ({
-    reportPlanIds: new Set(visibleArtifactTaskRefs.reportPlanIds || []),
-    publishedReportIds: new Set(visibleArtifactTaskRefs.publishedReportIds || []),
-    staticPageDraftIds: new Set(visibleArtifactTaskRefs.staticPageDraftIds || []),
-    htmlArtifactIds: new Set(visibleArtifactTaskRefs.htmlArtifactIds || []),
-  }), [visibleArtifactTaskRefs]);
   const taskCardStaticPageDraftItems = useMemo(() => {
-    const visibleIds = new Set(visibleArtifactTaskRefSets.staticPageDraftIds);
-    staticPageDraftTaskRefIds(activeStaticPageDraft).forEach((id) => visibleIds.add(id));
-    return staticPageDraftItems.filter((draft) => staticPageDraftTaskRefIds(draft).some((id) => visibleIds.has(id)));
-  }, [activeStaticPageDraft, staticPageDraftItems, visibleArtifactTaskRefSets]);
+    const byId = new Map();
+    const activeDraftIds = new Set(staticPageDraftTaskRefIds(activeStaticPageDraft));
+    const addDraft = (draft) => {
+      if (!draft?.id) return;
+      byId.set(draft.id, draft);
+    };
+    reportShelfStaticPageDraftItems.forEach(addDraft);
+    staticPageDraftItems.forEach((draft) => {
+      const status = String(draft?.backendStatus || draft?.backend_status || draft?.status || '').toLowerCase();
+      const snapshot = staticPageDraftAsyncSnapshot(draft);
+      const draftIds = staticPageDraftTaskRefIds(draft);
+      const isActiveDraft = draftIds.some((id) => activeDraftIds.has(id));
+      const shouldKeepTaskCard = isActiveDraft
+        || snapshot.renderInProgress
+        || snapshot.previewReady
+        || snapshot.rendered
+        || ['queued', 'running', 'preview_ready', 'effect_confirmed', 'rendering', 'rendered'].includes(status);
+      if (shouldKeepTaskCard) {
+        addDraft(draft);
+      }
+    });
+    return sortStaticPageDrafts([...byId.values()]);
+  }, [activeStaticPageDraft, reportShelfStaticPageDraftItems, staticPageDraftItems]);
   const taskCardHtmlArtifacts = useMemo(() => {
-    const visibleArtifactIds = new Set(visibleArtifactTaskRefSets.htmlArtifactIds);
-    if (activeHtmlArtifactId) {
-      visibleArtifactIds.add(activeHtmlArtifactId);
-    }
-    const visibleDraftIds = new Set();
+    const activeDraftIds = new Set();
     taskCardStaticPageDraftItems.forEach((draft) => {
-      staticPageDraftTaskRefIds(draft).forEach((id) => visibleDraftIds.add(id));
+      staticPageDraftTaskRefIds(draft).forEach((id) => activeDraftIds.add(id));
     });
     return htmlArtifacts.filter((artifact) => {
-      const artifactId = htmlArtifactTaskRefId(artifact);
-      if (artifactId && visibleArtifactIds.has(artifactId)) return true;
       const ownerDraftId = artifactOwnerStaticPageDraftId(artifact);
-      return ownerDraftId && visibleDraftIds.has(ownerDraftId);
+      return !ownerDraftId || activeDraftIds.has(ownerDraftId);
     });
-  }, [activeHtmlArtifactId, htmlArtifacts, taskCardStaticPageDraftItems, visibleArtifactTaskRefSets]);
-  const taskCardReportPlans = useMemo(() => {
-    const visibleIds = new Set(visibleArtifactTaskRefSets.reportPlanIds);
-    if (selectedReportPlanId) {
-      visibleIds.add(selectedReportPlanId);
-    }
-    return datasetReportPlans.filter((plan) => visibleIds.has(plan.id));
-  }, [datasetReportPlans, selectedReportPlanId, visibleArtifactTaskRefSets]);
-  const taskCardPublishedReports = useMemo(() => {
-    const visibleReportIds = new Set(visibleArtifactTaskRefSets.publishedReportIds);
-    const visiblePlanIds = new Set(taskCardReportPlans.map((plan) => plan.id).filter(Boolean));
-    return datasetPublishedReports.filter((report) => {
-      if (visibleReportIds.has(report.id || report.report_id || '')) return true;
-      const planId = report.report_plan_id || report.reportPlanId || report.plan_id || report.planId || '';
-      return planId && visiblePlanIds.has(planId);
-    });
-  }, [datasetPublishedReports, taskCardReportPlans, visibleArtifactTaskRefSets]);
+  }, [htmlArtifacts, taskCardStaticPageDraftItems]);
+  const taskCardReportPlans = datasetReportPlans;
+  const taskCardPublishedReports = datasetPublishedReports;
   const activeHtmlArtifact = useMemo(
     () => htmlArtifacts.find((artifact) => artifact.id === activeHtmlArtifactId) || null,
     [activeHtmlArtifactId, htmlArtifacts],
