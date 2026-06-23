@@ -2802,6 +2802,56 @@ textarea {
   padding: 0 12px 11px;
 }
 
+.artifact-task-card-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 11px;
+}
+
+.artifact-task-card-control {
+  min-height: 24px;
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+.artifact-task-card-edit-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 12px 12px;
+  padding: 10px;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 10px;
+  background: rgba(5, 12, 24, 0.58);
+}
+
+.artifact-task-card-edit-block {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-task-card-edit-block span {
+  color: #8fd3ff;
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.artifact-task-card-edit-block p,
+.artifact-task-card-edit-block li {
+  margin: 0;
+  color: #c8d7ee;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.artifact-task-card-edit-block ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0 0 0 16px;
+}
+
 .report-shelf-actions {
   padding-top: 1px;
 }

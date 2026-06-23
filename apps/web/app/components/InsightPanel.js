@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import { buildArtifactTaskCards } from '../lib/artifact-task-cards';
@@ -1621,12 +1621,141 @@ function openTaskCardUrl(card) {
   return true;
 }
 
+function compactTaskCardText(value, limit = 900) {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, limit);
+}
+
+function firstTaskCardText(values = [], limit = 900) {
+  for (const value of values) {
+    if (value && typeof value === 'object') {
+      const text = compactTaskCardText(value.sourceMarkdown || value.userGoal || value.subject || value.title, limit);
+      if (text) return text;
+      continue;
+    }
+    const text = compactTaskCardText(value, limit);
+    if (text) return text;
+  }
+  return '';
+}
+
+function uniqueTaskCardLines(lines = []) {
+  const seen = new Set();
+  return lines
+    .map((line) => compactTaskCardText(line, 220))
+    .filter((line) => {
+      if (!line || seen.has(line)) return false;
+      seen.add(line);
+      return true;
+    });
+}
+
+function taskCardSourceLines(card) {
+  const raw = card?.raw || {};
+  const draft = raw.staticPageDraft || {};
+  const sourceRefs = draft.source_refs || draft.sourceRefs || {};
+  const clientSource = sourceRefs.client_source || sourceRefs.clientSource || draft.source || {};
+  const planningBrief = clientSource.planningBrief || clientSource.planning_brief || draft.source?.planningBrief || {};
+  const dataSnapshot = draft.dataSnapshot || draft.data_snapshot || {};
+  const htmlArtifact = raw.htmlArtifact || {};
+  const htmlPayload = htmlArtifact.payload || {};
+  const clientArtifact = raw.clientArtifact || {};
+  const reportPlan = raw.reportPlan || {};
+  const report = raw.publishedReport || {};
+
+  const datasetIds = [
+    draft.datasetId,
+    draft.dataset_id,
+    sourceRefs.dataset_id,
+    sourceRefs.datasetId,
+    reportPlan.dataset_id,
+    reportPlan.datasetId,
+    report.dataset_id,
+    report.datasetId,
+    ...(Array.isArray(draft.matched_dataset_ids) ? draft.matched_dataset_ids : []),
+    ...(Array.isArray(draft.matchedDatasetIds) ? draft.matchedDatasetIds : []),
+    ...(Array.isArray(clientArtifact.dataset_ids) ? clientArtifact.dataset_ids : []),
+    ...(Array.isArray(clientArtifact.datasetIds) ? clientArtifact.datasetIds : []),
+  ].filter(Boolean);
+
+  const fieldCandidates = Array.isArray(dataSnapshot.fieldCandidates)
+    ? dataSnapshot.fieldCandidates
+    : Array.isArray(dataSnapshot.field_candidates)
+      ? dataSnapshot.field_candidates
+      : [];
+  const fieldLine = fieldCandidates.length
+    ? `字段线索：${fieldCandidates.slice(0, 4).map((item) => item.label || item.title || item.fieldPath || item.field_path).filter(Boolean).join('、')}`
+    : '';
+
+  return uniqueTaskCardLines([
+    planningBrief.datasetLine ? `数据集：${planningBrief.datasetLine}` : '',
+    planningBrief.documentLine ? `文档线索：${planningBrief.documentLine}` : '',
+    planningBrief.evidenceLine ? `证据线索：${planningBrief.evidenceLine}` : '',
+    datasetIds.length ? `数据集ID：${Array.from(new Set(datasetIds)).slice(0, 5).join('、')}` : '',
+    fieldLine,
+    htmlPayload.renderOutputId || htmlPayload.render_output_id ? `Render Output：${htmlPayload.renderOutputId || htmlPayload.render_output_id}` : '',
+    ...(Array.isArray(card?.sourceRefs)
+      ? card.sourceRefs
+        .filter((ref) => !['workflow_execution', 'static_page_draft'].includes(ref.kind))
+        .slice(0, 4)
+        .map((ref) => `${ref.label || formatSnakeCaseLabel(ref.kind)}${ref.id ? `：${ref.id}` : ''}`)
+      : []),
+  ]);
+}
+
+function taskCardEditInfo(card) {
+  const raw = card?.raw || {};
+  const draft = raw.staticPageDraft || {};
+  const sourceRefs = draft.source_refs || draft.sourceRefs || {};
+  const clientSource = sourceRefs.client_source || sourceRefs.clientSource || draft.source || {};
+  const planningBrief = clientSource.planningBrief || clientSource.planning_brief || draft.source?.planningBrief || {};
+  const htmlArtifact = raw.htmlArtifact || {};
+  const htmlPayload = htmlArtifact.payload || {};
+  const clientArtifact = raw.clientArtifact || {};
+  const manifest = clientArtifact.manifest || {};
+
+  const prompt = firstTaskCardText([
+    draft.prompt,
+    draft.promptText,
+    draft.prompt_text,
+    planningBrief.userGoal,
+    planningBrief.sourceMarkdown,
+    draft.objective,
+    htmlPayload.prompt,
+    htmlPayload.promptText,
+    htmlPayload.prompt_text,
+    manifest.prompt,
+    manifest.prompt_text,
+    clientArtifact.prompt,
+    raw.reportPlan?.objective,
+    raw.reportPlan?.prompt,
+    card?.summary,
+  ], 1200);
+  const sources = taskCardSourceLines(card);
+  return {
+    prompt,
+    sources,
+    hasContent: Boolean(prompt || sources.length),
+  };
+}
+
+function deletableStaticPageDraftId(card) {
+  const draft = card?.raw?.staticPageDraft;
+  if (!draft) return '';
+  return draft.id || draft.backendDraftId || draft.backend_draft_id || '';
+}
+
 function ArtifactTaskCard({
   card,
   active,
+  expanded,
+  editInfo,
   onSelect,
   onOpen,
+  onToggleEdit,
+  onDelete,
 }) {
+  const primaryFile = taskCardPrimaryFile(card);
+  const primaryKindLabel = primaryFile?.kind === 'preview_image' ? '效果图' : '页面';
   return (
     <article className={`generated-project-card artifact-task-card ${active ? 'active' : ''}`.trim()}>
       <button
@@ -1638,7 +1767,7 @@ function ArtifactTaskCard({
           event.stopPropagation();
           onOpen?.();
         }}
-        title={card.canOpen ? '双击打开报表页面' : undefined}
+        title={card.canOpen ? `双击打开${primaryKindLabel}` : undefined}
       >
         <div className="generated-project-title-row">
           <strong>{truncateText(card.title, 38)}</strong>
@@ -1649,6 +1778,47 @@ function ArtifactTaskCard({
           <em>{card.phase ? `${card.phase} · ${card.statusLabel}` : card.statusLabel}</em>
         </div>
       </button>
+      <div className="artifact-task-card-controls" aria-label="产物操作">
+        {editInfo?.hasContent ? (
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn artifact-task-card-control"
+            aria-expanded={expanded}
+            onClick={onToggleEdit}
+          >
+            {expanded ? '收起' : '编辑'}
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button
+            type="button"
+            className="ghost-btn compact-action-btn danger-action artifact-task-card-control"
+            onClick={onDelete}
+          >
+            删除
+          </button>
+        ) : null}
+      </div>
+      {expanded ? (
+        <div className="artifact-task-card-edit-panel">
+          <div className="artifact-task-card-edit-block">
+            <span>生成提示词</span>
+            <p>{editInfo?.prompt || '暂无记录'}</p>
+          </div>
+          <div className="artifact-task-card-edit-block">
+            <span>数据来源</span>
+            {editInfo?.sources?.length ? (
+              <ul>
+                {editInfo.sources.map((source) => (
+                  <li key={source}>{source}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>暂无记录</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -1701,6 +1871,7 @@ export default function InsightPanel({
   onSelectHtmlArtifact,
   onRefreshHtmlArtifacts,
 }) {
+  const [expandedArtifactTaskCardId, setExpandedArtifactTaskCardId] = useState('');
   const artifactTaskCards = useMemo(() => buildArtifactTaskCards({
     reportPlans,
     publishedReports,
@@ -1755,6 +1926,13 @@ export default function InsightPanel({
       const reportId = publishedReport.id || publishedReport.report_id || publishedReport.reportId || card.id;
       onSelectPublishedReport?.(reportId, card.title);
     }
+  };
+
+  const deleteTaskCard = (card) => {
+    const draftId = deletableStaticPageDraftId(card);
+    if (!draftId || !onDeleteStaticPageDraft) return;
+    setExpandedArtifactTaskCardId((current) => (current === card.id ? '' : current));
+    onDeleteStaticPageDraft(draftId);
   };
 
   const openTaskCard = (card) => {
@@ -1824,8 +2002,12 @@ export default function InsightPanel({
                 key={card.id}
                 card={card}
                 active={isTaskCardActive(card)}
+                expanded={expandedArtifactTaskCardId === card.id}
+                editInfo={taskCardEditInfo(card)}
                 onSelect={() => selectTaskCard(card)}
                 onOpen={() => openTaskCard(card)}
+                onToggleEdit={() => setExpandedArtifactTaskCardId((current) => (current === card.id ? '' : card.id))}
+                onDelete={deletableStaticPageDraftId(card) && onDeleteStaticPageDraft ? () => deleteTaskCard(card) : null}
               />
             ))}
           </div>
