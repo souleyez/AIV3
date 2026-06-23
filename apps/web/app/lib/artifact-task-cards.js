@@ -1,6 +1,6 @@
 import { formatSnakeCaseLabel } from './formatters.js';
 import { normalizeHtmlArtifactManifest } from './html-artifact-manifest.js';
-import { staticPageRenderedUrlFromDraft, staticPageSafePreviewPath } from './html-artifact-utils.js';
+import { isCustomerFacingHtmlArtifact, staticPageRenderedUrlFromDraft, staticPageSafePreviewPath } from './html-artifact-utils.js';
 
 const TASK_STATUSES = new Set([
   'queued',
@@ -50,6 +50,11 @@ const FILE_KIND_LABELS = {
 };
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'retrying', 'needs_review']);
+const ARTIFACT_PRODUCING_CODEX_TASKS = new Set([
+  'customer_artifact_request',
+  'generated_static_page_edit',
+  'generated_static_page_publish',
+]);
 
 function compactText(value, limit = 180) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, limit);
@@ -596,6 +601,7 @@ function htmlArtifactGeneratedFiles(artifact, manifest) {
 
 function buildHtmlArtifactCard(artifact) {
   if (!artifact) return null;
+  if (!isCustomerFacingHtmlArtifact(artifact)) return null;
   const normalized = normalizeHtmlArtifactManifest(artifact);
   if (normalized.rejected) {
     const id = normalized.sourceId || artifact.id || artifact.artifact_id || 'rejected-html-artifact';
@@ -677,6 +683,10 @@ function buildHtmlArtifactCard(artifact) {
 
 function buildCodexTaskCard(task) {
   if (!task) return null;
+  if (!ARTIFACT_PRODUCING_CODEX_TASKS.has(compactText(task.capability, 80))
+    && !ARTIFACT_PRODUCING_CODEX_TASKS.has(compactText(task.route, 80))) {
+    return null;
+  }
   const workflowExecutionId = task.workflowExecutionId || task.workflow_execution_id || '';
   const status = normalizeArtifactTaskStatus(task.status, 'running');
   return {

@@ -12,6 +12,7 @@ import {
   findStaticPageDraftByAnyId,
   firstReportAssetPath,
   htmlArtifactOwnerScope,
+  isCustomerFacingHtmlArtifact,
   isReportRenderHtmlArtifact,
   mergeHtmlArtifacts,
   replaceReportRenderHtmlArtifacts,
@@ -99,6 +100,15 @@ describe('HTML artifact helpers', () => {
     );
     assert.equal(findStaticPageDraftByAnyId('', {}, [localDraft]), null);
     assert.equal(findStaticPageDraftByAnyId('missing', {}, null), null);
+  });
+
+  it('classifies internal HTML handoff and diagnostic artifacts as non-customer-facing', () => {
+    assert.equal(isCustomerFacingHtmlArtifact({ templateId: 'static_page_published_preview' }), true);
+    assert.equal(isCustomerFacingHtmlArtifact({ templateId: 'video_extraction_summary' }), true);
+    assert.equal(isCustomerFacingHtmlArtifact({ templateId: 'static_page_planning_handoff' }), false);
+    assert.equal(isCustomerFacingHtmlArtifact({ template_id: 'static_page_data_quality_report' }), false);
+    assert.equal(isCustomerFacingHtmlArtifact({ manifest: { templateId: 'codex_execution_report' } }), false);
+    assert.equal(isCustomerFacingHtmlArtifact({ templateId: 'wechat_video_login_handoff' }), false);
   });
 
   it('finds published static page artifacts by owner scope and template id', () => {

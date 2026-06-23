@@ -44,6 +44,30 @@ describe('artifact task cards', () => {
           renderOutputId: 'render-1',
           summary: '页面已生成。',
         },
+      }, {
+        kind: 'html_artifact',
+        version: 1,
+        id: 'html-static-page-handoff-draft-1',
+        title: '门店取高报表 · 交接',
+        sourceType: 'static_page',
+        templateId: 'static_page_planning_handoff',
+        payload: { status: 'planned' },
+      }, {
+        kind: 'html_artifact',
+        version: 1,
+        id: 'html-static-page-quality-draft-1',
+        title: '门店取高报表 · 数据质量报告',
+        sourceType: 'static_page',
+        templateId: 'static_page_data_quality_report',
+        payload: { status: 'failed' },
+      }, {
+        kind: 'html_artifact',
+        version: 1,
+        id: 'html-artifact-codex-exec-1',
+        title: 'Codex Host 执行报告',
+        sourceType: 'codex_host',
+        templateId: 'codex_execution_report',
+        payload: { status: 'completed' },
       }],
       codexCustomerTasks: [{
         id: 'task-1',
@@ -53,6 +77,13 @@ describe('artifact task cards', () => {
         route: 'generated_static_page_publish',
         workflowExecutionId: '22222222-2222-4222-8222-222222222222',
         createdAt: '2026-06-17T08:01:00Z',
+      }, {
+        id: 'task-v3-change',
+        title: '需人工审核',
+        status: 'blocked',
+        capability: 'v3_product_change_request',
+        route: 'v3_product_change_request',
+        createdAt: '2026-06-17T08:01:30Z',
       }],
       codexCustomerArtifacts: [{
         id: 'artifact-bundle-1',
@@ -106,6 +137,7 @@ describe('artifact task cards', () => {
 
     assert.equal(cards.length, 3);
     assert.deepEqual(cards.map((card) => card.kind), ['v3_client_artifact', 'codex_artifact', 'html_artifact']);
+    assert.equal(cards.some((card) => /交接|数据质量|执行报告|人工审核/.test(card.title)), false);
 
     const staticPageCard = cards.find((card) => card.sourceRefs.some((ref) => ref.id === 'draft-backend-1'));
     assert.ok(staticPageCard);

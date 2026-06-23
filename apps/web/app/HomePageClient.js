@@ -50,12 +50,12 @@ import {
 } from './lib/home-chat-intents';
 import { fetchJson, fetchSseJson } from './lib/home-api-client';
 import {
-  buildStaticPagePlanningHtmlArtifact,
   buildReportRenderHtmlArtifact,
   buildStaticPagePublishedHtmlArtifact,
   findPublishedStaticPageArtifactForDraft,
   findStaticPageDraftByAnyId,
   htmlArtifactOwnerScope,
+  isCustomerFacingHtmlArtifact,
   mergeHtmlArtifacts,
   replaceReportRenderHtmlArtifacts,
   staticPageRenderedUrlFromDraft,
@@ -403,9 +403,8 @@ export default function HomePageClient() {
   );
   const htmlArtifacts = useMemo(
     () => mergeHtmlArtifacts(
-      backendHtmlArtifacts,
+      backendHtmlArtifacts.filter(isCustomerFacingHtmlArtifact),
       staticPageDraftItems.map(buildStaticPagePublishedHtmlArtifact).filter(Boolean),
-      staticPageDraftItems.map(buildStaticPagePlanningHtmlArtifact).filter(Boolean),
       reportRenderOutputs.map((output) => buildReportRenderHtmlArtifact(output, selectedReportPlan)).filter(Boolean),
     ),
     [backendHtmlArtifacts, staticPageDraftItems, reportRenderOutputs, selectedReportPlan],

@@ -18,6 +18,28 @@ export function staticPageRenderedUrlFromDraft(draftOrOutput) {
     || '';
 }
 
+const INTERNAL_HTML_ARTIFACT_TEMPLATE_IDS = new Set([
+  'static_page_planning_handoff',
+  'static_page_data_quality_report',
+  'codex_execution_report',
+  'wechat_video_login_handoff',
+]);
+
+function htmlArtifactTemplateId(artifact = {}) {
+  return String(
+    artifact.templateId
+      || artifact.template_id
+      || artifact.manifest?.templateId
+      || artifact.manifest?.template_id
+      || '',
+  ).trim();
+}
+
+export function isCustomerFacingHtmlArtifact(artifact) {
+  if (!artifact) return false;
+  return !INTERNAL_HTML_ARTIFACT_TEMPLATE_IDS.has(htmlArtifactTemplateId(artifact));
+}
+
 export function staticPageSafePreviewPath(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
