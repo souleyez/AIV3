@@ -1936,7 +1936,6 @@ export default function InsightPanel({
     return false;
   };
   const activeTaskCard = visibleArtifactTaskCards.find(isTaskCardActive) || null;
-  const activeTaskCardTitle = activeTaskCard?.title || '';
 
   const selectTaskCard = (card) => {
     const raw = card?.raw || {};
@@ -2037,11 +2036,6 @@ export default function InsightPanel({
 
       {resultCount ? (
         <section className="card insight-card right-results-card">
-          {activeTaskCardTitle ? (
-            <div className="report-shelf-selected-note">
-              已选中「{truncateText(activeTaskCardTitle, 30)}」任务，可以告诉我你想怎么调整这个报表或产物。
-            </div>
-          ) : null}
           <div className="generated-project-list">
             {visibleArtifactTaskCards.map((card) => (
               <ArtifactTaskCard

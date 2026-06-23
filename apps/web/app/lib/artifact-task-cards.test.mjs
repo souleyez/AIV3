@@ -224,4 +224,21 @@ describe('artifact task cards', () => {
     assert.ok(publishedOnlyCard);
     assert.equal(publishedOnlyCard.kind, 'published_report');
   });
+
+  it('does not surface archived static page drafts even if the payload still has a rendered URL', () => {
+    const cards = buildArtifactTaskCards({
+      staticPageDrafts: [{
+        id: 'archived-static-page',
+        backendStatus: 'archived',
+        status: 'rendered',
+        title: '静态页：历史归档报表',
+        finalPage: {
+          status: 'rendered',
+          htmlPreviewUrl: '/generated-artifacts/archived/index.html',
+        },
+      }],
+    });
+
+    assert.deepEqual(cards, []);
+  });
 });

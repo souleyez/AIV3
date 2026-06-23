@@ -272,6 +272,24 @@ test('backend static page draft merge preserves status and dataset scope', () =>
   assert.equal(normalized.id, 'backend-only');
   assert.equal(normalized.localDraftId, 'local-only');
   assert.equal(normalized.status, 'rendered');
+
+  const archived = normalizeBackendStaticPageDraft({
+    id: 'archived-backend',
+    status: 'archived',
+    source_refs: { local_draft_id: 'archived-local' },
+    draft_payload: {
+      status: 'rendered',
+      finalPage: {
+        status: 'rendered',
+        htmlPreviewUrl: '/generated-artifacts/archived/index.html',
+      },
+    },
+  });
+
+  assert.equal(archived.id, 'archived-backend');
+  assert.equal(archived.localDraftId, 'archived-local');
+  assert.equal(archived.backendStatus, 'archived');
+  assert.equal(archived.status, 'archived');
 });
 
 test('render output merge updates final page without losing existing values', () => {

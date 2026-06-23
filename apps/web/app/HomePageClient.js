@@ -364,7 +364,7 @@ export default function HomePageClient() {
   );
   const staticPageDraftItems = useMemo(
     () => sortStaticPageDrafts(Object.values(staticPageDrafts).filter((draft) => {
-      const status = String(draft?.status || draft?.backendStatus || '').toLowerCase();
+      const status = String(draft?.backendStatus || draft?.backend_status || draft?.status || '').toLowerCase();
       return status !== 'archived';
     })),
     [staticPageDrafts],

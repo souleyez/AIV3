@@ -2977,17 +2977,6 @@ textarea {
   border-color: rgba(148, 163, 184, 0.2);
 }
 
-.report-shelf-selected-note {
-  margin: 0 0 10px;
-  padding: 9px 11px;
-  border: 1px solid rgba(125, 211, 252, 0.24);
-  border-radius: 8px;
-  color: var(--text-main);
-  background: rgba(14, 165, 233, 0.1);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .artifact-download-link {
   text-decoration: none;
 }

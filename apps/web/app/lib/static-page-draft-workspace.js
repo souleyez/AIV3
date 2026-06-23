@@ -9,8 +9,16 @@ export function staticPageDraftIsDataReportArtifact(draft) {
   return /template:data-report(?:\||$)/.test(staticPageDraftArtifactKey(draft));
 }
 
+export function staticPageDraftIsArchived(draft) {
+  return [
+    draft?.backendStatus,
+    draft?.backend_status,
+    draft?.status,
+  ].some((status) => String(status || '').toLowerCase() === 'archived');
+}
+
 export function shouldAnnounceStaticPageRendered(draft) {
-  return !staticPageDraftIsDataReportArtifact(draft);
+  return !staticPageDraftIsArchived(draft) && !staticPageDraftIsDataReportArtifact(draft);
 }
 
 export function staticPageDraftAsyncSnapshot(draft) {
@@ -39,6 +47,9 @@ export function isReusableStaticPageReportDraft(draft) {
   if (!draft) {
     return false;
   }
+  if (staticPageDraftIsArchived(draft)) {
+    return false;
+  }
   const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
   const snapshot = staticPageDraftAsyncSnapshot(draft);
   if (staticPageDraftBaselineStatus(draft) === 'retired') {
@@ -56,6 +67,9 @@ export function isReusableStaticPageReportDraft(draft) {
 
 export function isVisibleReportShelfStaticPageDraft(draft) {
   if (!draft) {
+    return false;
+  }
+  if (staticPageDraftIsArchived(draft)) {
     return false;
   }
   const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
@@ -127,6 +141,9 @@ export function staticPageDraftDiscoveryId(draft) {
 }
 
 export function staticPageDraftReadyForAutoRender(draft) {
+  if (staticPageDraftIsArchived(draft)) {
+    return false;
+  }
   const snapshot = staticPageDraftAsyncSnapshot(draft);
   return Boolean(
     draft?.backendDraftId

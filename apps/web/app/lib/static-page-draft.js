@@ -2301,6 +2301,9 @@ export function mergeBackendStaticPageDraft(localDraft, backendDraft) {
   if (backendDraft?.status === 'rendered' && merged.finalPage?.status === 'rendered') {
     merged.status = 'rendered';
   }
+  if (backendDraft?.status === 'archived') {
+    merged.status = 'archived';
+  }
   if (backendDraft?.status === 'confirmed' && merged.status !== 'rendered') {
     merged.status = 'effect_confirmed';
   }

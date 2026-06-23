@@ -10,6 +10,7 @@ import {
   sortStaticPageDrafts,
   staticPageDraftAsyncSnapshot,
   staticPageDraftDiscoveryId,
+  staticPageDraftIsArchived,
   staticPageDraftIsDataReportArtifact,
   staticPageDraftReadyForAutoRender,
 } from './static-page-draft-workspace.js';
@@ -56,6 +57,25 @@ describe('static page draft workspace helpers', () => {
     assert.equal(staticPageDraftReadyForAutoRender({
       previewContract: { status: 'preview_ready', assetKey: 'preview.png' },
     }), false);
+  });
+
+  it('excludes archived backend drafts even when their payload still has rendered output', () => {
+    const archived = {
+      id: 'archived-draft',
+      backendStatus: 'archived',
+      status: 'rendered',
+      previewContract: { status: 'preview_ready', assetKey: 'preview.png' },
+      finalPage: {
+        status: 'rendered',
+        htmlPreviewUrl: '/generated-artifacts/archived/index.html',
+      },
+    };
+
+    assert.equal(staticPageDraftIsArchived(archived), true);
+    assert.equal(shouldAnnounceStaticPageRendered(archived), false);
+    assert.equal(isVisibleReportShelfStaticPageDraft(archived), false);
+    assert.equal(isReusableStaticPageReportDraft(archived), false);
+    assert.equal(staticPageDraftReadyForAutoRender(archived), false);
   });
 
   it('keeps data-report artifacts visible but suppresses rendered chat announcements and reuse', () => {

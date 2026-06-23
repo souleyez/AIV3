@@ -193,6 +193,8 @@ function primaryFileId(files = []) {
 
 function cardStatusFromDraft(draft) {
   const finalPage = draft?.finalPage || {};
+  const backendStatus = String(draft?.backendStatus || draft?.backend_status || '').toLowerCase();
+  if (backendStatus === 'archived') return 'archived';
   const raw = finalPage.status || draft?.status || draft?.backendStatus || draft?.backend_status || '';
   const status = normalizeArtifactTaskStatus(raw, 'running');
   if (status === 'completed' && staticPageRenderedUrlFromDraft(draft)) return 'published';
@@ -960,7 +962,10 @@ function buildTaskCardsFromInputs({
         return !planId || !planIds.has(planId);
       })
       .map(buildPublishedReportCard),
-    ...asArray(staticPageDrafts).map(buildStaticPageDraftCard),
+    ...asArray(staticPageDrafts).map((draft) => {
+      const card = buildStaticPageDraftCard(draft);
+      return card?.status === 'archived' ? null : card;
+    }),
     ...asArray(htmlArtifacts).map(buildHtmlArtifactCard),
     ...asArray(codexCustomerTasks).map(buildCodexTaskCard),
     ...asArray(codexCustomerArtifacts).map(buildCodexArtifactCard),
