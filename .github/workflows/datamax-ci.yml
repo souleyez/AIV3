@@ -13,7 +13,7 @@ permissions:
 jobs:
   no-credential-smoke:
     name: No-Credential Smoke
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, aiv3, server8, light]
     timeout-minutes: 30
 
     steps:
@@ -73,7 +73,7 @@ jobs:
 
   rust-minimal:
     name: Rust Minimal
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, aiv3, server8, light]
     timeout-minutes: 45
     env:
       CC: clang
@@ -88,8 +88,10 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install native build tools
-        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Check native build tools
+        run: |
+          command -v clang
+          command -v clang++
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
