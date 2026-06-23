@@ -44,6 +44,8 @@ const STATIC_PAGE_STATUS_LABELS = {
   stale: '规划已变更',
 };
 
+const DISMISSED_ARTIFACT_TASK_CARD_STORAGE_KEY = 'v3.dismissedArtifactTaskCards.v1';
+
 function SectionHeader({ title, subtitle }) {
   return (
     <div className="insight-section-head">
@@ -1744,6 +1746,27 @@ function deletableStaticPageDraftId(card) {
   return draft.id || draft.backendDraftId || draft.backend_draft_id || '';
 }
 
+function canDeleteArtifactTaskCard(card, hasStaticPageDelete) {
+  if (deletableStaticPageDraftId(card) && hasStaticPageDelete) return true;
+  return card?.status === 'failed';
+}
+
+function readDismissedArtifactTaskCardIds() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DISMISSED_ARTIFACT_TASK_CARD_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean).map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDismissedArtifactTaskCardIds(ids = []) {
+  if (typeof window === 'undefined') return;
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean).map(String))).slice(-300);
+  window.localStorage.setItem(DISMISSED_ARTIFACT_TASK_CARD_STORAGE_KEY, JSON.stringify(uniqueIds));
+}
+
 function ArtifactTaskCard({
   card,
   active,
@@ -1872,6 +1895,7 @@ export default function InsightPanel({
   onRefreshHtmlArtifacts,
 }) {
   const [expandedArtifactTaskCardId, setExpandedArtifactTaskCardId] = useState('');
+  const [dismissedArtifactTaskCardIds, setDismissedArtifactTaskCardIds] = useState(() => readDismissedArtifactTaskCardIds());
   const artifactTaskCards = useMemo(() => buildArtifactTaskCards({
     reportPlans,
     publishedReports,
@@ -1889,7 +1913,15 @@ export default function InsightPanel({
     codexCustomerArtifacts,
     clientArtifacts,
   ]);
-  const resultCount = artifactTaskCards.length;
+  const dismissedArtifactTaskCardSet = useMemo(
+    () => new Set(dismissedArtifactTaskCardIds),
+    [dismissedArtifactTaskCardIds],
+  );
+  const visibleArtifactTaskCards = useMemo(
+    () => artifactTaskCards.filter((card) => !dismissedArtifactTaskCardSet.has(card.id)),
+    [artifactTaskCards, dismissedArtifactTaskCardSet],
+  );
+  const resultCount = visibleArtifactTaskCards.length;
   const isTaskCardActive = (card) => {
     const raw = card?.raw || {};
     const draft = raw.staticPageDraft;
@@ -1901,7 +1933,7 @@ export default function InsightPanel({
     if (htmlArtifact && activeHtmlArtifactId && (htmlArtifact.id || htmlArtifact.artifact_id) === activeHtmlArtifactId) return true;
     return false;
   };
-  const activeTaskCard = artifactTaskCards.find(isTaskCardActive) || null;
+  const activeTaskCard = visibleArtifactTaskCards.find(isTaskCardActive) || null;
   const activeTaskCardTitle = activeTaskCard?.title || '';
 
   const selectTaskCard = (card) => {
@@ -1930,9 +1962,21 @@ export default function InsightPanel({
 
   const deleteTaskCard = (card) => {
     const draftId = deletableStaticPageDraftId(card);
-    if (!draftId || !onDeleteStaticPageDraft) return;
+    if (draftId && onDeleteStaticPageDraft) {
+      setExpandedArtifactTaskCardId((current) => (current === card.id ? '' : current));
+      onDeleteStaticPageDraft(draftId);
+      return;
+    }
+    if (card?.status !== 'failed') return;
+    if (typeof window !== 'undefined' && !window.confirm('删除这个失败产物？删除后右侧列表将不再展示。')) {
+      return;
+    }
     setExpandedArtifactTaskCardId((current) => (current === card.id ? '' : current));
-    onDeleteStaticPageDraft(draftId);
+    setDismissedArtifactTaskCardIds((current) => {
+      const next = Array.from(new Set([...current, card.id]));
+      writeDismissedArtifactTaskCardIds(next);
+      return next;
+    });
   };
 
   const openTaskCard = (card) => {
@@ -1997,7 +2041,7 @@ export default function InsightPanel({
             </div>
           ) : null}
           <div className="generated-project-list">
-            {artifactTaskCards.map((card) => (
+            {visibleArtifactTaskCards.map((card) => (
               <ArtifactTaskCard
                 key={card.id}
                 card={card}
@@ -2007,7 +2051,7 @@ export default function InsightPanel({
                 onSelect={() => selectTaskCard(card)}
                 onOpen={() => openTaskCard(card)}
                 onToggleEdit={() => setExpandedArtifactTaskCardId((current) => (current === card.id ? '' : card.id))}
-                onDelete={deletableStaticPageDraftId(card) && onDeleteStaticPageDraft ? () => deleteTaskCard(card) : null}
+                onDelete={canDeleteArtifactTaskCard(card, Boolean(onDeleteStaticPageDraft)) ? () => deleteTaskCard(card) : null}
               />
             ))}
           </div>
