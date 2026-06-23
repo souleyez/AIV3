@@ -73,10 +73,8 @@ import {
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import {
-  combinedDatasetIds,
   datasetSelectionStateAfterToggle,
   datasetIdsAfterCatalogRefresh,
-  datasetRecordIds,
   documentDatasetIds,
   documentDatasetSelectionUpdate,
   documentMembershipResponseSelectionUpdate,
@@ -419,14 +417,7 @@ export default function HomePageClient() {
     () => selectedOrFallbackDatasetIds(selectedDatasetIds, selectedDatasetId),
     [selectedDatasetId, selectedDatasetIds],
   );
-  const reportShelfVisibleDatasetIds = useMemo(
-    () => datasetRecordIds(datasets),
-    [datasets],
-  );
-  const reportShelfFetchDatasetIds = useMemo(
-    () => combinedDatasetIds(reportShelfVisibleDatasetIds, reportShelfDatasetIds),
-    [reportShelfVisibleDatasetIds, reportShelfDatasetIds],
-  );
+  const reportShelfFetchDatasetIds = reportShelfDatasetIds;
   const datasetPublishedReports = useMemo(
     () => filterRecordsByDatasetIds(publishedReports, reportShelfDatasetIds),
     [publishedReports, reportShelfDatasetIds],
@@ -828,8 +819,15 @@ export default function HomePageClient() {
 
   async function hydrateBackendStaticPageDraft(backendDraft) {
     let draft = normalizeBackendStaticPageDraft(backendDraft);
-    const shouldLoadJobs = draft?.backendDraftId && (draft.imageJob?.id || ['queued', 'preview_ready', 'effect_confirmed'].includes(draft.status));
-    const shouldLoadRenders = Boolean(draft?.backendDraftId);
+    const snapshot = staticPageDraftAsyncSnapshot(draft);
+    const alreadyRenderedWithUrl = snapshot.rendered && Boolean(staticPageRenderedUrl(draft));
+    const shouldLoadJobs = !alreadyRenderedWithUrl
+      && draft?.backendDraftId
+      && (draft.imageJob?.id || ['queued', 'preview_ready', 'effect_confirmed'].includes(draft.status));
+    const shouldLoadRenders = Boolean(draft?.backendDraftId && !alreadyRenderedWithUrl);
+    if (!shouldLoadJobs && !shouldLoadRenders) {
+      return draft;
+    }
 
     const [imageJobs, renderOutputs] = await Promise.all([
       shouldLoadJobs
@@ -892,7 +890,7 @@ export default function HomePageClient() {
     const { orderedDatasetIds } = staticPageDraftShelfDatasetScope(
       reportShelfDatasetIds,
       datasetIds,
-      reportShelfVisibleDatasetIds,
+      [],
     );
     queries.push({
       query: new URLSearchParams({
