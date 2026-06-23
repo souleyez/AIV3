@@ -1,6 +1,6 @@
 export const metadata = {
   title: 'DataMax V3',
-  description: 'DataMax V3 企业级数据处理助手。',
+  description: 'DataMax V3 企业级数据助手。',
 };
 
 const DOWNLOAD_LINKS = [
@@ -70,7 +70,7 @@ export default function V3LandingPage() {
             letterSpacing: 0,
             maxWidth: 680,
           }}>
-            企业级数据处理助手
+            企业级数据助手
           </h1>
           <p style={{
             margin: 0,

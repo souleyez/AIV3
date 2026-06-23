@@ -1205,7 +1205,7 @@ export default function ExternalIntegrationsPageClient() {
         <figure className="external-product-visual">
           <img
             src="/external-integrations/v3-enterprise-assistant-hero.png"
-            alt="DataMax企业级数据处理助手能力概览"
+            alt="DataMax企业级数据助手能力概览"
           />
         </figure>
       </section>

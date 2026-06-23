@@ -211,6 +211,7 @@ const STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS = 4000;
 const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_INTERVAL_MS = 2500;
 const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
+const VISIBLE_ARTIFACT_TASK_REFS_STORAGE_KEY_PREFIX = 'aidp-v3-visible-artifact-task-refs';
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
 
@@ -224,6 +225,52 @@ function normalizedUniqueStrings(values = []) {
   return [...new Set((Array.isArray(values) ? values : [values])
     .map((value) => String(value || '').trim())
     .filter(Boolean))];
+}
+
+function emptyVisibleArtifactTaskRefs() {
+  return {
+    reportPlanIds: [],
+    publishedReportIds: [],
+    staticPageDraftIds: [],
+    htmlArtifactIds: [],
+  };
+}
+
+function normalizeVisibleArtifactTaskRefs(value = {}) {
+  return {
+    reportPlanIds: normalizedUniqueStrings(value.reportPlanIds || value.report_plan_ids || []),
+    publishedReportIds: normalizedUniqueStrings(value.publishedReportIds || value.published_report_ids || []),
+    staticPageDraftIds: normalizedUniqueStrings(value.staticPageDraftIds || value.static_page_draft_ids || []),
+    htmlArtifactIds: normalizedUniqueStrings(value.htmlArtifactIds || value.html_artifact_ids || []),
+  };
+}
+
+function visibleArtifactTaskRefsStorageKey(threadId = '') {
+  const normalizedThreadId = String(threadId || '').trim() || readLocalThreadId();
+  return `${VISIBLE_ARTIFACT_TASK_REFS_STORAGE_KEY_PREFIX}:${normalizedThreadId}`;
+}
+
+function readVisibleArtifactTaskRefs(threadId = '') {
+  if (typeof window === 'undefined') return emptyVisibleArtifactTaskRefs();
+  try {
+    const raw = window.localStorage.getItem(visibleArtifactTaskRefsStorageKey(threadId));
+    if (!raw) return emptyVisibleArtifactTaskRefs();
+    return normalizeVisibleArtifactTaskRefs(JSON.parse(raw));
+  } catch {
+    return emptyVisibleArtifactTaskRefs();
+  }
+}
+
+function writeVisibleArtifactTaskRefs(threadId = '', refs = {}) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      visibleArtifactTaskRefsStorageKey(threadId),
+      JSON.stringify(normalizeVisibleArtifactTaskRefs(refs)),
+    );
+  } catch {
+    // The shelf is a convenience cache; explicit task creation/selection can rebuild it.
+  }
 }
 
 function staticPageDraftTaskRefIds(draftOrId) {
@@ -321,12 +368,7 @@ export default function HomePageClient() {
   const [staticPageActionBusy, setStaticPageActionBusy] = useState(false);
   const [backendHtmlArtifacts, setBackendHtmlArtifacts] = useState([]);
   const [activeHtmlArtifactId, setActiveHtmlArtifactId] = useState(null);
-  const [visibleArtifactTaskRefs, setVisibleArtifactTaskRefs] = useState({
-    reportPlanIds: [],
-    publishedReportIds: [],
-    staticPageDraftIds: [],
-    htmlArtifactIds: [],
-  });
+  const [visibleArtifactTaskRefs, setVisibleArtifactTaskRefs] = useState(() => readVisibleArtifactTaskRefs());
   const [scopePlan, setScopePlan] = useState({ candidates: [], hint: '' });
   const [activityEvents, setActivityEvents] = useState([]);
   const [lastAssistantRunId, setLastAssistantRunId] = useState('');
@@ -2627,6 +2669,7 @@ export default function HomePageClient() {
     }
     writeLocalThreadId(threadId);
     setLocalThreadId(threadId);
+    setVisibleArtifactTaskRefs(readVisibleArtifactTaskRefs(threadId));
     setDraftSessionStartedAt(localSession.startedAt || new Date().toISOString());
     setDraftSessionTitle(localSession.title || '');
     setComposingNewSession(false);
@@ -2651,6 +2694,7 @@ export default function HomePageClient() {
     });
     writeLocalThreadId(draft.threadId);
     setLocalThreadId(draft.threadId);
+    setVisibleArtifactTaskRefs(readVisibleArtifactTaskRefs(draft.threadId));
     setDraftSessionStartedAt(draft.startedAt);
     setDraftSessionTitle('');
     setBanner(draft.banner);
@@ -2684,6 +2728,7 @@ export default function HomePageClient() {
     persistCurrentLocalConversation();
     setComposingNewSession(false);
     setSelectedSessionId(sessionId);
+    setVisibleArtifactTaskRefs(emptyVisibleArtifactTaskRefs());
     setMobilePanel('chat');
   }
 
@@ -3536,6 +3581,13 @@ export default function HomePageClient() {
   }, [lastAssistantRunId]);
 
   useEffect(() => {
+    if (selectedSessionId) {
+      return;
+    }
+    writeVisibleArtifactTaskRefs(localThreadId || readLocalThreadId(), visibleArtifactTaskRefs);
+  }, [localThreadId, selectedSessionId, visibleArtifactTaskRefs]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       setLocalChatStorageReady(true);
       return;
@@ -3543,6 +3595,7 @@ export default function HomePageClient() {
     try {
       const threadId = readLocalThreadId();
       setLocalThreadId(threadId);
+      setVisibleArtifactTaskRefs(readVisibleArtifactTaskRefs(threadId));
       const storedLocalSessions = readLocalChatSessions();
       setLocalChatSessions(storedLocalSessions);
       const currentLocalSession = storedLocalSessions.find((session) => session.id === threadId);

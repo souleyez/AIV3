@@ -1,7 +1,7 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'DataMax企业级数据处理助手',
+  title: 'DataMax企业级数据助手',
   description: '无需开发对接，文档数据库爬虫采集皆可入库，秒生数据可视化报表，支持移动端。',
 };
 
