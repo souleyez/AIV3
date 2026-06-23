@@ -2,6 +2,66 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-23 DataMax Server8 Self-Hosted CI Bring-Up
+
+- Scope:
+  - add a repo-level GitHub Actions self-hosted runner for `souleyez/AIV3` on 8 server;
+  - move `DataMax CI` off GitHub-hosted `ubuntu-latest` and onto the 8-server runner labels;
+  - keep CI lightweight and no-credential.
+- 8-server runner:
+  - installed GitHub Actions runner `2.335.1` under `/opt/actions-runner/aiv3`;
+  - runner service `actions.runner.souleyez-AIV3.aiv3-server8.service` is `active`;
+  - runner name is `aiv3-server8`;
+  - labels are `self-hosted`, `Linux`, `X64`, `aiv3`, `server8`, and `light`;
+  - runner process runs as `github-runner`;
+  - service PATH includes `/home/github-runner/.cargo/bin` and `/usr/local/bin`;
+  - `github-runner` can run Node `v22.22.1`, pnpm, Rust `1.95.0`, rustfmt, clang, and clang++.
+- GitHub changes:
+  - pushed `be69284e Run DataMax CI on server8 self-hosted runner`;
+  - pushed `c5e47976 Use server8 local toolchain for DataMax CI`;
+  - `.github/workflows/datamax-ci.yml` now uses `runs-on: [self-hosted, Linux, X64, aiv3, server8, light]`;
+  - workflow uses the 8-server local Node/Rust toolchain instead of `actions/setup-node`, `pnpm/action-setup`, `dtolnay/rust-toolchain`, or cargo cache action.
+- Verification:
+  - initial run `27994867501` was cancelled after `actions/setup-node` stalled on the self-hosted runner;
+  - final run `27995580910` for commit `c5e47976` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, toolchain check, `cargo fmt --check`, model gateway tests, and static-page-worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, `pnpm install --frozen-lockfile`, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
+- Safety:
+  - no public API URL, third-party URL, auth method, request field, response field, model routing policy, provider key, customer data, source sync, object cleanup, P2 backfill, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, runner registration token, raw GitHub token, customer payload, document body, object key, or content hash was recorded;
+  - no 120 server change was performed;
+  - no V3 production service was restarted for this CI setup.
+
+## 2026-06-22 P5 External Image Structured Extract Helper Release and 8-Server Deployment Verification
+
+- Scope:
+  - release P5 helper split slices #648-#651 for third-party image structured extraction;
+  - keep public and third-party API contracts unchanged.
+- GitHub:
+  - committed and pushed `1677e997 Refactor external image structured extraction helpers` to `origin/main`;
+  - staged scope was limited to `crates/platform-api/src/lib.rs`, `crates/platform-api/src/external_image_structured_extract_record_support.rs`, `docs/plans/datamax-active-execution-plan.md`, and this validation ledger.
+- Local verification before release:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_record_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --cached --check`: passed;
+  - staged-diff secret scan: no match.
+- 8-server deployment:
+  - `/srv/aiv3/repo` was clean before deployment and fast-forwarded from `f5f257be7` to `1677e9978`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker`: passed;
+  - restarted `aiv3-platform-api`, `aiv3-assistant-run-worker`, `aiv3-chat-session-worker`, and `aiv3-static-page-worker`;
+  - `aiv3-platform-api`, `aiv3-assistant-run-worker`, `aiv3-chat-session-worker`, `aiv3-static-page-worker`, and `aiv3-web` returned `active`;
+  - `http://127.0.0.1:3000/healthz` returned platform-api ok JSON;
+  - `http://127.0.0.1:3000/readyz` returned platform-api ready JSON;
+  - `https://v3.elepcloud.com/`, `/admin/login`, and `/external-integrations/pure-third-party-integration-guide.zh-CN.html` returned HTTP 200;
+  - warning-or-higher logs for the restarted Rust services during the immediate post-restart window had no entries.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, image model runtime, retry policy, output field name, status label, payment method label, production data mapping, or model behavior policy was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no outbound message dispatch, callback, source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed.
+
 ## 2026-06-22 P5 External Image Structured Extract Payload Normalize Helper Local Verification
 
 - Purpose:
