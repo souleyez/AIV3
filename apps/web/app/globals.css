@@ -2849,6 +2849,10 @@ textarea {
   right: 7px;
 }
 
+.artifact-task-card-delete::before {
+  content: "×";
+}
+
 .artifact-task-card-edit-toggle span {
   display: inline-block;
   width: 0;

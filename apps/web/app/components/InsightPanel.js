@@ -1800,9 +1800,7 @@ function ArtifactTaskCard({
           title="删除产物"
           aria-label="删除产物"
           onClick={onDelete}
-        >
-          X
-        </button>
+        />
       ) : null}
       <button
         type="button"
