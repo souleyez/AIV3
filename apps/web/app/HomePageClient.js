@@ -885,7 +885,7 @@ export default function HomePageClient() {
     queries.push({
       query: new URLSearchParams({
         visible_templates: 'true',
-        limit: '60',
+        limit: '12',
       }),
       datasetId: '',
       source: 'templates',
@@ -912,7 +912,7 @@ export default function HomePageClient() {
     }
     try {
       const draftGroups = await Promise.all(
-        queries.map(({ query, datasetId, source }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`, { timeoutMs: 18000 })
+        queries.map(({ query, datasetId, source }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`, { timeoutMs: 30000 })
           .then((items) => {
             const drafts = (Array.isArray(items) ? items : []).map((draft) => ({
               ...draft,
@@ -958,9 +958,15 @@ export default function HomePageClient() {
       if (staticPageDraftIds.length) {
         markArtifactTaskVisible({ staticPageDraftIds });
       }
-      Promise.all(
+      Promise.allSettled(
         (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
-      ).then((hydratedDrafts) => {
+      ).then((results) => {
+        const hydratedDrafts = results
+          .filter((result) => result.status === 'fulfilled' && result.value?.id)
+          .map((result) => result.value);
+        if (!hydratedDrafts.length) {
+          return;
+        }
         upsertStaticPageDraftBatch(hydratedDrafts);
         const hydratedIds = normalizedUniqueStrings(
           (reveal ? hydratedDrafts : [])
