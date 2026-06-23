@@ -876,7 +876,12 @@ export default function HomePageClient() {
   }
 
   async function refreshStaticPageDraftShelf(options = {}) {
-    const { silent = true, datasetIds = reportShelfFetchDatasetIds } = options;
+    const {
+      silent = true,
+      datasetIds = reportShelfFetchDatasetIds,
+      reveal = false,
+      revealLocalThreadTasks = true,
+    } = options;
     const queries = [];
     const localThreadId = readLocalThreadId();
     const { orderedDatasetIds } = staticPageDraftShelfDatasetScope(
@@ -890,6 +895,7 @@ export default function HomePageClient() {
         limit: '60',
       }),
       datasetId: '',
+      source: 'templates',
     });
     orderedDatasetIds.forEach((datasetId) => {
       queries.push({
@@ -898,6 +904,7 @@ export default function HomePageClient() {
           limit: '12',
         }),
         datasetId,
+        source: 'dataset',
       });
     });
     if (localThreadId) {
@@ -907,11 +914,12 @@ export default function HomePageClient() {
           limit: '12',
         }),
         datasetId: '',
+        source: 'local_thread',
       });
     }
     try {
       const draftGroups = await Promise.all(
-        queries.map(({ query, datasetId }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`, { timeoutMs: 18000 })
+        queries.map(({ query, datasetId, source }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`, { timeoutMs: 18000 })
           .then((items) => {
             const drafts = (Array.isArray(items) ? items : []).map((draft) => ({
               ...draft,
@@ -921,9 +929,9 @@ export default function HomePageClient() {
               ]),
             }));
             upsertStaticPageDraftBatch(drafts);
-            return { items: drafts, datasetId };
+            return { items: drafts, datasetId, source };
           })
-          .catch(() => ({ items: [], datasetId }))),
+          .catch(() => ({ items: [], datasetId, source }))),
       );
       const draftById = new Map();
       draftGroups.forEach(({ items, datasetId }) => {
@@ -946,10 +954,28 @@ export default function HomePageClient() {
         });
       });
       const backendDrafts = [...draftById.values()];
+      const draftsToReveal = reveal
+        ? backendDrafts
+        : revealLocalThreadTasks
+          ? draftGroups
+            .filter((group) => group.source === 'local_thread')
+            .flatMap((group) => Array.isArray(group.items) ? group.items : [])
+          : [];
+      const staticPageDraftIds = normalizedUniqueStrings(draftsToReveal.flatMap((draft) => staticPageDraftTaskRefIds(draft)));
+      if (staticPageDraftIds.length) {
+        markArtifactTaskVisible({ staticPageDraftIds });
+      }
       Promise.all(
         (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
       ).then((hydratedDrafts) => {
         upsertStaticPageDraftBatch(hydratedDrafts);
+        const hydratedIds = normalizedUniqueStrings(
+          (reveal ? hydratedDrafts : [])
+            .flatMap((draft) => staticPageDraftTaskRefIds(draft)),
+        );
+        if (hydratedIds.length) {
+          markArtifactTaskVisible({ staticPageDraftIds: hydratedIds });
+        }
       }).catch(() => {});
       if (!silent) {
         setBanner(backendDrafts.length ? `已刷新 ${backendDrafts.length} 个静态页草稿/成品。` : '当前终端还没有静态页草稿。');
@@ -962,7 +988,7 @@ export default function HomePageClient() {
   }
 
   async function refreshHtmlArtifacts(options = {}) {
-    const { silent = true } = options;
+    const { silent = true, reveal = false } = options;
     const query = new URLSearchParams({
       local_thread_id: readLocalThreadId(),
       limit: '50',
@@ -970,6 +996,12 @@ export default function HomePageClient() {
     try {
       const artifacts = await fetchJson(`/api/v3/html-artifacts?${query.toString()}`);
       setBackendHtmlArtifacts(Array.isArray(artifacts) ? artifacts : []);
+      if (reveal && Array.isArray(artifacts) && artifacts.length) {
+        markArtifactTaskVisible({
+          htmlArtifactIds: artifacts.map((artifact) => htmlArtifactTaskRefId(artifact)),
+          staticPageDraftIds: artifacts.map((artifact) => artifactOwnerStaticPageDraftId(artifact)),
+        });
+      }
       if (!silent) {
         setBanner(artifacts?.length ? `已刷新 ${artifacts.length} 个 HTML 产物。` : '当前终端还没有后端 HTML 产物。');
       }
@@ -1452,7 +1484,7 @@ export default function HomePageClient() {
   }
 
   async function refreshCatalog(options = {}) {
-    const { preferredDatasetId = null, silent = false } = options;
+    const { preferredDatasetId = null, silent = false, revealArtifactTasks = false } = options;
     if (!silent) {
       setBootstrapping(true);
     }
@@ -1478,6 +1510,19 @@ export default function HomePageClient() {
         setSelectedDatasetIds((current) => datasetIdsAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
         setSelectedDatasetId((current) => selectedDatasetIdAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
       });
+      if (revealArtifactTasks) {
+        const scopedDatasetIds = selectedOrFallbackDatasetIds(selectedDatasetIds, selectedDatasetId);
+        const visibleReports = filterRecordsByDatasetIds(nextPublishedReports, scopedDatasetIds);
+        const visibleReportPlanIds = new Set(visibleReports
+          .map((report) => report.report_plan_id || report.reportPlanId || report.plan_id || report.planId || '')
+          .filter(Boolean));
+        const visiblePlans = filterRecordsByDatasetIds(nextReportPlans, scopedDatasetIds)
+          .filter((plan) => visibleReportPlanIds.has(plan.id));
+        markArtifactTaskVisible({
+          reportPlanIds: visiblePlans.map((plan) => plan.id),
+          publishedReportIds: visibleReports.map((report) => report.id || report.report_id || report.reportId),
+        });
+      }
       setError('');
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '目录加载失败');
@@ -3569,7 +3614,7 @@ export default function HomePageClient() {
 
   useEffect(() => {
     refreshStaticPageDraftShelf({ silent: true });
-  }, [reportShelfFetchDatasetIds.join('|')]);
+  }, [localThreadId, reportShelfFetchDatasetIds.join('|')]);
 
   useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);
@@ -4242,9 +4287,10 @@ export default function HomePageClient() {
         refreshReportDetail(selectedReportPlanId);
       }
     },
-    onRefreshReports: () => refreshCatalog({
+    onRefreshReports: (options = {}) => refreshCatalog({
       preferredDatasetId: selectedDatasetIds[0] || selectedDatasetId,
       silent: true,
+      revealArtifactTasks: options.reveal === true,
     }),
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: taskCardStaticPageDraftItems,
@@ -4255,7 +4301,10 @@ export default function HomePageClient() {
     onCancelDefaultStaticPageTemplate: handleCancelDefaultStaticPageTemplate,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,
-    onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: true }),
+    onRefreshStaticPageDrafts: (options = {}) => refreshStaticPageDraftShelf({
+      silent: true,
+      reveal: options.reveal === true,
+    }),
     staticPageEditorOpen,
     assistantRunProgress,
     codexCustomerTasks,
@@ -4264,8 +4313,8 @@ export default function HomePageClient() {
     htmlArtifacts: taskCardHtmlArtifacts,
     activeHtmlArtifactId,
     onSelectHtmlArtifact: handleSelectHtmlArtifact,
-    onRefreshHtmlArtifacts: () => Promise.all([
-      refreshHtmlArtifacts({ silent: true }),
+    onRefreshHtmlArtifacts: (options = {}) => Promise.all([
+      refreshHtmlArtifacts({ silent: true, reveal: options.reveal === true }),
       refreshClientArtifacts({ silent: true }),
     ]),
   };

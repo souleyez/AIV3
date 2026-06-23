@@ -1898,6 +1898,7 @@ export default function InsightPanel({
 }) {
   const [expandedArtifactTaskCardId, setExpandedArtifactTaskCardId] = useState('');
   const [dismissedArtifactTaskCardIds, setDismissedArtifactTaskCardIds] = useState(() => readDismissedArtifactTaskCardIds());
+  const [artifactTaskRefreshBusy, setArtifactTaskRefreshBusy] = useState(false);
   const artifactTaskCards = useMemo(() => buildArtifactTaskCards({
     reportPlans,
     publishedReports,
@@ -1936,6 +1937,21 @@ export default function InsightPanel({
     return false;
   };
   const activeTaskCard = visibleArtifactTaskCards.find(isTaskCardActive) || null;
+
+  const refreshArtifactTaskCards = async () => {
+    if (artifactTaskRefreshBusy) return;
+    setArtifactTaskRefreshBusy(true);
+    try {
+      await Promise.all([
+        onRefreshStaticPageDrafts?.({ reveal: true }),
+        onRefreshHtmlArtifacts?.({ reveal: true }),
+        onRefreshReports?.({ reveal: true }),
+        selectedReportPlanId ? onRefreshReportDetail?.() : Promise.resolve(),
+      ]);
+    } finally {
+      setArtifactTaskRefreshBusy(false);
+    }
+  };
 
   const selectTaskCard = (card) => {
     const raw = card?.raw || {};
@@ -2052,7 +2068,20 @@ export default function InsightPanel({
             ))}
           </div>
         </section>
-      ) : null}
+      ) : (
+        <section className="card insight-card right-results-card">
+          <div className="generated-project-list artifact-task-empty-list">
+            <button
+              type="button"
+              className="ghost-btn compact-action-btn"
+              onClick={refreshArtifactTaskCards}
+              disabled={artifactTaskRefreshBusy}
+            >
+              {artifactTaskRefreshBusy ? '刷新中' : '刷新产物栏'}
+            </button>
+          </div>
+        </section>
+      )}
     </aside>
   );
 }
