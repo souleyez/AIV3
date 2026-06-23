@@ -516,6 +516,18 @@ export default function HomePageClient() {
       return !ownerDraftId || activeDraftIds.has(ownerDraftId);
     });
   }, [htmlArtifacts, taskCardStaticPageDraftItems]);
+  const staticPageShelfNeedsPolling = useMemo(() => (
+    taskCardStaticPageDraftItems.some((draft) => {
+      const snapshot = staticPageDraftAsyncSnapshot(draft);
+      const status = String(draft?.backendStatus || draft?.backend_status || draft?.status || '').toLowerCase();
+      const imageStatus = String(draft?.imageJob?.status || draft?.previewContract?.status || '').toLowerCase();
+      const finalStatus = String(draft?.finalPage?.status || '').toLowerCase();
+      return snapshot.renderInProgress
+        || ['queued', 'running'].includes(imageStatus)
+        || ['queued', 'running', 'rendering', 'preview_ready', 'effect_confirmed'].includes(status)
+        || ['queued', 'rendering'].includes(finalStatus);
+    })
+  ), [taskCardStaticPageDraftItems]);
   const taskCardReportPlans = datasetReportPlans;
   const taskCardPublishedReports = datasetPublishedReports;
   const activeHtmlArtifact = useMemo(
@@ -885,7 +897,7 @@ export default function HomePageClient() {
     queries.push({
       query: new URLSearchParams({
         visible_templates: 'true',
-        limit: '12',
+        limit: '6',
       }),
       datasetId: '',
       source: 'templates',
@@ -3606,14 +3618,16 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
-    refreshStaticPageDraftShelf({ silent: true });
     refreshHtmlArtifacts({ silent: true });
     refreshClientArtifacts({ silent: true });
   }, []);
 
   useEffect(() => {
+    if (!localChatStorageReady) {
+      return;
+    }
     refreshStaticPageDraftShelf({ silent: true });
-  }, [localThreadId, reportShelfFetchDatasetIds.join('|')]);
+  }, [localChatStorageReady, localThreadId, reportShelfFetchDatasetIds.join('|')]);
 
   useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);
@@ -3825,6 +3839,9 @@ export default function HomePageClient() {
   }, [selectedDatasetId]);
 
   useEffect(() => {
+    if (!staticPageShelfNeedsPolling) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       refreshStaticPageDraftShelf({ silent: true });
       refreshHtmlArtifacts({ silent: true });
@@ -3832,7 +3849,7 @@ export default function HomePageClient() {
     }, STATIC_PAGE_SHELF_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, []);
+  }, [staticPageShelfNeedsPolling]);
 
   useEffect(() => {
     const backendDraftId = activeStaticPageDraft?.backendDraftId;
