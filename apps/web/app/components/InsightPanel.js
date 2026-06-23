@@ -1781,6 +1781,29 @@ function ArtifactTaskCard({
   const primaryKindLabel = primaryFile?.kind === 'preview_image' ? '效果图' : '页面';
   return (
     <article className={`generated-project-card artifact-task-card ${active ? 'active' : ''}`.trim()}>
+      {editInfo?.hasContent ? (
+        <button
+          type="button"
+          className={`artifact-task-card-edit-toggle ${expanded ? 'expanded' : ''}`.trim()}
+          title={expanded ? '收起产物信息' : '查看生成提示词和数据来源'}
+          aria-label={expanded ? '收起产物信息' : '查看生成提示词和数据来源'}
+          aria-expanded={expanded}
+          onClick={onToggleEdit}
+        >
+          <span aria-hidden="true" />
+        </button>
+      ) : null}
+      {onDelete ? (
+        <button
+          type="button"
+          className="artifact-task-card-delete"
+          title="删除产物"
+          aria-label="删除产物"
+          onClick={onDelete}
+        >
+          X
+        </button>
+      ) : null}
       <button
         type="button"
         className="generated-project-main"
@@ -1801,27 +1824,6 @@ function ArtifactTaskCard({
           <em>{card.phase ? `${card.phase} · ${card.statusLabel}` : card.statusLabel}</em>
         </div>
       </button>
-      <div className="artifact-task-card-controls" aria-label="产物操作">
-        {editInfo?.hasContent ? (
-          <button
-            type="button"
-            className="ghost-btn compact-action-btn artifact-task-card-control"
-            aria-expanded={expanded}
-            onClick={onToggleEdit}
-          >
-            {expanded ? '收起' : '编辑'}
-          </button>
-        ) : null}
-        {onDelete ? (
-          <button
-            type="button"
-            className="ghost-btn compact-action-btn danger-action artifact-task-card-control"
-            onClick={onDelete}
-          >
-            删除
-          </button>
-        ) : null}
-      </div>
       {expanded ? (
         <div className="artifact-task-card-edit-panel">
           <div className="artifact-task-card-edit-block">

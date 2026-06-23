@@ -2683,6 +2683,7 @@ textarea {
 }
 
 .generated-project-card {
+  position: relative;
   overflow: hidden;
   border: 1px solid rgba(80, 143, 255, 0.18);
   border-radius: 16px;
@@ -2690,6 +2691,7 @@ textarea {
     radial-gradient(circle at 8% 0%, rgba(49, 130, 255, 0.18), transparent 34%),
     linear-gradient(145deg, rgba(11, 24, 43, 0.96), rgba(7, 15, 29, 0.94));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .generated-project-card.active {
@@ -2698,6 +2700,17 @@ textarea {
     radial-gradient(circle at 8% 0%, rgba(59, 130, 246, 0.27), transparent 34%),
     radial-gradient(circle at 100% 80%, rgba(34, 211, 238, 0.12), transparent 36%),
     linear-gradient(145deg, rgba(13, 31, 55, 0.98), rgba(7, 18, 34, 0.96));
+}
+
+.artifact-task-card:hover,
+.artifact-task-card:focus-within {
+  border-color: rgba(125, 211, 252, 0.38);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(59, 130, 246, 0.23), transparent 34%),
+    linear-gradient(145deg, rgba(13, 30, 52, 0.98), rgba(8, 18, 34, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 10px 26px rgba(6, 16, 32, 0.22);
 }
 
 .generated-project-card[role="button"] {
@@ -2802,17 +2815,77 @@ textarea {
   padding: 0 12px 11px;
 }
 
-.artifact-task-card-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 12px 11px;
+.artifact-task-card .generated-project-main {
+  padding-right: 58px;
 }
 
-.artifact-task-card-control {
-  min-height: 24px;
-  padding: 4px 9px;
-  font-size: 11px;
+.artifact-task-card-edit-toggle,
+.artifact-task-card-delete {
+  position: absolute;
+  top: 7px;
+  z-index: 2;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 18, 34, 0.78);
+  color: rgba(203, 213, 225, 0.86);
+  font-size: 10px;
+  font-weight: 820;
+  line-height: 18px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.artifact-task-card-edit-toggle {
+  right: 31px;
+}
+
+.artifact-task-card-delete {
+  right: 7px;
+}
+
+.artifact-task-card-edit-toggle span {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-left: 1px;
+  border-color: transparent transparent transparent currentColor;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  transition: transform 0.14s ease;
+}
+
+.artifact-task-card-edit-toggle.expanded span {
+  transform: rotate(90deg);
+}
+
+.artifact-task-card-edit-toggle.expanded,
+.artifact-task-card:focus-within .artifact-task-card-edit-toggle.expanded,
+.artifact-task-card:hover .artifact-task-card-delete,
+.artifact-task-card:hover .artifact-task-card-edit-toggle,
+.artifact-task-card:focus-within .artifact-task-card-delete,
+.artifact-task-card:focus-within .artifact-task-card-edit-toggle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.artifact-task-card-edit-toggle:hover,
+.artifact-task-card-edit-toggle:focus-visible {
+  border-color: rgba(125, 211, 252, 0.5);
+  background: rgba(14, 116, 144, 0.45);
+  color: #e0f2fe;
+}
+
+.artifact-task-card-delete:hover,
+.artifact-task-card-delete:focus-visible {
+  border-color: rgba(248, 113, 113, 0.58);
+  background: rgba(127, 29, 29, 0.82);
+  color: #fff;
 }
 
 .artifact-task-card-edit-panel {

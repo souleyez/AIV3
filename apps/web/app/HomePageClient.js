@@ -122,14 +122,6 @@ import {
   uiDatasetIdsFromBackendScope,
 } from './lib/scope-planner';
 import {
-  buildReportShelfSelectionLocalMessage,
-  reportShelfSelectionContent,
-  publishedReportForPlan,
-  reportTemplateCandidateId,
-  reportTemplateTitle,
-  reportTemplateUrl,
-} from './lib/report-template-utils';
-import {
   reportShelfDefaultTargetDatasetIds,
   staticPageDraftHasAnyReportShelfDefault,
   staticPageDraftIsDefaultForDatasetIds,
@@ -2697,34 +2689,12 @@ export default function HomePageClient() {
     setMobilePanel('chat');
   }
 
-  function appendReportShelfSelectionMessage(title, metadata = {}) {
-    const content = reportShelfSelectionContent(title);
-    setLocalMessages((current) => {
-      const last = current[current.length - 1];
-      if (last?.metadata?.source === 'report_shelf_selection' && last?.content === content) {
-        return current;
-      }
-      return appendLocalChatMessages(
-        current,
-        buildReportShelfSelectionLocalMessage(title, metadata),
-      );
-    });
-  }
-
   function handleSelectReportPlanFromShelf(reportPlanId) {
     setSelectedReportPlanId(reportPlanId);
-    const plan = datasetReportPlans.find((item) => item.id === reportPlanId) || null;
-    const published = publishedReportForPlan(plan, datasetPublishedReports);
-    appendReportShelfSelectionMessage(reportTemplateTitle({ plan, published }, '当前'), {
-      reportPlanId,
-    });
     setMobilePanel('chat');
   }
 
-  function handleSelectPublishedReportFromShelf(reportId, title) {
-    appendReportShelfSelectionMessage(title || '当前', {
-      publishedReportId: reportId,
-    });
+  function handleSelectPublishedReportFromShelf() {
     setMobilePanel('chat');
   }
 
@@ -2737,10 +2707,6 @@ export default function HomePageClient() {
     setStaticPageEditorOpen(false);
     setActiveHtmlArtifactId(null);
     setMobilePanel('chat');
-    const title = reportTemplateTitle({ draft }, '当前');
-    appendReportShelfSelectionMessage(title, {
-      draftId: draft.id,
-    });
   }
 
   function handleOpenStaticPageDraft(draftId) {
