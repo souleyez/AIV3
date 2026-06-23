@@ -1607,23 +1607,18 @@ function ReportShelfCard({
   );
 }
 
-function taskCardWorkflowExecutionId(card) {
-  return card?.detail?.workflowExecutionId
-    || (Array.isArray(card?.sourceRefs)
-      ? card.sourceRefs.find((ref) => ref?.kind === 'workflow_execution')?.id
-      : '')
-    || '';
-}
-
 function taskCardPrimaryFile(card) {
   return (Array.isArray(card?.files) ? card.files : []).find((file) => file.id === card?.primaryFileId)
     || (Array.isArray(card?.files) ? card.files : [])[0]
     || null;
 }
 
-function taskCardDetailLine(card) {
-  const reason = card?.detail?.retryableReason || card?.detail?.nextAction || '';
-  return reason || card?.summary || '任务状态会随后台结果更新。';
+function openTaskCardUrl(card) {
+  const file = taskCardPrimaryFile(card);
+  const url = String(file?.url || '').trim();
+  if (!url || typeof window === 'undefined') return false;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
 }
 
 function ArtifactTaskCard({
@@ -1631,18 +1626,20 @@ function ArtifactTaskCard({
   active,
   onSelect,
   onOpen,
-  onEdit,
-  onSelectFile,
-  onRetry,
-  onCancel,
 }) {
-  const files = Array.isArray(card?.files) ? card.files : [];
-  const visibleFiles = files.slice(0, 6);
-  const stages = Array.isArray(card?.detail?.stages) ? card.detail.stages : [];
-  const workflowExecutionId = taskCardWorkflowExecutionId(card);
   return (
     <article className={`generated-project-card artifact-task-card ${active ? 'active' : ''}`.trim()}>
-      <button type="button" className="generated-project-main" onClick={onSelect}>
+      <button
+        type="button"
+        className="generated-project-main"
+        onClick={onSelect}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen?.();
+        }}
+        title={card.canOpen ? '双击打开报表页面' : undefined}
+      >
         <div className="generated-project-title-row">
           <strong>{truncateText(card.title, 38)}</strong>
           <time dateTime={card.updatedAt || undefined}>{card.updatedAt ? formatRelativeTime(card.updatedAt) : '刚刚'}</time>
@@ -1651,89 +1648,7 @@ function ArtifactTaskCard({
           <span>{truncateText(card.summary, 64)}</span>
           <em>{card.phase ? `${card.phase} · ${card.statusLabel}` : card.statusLabel}</em>
         </div>
-        {active && stages.length ? (
-          <div className="codex-artifact-file-list">
-            {stages.map((stage) => (
-              <span key={stage.key || stage.label} title={`${stage.label}：${formatSnakeCaseLabel(stage.status)}`}>
-                {truncateText(`${stage.label} · ${formatSnakeCaseLabel(stage.status)}`, 24)}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {active && card.sourceRefs?.length ? (
-          <div className="codex-artifact-file-list">
-            {card.sourceRefs.slice(0, 4).map((ref) => (
-              <span key={`${ref.kind}:${ref.id}`} title={ref.id}>
-                {truncateText(ref.label || ref.kind, 18)}
-              </span>
-            ))}
-          </div>
-        ) : null}
       </button>
-      {active ? (
-        <div className="generated-project-actions" aria-label="任务卡操作">
-          <button type="button" className="ghost-btn compact-action-btn" onClick={onSelect}>
-            打开详情
-          </button>
-          {card.canOpen ? (
-            <button type="button" className="primary-btn compact-action-btn" onClick={onOpen}>
-              打开产物
-            </button>
-          ) : null}
-          {card.canEdit ? (
-            <button type="button" className="ghost-btn compact-action-btn" onClick={onEdit}>
-              继续编辑
-            </button>
-          ) : null}
-          {visibleFiles.map((file) => (
-            file.kind === 'html' || file.kind === 'static_page' ? (
-              <button
-                key={file.id}
-                type="button"
-                className="ghost-btn compact-action-btn"
-                title={file.url || file.path || file.label}
-                onClick={() => onSelectFile?.(file)}
-              >
-                {truncateText(file.label || '文件', 16)}
-              </button>
-            ) : file.url ? (
-              <a
-                key={file.id}
-                className="ghost-btn compact-action-btn artifact-download-link"
-                href={file.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={file.url || file.path || file.label}
-              >
-                {truncateText(file.label || '文件', 16)}
-              </a>
-            ) : (
-              <button
-                key={file.id}
-                type="button"
-                className="ghost-btn compact-action-btn"
-                disabled
-                title={file.path || file.label}
-              >
-                {truncateText(file.label || '文件', 16)}
-              </button>
-            )
-          ))}
-          {card.canRetry && workflowExecutionId ? (
-            <button type="button" className="ghost-btn compact-action-btn" onClick={() => onRetry?.(workflowExecutionId)}>
-              重试
-            </button>
-          ) : null}
-          {card.canCancel && workflowExecutionId ? (
-            <button type="button" className="ghost-btn compact-action-btn danger-action" onClick={() => onCancel?.(workflowExecutionId)}>
-              取消
-            </button>
-          ) : null}
-          <button type="button" className="ghost-btn compact-action-btn" disabled title={taskCardDetailLine(card)}>
-            {truncateText(taskCardDetailLine(card), 18)}
-          </button>
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -1763,7 +1678,6 @@ export default function InsightPanel({
   onRequestReportRender,
   onPublishReport,
   onRetryWorkflowExecution,
-  onCancelWorkflowExecution,
   onRefreshReportDetail,
   onRefreshReports,
   staticPageDraft,
@@ -1844,6 +1758,10 @@ export default function InsightPanel({
   };
 
   const openTaskCard = (card) => {
+    if (openTaskCardUrl(card)) {
+      selectTaskCard(card);
+      return;
+    }
     selectTaskCard(card);
     const raw = card?.raw || {};
     const draft = raw.staticPageDraft;
@@ -1862,42 +1780,6 @@ export default function InsightPanel({
     }
     const file = taskCardPrimaryFile(card);
     if (file?.url && typeof window !== 'undefined') {
-      window.open(file.url, '_blank', 'noopener,noreferrer');
-    }
-  };
-
-  const editTaskCard = (card) => {
-    selectTaskCard(card);
-    const raw = card?.raw || {};
-    const draft = raw.staticPageDraft;
-    const htmlArtifact = raw.htmlArtifact;
-    if (draft?.id) {
-      if (card.status === 'published') {
-        onPreviewStaticPageDraft?.(draft.id);
-      } else {
-        onSelectStaticPageDraft?.(draft.id);
-      }
-      return;
-    }
-    if (htmlArtifact && (htmlArtifact.id || htmlArtifact.artifact_id)) {
-      onSelectHtmlArtifact?.(htmlArtifact.id || htmlArtifact.artifact_id);
-    }
-  };
-
-  const selectTaskFile = (card, file) => {
-    if (!file) return;
-    const raw = card?.raw || {};
-    if (file.kind === 'html' || file.kind === 'static_page') {
-      if (raw.staticPageDraft?.id) {
-        onPreviewStaticPageDraft?.(raw.staticPageDraft.id);
-        return;
-      }
-      if (raw.htmlArtifact && (raw.htmlArtifact.id || raw.htmlArtifact.artifact_id)) {
-        onSelectHtmlArtifact?.(raw.htmlArtifact.id || raw.htmlArtifact.artifact_id);
-        return;
-      }
-    }
-    if (file.url && typeof window !== 'undefined') {
       window.open(file.url, '_blank', 'noopener,noreferrer');
     }
   };
@@ -1944,10 +1826,6 @@ export default function InsightPanel({
                 active={isTaskCardActive(card)}
                 onSelect={() => selectTaskCard(card)}
                 onOpen={() => openTaskCard(card)}
-                onEdit={() => editTaskCard(card)}
-                onSelectFile={(file) => selectTaskFile(card, file)}
-                onRetry={onRetryWorkflowExecution}
-                onCancel={onCancelWorkflowExecution}
               />
             ))}
           </div>
