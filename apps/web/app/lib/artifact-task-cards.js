@@ -68,6 +68,131 @@ function firstText(values = [], limit = 180) {
   return '';
 }
 
+const GENERIC_TASK_TITLE_SUBJECTS = new Set([
+  'html产物',
+  'codex产物',
+  '产物',
+  '任务',
+  '报表',
+  '页面',
+  '静态页',
+  '数据可视化报告',
+  '可视化报告',
+]);
+
+const TASK_TITLE_KEYWORDS = /报表|看板|分析|总览|复盘|月报|日报|周报|清单|提成|经营|品牌|门店|分店|区域|收入|订单|养老|长者|简历|合同|财务|库存|销售|风险|预警|取高|健康度|案例|方案|培训|视频|PPT|图库|资产库/i;
+
+function stripTaskTitleBoilerplate(value) {
+  let text = compactText(value, 260);
+  if (!text) return '';
+
+  text = text
+    .replace(/["“”]/g, '')
+    .replace(/\s*\[[^\]]*(?:已引用模板|引用模板|模板|template)[^\]]*\]\s*/gi, ' ')
+    .replace(/\s*【[^】]*(?:已引用模板|引用模板|模板|template)[^】]*】\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  text = text
+    .replace(/^(?:DataMax|V3|Codex|HTML)\s*/i, '')
+    .replace(/^(?:静态页|报表|页面|产物|任务)\s*[：:]\s*/i, '')
+    .replace(/\s*(?:[·-]\s*)?(?:成品|交接|数据质量报告|执行报告|已发布|最终版|Completed)\s*$/i, '')
+    .trim();
+
+  for (let index = 0; index < 3; index += 1) {
+    const before = text;
+    text = text
+      .replace(/^(?:请|帮我|帮忙|麻烦|给我|现在|继续|直接|随便|快速)?\s*(?:重新|继续)?\s*(?:生成|制作|创建|输出|做|出|整理|发布|复用|修改|更新|刷新|设计|查看|打开|分析)\s*(?:一个|一份|一张|一页|新的|当前|最新|总的)?\s*/i, '')
+      .replace(/^(?:一个|一份|一张|一页|新的|当前|最新|总的)\s*/i, '')
+      .trim();
+    if (before === text) break;
+  }
+
+  text = text
+    .replace(/\s*(?:我看看|给我看看|看看|看下|试试|一下|吧)[。.!！?？]*$/i, '')
+    .replace(/^(?:关于|有关)\s*/i, '')
+    .trim();
+
+  return text;
+}
+
+function shortenTaskTitleSubject(value) {
+  let text = stripTaskTitleBoilerplate(value);
+  if (!text) return '';
+
+  const punctuationLead = text.split(/[。；;]/)[0]?.trim();
+  if (punctuationLead && punctuationLead.length >= 4) {
+    text = punctuationLead;
+  }
+
+  const commaLead = text.split(/[，,]/)[0]?.trim();
+  if (commaLead && commaLead.length >= 6 && TASK_TITLE_KEYWORDS.test(commaLead)) {
+    text = commaLead;
+  }
+
+  const stopLead = text.split(/(?:\s+|，|,)(?:展示|识别|包括|包含|用于|可以|需要|支持|帮助|按照|基于|根据|以及|并|和)/)[0]?.trim();
+  if (stopLead && stopLead.length >= 4 && TASK_TITLE_KEYWORDS.test(stopLead)) {
+    text = stopLead;
+  }
+
+  const spaceLead = text.split(/\s+/)[0]?.trim();
+  if (spaceLead && spaceLead.length >= 4 && TASK_TITLE_KEYWORDS.test(spaceLead)) {
+    text = spaceLead;
+  }
+
+  return compactText(text, 40);
+}
+
+function taskTitleSubjectScore(subject) {
+  const normalized = compactText(subject, 80).toLowerCase();
+  if (!normalized || GENERIC_TASK_TITLE_SUBJECTS.has(normalized)) return -100;
+  let score = 0;
+  if (TASK_TITLE_KEYWORDS.test(subject)) score += 40;
+  if (subject.length >= 4 && subject.length <= 24) score += 25;
+  if (subject.length > 32) score -= 20;
+  if (/快速生成|关键指标|可核查证据|页面规划|HTML\s*生成|客户任务|受控执行|文件就绪/i.test(subject)) score -= 35;
+  if (/报告|报表|看板|总览|分析|清单$/.test(subject)) score += 10;
+  return score;
+}
+
+function bestTaskTitleSubject(values = []) {
+  let best = '';
+  let bestScore = -101;
+  for (const value of values) {
+    const subject = shortenTaskTitleSubject(value);
+    const score = taskTitleSubjectScore(subject);
+    if (score > bestScore) {
+      best = subject;
+      bestScore = score;
+    }
+  }
+  return bestScore > -100 ? best : '';
+}
+
+function taskCardTitle(kind, values = [], fallback = '任务') {
+  const subject = bestTaskTitleSubject(values);
+  if (!subject) return fallback;
+  const normalizedKind = compactText(kind, 20);
+  if (!normalizedKind || subject.startsWith(`${normalizedKind}：`) || subject === normalizedKind) {
+    return subject;
+  }
+  return `${normalizedKind}：${subject}`;
+}
+
+function preferTaskCardTitle(values = [], fallback = '任务') {
+  let best = '';
+  let bestScore = -101;
+  for (const value of values) {
+    const text = compactText(value, 120);
+    const score = taskTitleSubjectScore(shortenTaskTitleSubject(text));
+    if (score > bestScore) {
+      best = text;
+      bestScore = score;
+    }
+  }
+  return bestScore > -100 && best ? best : fallback;
+}
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -204,18 +329,24 @@ function cardStatusFromDraft(draft) {
 function staticPageTitle(draft) {
   const finalPage = draft?.finalPage || {};
   const manifest = finalPage.assetManifest || finalPage.asset_manifest || {};
-  return firstText([
+  return taskCardTitle('静态页', [
     manifest.reportTitle,
     manifest.report_title,
     manifest.displayTitle,
     manifest.display_title,
     manifest.title,
+    manifest.description,
+    manifest.summary,
     finalPage.reportTitle,
     finalPage.report_title,
+    finalPage.title,
     draft?.title,
+    draft?.name,
     draft?.objective,
     draft?.prompt,
-  ], 120) || '静态页任务';
+    draft?.modelSummary,
+    draft?.model_summary,
+  ], '静态页任务');
 }
 
 function staticPageSummary(draft) {
@@ -405,13 +536,17 @@ function buildStaticPageDraftCard(draft) {
 }
 
 function reportPlanTitle(plan, published) {
-  return firstText([
+  return taskCardTitle('报表', [
     published?.title,
     published?.name,
+    published?.report_title,
+    published?.reportTitle,
     plan?.title,
     plan?.name,
     plan?.objective,
-  ], 120) || '报表任务';
+    plan?.prompt,
+    plan?.description,
+  ], '报表任务');
 }
 
 function publishedReportUrl(report) {
@@ -500,7 +635,7 @@ function buildPublishedReportCard(report) {
   return {
     id: stableId('published_report', id),
     kind: 'published_report',
-    title: firstText([report.title, report.name, report.report_title, report.reportTitle], 120) || '已发布报表',
+    title: taskCardTitle('报表', [report.title, report.name, report.report_title, report.reportTitle], '已发布报表'),
     status: 'published',
     statusLabel: artifactTaskStatusLabel('published'),
     phase: '发布版本',
@@ -610,7 +745,7 @@ function buildHtmlArtifactCard(artifact) {
     return {
       id: stableId('html_artifact', id),
       kind: 'html_artifact',
-      title: artifact.title || '已拦截 HTML 产物',
+      title: taskCardTitle('产物', [artifact.title], '已拦截 HTML 产物'),
       status: 'failed',
       statusLabel: artifactTaskStatusLabel('failed'),
       phase: '安全拦截',
@@ -640,7 +775,13 @@ function buildHtmlArtifactCard(artifact) {
   return {
     id: stableId('html_artifact', manifest.id),
     kind: 'html_artifact',
-    title: manifest.title || 'HTML 产物',
+    title: taskCardTitle(manifest.templateId === 'static_page_published_preview' ? '静态页' : '产物', [
+      manifest.title,
+      manifest.payload?.reportTitle,
+      manifest.payload?.report_title,
+      manifest.payload?.summary,
+      manifest.provenance?.reason,
+    ], manifest.templateId === 'static_page_published_preview' ? '静态页任务' : 'HTML 产物'),
     status,
     statusLabel: artifactTaskStatusLabel(status),
     phase: manifest.templateLabel || '产物',
@@ -694,7 +835,14 @@ function buildCodexTaskCard(task) {
   return {
     id: stableId('codex_task', workflowExecutionId || task.id || task.title),
     kind: 'codex_task',
-    title: task.title || 'Codex 执行任务',
+    title: taskCardTitle(task.route === 'generated_static_page_edit' || task.route === 'generated_static_page_publish' ? '静态页' : '任务', [
+      task.title,
+      task.name,
+      task.objective,
+      task.prompt,
+      task.summary,
+      task.resultSummary?.summary,
+    ], 'Codex 执行任务'),
     status,
     statusLabel: task.statusLabel || artifactTaskStatusLabel(status),
     phase: task.route ? formatSnakeCaseLabel(task.route) : '受控执行',
@@ -762,7 +910,13 @@ function buildCodexArtifactCard(bundle) {
   return {
     id: stableId('codex_artifact', bundle.id || workflowExecutionId || bundle.primaryUrl || bundle.title),
     kind: 'codex_artifact',
-    title: bundle.title || 'Codex 产物',
+    title: taskCardTitle('产物', [
+      bundle.title,
+      bundle.name,
+      bundle.objective,
+      bundle.summary,
+      bundle.prompt,
+    ], 'Codex 产物'),
     status,
     statusLabel: bundle.statusLabel || artifactTaskStatusLabel(status),
     phase: bundle.published ? '已发布' : '发布校验',
@@ -866,7 +1020,14 @@ function buildClientArtifactCard(artifact) {
   return {
     id: stableId('v3_client_artifact', artifactId || taskId || artifact.title),
     kind: 'v3_client_artifact',
-    title: firstText([artifact.title, manifest.title], 120) || '客户端上传产物',
+    title: taskCardTitle('产物', [
+      artifact.title,
+      manifest.title,
+      artifact.name,
+      manifest.name,
+      artifact.summary,
+      manifest.metadata?.summary,
+    ], '客户端上传产物'),
     status,
     statusLabel: artifactTaskStatusLabel(status),
     phase: published ? 'V3 已发布' : 'V3 已接收',
@@ -926,6 +1087,7 @@ function mergeCards(existing, incoming) {
   return {
     ...other,
     ...lead,
+    title: preferTaskCardTitle([lead.title, other.title], lead.title || other.title || '任务'),
     files,
     primaryFileId: primaryFileId(files),
     sourceRefs,

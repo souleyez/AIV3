@@ -241,4 +241,49 @@ describe('artifact task cards', () => {
 
     assert.deepEqual(cards, []);
   });
+
+  it('derives concise business names for artifact task cards', () => {
+    const cards = buildArtifactTaskCards({
+      staticPageDrafts: [{
+        id: 'draft-fixed-commission',
+        title: '静态页：生成固定提成取高报表',
+        status: 'rendered',
+        finalPage: {
+          status: 'rendered',
+          htmlPreviewUrl: '/generated-artifacts/fixed-commission/index.html',
+          assetManifest: {
+            title: '门店取高报表 · 成品',
+          },
+        },
+      }, {
+        id: 'draft-health',
+        title: '静态页：经营健康度总览 识别大区、小区、分店的整体经营表现，包括收入、面积、租金等',
+        status: 'rendering',
+      }, {
+        id: 'draft-generic',
+        title: '随便生成一个报表我看看 [已引用模板：资料1.docx]',
+        objective: '快速生成一页数据可视化报告，展示关键指标、趋势、结构和可核查证据。',
+        prompt: '固定提成取高风险识别，可以从哪些品牌已触发、哪些即将触发、哪些差距较大三个层级来做。',
+        status: 'queued',
+      }],
+      htmlArtifacts: [{
+        kind: 'html_artifact',
+        version: 1,
+        id: 'html-fixed-commission',
+        title: '固定提成取高报表 · 成品',
+        sourceType: 'static_page',
+        templateId: 'static_page_published_preview',
+        ownerScope: { type: 'static_page_draft', id: 'draft-fixed-commission' },
+        payload: {
+          status: 'rendered',
+          previewPath: '/generated-artifacts/fixed-commission/index.html',
+        },
+      }],
+    });
+
+    assert.ok(cards.some((card) => card.title === '静态页：固定提成取高报表'));
+    assert.ok(cards.some((card) => card.title === '静态页：经营健康度总览'));
+    assert.ok(cards.some((card) => card.title === '静态页：固定提成取高风险识别'));
+    assert.equal(cards.some((card) => /随便|我看看|成品|生成固定/.test(card.title)), false);
+  });
 });
