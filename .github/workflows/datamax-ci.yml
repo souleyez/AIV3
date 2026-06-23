@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PATH: /home/github-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
 jobs:
   no-credential-smoke:
     name: No-Credential Smoke
@@ -20,16 +23,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
+      - name: Check Node toolchain
+        run: |
+          node -v
+          npm -v
+          pnpm -v
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
@@ -83,18 +81,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Check native build tools
+      - name: Check Rust and native toolchain
         run: |
+          cargo --version
+          rustc --version
+          rustfmt --version
           command -v clang
           command -v clang++
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Rust format
         run: cargo fmt --check
