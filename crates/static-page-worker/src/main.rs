@@ -71,14 +71,21 @@ struct StaticPagePreviewAssetMaterialization {
 
 #[derive(Clone, Debug)]
 enum StaticPageImageProviderConfig {
-    Direct(DirectImageGenerationConfig),
+    Direct {
+        direct: DirectImageGenerationConfig,
+        fallback_orchestrator: Option<CodexOrchestratorConfig>,
+    },
     Orchestrator(CodexOrchestratorConfig),
 }
 
 impl StaticPageImageProviderConfig {
     fn from_env() -> Result<Option<Self>> {
-        if let Some(config) = DirectImageGenerationConfig::from_env()? {
-            return Ok(Some(Self::Direct(config)));
+        if let Some(direct) = DirectImageGenerationConfig::from_env()? {
+            let fallback_orchestrator = CodexOrchestratorConfig::from_env().ok();
+            return Ok(Some(Self::Direct {
+                direct,
+                fallback_orchestrator,
+            }));
         }
         CodexOrchestratorConfig::from_env()
             .map(Self::Orchestrator)
@@ -87,21 +94,30 @@ impl StaticPageImageProviderConfig {
 
     fn provider_name(&self) -> &str {
         match self {
-            Self::Direct(config) => config.provider.as_str(),
+            Self::Direct { direct, .. } => direct.provider.as_str(),
             Self::Orchestrator(_) => "cloudflare_orchestrator",
         }
     }
 
     fn base_url(&self) -> &str {
         match self {
-            Self::Direct(config) => config.base_url.as_str(),
+            Self::Direct { direct, .. } => direct.base_url.as_str(),
             Self::Orchestrator(config) => config.base_url.as_str(),
         }
     }
 
     fn runtime_target(&self) -> &str {
         match self {
-            Self::Direct(_) => "local_direct",
+            Self::Direct {
+                fallback_orchestrator,
+                ..
+            } => {
+                if fallback_orchestrator.is_some() {
+                    "local_direct_with_cloudflare_fallback"
+                } else {
+                    "local_direct"
+                }
+            }
             Self::Orchestrator(config) => config.runtime_target_id.as_str(),
         }
     }
@@ -499,113 +515,194 @@ async fn process_static_page_image_task(
                 "STATIC_PAGE_IMAGE_PROVIDER direct config or CODEX_ORCHESTRATOR_ACCESS_KEY/CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
             )
         })?;
-        if let StaticPageImageProviderConfig::Direct(direct_config) = image_provider_config {
-            mark_job_running(storage, &mut job).await?;
-            let direct_task_id = format!("direct-image2-{}", job.id);
-            let submitted_at = Utc::now();
-            job.image_prompt_payload = merge_orchestrator_state(
-                &job.image_prompt_payload,
-                json!({
-                    "provider": direct_config.provider,
-                    "status": "running",
-                    "taskId": direct_task_id,
-                    "submittedAt": submitted_at,
-                    "model": direct_config.image_model,
-                    "size": direct_config.image_size,
-                    "baseUrlConfigured": true,
-                }),
-            );
-            job.queue_position = None;
-            storage
-                .static_page_image_jobs()
-                .update(task.tenant_id, &job)
-                .await?;
-            append_assistant_event(
-                storage,
-                job.tenant_id,
-                job.assistant_run_id,
-                "static_page_image_job.submitted",
-                json!({
-                    "draft_id": job.draft_id,
-                    "image_job_id": job.id,
-                    "orchestrator_task_id": direct_task_id,
-                    "provider": direct_config.provider,
-                    "status": "running",
-                    "model": direct_config.image_model,
-                    "size": direct_config.image_size,
-                    "queue_position": Value::Null,
-                    "poll_after_seconds": 0,
-                }),
-            )
-            .await?;
-
-            let mut artifact = generate_static_page_visual_direct(
-                http_client,
-                direct_config,
-                job.id,
-                &job.image_prompt_payload,
-            )?;
-            let materialization = materialize_preview_asset(http_client, None, job.id, &artifact);
-            if let Some(materialized_asset_key) = materialization
-                .as_ref()
-                .and_then(|materialization| materialization.persisted_asset_key.as_deref())
-            {
-                artifact.asset_key = materialized_asset_key.to_string();
+        if let StaticPageImageProviderConfig::Direct {
+            direct: direct_config,
+            fallback_orchestrator,
+        } = image_provider_config
+        {
+            let already_using_orchestrator =
+                static_page_image_orchestrator_task_id(&job.image_prompt_payload).is_some();
+            if already_using_orchestrator && fallback_orchestrator.is_none() {
+                return Err(anyhow!(
+                    "static page image job {} is waiting for Cloudflare orchestrator but no fallback orchestrator config is available",
+                    job.id
+                ));
             }
-            let asset_provenance =
-                static_page_image_preview_asset_provenance(&artifact, materialization.as_ref());
-            mark_job_preview_ready(storage, &job, &artifact.asset_key, &asset_provenance).await?;
-            append_assistant_event(
-                storage,
-                job.tenant_id,
-                job.assistant_run_id,
-                "static_page_image_job.preview_ready",
-                json!({
-                    "draft_id": job.draft_id,
-                    "image_job_id": job.id,
-                    "orchestrator_task_id": direct_task_id,
-                    "provider": direct_config.provider,
-                    "preview_asset_key": artifact.asset_key,
-                    "artifact": {
-                        "name": artifact.name,
-                        "mime_type": artifact.mime_type,
-                        "width": artifact.width,
-                        "height": artifact.height,
-                    },
-                    "asset_provenance": asset_provenance,
-                    "artifact_manifest": static_page_image_preview_artifact_manifest(
-                        &job,
-                        &artifact,
-                        &direct_task_id,
-                        &asset_provenance,
-                    ),
-                }),
-            )
-            .await?;
-
-            platform_api::apply_workflow_signal_with_dependencies(
-                storage,
-                workflow_catalog,
-                event_bus,
-                task.tenant_id,
-                task.execution_id,
-                WorkflowSignal::StepCompleted {
-                    task_key: task.task_key.clone(),
-                    output: Some(json!({
-                        "static_page_image_job_id": job.id,
-                        "preview_asset_key": artifact.asset_key,
+            if already_using_orchestrator {
+                tracing::info!(
+                    image_job_id = %job.id,
+                    "static page image job continues on Cloudflare orchestrator fallback"
+                );
+            } else {
+                mark_job_running(storage, &mut job).await?;
+                let direct_task_id = format!("direct-image2-{}", job.id);
+                let submitted_at = Utc::now();
+                job.image_prompt_payload = merge_orchestrator_state(
+                    &job.image_prompt_payload,
+                    json!({
+                        "provider": direct_config.provider,
+                        "status": "running",
+                        "taskId": direct_task_id,
+                        "submittedAt": submitted_at,
+                        "model": direct_config.image_model,
+                        "size": direct_config.image_size,
+                        "baseUrlConfigured": true,
+                    }),
+                );
+                job.queue_position = None;
+                storage
+                    .static_page_image_jobs()
+                    .update(task.tenant_id, &job)
+                    .await?;
+                append_assistant_event(
+                    storage,
+                    job.tenant_id,
+                    job.assistant_run_id,
+                    "static_page_image_job.submitted",
+                    json!({
+                        "draft_id": job.draft_id,
+                        "image_job_id": job.id,
                         "orchestrator_task_id": direct_task_id,
-                        "image_provider": direct_config.provider,
-                    })),
-                },
-            )
-            .await?;
+                        "provider": direct_config.provider,
+                        "status": "running",
+                        "model": direct_config.image_model,
+                        "size": direct_config.image_size,
+                        "queue_position": Value::Null,
+                        "poll_after_seconds": 0,
+                    }),
+                )
+                .await?;
 
-            return Ok(StaticPageImageTaskOutcome::Completed);
+                match generate_static_page_visual_direct(
+                    http_client,
+                    direct_config,
+                    job.id,
+                    &job.image_prompt_payload,
+                ) {
+                    Ok(mut artifact) => {
+                        let materialization =
+                            materialize_preview_asset(http_client, None, job.id, &artifact);
+                        if let Some(materialized_asset_key) = materialization
+                            .as_ref()
+                            .and_then(|materialization| materialization.persisted_asset_key.as_deref())
+                        {
+                            artifact.asset_key = materialized_asset_key.to_string();
+                        }
+                        let asset_provenance = static_page_image_preview_asset_provenance(
+                            &artifact,
+                            materialization.as_ref(),
+                        );
+                        mark_job_preview_ready(
+                            storage,
+                            &job,
+                            &artifact.asset_key,
+                            &asset_provenance,
+                        )
+                        .await?;
+                        append_assistant_event(
+                            storage,
+                            job.tenant_id,
+                            job.assistant_run_id,
+                            "static_page_image_job.preview_ready",
+                            json!({
+                                "draft_id": job.draft_id,
+                                "image_job_id": job.id,
+                                "orchestrator_task_id": direct_task_id,
+                                "provider": direct_config.provider,
+                                "preview_asset_key": artifact.asset_key,
+                                "artifact": {
+                                    "name": artifact.name,
+                                    "mime_type": artifact.mime_type,
+                                    "width": artifact.width,
+                                    "height": artifact.height,
+                                },
+                                "asset_provenance": asset_provenance,
+                                "artifact_manifest": static_page_image_preview_artifact_manifest(
+                                    &job,
+                                    &artifact,
+                                    &direct_task_id,
+                                    &asset_provenance,
+                                ),
+                            }),
+                        )
+                        .await?;
+
+                        platform_api::apply_workflow_signal_with_dependencies(
+                            storage,
+                            workflow_catalog,
+                            event_bus,
+                            task.tenant_id,
+                            task.execution_id,
+                            WorkflowSignal::StepCompleted {
+                                task_key: task.task_key.clone(),
+                                output: Some(json!({
+                                    "static_page_image_job_id": job.id,
+                                    "preview_asset_key": artifact.asset_key,
+                                    "orchestrator_task_id": direct_task_id,
+                                    "image_provider": direct_config.provider,
+                                })),
+                            },
+                        )
+                        .await?;
+
+                        return Ok(StaticPageImageTaskOutcome::Completed);
+                    }
+                    Err(error) => {
+                        let Some(_orchestrator_config) = fallback_orchestrator.as_ref() else {
+                            return Err(error);
+                        };
+                        let error_message = error.to_string();
+                        let fallback_at = Utc::now();
+                        tracing::warn!(
+                            image_job_id = %job.id,
+                            direct_provider = %direct_config.provider,
+                            error = %bounded_text(&error_message, 300),
+                            "static page direct image generation failed; falling back to Cloudflare orchestrator"
+                        );
+                        job.image_prompt_payload = merge_orchestrator_state(
+                            &job.image_prompt_payload,
+                            json!({
+                                "provider": "cloudflare_orchestrator",
+                                "status": "fallback_started",
+                                "directProvider": direct_config.provider,
+                                "directTaskId": direct_task_id,
+                                "directFailureReason": bounded_text(&error_message, 500),
+                                "fallbackStartedAt": fallback_at,
+                            }),
+                        );
+                        storage
+                            .static_page_image_jobs()
+                            .update(task.tenant_id, &job)
+                            .await?;
+                        append_assistant_event(
+                            storage,
+                            job.tenant_id,
+                            job.assistant_run_id,
+                            "static_page_image_job.fallback_started",
+                            json!({
+                                "draft_id": job.draft_id,
+                                "image_job_id": job.id,
+                                "from_provider": direct_config.provider,
+                                "to_provider": "cloudflare_orchestrator",
+                                "direct_task_id": direct_task_id,
+                                "error": bounded_text(&error_message, 500),
+                                "status": "fallback_started",
+                            }),
+                        )
+                        .await?;
+                    }
+                }
+            }
         }
-        let StaticPageImageProviderConfig::Orchestrator(orchestrator_config) = image_provider_config
-        else {
-            unreachable!("direct image provider returned before orchestrator path")
+        let orchestrator_config = match image_provider_config {
+            StaticPageImageProviderConfig::Orchestrator(config) => config,
+            StaticPageImageProviderConfig::Direct {
+                fallback_orchestrator: Some(config),
+                ..
+            } => config,
+            StaticPageImageProviderConfig::Direct { .. } => {
+                unreachable!("direct image provider without fallback returned before orchestrator path")
+            }
         };
         let orchestrator_task_id =
             if let Some(task_id) = static_page_image_orchestrator_task_id(&job.image_prompt_payload)
@@ -1462,7 +1559,17 @@ fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
         || message.contains("status=503")
         || message.contains("status=504")
         || message.contains("status=524")
+        || message.contains("status=0")
+        || message.contains("status=402")
         || message.contains("status=429")
+        || message.contains("insufficient_quota")
+        || message.contains("quota_exceeded")
+        || message.contains("quota exceeded")
+        || message.contains("credit exhausted")
+        || message.contains("payment required")
+        || message.contains("余额不足")
+        || message.contains("余额已用尽")
+        || message.contains("额度")
         || message.contains("excessive system load")
         || message.contains("upstream_error")
 }
@@ -1486,7 +1593,17 @@ fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
         || message.contains("status=503")
         || message.contains("status=504")
         || message.contains("status=524")
+        || message.contains("status=0")
+        || message.contains("status=402")
         || message.contains("status=429")
+        || message.contains("insufficient_quota")
+        || message.contains("quota_exceeded")
+        || message.contains("quota exceeded")
+        || message.contains("credit exhausted")
+        || message.contains("payment required")
+        || message.contains("余额不足")
+        || message.contains("余额已用尽")
+        || message.contains("额度")
         || message.contains("excessive system load")
         || message.contains("upstream_error")
 }
@@ -2426,6 +2543,15 @@ mod tests {
         ));
         assert!(static_page_image_error_should_auto_retry(
             "direct image generation failed: status=429 Too Many Requests"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "direct image generation failed: status=402 Payment Required body_excerpt=\"insufficient_quota\""
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "Cloudflare Codex submit failed: status=0 body_chars=0 body_excerpt=\"\""
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "direct image generation failed: 余额不足，额度已用尽"
         ));
         assert!(!static_page_image_error_should_auto_retry(
             "orchestrator response JSON decode failed: status=403 body_excerpt=\"1010 browser_signature_banned\""

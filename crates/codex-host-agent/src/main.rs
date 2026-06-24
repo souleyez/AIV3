@@ -698,7 +698,12 @@ fn codex_host_cancelled_error_reason(error_message: &str) -> Option<&'static str
 }
 
 fn codex_host_failure_reason(error_message: &str) -> &'static str {
-    if error_message.contains("timed out") {
+    let lowercase = error_message.to_ascii_lowercase();
+    if codex_host_provider_quota_error(&lowercase) {
+        "provider_quota_exhausted"
+    } else if codex_host_provider_rate_limit_error(&lowercase) {
+        "provider_rate_limited"
+    } else if error_message.contains("timed out") {
         "timeout"
     } else if error_message.contains("non_zero_exit") {
         "non_zero_exit"
@@ -722,7 +727,7 @@ fn should_fallback_codex_exec_to_cloudflare(
     let error_message = error.to_string();
     matches!(
         codex_host_failure_reason(&error_message),
-        "timeout" | "non_zero_exit"
+        "timeout" | "non_zero_exit" | "provider_quota_exhausted" | "provider_rate_limited"
     )
 }
 
@@ -736,8 +741,33 @@ fn should_retry_codex_exec_locally(
     let error_message = error.to_string();
     matches!(
         codex_host_failure_reason(&error_message),
-        "timeout" | "non_zero_exit"
+        "timeout" | "non_zero_exit" | "provider_rate_limited"
     )
+}
+
+fn codex_host_provider_quota_error(lowercase_message: &str) -> bool {
+    lowercase_message.contains("insufficient_quota")
+        || lowercase_message.contains("quota_exceeded")
+        || lowercase_message.contains("quota exceeded")
+        || lowercase_message.contains("credit exhausted")
+        || lowercase_message.contains("balance")
+        || lowercase_message.contains("billing")
+        || lowercase_message.contains("payment required")
+        || lowercase_message.contains("status=402")
+        || lowercase_message.contains("status: 402")
+        || lowercase_message.contains("http 402")
+        || lowercase_message.contains("额度")
+        || lowercase_message.contains("余额不足")
+        || lowercase_message.contains("余额已用尽")
+}
+
+fn codex_host_provider_rate_limit_error(lowercase_message: &str) -> bool {
+    lowercase_message.contains("rate_limit")
+        || lowercase_message.contains("rate limit")
+        || lowercase_message.contains("too many requests")
+        || lowercase_message.contains("status=429")
+        || lowercase_message.contains("status: 429")
+        || lowercase_message.contains("http 429")
 }
 
 fn codex_exec_local_max_attempts(task_context: &CodexHostTaskContext) -> u32 {
@@ -3512,6 +3542,8 @@ fn cloudflare_orchestrator_requeueable_error(error_message: &str) -> bool {
         || message.contains("failed to poll cloudflare codex task")
         || message.contains("cloudflare codex poll response is invalid json")
         || message.contains("cloudflare codex poll response missing task")
+        || message.contains("cloudflare codex poll failed: status=0")
+        || message.contains("cloudflare codex submit failed: status=0")
         || message.contains("cloudflare codex poll failed: status=500")
         || message.contains("cloudflare codex poll failed: status=502")
         || message.contains("cloudflare codex poll failed: status=503")
@@ -4437,6 +4469,7 @@ async fn curl_orchestrator_json(
 
     let mut command = Command::new("curl");
     command
+        .arg("--http1.1")
         .arg("--config")
         .arg("-")
         .stdin(Stdio::piped())
@@ -10497,6 +10530,9 @@ function renderInsight(k){
         assert!(cloudflare_orchestrator_requeueable_error(
             "Cloudflare Codex poll failed: status=500 body_excerpt=\"temporary upstream error\""
         ));
+        assert!(cloudflare_orchestrator_requeueable_error(
+            "Cloudflare Codex submit failed: status=0 body_chars=0 body_excerpt=\"\""
+        ));
     }
 
     #[test]
@@ -10521,6 +10557,29 @@ function renderInsight(k){
             &task_context,
             &task
         ));
+    }
+
+    #[test]
+    fn codex_exec_provider_quota_errors_fallback_without_local_retry() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _fallback_enabled = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_CODEX_EXEC_CLOUDFLARE_FALLBACK_ENABLED",
+            "true",
+        );
+        let task_context = test_static_page_task_context();
+        let error = anyhow!(
+            "Codex Host command failed: provider returned status=402 body_excerpt=\"insufficient_quota\""
+        );
+
+        assert_eq!(
+            codex_host_failure_reason(&error.to_string()),
+            "provider_quota_exhausted"
+        );
+        assert!(should_fallback_codex_exec_to_cloudflare(
+            &task_context,
+            &error
+        ));
+        assert!(!should_retry_codex_exec_locally(&task_context, &error));
     }
 
     #[test]
