@@ -2,6 +2,60 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-24 Resume Recommendation Direct Answer Release and 8-Server Verification
+
+- Scope:
+  - improve multi-resume candidate recommendation questions so they use structured resume profile scans instead of top-k retrieval chunks or provider fallback;
+  - keep public API, third-party API, request fields, response fields, and production data contracts unchanged.
+- GitHub:
+  - committed and pushed `cfba63d5 Improve resume recommendation direct answers` to `origin/main`;
+  - staged scope was limited to `crates/platform-api/src/assistant_run_resume_profile_match_support.rs`, `crates/platform-api/src/assistant_run_resume_prompt_support.rs`, `crates/platform-api/src/lib.rs`, and `crates/platform-api/src/retrieval_evidence_ranking_support.rs`.
+- Local verification before release:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api candidate_recommendation_detects_multi_resume_selection --lib`: passed;
+  - `cargo test -p platform-api recommendation_answer_ranks_all_candidates_with_time_weight --lib`: passed;
+  - `cargo test -p platform-api term_matching_handles_ascii_companies_and_noise --lib`: passed;
+  - `cargo test -p platform-api assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer --lib`: passed;
+  - `cargo test -p platform-api sort_retrieval_evidences_keeps_existing_priority_order --lib`: passed;
+  - `cargo check -p platform-api`: passed;
+  - `git diff --check` for the staged backend files passed with Windows LF/CRLF warnings only.
+- 8-server deployment:
+  - `/srv/aiv3/repo` was aligned to `cfba63d55`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker`: passed;
+  - restarted `aiv3-platform-api.service` and `aiv3-assistant-run-worker.service`;
+  - both services returned `active`;
+  - `http://127.0.0.1:3000/healthz` returned platform-api ok JSON;
+  - `http://127.0.0.1:3000/readyz` returned platform-api ready JSON.
+- 8-server live smoke:
+  - resume recommendation assistant run `7130dfb5-6a12-4617-839c-28e8f4d0066b` returned successfully;
+  - runtime provider/model was `platform_direct_answer` / `dataset-entity-scan-direct-v1`;
+  - answer used the preferred resume dataset scope and reported 24 structured resume profile rows;
+  - answer contained the candidate ranking marker and time-weight marker;
+  - weak-token false positive `学校=开发` was absent.
+- GitHub Actions:
+  - DataMax CI run `28076397820` for `cfba63d55f4474207c56aa523ccdbee0119c3115` completed successfully.
+- Post-release local regression:
+  - `cargo test -p platform-api resume_profile --lib`: passed, 10/10 tests;
+  - `cargo test -p platform-api assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer --lib`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, report `target/external-scoped-document-chat-smoke/20260624060428-self-test.json`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, report `target/external-report-focus-smoke/external-report-focus-self-test-20260624060428.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, expected focus `取高机会`, report `target/external-report-export-smoke/20260624060428-self-test.json`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`, report `target/static-page-5way-smoke/20260624060440-self-test.json`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`, report `target/cloudflare-fallback-2way-smoke/20260624060440-self-test.json`;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`, report `target/main-chat-20way-smoke/20260624060541-self-test.json`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`, report `target/external-channel-20way-smoke/20260624060541-self-test.json`;
+  - `npm run smoke:main-assistant-streaming -- --self-test`: passed, `createOk=true`, `continueOk=true`, `createDeltaCount=2`, `continueDeltaCount=2`, report `target/main-assistant-streaming-smoke/20260624070246-self-test.json`;
+  - `npm run smoke:external-channel-streaming-10way -- --self-test`: passed, `okCount=15`, `normalOkCount=10`, `staticPageOkCount=3`, `reconnectOkCount=2`, `artifactCount=2`, `continuePollingCount=1`, report `target/external-channel-streaming-10way-smoke/20260624070246-self-test.json`;
+  - `npm run smoke:main-chat-20way -- --self-test`: re-ran after streaming smoke helper update, passed, `okCount=20`, `failedCount=0`, report `target/main-chat-20way-smoke/20260624065111-self-test.json`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with existing module-type warning only;
+  - 8-server `/srv/aiv3/repo` remained on `cfba63d55`; `aiv3-platform-api.service` and `aiv3-assistant-run-worker.service` were `active`; `healthz` and `readyz` passed.
+- Known remaining regression gap:
+  - `external-channel-streaming-10way` now has deterministic `--self-test`; production live streaming with real bearer/cookie is still left for a controlled live window.
+- Safety:
+  - no public API URL, third-party URL, auth method, required request field, existing response field, schema, production data mapping, model provider key, database URL, raw customer document body, raw source payload, object key, content hash, or raw Authorization value was recorded or changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, or 120 server change was performed.
+
 ## 2026-06-23 DataMax Server8 Self-Hosted CI Bring-Up
 
 - Scope:

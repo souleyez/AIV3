@@ -37,6 +37,7 @@ function parseArgs(argv) {
     botExternalId: process.env.EXTERNAL_CHANNEL_STREAMING_SMOKE_BOT_EXTERNAL_ID || 'bot-v3',
     outputDir: process.env.EXTERNAL_CHANNEL_STREAMING_SMOKE_OUTPUT_DIR
       || 'target/external-channel-streaming-10way-smoke',
+    selfTest: parseBoolean(process.env.EXTERNAL_CHANNEL_STREAMING_SMOKE_SELF_TEST),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -84,6 +85,8 @@ function parseArgs(argv) {
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -110,6 +113,10 @@ function parseList(value) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseBoolean(value) {
+  return ['1', 'true', 'yes', 'y'].includes(String(value || '').trim().toLowerCase());
 }
 
 function assertCount(value, name, min, max) {
@@ -145,6 +152,9 @@ Environment aliases:
   EXTERNAL_CHANNEL_STREAMING_SMOKE_BEARER
   EXTERNAL_CHANNEL_STREAMING_SMOKE_DATASET_EXTERNAL_IDS
   EXTERNAL_CHANNEL_STREAMING_SMOKE_DOCUMENT_EXTERNAL_IDS
+
+Optional:
+  --self-test                    run deterministic offline streaming parser, reconnect, and summary checks
 `);
 }
 
@@ -727,21 +737,13 @@ function percentile(values, ratio) {
   return sorted[index];
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const tasks = [
-    ...Array.from({ length: args.normalCount }, (_, index) => runNormalTask(args, index, runId)),
-    ...Array.from({ length: args.staticPageCount }, (_, index) => runStaticPageTask(args, index, runId)),
-    ...Array.from({ length: args.reconnectCount }, (_, index) => runReconnectTask(args, index, runId)),
-  ];
-  const results = await Promise.all(tasks);
+function summarizeRun(args, runId, results) {
   const latencies = results.flatMap((item) => [
     item.result?.latencyMs,
     item.first?.latencyMs,
     item.second?.latencyMs,
   ].filter((value) => Number.isFinite(value)));
-  const summary = {
+  return {
     runId,
     baseUrl: args.baseUrl,
     connectionId: args.connectionId,
@@ -774,6 +776,338 @@ async function main() {
     maxLatencyMs: latencies.length ? Math.max(...latencies) : null,
     generatedAt: new Date().toISOString(),
   };
+}
+
+function buildSseFrame(event, data) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function splitFixtureStream(text) {
+  const first = Math.max(1, Math.floor(text.length / 4));
+  const second = Math.max(first + 1, Math.floor(text.length / 2));
+  return [text.slice(0, first), text.slice(first, second), text.slice(second)];
+}
+
+function streamResultFromFixture({ frames, disconnected = false, httpStatus = 200, latencyMs = 200 }) {
+  const text = frames.join('');
+  const state = createStreamState();
+  const events = [];
+  for (const chunk of splitFixtureStream(text)) {
+    events.push(...parseSseFrames(chunk, state));
+  }
+  events.push(...flushSseFrames(state));
+  return summarizeStreamResult({
+    ok: httpStatus >= 200 && httpStatus < 300,
+    disconnected,
+    httpStatus,
+    latencyMs,
+    events,
+    bodyPrefix: text.slice(0, 500),
+    error: null,
+  });
+}
+
+function fixtureStartedFrame(task, index, sequence) {
+  return buildSseFrame('external_channel.started', {
+    sequence,
+    event_id: `${task}-${index}-evt-${sequence}`,
+    assistant_run_id: `${task}-${index}-run`,
+    status: 'started',
+  });
+}
+
+function fixtureProgressFrame(task, index, sequence, displayText) {
+  return buildSseFrame('external_channel.progress', {
+    sequence,
+    event_id: `${task}-${index}-evt-${sequence}`,
+    assistant_run_id: `${task}-${index}-run`,
+    display_text: displayText,
+    status: 'processing',
+  });
+}
+
+function fixtureCompletedFrame(task, index, sequence, response) {
+  return buildSseFrame('external_channel.completed', {
+    sequence,
+    event_id: `${task}-${index}-evt-${sequence}`,
+    assistant_run_id: `${task}-${index}-run`,
+    response,
+  });
+}
+
+function fixtureDoneFrame(task, index, sequence) {
+  return buildSseFrame('done', {
+    sequence,
+    event_id: `${task}-${index}-evt-${sequence}`,
+    status: 'done',
+  });
+}
+
+function fixtureAnswerResponse(task, index, text) {
+  return {
+    assistant_run_id: `${task}-${index}-run`,
+    reply: {
+      reply_type: 'answer',
+      task_status: 'answered',
+      text,
+    },
+  };
+}
+
+function summarizeNormalFixtureTask(args, index, runId) {
+  const payload = buildPayload(args, 'normal', index, runId);
+  const result = streamResultFromFixture({
+    latencyMs: 200 + index,
+    frames: [
+      fixtureStartedFrame('normal', index, 1),
+      fixtureProgressFrame('normal', index, 2, '正在组织第三方普通问答流式回复'),
+      fixtureCompletedFrame(
+        'normal',
+        index,
+        3,
+        fixtureAnswerResponse('normal', index, `普通问答 ${index + 1} 已完成。`),
+      ),
+      fixtureDoneFrame('normal', index, 4),
+    ],
+  });
+  return {
+    taskType: 'normal',
+    index,
+    conversationExternalId: payload.conversation_external_id,
+    messageExternalId: payload.message_external_id,
+    idempotencyKey: payload.idempotency_key,
+    ok: result.ok
+      && result.started
+      && result.completedCount === 1
+      && !result.duplicateFinalMessages
+      && !result.terminalFailure
+      && !result.errorFrame,
+    checks: {
+      transportOk: result.ok,
+      started: result.started,
+      completedOnce: result.completedCount === 1,
+      noDuplicateFinalMessages: !result.duplicateFinalMessages,
+      noTerminalFailure: !result.terminalFailure,
+      noErrorFrame: !result.errorFrame,
+    },
+    result,
+  };
+}
+
+function summarizeStaticPageFixtureTask(args, index, runId) {
+  const payload = buildPayload(args, 'static_page', index, runId);
+  const usesArtifact = index % 2 === 0;
+  const response = usesArtifact
+    ? {
+      assistant_run_id: `static-page-${index}-run`,
+      reply: {
+        reply_type: 'task_status',
+        task_status: 'answered',
+        text: '静态页已发布。',
+        card: {
+          public_url: `/generated-artifacts/self-test/static-page-${index}/index.html`,
+        },
+      },
+    }
+    : {
+      assistant_run_id: `static-page-${index}-run`,
+      reply: {
+        reply_type: 'task_status',
+        task_status: 'continue_polling',
+        text: '静态页仍在后台生成，可继续轮询。',
+        card: {
+          status_url: `/v1/external/tasks/static-page-${index}/status`,
+        },
+      },
+    };
+  const result = streamResultFromFixture({
+    latencyMs: 300 + index,
+    frames: [
+      fixtureStartedFrame('static-page', index, 1),
+      fixtureProgressFrame('static-page', index, 2, '已创建报表任务，正在推进静态页生成。'),
+      fixtureCompletedFrame('static-page', index, 3, response),
+      fixtureDoneFrame('static-page', index, 4),
+    ],
+  });
+  const longTaskProgressOk = Boolean(result.artifactUrl || result.continuePolling);
+  return {
+    taskType: 'static_page',
+    index,
+    conversationExternalId: payload.conversation_external_id,
+    messageExternalId: payload.message_external_id,
+    idempotencyKey: payload.idempotency_key,
+    ok: result.ok
+      && result.started
+      && !result.duplicateFinalMessages
+      && !result.terminalFailure
+      && !result.errorFrame
+      && longTaskProgressOk,
+    checks: {
+      transportOk: result.ok,
+      started: result.started,
+      noDuplicateFinalMessages: !result.duplicateFinalMessages,
+      noTerminalFailure: !result.terminalFailure,
+      noErrorFrame: !result.errorFrame,
+      artifactOrContinuePolling: longTaskProgressOk,
+    },
+    result,
+  };
+}
+
+function summarizeReconnectFixtureTask(args, index, runId) {
+  const payload = buildPayload(args, 'reconnect', index, runId);
+  const first = streamResultFromFixture({
+    disconnected: true,
+    latencyMs: 150 + index,
+    frames: [
+      fixtureStartedFrame('reconnect', index, 1),
+      fixtureProgressFrame('reconnect', index, 2, '客户端主动断开，等待续传。'),
+    ],
+  });
+  const second = streamResultFromFixture({
+    latencyMs: 260 + index,
+    frames: [
+      fixtureProgressFrame('reconnect', index, 3, '续传后继续输出。'),
+      fixtureCompletedFrame(
+        'reconnect',
+        index,
+        4,
+        fixtureAnswerResponse('reconnect', index, `断线续传 ${index + 1} 已完成。`),
+      ),
+      fixtureDoneFrame('reconnect', index, 5),
+    ],
+  });
+  const secondSequences = second.events
+    .filter((frame) => frame.event !== 'external_channel.started')
+    .map((frame) => sequenceFromFrame(frame))
+    .filter((sequence) => Number.isInteger(sequence));
+  const replayedOnlyAfterLastSequence = secondSequences.every((sequence) => sequence > first.lastSequence);
+  const completedCount = first.completedCount + second.completedCount;
+  const duplicateFinalMessages = first.duplicateFinalMessages
+    || second.duplicateFinalMessages
+    || completedCount > 1;
+
+  return {
+    taskType: 'reconnect',
+    index,
+    conversationExternalId: payload.conversation_external_id,
+    messageExternalId: payload.message_external_id,
+    idempotencyKey: payload.idempotency_key,
+    ok: first.disconnected
+      && second.ok
+      && second.completedCount === 1
+      && replayedOnlyAfterLastSequence
+      && !duplicateFinalMessages
+      && !second.terminalFailure
+      && !second.errorFrame,
+    checks: {
+      firstDisconnected: first.disconnected,
+      reconnectTransportOk: second.ok,
+      reconnectCompletedOnce: second.completedCount === 1,
+      replayedOnlyAfterLastSequence,
+      noDuplicateFinalMessages: !duplicateFinalMessages,
+      noTerminalFailure: !second.terminalFailure,
+      noErrorFrame: !second.errorFrame,
+    },
+    first,
+    second,
+  };
+}
+
+async function runSelfTest(args) {
+  const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-self-test`;
+  const fixtureArgs = {
+    ...args,
+    baseUrl: 'https://v3.elepcloud.com',
+    connectionId: DEFAULT_CONNECTION_ID,
+    bearer: '',
+    normalCount: DEFAULT_NORMAL_COUNT,
+    staticPageCount: DEFAULT_STATIC_PAGE_COUNT,
+    reconnectCount: DEFAULT_RECONNECT_COUNT,
+  };
+  const results = [
+    ...Array.from({ length: fixtureArgs.normalCount }, (_, index) =>
+      summarizeNormalFixtureTask(fixtureArgs, index, runId)),
+    ...Array.from({ length: fixtureArgs.staticPageCount }, (_, index) =>
+      summarizeStaticPageFixtureTask(fixtureArgs, index, runId)),
+    ...Array.from({ length: fixtureArgs.reconnectCount }, (_, index) =>
+      summarizeReconnectFixtureTask(fixtureArgs, index, runId)),
+  ];
+  const duplicateResult = streamResultFromFixture({
+    frames: [
+      fixtureStartedFrame('duplicate', 0, 1),
+      fixtureCompletedFrame('duplicate', 0, 2, fixtureAnswerResponse('duplicate', 0, '重复 final')),
+      fixtureCompletedFrame('duplicate', 0, 3, fixtureAnswerResponse('duplicate', 0, '重复 final')),
+      fixtureDoneFrame('duplicate', 0, 4),
+    ],
+  });
+  const summary = {
+    ...summarizeRun(fixtureArgs, runId, results),
+    selfTest: true,
+  };
+  const payloads = results.map((item) => ({
+    conversationExternalId: item.conversationExternalId,
+    messageExternalId: item.messageExternalId,
+    idempotencyKey: item.idempotencyKey,
+  }));
+  const checks = {
+    defaultCountsPreserved: fixtureArgs.normalCount === 10
+      && fixtureArgs.staticPageCount === 3
+      && fixtureArgs.reconnectCount === 2
+      && summary.totalTaskCount === 15,
+    payloadsHaveUniqueConversationIds: new Set(payloads.map((item) => item.conversationExternalId)).size === 15,
+    payloadsHaveUniqueMessageIds: new Set(payloads.map((item) => item.messageExternalId)).size === 15,
+    payloadsHaveUniqueIdempotencyKeys: new Set(payloads.map((item) => item.idempotencyKey)).size === 15,
+    normalStreamsAllPass: summary.normalOkCount === 10,
+    staticPageStreamsAllPass: summary.staticPageOkCount === 3
+      && summary.artifactCount > 0
+      && summary.continuePollingCount > 0,
+    reconnectStreamsAllPass: summary.reconnectOkCount === 2
+      && results
+        .filter((item) => item.taskType === 'reconnect')
+        .every((item) => item.checks.replayedOnlyAfterLastSequence),
+    noDuplicateFinalMessagesInPassingTasks: summary.duplicateFinalMessageCount === 0,
+    duplicateFinalMessageGuardWorks: duplicateResult.duplicateFinalMessages === true,
+    latencyPercentilesComputed: summary.p50LatencyMs === 206
+      && summary.p95LatencyMs === 302
+      && summary.maxLatencyMs === 302,
+  };
+  const ok = Object.values(checks).every(Boolean) && summary.failedCount === 0;
+  const report = {
+    summary: {
+      ...summary,
+      ok,
+      checks,
+      generatedAt: new Date().toISOString(),
+    },
+    results,
+    duplicateGuard: duplicateResult,
+  };
+  const outputDir = join(process.cwd(), args.outputDir);
+  await mkdir(outputDir, { recursive: true });
+  const reportPath = join(outputDir, `${runId}.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report.summary, null, 2));
+  console.log(`report=${reportPath}`);
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const tasks = [
+    ...Array.from({ length: args.normalCount }, (_, index) => runNormalTask(args, index, runId)),
+    ...Array.from({ length: args.staticPageCount }, (_, index) => runStaticPageTask(args, index, runId)),
+    ...Array.from({ length: args.reconnectCount }, (_, index) => runReconnectTask(args, index, runId)),
+  ];
+  const results = await Promise.all(tasks);
+  const summary = summarizeRun(args, runId, results);
 
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
