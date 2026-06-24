@@ -13,8 +13,8 @@ pub(crate) fn sort_retrieval_evidences_by_relevance(evidences: &mut [RetrievalEv
                     .unwrap_or(usize::MAX)
                     .cmp(&rank_hint_from_evidence_manifest(right).unwrap_or(usize::MAX))
             })
-            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
             .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
     });
 }
 
@@ -265,8 +265,8 @@ mod tests {
             vec![
                 "higher_recall",
                 "lower_rank_hint",
-                "same_rank_lower_chunk",
                 "same_rank_newer",
+                "same_rank_lower_chunk",
                 "missing_rank_hint",
             ]
         );

@@ -5802,17 +5802,27 @@ async fn create_assistant_run_inner(
         &selected_scope,
         request.current_artifact.as_ref(),
     );
-    let runtime_mode_for_trail = if react_enabled {
+    let deterministic_scan_direct_answer =
+        assistant_run_dataset_entity_scan_direct_answer(&request, &evidence_state);
+    let deterministic_scan_direct_answer_available = deterministic_scan_direct_answer.is_some();
+    let react_enabled_for_execution = react_enabled && !deterministic_scan_direct_answer_available;
+    let runtime_mode_for_trail = if deterministic_scan_direct_answer_available {
+        "placeholder".to_string()
+    } else if react_enabled_for_execution {
         react_runtime.mode.clone()
     } else {
         chat_runtime.mode.clone()
     };
-    let runtime_provider_for_trail = if react_enabled {
+    let runtime_provider_for_trail = if deterministic_scan_direct_answer_available {
+        "platform_direct_answer".to_string()
+    } else if react_enabled_for_execution {
         react_runtime.provider.clone()
     } else {
         chat_runtime.provider.clone()
     };
-    let runtime_model_for_trail = if react_enabled {
+    let runtime_model_for_trail = if deterministic_scan_direct_answer_available {
+        "dataset-entity-scan-direct-v1".to_string()
+    } else if react_enabled_for_execution {
         react_runtime.model.clone()
     } else {
         chat_runtime.model.clone()
@@ -5856,6 +5866,7 @@ async fn create_assistant_run_inner(
         "provider": runtime_provider_for_trail,
         "model": runtime_model_for_trail,
         "react_enabled": react_enabled,
+        "react_execution_enabled": react_enabled_for_execution,
         "entrypoint": "create_assistant_run",
     });
     let run = state
@@ -6142,7 +6153,7 @@ async fn create_assistant_run_inner(
         ));
     }
 
-    let react_outcome = if react_enabled {
+    let react_outcome = if react_enabled_for_execution {
         match run_assistant_run_react_for_create(
             &state,
             &request,
@@ -6262,11 +6273,13 @@ async fn create_assistant_run_inner(
                 )
             }
             None => {
+                let mut skip_quality_retry = false;
                 let response = if let Some(direct_answer) =
                     assistant_run_answer_quality_spreadsheet_controlled_answer(
                         &evidence_state,
                         &request,
                     ) {
+                    skip_quality_retry = true;
                     let response = assistant_run_direct_answer_response(direct_answer);
                     state
                         .storage
@@ -6289,12 +6302,36 @@ async fn create_assistant_run_inner(
                         .await
                         .map_err(ApiError::from_storage)?;
                     response
+                } else if let Some(direct_answer) = deterministic_scan_direct_answer.clone() {
+                    skip_quality_retry = true;
+                    let response = assistant_run_direct_answer_response(direct_answer);
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name: "assistant_run.dataset_entity_scan_direct_answered"
+                                    .to_string(),
+                                payload: json!({
+                                    "source": "dataset_entity_scan_direct_answer",
+                                    "reason": "deterministic_scan_before_react",
+                                    "runtime": render_runtime_manifest(&response.runtime),
+                                }),
+                                created_at: Utc::now(),
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    response
                 } else if let Some(direct_answer) =
                     assistant_run_preferred_dataset_entity_scan_direct_answer(
                         &request,
                         &evidence_state,
                     )
                 {
+                    skip_quality_retry = true;
                     let response = assistant_run_direct_answer_response(direct_answer);
                     state
                         .storage
@@ -6490,26 +6527,28 @@ async fn create_assistant_run_inner(
                     "role": ChatMessageRole::Assistant.as_str(),
                     "content": assistant_run_sanitize_customer_facing_answer_text(&response.output_text),
                 })];
-                if let Some(outcome) = maybe_run_assistant_run_answer_quality_retry_for_create(
-                    &state,
-                    &request,
-                    run.id,
-                    &selected_scope,
-                    &evidence_state,
-                    &response,
-                    local_thread_id.as_deref(),
-                    &active_secret_binding_ids,
-                    current_user_id,
-                    &react_runtime,
-                    &chat_runtime,
-                )
-                .await?
-                {
-                    evidence_state = outcome.evidence_state;
-                    runtime_manifest = outcome.runtime_manifest;
-                    retry_trail_steps = outcome.execution_trail_steps;
-                    output_artifacts = outcome.output_artifacts;
-                    retry_events = outcome.events;
+                if !skip_quality_retry {
+                    if let Some(outcome) = maybe_run_assistant_run_answer_quality_retry_for_create(
+                        &state,
+                        &request,
+                        run.id,
+                        &selected_scope,
+                        &evidence_state,
+                        &response,
+                        local_thread_id.as_deref(),
+                        &active_secret_binding_ids,
+                        current_user_id,
+                        &react_runtime,
+                        &chat_runtime,
+                    )
+                    .await?
+                    {
+                        evidence_state = outcome.evidence_state;
+                        runtime_manifest = outcome.runtime_manifest;
+                        retry_trail_steps = outcome.execution_trail_steps;
+                        output_artifacts = outcome.output_artifacts;
+                        retry_events = outcome.events;
+                    }
                 }
                 (
                     runtime_manifest,
@@ -6520,7 +6559,7 @@ async fn create_assistant_run_inner(
             }
         };
 
-    if react_enabled {
+    if react_enabled_for_execution {
         execution_trail.push(json!({
             "status": "completed",
             "label": "Host-Controlled ReAct 运行",
@@ -6530,6 +6569,15 @@ async fn create_assistant_run_inner(
             "at": now,
         }));
         execution_trail.append(&mut react_trail_steps);
+    } else if deterministic_scan_direct_answer_available {
+        execution_trail.push(json!({
+            "status": "completed",
+            "label": "结构化扫描直接回答",
+            "runtime_mode": runtime_mode_for_trail,
+            "provider": runtime_provider_for_trail,
+            "model": runtime_model_for_trail,
+            "at": now,
+        }));
     } else {
         execution_trail.push(json!({
             "status": "completed",
@@ -33260,10 +33308,7 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
     evidence_state: &Value,
     dimension: AssistantRunEntityScanAnswerDimension,
 ) -> Option<String> {
-    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
-        evidence_state,
-        &request.prompt,
-    );
+    let scans = assistant_run_dataset_entity_scan_direct_answer_payloads(request, evidence_state);
     if scans.is_empty() {
         return None;
     }
@@ -33311,6 +33356,7 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
             | AssistantRunEntityScanAnswerDimension::ResumeEducation
             | AssistantRunEntityScanAnswerDimension::ResumeCertificate
             | AssistantRunEntityScanAnswerDimension::ResumeExperience
+            | AssistantRunEntityScanAnswerDimension::ResumeRecommendation
             | AssistantRunEntityScanAnswerDimension::ResumeProfileMatch
     ) {
         return assistant_run_resume_profile_direct_answer(&scans, dimension, &request.prompt);
@@ -33378,6 +33424,68 @@ fn assistant_run_preferred_dataset_entity_scan_direct_answer(
     )
 }
 
+fn assistant_run_dataset_entity_scan_direct_answer_payloads(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> Vec<Value> {
+    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+        evidence_state,
+        &request.prompt,
+    );
+    let selected_scope = request.selected_scope.as_ref();
+    let preferred_dataset_ids = selected_scope
+        .map(assistant_run_preferred_dataset_id_strings_from_scope)
+        .unwrap_or_default();
+    let selected_dataset_ids = if !preferred_dataset_ids.is_empty() {
+        preferred_dataset_ids
+    } else {
+        selected_scope
+            .map(selected_dataset_ids_from_scope)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|dataset_id| dataset_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    if selected_dataset_ids.is_empty() {
+        return scans;
+    }
+
+    scans
+        .into_iter()
+        .filter(|scan| {
+            scan.get("dataset_id")
+                .and_then(Value::as_str)
+                .map(|dataset_id| {
+                    selected_dataset_ids
+                        .iter()
+                        .any(|selected_id| selected_id == dataset_id)
+                })
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn assistant_run_preferred_dataset_id_strings_from_scope(scope: &Value) -> Vec<String> {
+    scope
+        .get("preferred_dataset_ids")
+        .or_else(|| scope.get("preferredDatasetIds"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            let mut ids = Vec::new();
+            for item in items {
+                let Some(raw) = item.as_str().map(str::trim) else {
+                    continue;
+                };
+                if raw.is_empty() || ids.iter().any(|id| id == raw) {
+                    continue;
+                }
+                ids.push(raw.to_string());
+            }
+            ids
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AssistantRunEntityScanAnswerDimension {
     Company,
@@ -33406,6 +33514,7 @@ enum AssistantRunEntityScanAnswerDimension {
     ResumeEducation,
     ResumeCertificate,
     ResumeExperience,
+    ResumeRecommendation,
     ResumeProfileMatch,
 }
 
@@ -33468,6 +33577,9 @@ fn assistant_run_entity_scan_answer_dimension(
     }
     if prompt_requests_resume_certificate_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeCertificate);
+    }
+    if prompt_requests_resume_candidate_recommendation(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeRecommendation);
     }
     if prompt_requests_resume_profile_match(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeProfileMatch);
@@ -33980,6 +34092,9 @@ fn assistant_run_resume_profile_direct_answer(
                     ]
                 },
             ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeRecommendation => {
+            assistant_run_resume_profile_recommendation_answer(rows, prompt)
         }
         AssistantRunEntityScanAnswerDimension::ResumeProfileMatch => {
             assistant_run_resume_profile_match_answer(rows, prompt)
@@ -89530,6 +89645,10 @@ retrieve_evidence:
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
             &selected_scope,
+            "如果我要招聘一名JAVA开发，负责AI平台开发，这14个人，哪一个最合适；提供一下排名及原因"
+        ));
+        assert!(assistant_run_dataset_entity_scan_requested(
+            &selected_scope,
             "统计文档里的关键词和名词，去重后给我清单"
         ));
         assert!(assistant_run_dataset_entity_scan_requested(
@@ -90916,6 +91035,80 @@ retrieve_evidence:
         assert!(location_match_answer.contains("地点=深圳"));
         assert!(location_match_answer.contains("| 李四 | 地点:深圳 |"));
         assert!(!location_match_answer.contains("| 张三 |"));
+
+        let recommendation_request = CreateAssistantRunRequest {
+            prompt: "如果我要招聘一名JAVA开发，负责智能知识库平台开发，这2个人，哪一个最合适；提供一下排名及原因"
+                .to_string(),
+            ..age_request.clone()
+        };
+        let recommendation_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&recommendation_request, &evidence)
+                .expect("resume recommendation should produce a direct candidate ranking");
+        assert!(recommendation_answer.contains("候选人综合匹配排序"));
+        assert!(recommendation_answer.contains("时间权重已计入最近年份"));
+        assert!(recommendation_answer.contains("| 1 | 李四 |"));
+        assert!(recommendation_answer.contains("| 2 | 张三 |"));
+
+        let selected_dataset_id = "11111111-1111-1111-1111-111111111111";
+        let other_dataset_id = "22222222-2222-2222-2222-222222222222";
+        let mut selected_scan = evidence["supplied_items"][0].clone();
+        selected_scan["dataset_id"] = json!(selected_dataset_id);
+        let scoped_evidence = json!({
+            "status": "supplied",
+            "supplied_items": [
+                selected_scan,
+                {
+                    "type": "dataset_entity_scan",
+                    "source": "visible_document_scan",
+                    "dataset_id": other_dataset_id,
+                    "summary": "other dataset scan",
+                    "scanned_document_count": 1,
+                    "resume_profile_rows": [{
+                        "document_id": "doc-other",
+                        "document_title": "王五简历.docx",
+                        "candidate_name": "王五",
+                        "gender": "男",
+                        "age": 28,
+                        "earliest_year": 2020,
+                        "latest_year": 2026,
+                        "company_count": 1,
+                        "skill_count": 5,
+                        "project_count": 6,
+                        "position_count": 1,
+                        "location_count": 1,
+                        "certificate_count": 0,
+                        "company_names": ["外部数据集公司"],
+                        "skill_names": ["Java", "Rust", "Kubernetes", "PostgreSQL", "AI平台"],
+                        "project_names": ["AI平台开发", "智能知识库平台", "搜索系统"],
+                        "position_names": ["Java架构师"],
+                        "location_names": ["广州"],
+                        "school_names": [],
+                        "degree_names": ["本科"],
+                        "certificate_names": []
+                    }]
+                }
+            ]
+        });
+        let scoped_recommendation_request = CreateAssistantRunRequest {
+            selected_scope: Some(json!({
+                "mode": "user_selected",
+                "datasets": [
+                    {"type": "dataset", "id": selected_dataset_id},
+                    {"type": "dataset", "id": other_dataset_id}
+                ],
+                "preferred_dataset_ids": [selected_dataset_id],
+                "dataset_scope_policy": "all_visible_datasets_with_preselection_priority"
+            })),
+            ..recommendation_request
+        };
+        let scoped_recommendation_answer = assistant_run_dataset_entity_scan_direct_answer(
+            &scoped_recommendation_request,
+            &scoped_evidence,
+        )
+        .expect("selected dataset should produce a direct candidate ranking");
+        assert!(scoped_recommendation_answer.contains("共 2 份可见简历"));
+        assert!(scoped_recommendation_answer.contains("| 1 | 李四 |"));
+        assert!(!scoped_recommendation_answer.contains("王五"));
 
         let experience_request = CreateAssistantRunRequest {
             prompt: "简历按工作年限排序出表".to_string(),

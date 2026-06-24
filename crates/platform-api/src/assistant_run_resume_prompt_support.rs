@@ -245,6 +245,154 @@ pub(crate) fn prompt_requests_resume_profile_match(prompt: &str) -> bool {
     (has_candidate_target || has_resume_search) && has_match_signal
 }
 
+pub(crate) fn prompt_requests_resume_candidate_recommendation(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    if prompt_prefers_entity_frequency(prompt) {
+        return false;
+    }
+    if prompt_contains_any(
+        prompt,
+        &[
+            "技能数",
+            "技能数量",
+            "项目数",
+            "项目数量",
+            "公司数",
+            "公司数量",
+            "城市数",
+            "城市数量",
+            "岗位数",
+            "岗位数量",
+            "证书数",
+            "证书数量",
+            "工作年限",
+            "经验年限",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "skill_count",
+            "project_count",
+            "company_count",
+            "position_count",
+            "certificate_count",
+        ],
+    ) {
+        return false;
+    }
+
+    let has_people_or_resume_signal = prompt_has_resume_signal(prompt)
+        || prompt_contains_any(
+            prompt,
+            &[
+                "个人",
+                "这些人",
+                "这几个人",
+                "这批人",
+                "这组人",
+                "这些候选",
+                "人选",
+                "人员",
+                "求职者",
+            ],
+        )
+        || ascii_prompt_contains_any(
+            &lower_prompt,
+            &["candidate", "candidates", "people", "person", "applicant"],
+        );
+    if !has_people_or_resume_signal {
+        return false;
+    }
+
+    let has_selection_signal = prompt_contains_any(
+        prompt,
+        &[
+            "最合适",
+            "最适合",
+            "最匹配",
+            "最推荐",
+            "哪一个",
+            "哪一位",
+            "哪个",
+            "哪位",
+            "谁最",
+            "排名",
+            "排行",
+            "排序",
+            "优先",
+            "推荐",
+            "筛选",
+            "比较",
+            "对比",
+            "候选",
+            "人选",
+            "负责",
+            "招聘",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "best",
+            "fit",
+            "suitable",
+            "recommend",
+            "rank",
+            "ranking",
+            "compare",
+            "candidate",
+            "shortlist",
+        ],
+    );
+    let has_role_or_capability_signal = prompt_contains_any(
+        prompt,
+        &[
+            "负责",
+            "岗位",
+            "职位",
+            "角色",
+            "开发",
+            "工程师",
+            "产品",
+            "项目",
+            "平台",
+            "系统",
+            "算法",
+            "数据",
+            "智能",
+            "技术",
+            "技能",
+            "经验",
+            "业务",
+            "适合",
+            "匹配",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "java",
+            "python",
+            "rust",
+            "go",
+            "ai",
+            "llm",
+            "agent",
+            "backend",
+            "frontend",
+            "fullstack",
+            "platform",
+            "system",
+            "project",
+            "product",
+            "developer",
+            "engineer",
+            "skill",
+            "experience",
+        ],
+    );
+
+    has_selection_signal && has_role_or_capability_signal
+}
+
 fn prompt_requests_resume_profile_sort(prompt: &str) -> bool {
     if !prompt_has_resume_signal(prompt) || prompt_prefers_entity_frequency(prompt) {
         return false;
@@ -358,6 +506,22 @@ mod tests {
         assert!(!prompt_requests_resume_profile_match("简历按技能数排序"));
         assert!(!prompt_requests_resume_profile_match(
             "简历技能出现频次和覆盖文档统计"
+        ));
+    }
+
+    #[test]
+    fn candidate_recommendation_detects_multi_resume_selection() {
+        assert!(prompt_requests_resume_candidate_recommendation(
+            "如果我要招聘一名JAVA开发，负责AI平台开发，这14个人，哪一个最合适；提供一下排名及原因"
+        ));
+        assert!(prompt_requests_resume_candidate_recommendation(
+            "这几份简历里推荐一个最适合做算法工程师的人选"
+        ));
+        assert!(!prompt_requests_resume_candidate_recommendation(
+            "简历技能出现频次和覆盖文档统计"
+        ));
+        assert!(!prompt_requests_resume_candidate_recommendation(
+            "简历按技能数排序"
         ));
     }
 

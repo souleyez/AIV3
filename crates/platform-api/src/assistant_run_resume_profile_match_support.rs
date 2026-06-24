@@ -8,7 +8,8 @@ use crate::{
     prompt_requests_location_statistics, prompt_requests_position_statistics,
     prompt_requests_project_statistics, prompt_requests_school_statistics,
     prompt_requests_skill_statistics, resume_profile_array_string, resume_profile_array_values,
-    resume_profile_candidate_name, value_i64_string, value_string, value_u64_string,
+    resume_profile_candidate_name, resume_profile_degree_rank, resume_profile_year_span,
+    value_i64_string, value_string, value_u64_string,
 };
 
 #[derive(Clone, Debug)]
@@ -258,6 +259,168 @@ pub(crate) fn assistant_run_resume_profile_match_answer(
     ))
 }
 
+pub(crate) fn assistant_run_resume_profile_recommendation_answer(
+    mut rows: Vec<Value>,
+    prompt: &str,
+) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let criteria = resume_profile_match_criteria(prompt, &rows);
+    let criteria_label = if criteria.is_empty() {
+        "未抽取到明确硬性条件，按履历完整度、近期程度、技能和项目覆盖排序".to_string()
+    } else {
+        criteria
+            .iter()
+            .map(|criterion| format!("{}={}", criterion.field_label, criterion.term))
+            .collect::<Vec<_>>()
+            .join("，")
+    };
+
+    rows.sort_by(|left, right| {
+        resume_profile_recommendation_score(right, &criteria)
+            .cmp(&resume_profile_recommendation_score(left, &criteria))
+            .then_with(|| {
+                right
+                    .get("latest_year")
+                    .and_then(Value::as_i64)
+                    .cmp(&left.get("latest_year").and_then(Value::as_i64))
+            })
+            .then_with(|| {
+                right
+                    .get("skill_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("skill_count").and_then(Value::as_u64))
+            })
+            .then_with(|| {
+                right
+                    .get("project_count")
+                    .and_then(Value::as_u64)
+                    .cmp(&left.get("project_count").and_then(Value::as_u64))
+            })
+            .then_with(|| {
+                resume_profile_candidate_name(left).cmp(&resume_profile_candidate_name(right))
+            })
+    });
+    for (index, row) in rows.iter_mut().enumerate() {
+        if let Some(object) = row.as_object_mut() {
+            object.insert("recommendation_rank".to_string(), Value::from(index + 1));
+        }
+    }
+
+    let table = assistant_run_resume_profile_table(
+        &rows,
+        &format!("候选人综合匹配排序（依据：{criteria_label}）"),
+        &[
+            "排名",
+            "候选人",
+            "匹配分",
+            "匹配项",
+            "技能",
+            "项目",
+            "公司",
+            "岗位",
+            "学历",
+            "最近年份",
+            "推荐说明",
+            "文档",
+        ],
+        |row| {
+            vec![
+                value_u64_string(row, "recommendation_rank"),
+                resume_profile_candidate_name(row),
+                resume_profile_recommendation_score(row, &criteria).to_string(),
+                resume_profile_row_match_summary(row, &criteria),
+                resume_profile_array_string(row, "skill_names", 5),
+                resume_profile_array_string(row, "project_names", 4),
+                resume_profile_array_string(row, "company_names", 3),
+                resume_profile_array_string(row, "position_names", 3),
+                resume_profile_array_string(row, "degree_names", 2),
+                value_i64_string(row, "latest_year"),
+                resume_profile_recommendation_reason(row, &criteria),
+                value_string(row, "document_title"),
+            ]
+        },
+    );
+    Some(format!(
+        "已按可见范围内全部候选人画像做综合排序；时间权重已计入最近年份，匹配分越高越优先。\n\n{table}"
+    ))
+}
+
+fn resume_profile_recommendation_score(
+    row: &Value,
+    criteria: &[ResumeProfileMatchCriterion],
+) -> i64 {
+    let match_score = resume_profile_row_match_score(row, criteria) as i64;
+    let latest_year_score = resume_profile_latest_year_score(row);
+    let span_score = resume_profile_year_span(row).unwrap_or(0).clamp(0, 20);
+    let skill_score = row
+        .get("skill_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(20) as i64;
+    let project_score = row
+        .get("project_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(20) as i64;
+    let company_score = row
+        .get("company_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(10) as i64;
+    let degree_score = resume_profile_degree_rank(row).unwrap_or(0).max(0);
+
+    match_score * 100
+        + latest_year_score * 6
+        + project_score * 4
+        + skill_score * 3
+        + span_score * 2
+        + company_score
+        + degree_score
+}
+
+fn resume_profile_latest_year_score(row: &Value) -> i64 {
+    match row.get("latest_year").and_then(Value::as_i64) {
+        Some(year) if year >= 2026 => 10,
+        Some(year) if year >= 2024 => 9,
+        Some(year) if year >= 2022 => 8,
+        Some(year) if year >= 2020 => 6,
+        Some(year) if year >= 2016 => 4,
+        Some(_) => 2,
+        None => 0,
+    }
+}
+
+fn resume_profile_recommendation_reason(
+    row: &Value,
+    criteria: &[ResumeProfileMatchCriterion],
+) -> String {
+    let mut reasons = Vec::new();
+    let match_summary = resume_profile_row_match_summary(row, criteria);
+    if match_summary != "-" {
+        reasons.push(format!("命中{}", match_summary));
+    }
+    if let Some(latest_year) = row.get("latest_year").and_then(Value::as_i64) {
+        reasons.push(format!("最近经历到{latest_year}"));
+    }
+    if let Some(project_count) = row.get("project_count").and_then(Value::as_u64) {
+        if project_count > 0 {
+            reasons.push(format!("项目{project_count}项"));
+        }
+    }
+    if let Some(skill_count) = row.get("skill_count").and_then(Value::as_u64) {
+        if skill_count > 0 {
+            reasons.push(format!("技能{skill_count}项"));
+        }
+    }
+    if reasons.is_empty() {
+        "结构化画像信息较少，建议补充解析后复核".to_string()
+    } else {
+        reasons.into_iter().take(4).collect::<Vec<_>>().join("；")
+    }
+}
+
 fn resume_profile_prompt_match_term(prompt: &str, term: &str) -> Option<String> {
     let prompt_text = prompt.to_ascii_lowercase();
     let normalized_term = normalize_document_entity_value(term);
@@ -341,6 +504,7 @@ fn resume_profile_term_can_filter(value: &str) -> bool {
             "熟悉",
             "掌握",
             "负责",
+            "开发",
             "参与",
             "做过",
             "会",
@@ -371,6 +535,7 @@ fn resume_profile_query_token_can_filter(token: &str) -> bool {
             "熟悉",
             "掌握",
             "项目",
+            "开发",
             "经验",
             "技能",
             "公司",
@@ -463,6 +628,13 @@ mod tests {
             Some("广州冠晚网络有限公司".to_string())
         );
         assert_eq!(resume_profile_prompt_match_term("谁会项目", "项目"), None);
+        assert_eq!(
+            resume_profile_prompt_match_term(
+                "如果我要招聘一名JAVA开发，负责AI平台开发",
+                "目前已经开发了包括广州医科大学"
+            ),
+            None
+        );
         assert!(resume_profile_terms_match("Rust / React", "Rust"));
         assert!(!resume_profile_terms_match(
             "广州冠晚网络有限公司深圳分部",
@@ -526,5 +698,66 @@ mod tests {
             lisi_index < zhang_index,
             "latest_year should sort before skill_count when match score ties"
         );
+    }
+
+    #[test]
+    fn recommendation_answer_ranks_all_candidates_with_time_weight() {
+        let rows = vec![
+            json!({
+                "candidate_name": "李四",
+                "skill_names": ["Java", "Spring"],
+                "project_names": ["ERP"],
+                "company_names": ["甲公司"],
+                "position_names": ["Java开发工程师"],
+                "degree_names": ["本科"],
+                "latest_year": 2024,
+                "earliest_year": 2020,
+                "skill_count": 2,
+                "project_count": 1,
+                "company_count": 1,
+                "document_title": "李四简历.pdf"
+            }),
+            json!({
+                "candidate_name": "张三",
+                "skill_names": ["Java", "Python", "LLM"],
+                "project_names": ["AI平台", "智能问答系统"],
+                "company_names": ["乙公司"],
+                "position_names": ["AI平台后端工程师"],
+                "degree_names": ["硕士"],
+                "latest_year": 2023,
+                "earliest_year": 2019,
+                "skill_count": 3,
+                "project_count": 1,
+                "company_count": 1,
+                "document_title": "张三简历.pdf"
+            }),
+            json!({
+                "candidate_name": "王五",
+                "skill_names": ["Java"],
+                "project_names": ["AI平台"],
+                "company_names": ["丙公司"],
+                "position_names": ["AI平台Java工程师"],
+                "degree_names": ["硕士"],
+                "latest_year": 2026,
+                "earliest_year": 2021,
+                "skill_count": 5,
+                "project_count": 3,
+                "company_count": 1,
+                "document_title": "王五简历.pdf"
+            }),
+        ];
+
+        let answer = assistant_run_resume_profile_recommendation_answer(
+            rows,
+            "如果我要招聘一名JAVA开发，负责AI平台开发，这3个人，哪一个最合适；提供一下排名及原因",
+        )
+        .expect("recommendation answer should be produced");
+
+        assert!(answer.contains("候选人综合匹配排序（依据："));
+        assert!(answer.contains("| 排名 | 候选人 | 匹配分 | 匹配项 | 技能 | 项目 | 公司 | 岗位 | 学历 | 最近年份 | 推荐说明 | 文档 |"));
+        assert!(answer.contains("| 1 | 王五 |"));
+        assert!(answer.contains("| 2 | 李四 |"));
+        assert!(answer.contains("| 3 | 张三 |"));
+        assert!(answer.contains("时间权重已计入最近年份"));
     }
 }
