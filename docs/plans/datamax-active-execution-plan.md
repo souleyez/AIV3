@@ -32,15 +32,15 @@
 
 | 模块 | 已确认 | 仍需处理 |
 | --- | --- | --- |
-| 主站 | `https://doc.elepcloud.com/` 是无需登录直接问答入口；主站 20 路 self-test 已具备。 | UI/运行时改动后要回归真流式、自动滚动、普通问答不被报表链路截断。 |
+| 主站 | `https://doc.elepcloud.com/` 是无需登录直接问答入口；主站 20 路问答 self-test 和主站流式 self-test 已具备。 | UI/运行时改动后要回归真流式、自动滚动、普通问答不被报表链路截断。 |
 | 管理台/文档 | `https://v3.elepcloud.com/` 是管理台和第三方接口文档入口。 | 保持域名分工稳定；不做未经确认的公开契约变更。 |
-| 第三方问答 | 20 路并发 self-test 已具备；数据集/文档范围授权已实现。 | 客户新失败样例需要按实际 conversation scope 做 targeted live smoke。 |
+| 第三方问答 | 20 路并发 self-test 和第三方流式 10 路 self-test 已具备；数据集/文档范围授权已实现。 | 客户新失败样例需要按实际 conversation scope 做 targeted live smoke；生产流式 live 仍需真实 bearer/context 和受控窗口。 |
 | 报表/静态页 | 新百默认模板是 `xinbai-functional-modular-template-20260604`；标准产物包含 `index.html`、`table-data.csv`、`report.ppt`、`report.md`。 | focus 命中、模块前置、链接只出现一次、导出字段可访问需要持续回归。 |
 | 数据源/CC 模式 | 数据源页和 staging analysis 链路已存在；CC/Codex 可协助 DB/API/ERP/MCP 接入。 | 所有接入必须落到明确目标数据集；生产同步仍需人工确认。 |
 | 企业记忆/P2 | 多类型 summary-only dry-run 已覆盖 DOC/DOCX/PDF/XLSX/PPTX/MP4、简历、制度手册、经营/考勤表格。 | 新客户失败样例、新数据类型、新事实用途策略再扩样；真实写入仍未开放。 |
 | fingerprint/对象治理 | inventory、原因聚合、对象清理 dry-run plan、文件系统 preflight 已具备。 | missing object 修复、真实对象清理、重复对象合并仍停留在只读计划阶段。 |
 | 生产观测 | 未授权 operator/queue stats 路径已验证返回 401；观测 key 路径返回脱敏聚合。 | authenticated operator live 需要合法 operator 凭证或运维侧脱敏回执。 |
-| CI | 本地和 8 服务器 smoke 覆盖主要缺口。 | GitHub Actions 因账号付款/额度状态在 job 启动前失败，账号恢复后重跑。 |
+| CI | 本地和 8 服务器 smoke 覆盖主要缺口；DataMax CI 已迁移到 8 服务器 self-hosted runner 并跑通。 | 当前本地 HEAD `69bdebae` 领先 `origin/main` 1 个提交，尚未推送触发远端 CI，也未部署 8 服务器。 |
 
 ## 2.1 待完成清单与完成标准
 
@@ -48,7 +48,7 @@
 | --- | --- | --- | --- | --- |
 | P0 | 发布前固定回归和部署边界 | self-test、8 服务器 code deploy、docs-only sync 口径已稳定。 | 每次发版继续执行 P0 命令并写 validation；docs-only 不重启服务。 | 本地和 8 服务器 P0 smoke 通过；服务全 `active`；`/readyz` 正常；validation 记录 head、命令、结果和安全边界。 |
 | P1 | operator 观测闭环 | 未授权和观测 key 脱敏路径已验证；authenticated operator live 缺合法凭证或运维脱敏回执。 | 拿到 operator cookie/bearer/local-key 后跑 live；拿不到则不阻塞 P5。 | 未授权仍 401；授权回执只含脱敏 provider/queue/fallback 聚合；不泄露 token、cookie、任务原文、客户数据或对象路径。 |
-| P1 | 20 路问答和重任务并发 live | self-test 已覆盖主站、第三方、静态页 5 路、Cloudflare fallback 2 路。 | 在受控窗口跑 live 20 路问答和 5/2 路重任务，并记录瓶颈分类。 | 主站和第三方 20 路问答成功；本地重任务 5 路、fallback 2 路不越限；失败能归因到模型供应商、队列、权限、模板命中或发布。 |
+| P1 | 20 路问答和重任务并发 live | self-test 已覆盖主站、第三方、主站流式、第三方流式 10 路、静态页 5 路、Cloudflare fallback 2 路。 | 在受控窗口跑 live 20 路问答、真实流式、5/2 路重任务，并记录瓶颈分类。 | 主站和第三方 20 路问答成功；真实流式不截断、不丢中间状态；本地重任务 5 路、fallback 2 路不越限；失败能归因到模型供应商、队列、权限、模板命中或发布。 |
 | P2 | 异步深解析和事实用途分类 | 多类型 summary-only dry-run 已覆盖；真实写入仍关闭。 | 继续用新失败样例或新类型扩样；不重复跑已覆盖类型。 | fact 类型均归入 `report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 或 `review_required`；未知类型进 review；未经确认不写库、不入队。 |
 | P2 | fingerprint、对象治理和重复文档 | inventory、repair plan、filesystem preflight 已是只读计划；缺真实 backfill/清理确认。 | 仅在用户确认后准备 operator-reviewed manifest、回滚说明和小批量执行方案。 | 真实 hash/backfill/对象清理前有 reviewed manifest；执行结果只记录聚合计数和原因分布；不输出对象 key、hash、标题或正文。 |
 | P3 | 新百默认报表模板和第三方触发 | 默认模板、focus、导出字段和链接去重 smoke 已稳定。 | 继续用真实客户问题做 targeted smoke；发现 focus 错位时只改模板/focus 判断，不改公开接口。 | 取高、经营状况、风险识别、低活跃、销售缺口、助推门店均能前置正确模块；解释型问题不误触发；链接只出现一次且结构字段可识别。 |
@@ -58,7 +58,7 @@
 | P4 | 企业资产库/资产空间 | Task 1-14 本地完成。已新增资产库 scope resolver、`0015_asset_libraries.sql` 基础表、`AssetLibraryView`/membership/scope summary contracts、主站登录态保护的平台 API、主站数据集页资产库关系 UI、服装设计资产库样例 preset、通用 `asset_items`/`dataset_asset_memberships`/`asset_profiles` storage/contracts 底座、asset profile 供料摘要 helper、可见资产画像摘要 scope summary；文档注册/ZIP/ingest worker/retrieval worker 会同步 document asset/profile；assistant-run 供料会读取已选数据集的 `asset_profile_hint`；图片/PPT/视频专用画像 adapter 已能从 VLM/media/chunk metadata 抽取安全压缩字段；静态页模板证据摘要和 report-planner AST 已显式输出 `asset_profile_summary`；主站资产库卡片已支持画像 hints 本地筛选/展示；本地多模态 fixture smoke 已覆盖真实 PNG/PPTX/manifest，并可生成真实 MP4 视频 fixture 强制验证 `videoRealFile=true`。 | 下一步做主站人工点选 smoke 和发版前 8 服务器验证；第三方 `asset_library_external_ids` 仍不加入公开契约。 | 一个企业可创建“服装设计资产库”等资产空间；资产库可挂多个数据集；scope summary 只返回当前用户可见数据集，隐藏数据集只保留 denied 计数；主站可在数据集页创建资产库、查看可见/无权限计数、挂接/移除数据集，并显示可见资产/画像摘要计数；样例 preset 只填充 name/domain/description/metadata，不改变核心逻辑；通用资产项可承载图片、视频、PPT、文档、产物的画像与 embedding 状态；文档上传/解析/索引会按 source 去重写入资产画像；图片 profile 提取 VLM summary、OCR、tags、entities、field candidates，视频 profile 提取 transcript/scenes/keyframe OCR，PPT profile 提取 outline 和 slide samples；assistant-run 会把当前已选数据集的画像作为 `asset_profile_hint` 低成本供料，但模型规则明确不能把它当作原文引用；profile 供料摘要会先提取 summary、名词项和 facets，避免把大 JSON/对象路径直接塞给模型；静态页模板上下文和报表规划 AST 会把画像整理成 count、kind_counts、primary_terms 和 compact hints 供页面规划、报表素材/主题规划使用；主站图库筛选只在选中资产库的已加载 scope 内本地过滤，不增加常驻资源；问答/报表/图库后续可按资产库范围聚合；数据集仍可单独授权和查询；不同企业/第三方资产默认隔离。 |
 | P4 | Codex 客户端企业配置器 | 部分本地完成。`codex-web` 已有 orchestrator、runtime target、项目工作区、下载/产物区和企业终端下载镜像；V3 已具备 client config package、client artifact multipart upload、文件下载、数据集/资产库挂接、任务卡展示、企业内私有 publish 登记、published HTML 沙箱预览、较大文件 filesystem object 双轨存储、公开沙箱 HTML 发布和 joint smoke harness。 | 下一步拿 V3 用户 session 与 `codex-web` 配置器做真实 execute smoke；raw/unsandboxed 公开 HTML 是否开放需单独评审。 | 客户员工可下载配置器，一键绑定企业 V3；只拿到临时授权的数据集/资产库/skill；本地产物可回写 V3 企业产物表并进入任务卡；V3 不承担本地执行算力；所有回写可审计、可撤销、可复用。 |
 | P5 | 工程治理和复杂文件拆分 | `platform-api` 与主站前端已持续小切片拆分；仍是当前可独立推进主线。 | 无 P1 凭证、无 P2/P4 写入确认、无新客户失败样例时，继续 P5 行为保持切片。 | 每个切片有定向测试、`cargo fmt --check`/`cargo check`/Web build/P0 smoke；提交可单独回退；不改变第三方公开契约。 |
-| CI | GitHub Actions | job 启动前失败，`steps=[]`，本地和 8 服务器验证可替代但不能声称 CI 通过；120 服务器现有 self-hosted runner 绑定 `souleyez/aigolf-ops-platform`，不覆盖 `souleyez/AIV3` 的 DataMax CI。 | 账号额度/runner 恢复后重跑 DataMax CI；若要使用 120，需要另行注册或迁移 AIV3 self-hosted runner 并调整 workflow。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
+| CI | GitHub Actions | AIV3 已使用 8 服务器 self-hosted runner `aiv3-server8` 跑 DataMax CI；`cfba63d5` 对应 run `28076397820` 已成功。当前本地 `69bdebae` 仅本地验证并写入 validation，未推送。 | 推送本地提交后观察 DataMax CI；若 runner 失效，再按 8 服务器 runner 修复，不再按旧的账号额度失败口径处理。 | `Rust Minimal` 和 `No-Credential Smoke` 有正常 steps 且通过；结果写入 validation。 |
 
 ## 2.2 当前执行队列
 
@@ -1914,4 +1914,4 @@ node --test apps/web/app/lib/local-chat-sessions.test.mjs
 4. 若进入受控压测窗口，执行 P1-2 live 20 路问答和 5/2 路重任务并发验证。
 5. 若出现新客户失败样例，按 P2-1 或 P3 做 targeted smoke；只扩新样例或新类型，不重复跑已覆盖类型。
 6. 若用户明确确认生产写入、backfill、对象清理或 source sync，才进入 P2/P4 真实执行准备；否则保持 dry-run/summary-only。
-7. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
+7. 推送当前本地提交后，观察 8 服务器 self-hosted DataMax CI；若成功只补发布/CI 回执，若失败按 runner、工具链或 smoke 分类处理。
