@@ -2,6 +2,33 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-24 Streaming Smoke Self-Tests and Active Plan Status CI Receipt
+
+- Scope:
+  - add deterministic self-test coverage for main-site streaming and external-channel streaming;
+  - update the active execution plan to reflect the 8-server self-hosted DataMax CI baseline and the remaining live-streaming/operator gates;
+  - keep public API, third-party API, request fields, response fields, runtime model routing, production data mapping, and 8-server services unchanged.
+- GitHub:
+  - pushed `69bdebae Add streaming smoke self-tests` to `origin/main`;
+  - pushed `262bc4ae Update DataMax active plan status` to `origin/main`.
+- Local verification before push:
+  - `npm run smoke:main-assistant-streaming -- --self-test`: passed, `createOk=true`, `continueOk=true`, `createDeltaCount=2`, `continueDeltaCount=2`;
+  - `npm run smoke:external-channel-streaming-10way -- --self-test`: passed, `okCount=15`, `normalOkCount=10`, `staticPageOkCount=3`, `reconnectOkCount=2`, `artifactCount=2`, `continuePollingCount=1`;
+  - `node --check scripts/smoke/main-assistant-streaming.mjs`: passed;
+  - `node --check scripts/smoke/external-channel-streaming-10way.mjs`: passed;
+  - `git diff --check -- docs/plans/datamax-active-execution-plan.md`: passed with Windows LF/CRLF warning only.
+- GitHub Actions:
+  - DataMax CI run `28084868655` for `262bc4ae8902cebd2f5a1a8f6dd75728d436ed4b` completed successfully;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests.
+- Deployment:
+  - no 8-server service deployment or restart was performed for this docs/smoke-script batch.
+- Remaining gates:
+  - production live streaming still requires a controlled live window with real main-site session or third-party bearer/context;
+  - authenticated operator live still requires a legitimate operator cookie/bearer/local-key or approved operator-side redacted receipt.
+- Safety:
+  - no public endpoint, auth mode, request field, response field, schema, database URL, provider key, bearer, cookie, customer payload, document body, object key, content hash, production data mapping, source sync, object cleanup, or P2 backfill was added or changed.
+
 ## 2026-06-24 Resume Recommendation Direct Answer Release and 8-Server Verification
 
 - Scope:
