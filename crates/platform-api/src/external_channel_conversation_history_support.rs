@@ -2,9 +2,9 @@ use contracts::AssistantRunMessageView;
 use domain_model::{AssistantRun, ChatMessageRole};
 use serde_json::Value;
 
-use crate::truncate_assistant_supply_text;
+use crate::truncate_assistant_context_text;
 
-const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
+const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 4000;
 
 pub(crate) fn external_channel_conversation_history_messages_from_recent_runs(
     recent_runs_newest_first: &[AssistantRun],
@@ -15,7 +15,7 @@ pub(crate) fn external_channel_conversation_history_messages_from_recent_runs(
         .rev()
         .filter(|run| run.service_lane == "external_channel")
     {
-        let user_prompt = truncate_assistant_supply_text(
+        let user_prompt = truncate_assistant_context_text(
             &run.user_prompt,
             EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
         );
@@ -63,7 +63,7 @@ pub(crate) fn external_channel_assistant_reply_from_output_artifacts(
                 .then(|| artifact.get("content").and_then(Value::as_str))
                 .flatten()
                 .map(|content| {
-                    truncate_assistant_supply_text(
+                    truncate_assistant_context_text(
                         content,
                         EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT,
                     )
@@ -161,6 +161,25 @@ mod tests {
         assert_eq!(
             external_channel_assistant_reply_from_output_artifacts(&artifacts).as_deref(),
             Some("最新 回复")
+        );
+    }
+
+    #[test]
+    fn conversation_history_preserves_choice_list_structure_for_followup() {
+        let run = test_run(
+            "请选择下一步",
+            Some("请选择：\nA. 继续问答\nB. 生成表格\nC. 生成报表页面"),
+            "external_channel",
+            json!({}),
+            Utc::now(),
+        );
+
+        let messages = external_channel_conversation_history_messages_from_recent_runs(&[run]);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[1].content,
+            "请选择：\nA. 继续问答\nB. 生成表格\nC. 生成报表页面"
         );
     }
 

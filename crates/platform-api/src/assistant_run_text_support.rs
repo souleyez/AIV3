@@ -32,6 +32,29 @@ pub(crate) fn truncate_assistant_supply_text(value: &str, max_chars: usize) -> S
         .collect()
 }
 
+pub(crate) fn truncate_assistant_context_text(value: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    let mut previous_blank = false;
+    for line in value.trim().lines() {
+        let normalized_line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let trimmed = normalized_line.trim();
+        if trimmed.is_empty() {
+            if !output.is_empty() && !previous_blank {
+                output.push('\n');
+                previous_blank = true;
+            }
+            continue;
+        }
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(trimmed);
+        previous_blank = false;
+    }
+
+    output.chars().take(max_chars).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +90,16 @@ mod tests {
         assert_eq!(
             truncate_assistant_supply_text("新世界 百货 经营 管理", 5),
             "新世界 百"
+        );
+    }
+
+    #[test]
+    fn truncate_assistant_context_text_preserves_line_structure() {
+        let text = "  请选择：\nA. 继续问答\n\nB. 生成表格\t\nC. 生成报表页面  ";
+
+        assert_eq!(
+            truncate_assistant_context_text(text, 80),
+            "请选择：\nA. 继续问答\nB. 生成表格\nC. 生成报表页面"
         );
     }
 }

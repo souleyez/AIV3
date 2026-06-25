@@ -26,10 +26,10 @@ use crate::{
     create_static_page_draft_for_assistant_run_id, ensure_react_requested_dataset_is_selected,
     ensure_scope_requests_conversation_memory, html_artifact_safe_summary_text,
     load_visible_dataset_for_user, load_visible_document_for_assistant_scope,
-    publish_static_page_revision_for_current_artifact, react_static_page_operations_from_arguments,
-    status_from_static_page_operations, status_from_static_page_payload,
-    summarize_static_page_operations, to_document_media_detail_view, value_at_any_key, ApiError,
-    AppState,
+    load_visible_static_page_draft, publish_static_page_revision_for_current_artifact,
+    react_static_page_operations_from_arguments, status_from_static_page_operations,
+    status_from_static_page_payload, summarize_static_page_operations,
+    to_document_media_detail_view, value_at_any_key, ApiError, AppState,
 };
 use workflow_engine::WorkflowSignal;
 
@@ -229,6 +229,17 @@ pub(crate) async fn execute_assistant_run_react_action(
             )
             .await
         }
+        AssistantRunReactActionType::CreateReportDraft => {
+            create_report_draft_from_react_action(
+                state,
+                action,
+                selected_scope,
+                active_assistant_run_id,
+                prompt,
+                current_user_id,
+            )
+            .await
+        }
         AssistantRunReactActionType::UpdateStaticPageModule => {
             let operations = react_static_page_operations_from_arguments(&action.arguments)?;
             if let (Some(draft_id), Some(active_assistant_run_id)) = (
@@ -242,6 +253,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                     active_assistant_run_id,
                     operations,
                     prompt,
+                    current_user_id,
                 )
                 .await
             } else {
@@ -280,10 +292,6 @@ pub(crate) async fn execute_assistant_run_react_action(
             )
             .await
         }
-        _ => Ok(rejected_react_tool_result(
-            action,
-            "action_not_implemented_in_first_slice",
-        )),
     }
 }
 
@@ -1097,6 +1105,169 @@ async fn create_static_page_draft_from_react_action(
     })
 }
 
+async fn create_report_draft_from_react_action(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    active_assistant_run_id: Option<AssistantRunId>,
+    prompt: &str,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(active_assistant_run_id) = active_assistant_run_id else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    };
+
+    let report_title = react_report_draft_title(&action.arguments, prompt);
+    let objective = react_argument_string(
+        &action.arguments,
+        &[
+            "objective",
+            "prompt",
+            "description",
+            "report_objective",
+            "reportObjective",
+        ],
+    )
+    .unwrap_or_else(|| prompt.trim().to_string());
+    let draft_payload = action
+        .arguments
+        .get("draft_payload")
+        .or_else(|| action.arguments.get("draftPayload"))
+        .or_else(|| action.arguments.get("report_payload"))
+        .or_else(|| action.arguments.get("reportPayload"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "type": "report_draft",
+                "intent": "report",
+                "reportTitle": report_title.clone(),
+                "objective": objective.clone(),
+                "status": "planned",
+                "workflow": {
+                    "kind": "static_page_report",
+                    "next": "generate_visual_and_html"
+                },
+                "modules": [],
+                "source": {
+                    "reactAction": action.action_type.as_str()
+                }
+            })
+        });
+    let source_refs = action
+        .arguments
+        .get("source_refs")
+        .or_else(|| action.arguments.get("sourceRefs"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "source": "assistant_run_react",
+                "kind": "report_draft",
+                "react_action": action.action_type.as_str(),
+                "report_title": report_title.clone(),
+                "objective": objective.clone(),
+            })
+        });
+
+    let outcome = create_static_page_draft_for_assistant_run_id(
+        state,
+        active_assistant_run_id,
+        current_user_id,
+        CreateStaticPageDraftRequest {
+            title: Some(report_title.clone()),
+            prompt: Some(objective.clone()),
+            template_reference_id: None,
+            selected_scope: Some(selected_scope.clone()),
+            visibility_snapshot: None,
+            source_refs,
+            draft_payload,
+        },
+    )
+    .await?;
+    append_static_page_draft_run_event(
+        state,
+        &outcome.draft,
+        "report_draft.react_created",
+        json!({
+            "draft_id": outcome.draft.id,
+            "status": outcome.draft.status.as_str(),
+            "react_action": action.action_type.as_str(),
+            "report_title": report_title,
+            "evidence_summary": outcome.evidence_summary.clone(),
+            "missing_evidence": outcome.missing_evidence.clone(),
+        }),
+    )
+    .await?;
+
+    let module_count = outcome
+        .draft
+        .draft_payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "report draft task created",
+            "items": [{
+                "type": "report_draft",
+                "draft_id": outcome.draft.id.to_string(),
+                "status": outcome.draft.status.as_str(),
+                "module_count": module_count,
+                "artifact_type": "report_draft",
+            }],
+            "limits": {},
+            "draft_id": outcome.draft.id.to_string(),
+            "draft_status": outcome.draft.status.as_str(),
+            "module_count": module_count,
+            "evidence_summary": outcome.evidence_summary,
+            "missing_evidence": outcome.missing_evidence,
+            "current_artifact": {
+                "kind": "static_page_draft",
+                "artifactType": "report_draft",
+                "backendDraftId": outcome.draft.id.to_string(),
+            },
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "创建报表草稿",
+            "react_action": action.action_type.as_str(),
+            "draft_id": outcome.draft.id.to_string(),
+            "draft_status": outcome.draft.status.as_str(),
+            "module_count": module_count,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn react_report_draft_title(arguments: &Value, prompt: &str) -> String {
+    let raw_title = react_argument_string(
+        arguments,
+        &[
+            "title",
+            "report_title",
+            "reportTitle",
+            "name",
+            "report_name",
+            "reportName",
+        ],
+    )
+    .unwrap_or_else(|| prompt.trim().to_string());
+    let title = truncate_chars(raw_title.trim(), 80);
+    if title.starts_with("报表：") || title.starts_with("静态页：") {
+        title
+    } else {
+        format!("报表：{title}")
+    }
+}
+
 fn react_argument_string(arguments: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         arguments
@@ -1148,25 +1319,19 @@ async fn apply_static_page_module_operations_to_current_draft(
     active_assistant_run_id: AssistantRunId,
     operations: Vec<Value>,
     prompt: &str,
+    current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
-    let mut draft = state
-        .storage
-        .static_page_drafts()
-        .get_by_id(state.tenant_id, draft_id)
-        .await
-        .map_err(ApiError::from_storage)?
-        .ok_or_else(|| {
-            ApiError::not_found(
+    let mut draft = match load_visible_static_page_draft(state, draft_id, current_user_id).await {
+        Ok(draft) => draft,
+        Err(error) if error.payload.code == "static_page_draft_not_found" => {
+            return Ok(rejected_react_tool_result(
+                action,
                 "static_page_draft_not_found",
-                format!("static page draft {} was not found", draft_id),
-            )
-        })?;
-    if draft.assistant_run_id != active_assistant_run_id {
-        return Ok(rejected_react_tool_result(
-            action,
-            "current_static_page_draft_run_mismatch",
-        ));
-    }
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let source_assistant_run_id = draft.assistant_run_id;
 
     let summary = summarize_static_page_operations(&operations);
     let mut draft_payload = apply_static_page_operations_to_payload(
@@ -1192,6 +1357,8 @@ async fn apply_static_page_module_operations_to_current_draft(
         "static_page_draft.react_operations_applied",
         json!({
             "draft_id": updated.id,
+            "source_assistant_run_id": source_assistant_run_id,
+            "editing_assistant_run_id": active_assistant_run_id,
             "operation_count": operations.len(),
             "summary": summary,
             "react_action": action.action_type.as_str(),
@@ -1215,6 +1382,8 @@ async fn apply_static_page_module_operations_to_current_draft(
             "operations": operations,
             "draft_id": updated.id.to_string(),
             "draft_status": updated.status.as_str(),
+            "source_assistant_run_id": source_assistant_run_id.to_string(),
+            "editing_assistant_run_id": active_assistant_run_id.to_string(),
         }),
         trail_step: json!({
             "status": "completed",
@@ -1223,6 +1392,8 @@ async fn apply_static_page_module_operations_to_current_draft(
             "operation_count": operations.len(),
             "draft_id": updated.id.to_string(),
             "draft_status": updated.status.as_str(),
+            "source_assistant_run_id": source_assistant_run_id.to_string(),
+            "editing_assistant_run_id": active_assistant_run_id.to_string(),
             "at": Utc::now(),
         }),
         final_answer: None,
@@ -1601,17 +1772,45 @@ fn static_page_image_job_id_from_arguments(
 
 fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<StaticPageDraftId> {
     let artifact = current_artifact?;
-    [
-        "backendDraftId",
-        "backend_draft_id",
-        "staticPageDraftId",
-        "static_page_draft_id",
-        "draft_id",
-        "id",
-    ]
-    .iter()
-    .find_map(|key| {
-        artifact
+    static_page_draft_id_from_object_keys(
+        artifact,
+        &[
+            "backendDraftId",
+            "backend_draft_id",
+            "staticPageDraftId",
+            "static_page_draft_id",
+            "draft_id",
+            "id",
+        ],
+    )
+    .or_else(|| {
+        ["payload", "manifest"]
+            .iter()
+            .find_map(|key| artifact.get(*key))
+            .and_then(|value| {
+                static_page_draft_id_from_object_keys(
+                    value,
+                    &[
+                        "backendDraftId",
+                        "backend_draft_id",
+                        "staticPageDraftId",
+                        "static_page_draft_id",
+                        "draft_id",
+                        "draftId",
+                    ],
+                )
+            })
+    })
+    .or_else(|| static_page_draft_id_from_owner_scope(artifact.get("ownerScope")))
+    .or_else(|| static_page_draft_id_from_owner_scope(artifact.get("owner_scope")))
+}
+
+fn static_page_draft_id_from_object_keys(
+    value: &Value,
+    keys: &[&str],
+) -> Option<StaticPageDraftId> {
+    keys.iter().find_map(|key| {
+        value
             .get(*key)
             .and_then(Value::as_str)
             .map(str::trim)
@@ -1619,6 +1818,14 @@ fn current_static_page_draft_id(current_artifact: Option<&Value>) -> Option<Stat
             .and_then(|value| Uuid::parse_str(value).ok())
             .map(StaticPageDraftId)
     })
+}
+
+fn static_page_draft_id_from_owner_scope(owner_scope: Option<&Value>) -> Option<StaticPageDraftId> {
+    let owner_scope = owner_scope?;
+    if owner_scope.get("type").and_then(Value::as_str) != Some("static_page_draft") {
+        return None;
+    }
+    static_page_draft_id_from_object_keys(owner_scope, &["id", "draft_id", "draftId"])
 }
 
 pub(crate) fn react_final_answer_content_is_raw_observation(content: &str) -> bool {
@@ -4806,6 +5013,46 @@ mod tests {
             citations: Vec::new(),
             conversation_state: json!({}),
         }
+    }
+
+    #[test]
+    fn current_static_page_draft_id_accepts_published_artifact_shapes() {
+        let draft_id = "89d54f4c-a62f-4a54-a659-03ba29022715";
+
+        assert_eq!(
+            current_static_page_draft_id(Some(&json!({
+                "kind": "html_artifact",
+                "templateId": "static_page_published_preview",
+                "ownerScope": {
+                    "type": "static_page_draft",
+                    "id": draft_id
+                }
+            })))
+            .map(|id| id.to_string()),
+            Some(draft_id.to_string())
+        );
+
+        assert_eq!(
+            current_static_page_draft_id(Some(&json!({
+                "kind": "html_artifact",
+                "payload": {
+                    "backendDraftId": draft_id
+                }
+            })))
+            .map(|id| id.to_string()),
+            Some(draft_id.to_string())
+        );
+
+        assert_eq!(
+            current_static_page_draft_id(Some(&json!({
+                "kind": "html_artifact",
+                "ownerScope": {
+                    "type": "report_render_output",
+                    "id": draft_id
+                }
+            }))),
+            None
+        );
     }
 
     fn test_document(object_key: &str, content_type: &str) -> Document {

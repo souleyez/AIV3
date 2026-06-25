@@ -162,6 +162,62 @@ export function findPublishedStaticPageArtifactForDraft(draft, artifacts = []) {
   }) || null;
 }
 
+export function buildCurrentAssistantArtifact({
+  activeStaticPageDraft = null,
+  activeHtmlArtifact = null,
+  draftsById = {},
+  draftItems = [],
+} = {}) {
+  if (activeStaticPageDraft) return activeStaticPageDraft;
+  if (!activeHtmlArtifact) return null;
+
+  const ownerScope = htmlArtifactOwnerScope(activeHtmlArtifact);
+  const ownerDraftId = ownerScope?.type === 'static_page_draft'
+    ? String(ownerScope.id || '').trim()
+    : '';
+  if (!ownerDraftId) {
+    return activeHtmlArtifact;
+  }
+
+  const draft = findStaticPageDraftByAnyId(ownerDraftId, draftsById, draftItems);
+  if (draft) return draft;
+
+  const payload = activeHtmlArtifact.payload || activeHtmlArtifact.manifest?.payload || {};
+  const publicUrl = payload.publicUrl
+    || payload.public_url
+    || payload.previewPath
+    || payload.preview_path
+    || '';
+  const renderOutputId = payload.renderOutputId || payload.render_output_id || '';
+  const title = payload.reportTitle
+    || payload.report_title
+    || activeHtmlArtifact.title
+    || activeHtmlArtifact.name
+    || '当前报表';
+
+  return {
+    kind: 'static_page_draft',
+    type: 'static_page_draft',
+    id: ownerDraftId,
+    backendDraftId: ownerDraftId,
+    title,
+    status: payload.status || activeHtmlArtifact.status || 'rendered',
+    finalPage: {
+      status: payload.status || 'rendered',
+      publicUrl,
+      renderOutputId,
+      assetManifest: {
+        reportTitle: title,
+      },
+    },
+    source: {
+      htmlArtifactId: activeHtmlArtifact.id || activeHtmlArtifact.artifact_id || '',
+      templateId: activeHtmlArtifact.templateId || activeHtmlArtifact.template_id || '',
+      sourceType: activeHtmlArtifact.sourceType || activeHtmlArtifact.source_type || '',
+    },
+  };
+}
+
 function firstObjectValue(...values) {
   for (const value of values) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {

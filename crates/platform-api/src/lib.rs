@@ -217,6 +217,7 @@ mod assistant_run_lexical_query_support;
 mod assistant_run_model_context_support;
 mod assistant_run_model_supply_budget_support;
 mod assistant_run_model_supply_item_support;
+mod assistant_run_option_followup_support;
 mod assistant_run_prompt_dimension_support;
 mod assistant_run_provider_retry_support;
 mod assistant_run_provider_usage_support;
@@ -504,6 +505,7 @@ use assistant_run_lexical_query_support::*;
 use assistant_run_model_context_support::*;
 use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
+use assistant_run_option_followup_support::*;
 pub(crate) use assistant_run_prompt_dimension_support::*;
 use assistant_run_provider_retry_support::*;
 use assistant_run_provider_usage_support::*;
@@ -841,7 +843,7 @@ const ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
-const ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT: usize = 900;
+const ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT: usize = 4000;
 const ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT: usize = 2;
 const ASSISTANT_RUN_MODEL_CONTEXT_STRUCTURED_FACT_LIMIT: usize = 4;
@@ -32860,6 +32862,14 @@ fn build_assistant_run_provider_input_with_evidence(
         ));
     }
 
+    if let Some(option_followup_context) =
+        assistant_run_short_option_followup_context(&request.prompt, &request.messages)
+    {
+        sections.push(format!(
+            "短选项回复续接解释（必须优先理解）：\n{option_followup_context}"
+        ));
+    }
+
     let history = request
         .messages
         .iter()
@@ -32872,7 +32882,7 @@ fn build_assistant_run_provider_input_with_evidence(
             format!(
                 "{}: {}",
                 message.role.as_str(),
-                truncate_assistant_supply_text(
+                truncate_assistant_context_text(
                     &message.content,
                     ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT
                 )
@@ -32968,6 +32978,14 @@ fn build_assistant_run_continue_provider_input(
         ));
     }
 
+    if let Some(option_followup_context) =
+        assistant_run_short_option_followup_context(continue_prompt, &request.messages)
+    {
+        sections.push(format!(
+            "短选项回复续接解释（必须优先理解）：\n{option_followup_context}"
+        ));
+    }
+
     let history = request
         .messages
         .iter()
@@ -32980,7 +32998,7 @@ fn build_assistant_run_continue_provider_input(
             format!(
                 "{}: {}",
                 message.role.as_str(),
-                truncate_assistant_supply_text(
+                truncate_assistant_context_text(
                     &message.content,
                     ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT
                 )
@@ -43992,7 +44010,16 @@ fn build_assistant_run_react_provider_input(
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .map(|message| {
+            format!(
+                "{}: {}",
+                message.role.as_str(),
+                truncate_assistant_context_text(
+                    &message.content,
+                    ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT
+                )
+            )
+        })
         .collect::<Vec<_>>();
     if !history.is_empty() {
         sections.push(format!("最近对话：\n{}", history.join("\n")));
@@ -44087,6 +44114,14 @@ fn build_assistant_run_react_continue_provider_input(
             "待模型接手的后台完成请求：{}",
             serde_json::to_string(&pending_model_completion_requests)
                 .unwrap_or_else(|_| "[]".to_string())
+        ));
+    }
+
+    if let Some(option_followup_context) =
+        assistant_run_short_option_followup_context(continue_prompt, &request.messages)
+    {
+        sections.push(format!(
+            "短选项回复续接解释（必须优先理解）：\n{option_followup_context}"
         ));
     }
 
@@ -88692,6 +88727,86 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_provider_input_expands_short_option_followup_for_external_channel() {
+        let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
+            prompt: "C".to_string(),
+            local_thread_id: Some("external-conv-1".to_string()),
+            startup_briefing: Some(json!({"platform": "generic_chat"})),
+            selected_scope: Some(json!({
+                "type": "external_channel",
+                "mode": "external_channel",
+                "intent": "data_question",
+            })),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: vec![AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content:
+                    "请选择下一步：\nA. 继续在聊天里解释\nB. 生成 MD 表格\nC. 生成经营分析报表页面"
+                        .to_string(),
+            }],
+        });
+
+        assert!(input.contains("短选项回复续接解释"));
+        assert!(input.contains("选项 C"));
+        assert!(input.contains("生成经营分析报表页面"));
+        assert!(input.contains("不要把 `C` 当作孤立问题"));
+        assert!(input.contains("用户问题：C"));
+    }
+
+    #[test]
+    fn assistant_run_continue_provider_input_expands_short_option_followup() {
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("browser-thread-1".to_string()),
+            user_prompt: "给这批简历做一个输出方式选择".to_string(),
+            startup_briefing: json!({"visibleDatasetCount": 1}),
+            selected_scope: json!({
+                "mode": "user_selected",
+                "datasets": [DatasetId::new()],
+                "intent": "data_question",
+            }),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "supplied", "supplied_items": []}),
+            service_lane: "assistant_run".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let request = ContinueAssistantRunRequest {
+            prompt: Some("选C".to_string()),
+            max_steps: Some(2),
+            current_artifact: None,
+            messages: vec![AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: "A、只给推荐结论\nB、按候选人生成排序表\nC、生成可下载报表页面"
+                    .to_string(),
+            }],
+        };
+
+        let input = build_assistant_run_continue_provider_input(
+            &run,
+            &request,
+            "选C",
+            &run.selected_scope,
+            &run.evidence_state,
+            2,
+        );
+
+        assert!(input.contains("短选项回复续接解释"));
+        assert!(input.contains("选项 C"));
+        assert!(input.contains("生成可下载报表页面"));
+        assert!(input.contains("继续指令：选C"));
+    }
+
+    #[test]
     fn assistant_run_provider_input_summarizes_current_static_page_without_body() {
         let input = build_assistant_run_provider_input(&CreateAssistantRunRequest {
             prompt: "把核心判断模块改成更强的 KPI 视觉".to_string(),
@@ -97553,6 +97668,128 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn assistant_run_react_can_create_report_draft_task() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping react report draft create test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("react-report-draft-create-test-{}", Uuid::new_v4()),
+                "ReAct Report Draft Create Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let (_, Json(run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "为我创建一份新的，专注于所有取高机会的报表吧".to_string(),
+                local_thread_id: Some("react-report-draft-create-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_report"]})),
+                selected_scope: Some(json!({"mode": "user_selected", "intent": "report"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should be created");
+
+        let action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::CreateReportDraft,
+            json!({
+                "title": "所有取高机会报表",
+                "objective": "专注于所有取高机会，给出可视化分析和后续动作"
+            }),
+        );
+        let mut evidence_state = json!({"status": "not_requested"});
+
+        let result = execute_assistant_run_react_action(
+            &state,
+            &action,
+            &json!({"mode": "user_selected", "intent": "report"}),
+            &mut evidence_state,
+            None,
+            Some(run_response.assistant_run_id),
+            "为我创建一份新的，专注于所有取高机会的报表吧",
+            Some("react-report-draft-create-thread"),
+            &[],
+            None,
+        )
+        .await
+        .expect("react report draft create should apply");
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["action_type"],
+            json!("create_report_draft")
+        );
+        assert_eq!(
+            result.observation["items"][0]["type"],
+            json!("report_draft")
+        );
+        assert_eq!(
+            result.observation["current_artifact"]["kind"],
+            json!("static_page_draft")
+        );
+        assert_eq!(
+            result.observation["current_artifact"]["artifactType"],
+            json!("report_draft")
+        );
+        let draft_id = result.observation["draft_id"]
+            .as_str()
+            .expect("draft id should be present")
+            .to_string();
+
+        let Json(loaded) =
+            get_static_page_draft(State(state.clone()), HeaderMap::new(), Path(draft_id))
+                .await
+                .expect("created report draft should load");
+        assert_eq!(loaded.title, "报表：所有取高机会报表");
+        assert_eq!(loaded.source_refs["source"], json!("assistant_run_react"));
+        assert_eq!(loaded.source_refs["kind"], json!("report_draft"));
+        assert_eq!(
+            loaded.source_refs["react_action"],
+            json!("create_report_draft")
+        );
+        assert_eq!(loaded.draft_payload["type"], json!("report_draft"));
+        assert_eq!(
+            loaded.draft_payload["workflow"]["kind"],
+            json!("static_page_report")
+        );
+
+        let Json(detail) = get_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Path(run_response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        assert!(detail
+            .events
+            .iter()
+            .any(|event| event.event_name == "report_draft.react_created"));
+    }
+
+    #[tokio::test]
     async fn docs_page_draft_creation_uses_supplied_section_title_hints() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -97824,6 +98061,89 @@ retrieve_evidence:
                 .any(|binding| binding["moduleId"] == json!("trend")
                     && binding["fieldPath"] == json!("orders.amount"))
         );
+
+        let (_, Json(edit_run_response)) = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "把当前报表核心判断改成经营风险优先".to_string(),
+                local_thread_id: Some("react-static-page-apply-thread".to_string()),
+                startup_briefing: Some(json!({"capabilities": ["static_page_plan"]})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: Some(json!({
+                    "kind": "html_artifact",
+                    "templateId": "static_page_published_preview",
+                    "ownerScope": {
+                        "type": "static_page_draft",
+                        "id": draft_response.draft.id.to_string()
+                    }
+                })),
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("second assistant run should be created");
+        let second_action = react_test_action(
+            AssistantRunReActStatus::Act,
+            AssistantRunReactActionType::UpdateStaticPageModule,
+            json!({
+                "operations": [{
+                    "type": "update_module",
+                    "targetModuleId": "hero",
+                    "patch": {
+                        "title": "经营风险优先",
+                        "content": "先展示风险门店、低活跃品牌和需要助推的取高机会。"
+                    }
+                }]
+            }),
+        );
+        let current_html_artifact = json!({
+            "kind": "html_artifact",
+            "templateId": "static_page_published_preview",
+            "ownerScope": {
+                "type": "static_page_draft",
+                "id": draft_response.draft.id.to_string()
+            }
+        });
+        let second_result = execute_assistant_run_react_action(
+            &state,
+            &second_action,
+            &json!({"mode": "ordinary_chat"}),
+            &mut evidence_state,
+            Some(&current_html_artifact),
+            Some(edit_run_response.assistant_run_id),
+            "把当前报表核心判断改成经营风险优先",
+            Some("react-static-page-apply-thread"),
+            &[],
+            None,
+        )
+        .await
+        .expect("react static page update should apply from a later run");
+
+        assert_eq!(second_result.observation["status"], json!("completed"));
+        assert_eq!(
+            second_result.observation["source_assistant_run_id"],
+            json!(run_response.assistant_run_id.to_string())
+        );
+        assert_eq!(
+            second_result.observation["editing_assistant_run_id"],
+            json!(edit_run_response.assistant_run_id.to_string())
+        );
+
+        let Json(second_updated) = get_static_page_draft(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(draft_response.draft.id.to_string()),
+        )
+        .await
+        .expect("updated static page draft should load after second run");
+        let hero_module = value_array(second_updated.draft_payload["modules"].clone())
+            .into_iter()
+            .find(|module| module["id"] == json!("hero"))
+            .expect("hero module should exist");
+        assert_eq!(hero_module["title"], json!("经营风险优先"));
 
         let Json(detail) = get_assistant_run(
             State(state),

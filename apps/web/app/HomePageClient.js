@@ -50,6 +50,7 @@ import {
 } from './lib/home-chat-intents';
 import { fetchJson, fetchSseJson } from './lib/home-api-client';
 import {
+  buildCurrentAssistantArtifact,
   buildReportRenderHtmlArtifact,
   buildStaticPagePublishedHtmlArtifact,
   findPublishedStaticPageArtifactForDraft,
@@ -524,6 +525,15 @@ export default function HomePageClient() {
   const activeHtmlArtifact = useMemo(
     () => htmlArtifacts.find((artifact) => artifact.id === activeHtmlArtifactId) || null,
     [activeHtmlArtifactId, htmlArtifacts],
+  );
+  const currentAssistantArtifact = useMemo(
+    () => buildCurrentAssistantArtifact({
+      activeStaticPageDraft,
+      activeHtmlArtifact,
+      draftsById: staticPageDrafts,
+      draftItems: staticPageDraftItems,
+    }),
+    [activeHtmlArtifact, activeStaticPageDraft, staticPageDraftItems, staticPageDrafts],
   );
   const visibleMessages = useMemo(
     () => (selectedSessionId ? messages : localMessages),
@@ -2100,7 +2110,7 @@ export default function HomePageClient() {
           body: {
             prompt,
             max_steps: 3,
-            current_artifact: activeStaticPageDraft || null,
+            current_artifact: currentAssistantArtifact || null,
             messages,
           },
         }, {
@@ -2126,7 +2136,7 @@ export default function HomePageClient() {
         startup_briefing: briefing,
         selected_scope: selectedScope,
         scope_candidates: nextScopePlan.candidates,
-        current_artifact: activeStaticPageDraft || null,
+        current_artifact: currentAssistantArtifact || null,
         messages: [...messages, { role: userMessage.role, content: userMessage.content }].slice(-12),
       },
     }, {

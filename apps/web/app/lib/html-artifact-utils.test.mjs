@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import {
+  buildCurrentAssistantArtifact,
   buildReportRenderHtmlArtifact,
   buildStaticPagePlanningHtmlArtifact,
   buildStaticPagePublishedHtmlArtifact,
@@ -136,6 +137,46 @@ describe('HTML artifact helpers', () => {
     );
     assert.equal(findPublishedStaticPageArtifactForDraft(null, [matchedBySnakeCase]), null);
     assert.equal(findPublishedStaticPageArtifactForDraft(draft, null), null);
+  });
+
+  it('builds current assistant artifact from the active draft or published artifact owner', () => {
+    const activeDraft = { id: 'local-active', backendDraftId: 'backend-active' };
+    assert.equal(buildCurrentAssistantArtifact({ activeStaticPageDraft: activeDraft }), activeDraft);
+
+    const mappedDraft = { id: 'local-1', backendDraftId: 'backend-1', title: '经营月报' };
+    const mappedArtifact = {
+      id: 'artifact-1',
+      templateId: 'static_page_published_preview',
+      ownerScope: { type: 'static_page_draft', id: 'backend-1' },
+    };
+    assert.equal(
+      buildCurrentAssistantArtifact({
+        activeHtmlArtifact: mappedArtifact,
+        draftItems: [mappedDraft],
+      }),
+      mappedDraft,
+    );
+
+    const fallback = buildCurrentAssistantArtifact({
+      activeHtmlArtifact: {
+        id: 'artifact-2',
+        title: '新世界百货经营管理月报表 · 成品',
+        templateId: 'static_page_published_preview',
+        ownerScope: { type: 'static_page_draft', id: '89d54f4c-a62f-4a54-a659-03ba29022715' },
+        payload: {
+          status: 'rendered',
+          previewPath: '/generated-artifacts/page/index.html',
+          renderOutputId: 'render-1',
+          reportTitle: '新世界百货经营管理月报表',
+        },
+      },
+    });
+
+    assert.equal(fallback.kind, 'static_page_draft');
+    assert.equal(fallback.backendDraftId, '89d54f4c-a62f-4a54-a659-03ba29022715');
+    assert.equal(fallback.finalPage.publicUrl, '/generated-artifacts/page/index.html');
+    assert.equal(fallback.finalPage.renderOutputId, 'render-1');
+    assert.equal(fallback.finalPage.assetManifest.reportTitle, '新世界百货经营管理月报表');
   });
 
   it('compacts static page planning references, missing evidence, and structure signals', () => {
