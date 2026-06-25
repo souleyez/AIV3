@@ -71,9 +71,41 @@ pub(crate) fn assistant_run_provider_error_is_retryable(error: &anyhow::Error) -
                 LlmProviderFailureKind::RequestFailed
                     | LlmProviderFailureKind::RequestTimeout
                     | LlmProviderFailureKind::ResponseBodyReadFailed
-            )
+            ) || (failure.kind == LlmProviderFailureKind::HttpStatus
+                && assistant_run_provider_http_status_is_retryable(&failure.message))
+                || (failure.kind == LlmProviderFailureKind::InvalidResponse
+                    && assistant_run_provider_invalid_response_is_retryable(&failure.message))
         })
         .unwrap_or(false)
+}
+
+fn assistant_run_provider_http_status_is_retryable(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "status 429",
+        "status 500",
+        "status 502",
+        "status 503",
+        "status 504",
+        "too many requests",
+        "rate limit",
+        "bad gateway",
+        "gateway timeout",
+        "upstream",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn assistant_run_provider_invalid_response_is_retryable(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("streaming response missing assistant content")
 }
 
 #[cfg(test)]
@@ -134,5 +166,24 @@ mod tests {
             assistant_run_runtime_retry_delay(base, 8),
             Duration::from_millis(160)
         );
+    }
+
+    #[test]
+    fn provider_retry_covers_transient_http_and_empty_streaming_response() {
+        assert!(assistant_run_provider_http_status_is_retryable(
+            "rightcode returned HTTP 502 with body error code: 502"
+        ));
+        assert!(assistant_run_provider_http_status_is_retryable(
+            "rightcode returned HTTP 429 too many requests"
+        ));
+        assert!(!assistant_run_provider_http_status_is_retryable(
+            "rightcode returned HTTP 401 authorized_error"
+        ));
+        assert!(assistant_run_provider_invalid_response_is_retryable(
+            "rightcode streaming response missing assistant content"
+        ));
+        assert!(!assistant_run_provider_invalid_response_is_retryable(
+            "rightcode returned malformed tool arguments"
+        ));
     }
 }
