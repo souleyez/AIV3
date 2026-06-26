@@ -352,6 +352,7 @@ mod external_template_html_artifact_support;
 pub mod external_wecom;
 pub mod fact_index;
 mod hash_support;
+mod health_response_support;
 mod html_artifact_collection_support;
 mod html_artifact_download_support;
 mod html_artifact_event_support;
@@ -654,6 +655,7 @@ pub(crate) use external_requested_skills_support::*;
 use external_system_user::*;
 use external_template_html_artifact_support::*;
 use hash_support::*;
+use health_response_support::*;
 use html_artifact_collection_support::*;
 use html_artifact_download_support::*;
 use html_artifact_event_support::*;
@@ -1766,12 +1768,7 @@ async fn load_report_plan_service_handoff(
 }
 
 async fn healthz() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        service: "platform-api".to_string(),
-        status: "ok".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        checked_at: Utc::now(),
-    })
+    Json(platform_api_health_response("ok", Utc::now()))
 }
 
 async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
@@ -1780,24 +1777,14 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<HealthRespon
     match state.storage.ping().await {
         Ok(()) => (
             StatusCode::OK,
-            Json(HealthResponse {
-                service: "platform-api".to_string(),
-                status: "ready".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                checked_at,
-            }),
+            Json(platform_api_health_response("ready", checked_at)),
         ),
         Err(error) => {
             tracing::error!(%error, "platform-api readiness check failed");
 
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse {
-                    service: "platform-api".to_string(),
-                    status: "not_ready".to_string(),
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    checked_at,
-                }),
+                Json(platform_api_health_response("not_ready", checked_at)),
             )
         }
     }
