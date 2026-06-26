@@ -34673,7 +34673,7 @@ fn assistant_run_react_json_payload_candidate(output_text: &str) -> Option<Strin
     None
 }
 
-fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
+pub(crate) fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
     let normalized = output_text.to_ascii_lowercase();
     [
         "[tool_call]",
@@ -42492,31 +42492,6 @@ fn assistant_run_answer_contains_row_terms(
         .all(|term| output_text.contains(term))
 }
 
-fn assistant_run_answer_satisfies_retrieval_point_list(
-    output_text: &str,
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-) -> bool {
-    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
-        return false;
-    }
-    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
-        || assistant_run_react_output_contains_internal_marker(output_text)
-        || !output_text.contains('|')
-    {
-        return false;
-    }
-    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
-    if rows.is_empty() {
-        return false;
-    }
-    let matched = rows
-        .iter()
-        .filter(|row| output_text.contains(&row.name))
-        .count();
-    matched >= rows.len().min(3)
-}
-
 async fn complete_assistant_run_answer_quality_judge(
     chat_runtime: &LlmRuntimeSelection,
     request: &CreateAssistantRunRequest,
@@ -42773,7 +42748,9 @@ fn assistant_run_answer_reports_actual_parse_unavailable(
     )
 }
 
-fn assistant_run_answer_contains_insufficient_evidence_marker(output_text: &str) -> bool {
+pub(crate) fn assistant_run_answer_contains_insufficient_evidence_marker(
+    output_text: &str,
+) -> bool {
     let lower = output_text.to_ascii_lowercase();
     prompt_contains_any(
         output_text,

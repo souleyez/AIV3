@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 
 use crate::prompt_match_support::prompt_contains_any;
 use crate::{
-    assistant_run_prompt_requests_point_list_table, assistant_run_request_wants_json_output,
+    assistant_run_answer_contains_insufficient_evidence_marker,
+    assistant_run_prompt_requests_point_list_table,
+    assistant_run_react_output_contains_internal_marker, assistant_run_request_wants_json_output,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,6 +102,31 @@ pub(crate) fn assistant_run_answer_quality_point_list_controlled_answer(
         ));
     }
     Some(lines.join("\n"))
+}
+
+pub(crate) fn assistant_run_answer_satisfies_retrieval_point_list(
+    output_text: &str,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
+        return false;
+    }
+    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
+        || assistant_run_react_output_contains_internal_marker(output_text)
+        || !output_text.contains('|')
+    {
+        return false;
+    }
+    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
+    if rows.is_empty() {
+        return false;
+    }
+    let matched = rows
+        .iter()
+        .filter(|row| output_text.contains(&row.name))
+        .count();
+    matched >= rows.len().min(3)
 }
 
 fn assistant_run_marker_value(content: &str, marker: &str) -> Option<String> {
@@ -265,5 +292,37 @@ mod tests {
             &point_list_request("智能梯控/电梯点位有哪些？请按楼层和位置出表。", false),
         )
         .is_none());
+    }
+
+    #[test]
+    fn point_list_support_detects_satisfied_retrieval_answer() {
+        let answer = "| 楼层 | 位置 | 点位名称 |\n| B1F | 东电梯 | B1F东电梯 |\n| B2 | 观光电梯口 | B2观光电梯口 |";
+
+        assert!(assistant_run_answer_satisfies_retrieval_point_list(
+            answer,
+            &point_list_request("智能梯控/电梯点位有哪些？请按楼层和位置出表。", false),
+            &point_list_evidence_state(),
+        ));
+    }
+
+    #[test]
+    fn point_list_support_rejects_unsatisfied_or_internal_answers() {
+        let request = point_list_request("智能梯控/电梯点位有哪些？请按楼层和位置出表。", false);
+
+        assert!(!assistant_run_answer_satisfies_retrieval_point_list(
+            "当前资料不足，无法确认。",
+            &request,
+            &point_list_evidence_state(),
+        ));
+        assert!(!assistant_run_answer_satisfies_retrieval_point_list(
+            "[tool_call] retrieve_evidence",
+            &request,
+            &point_list_evidence_state(),
+        ));
+        assert!(!assistant_run_answer_satisfies_retrieval_point_list(
+            "B1F东电梯、B2观光电梯口",
+            &request,
+            &point_list_evidence_state(),
+        ));
     }
 }
