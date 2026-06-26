@@ -218,6 +218,7 @@ mod assistant_run_model_context_support;
 mod assistant_run_model_supply_budget_support;
 mod assistant_run_model_supply_item_support;
 mod assistant_run_option_followup_support;
+mod assistant_run_point_list_support;
 mod assistant_run_prompt_dimension_support;
 mod assistant_run_prompt_request_support;
 mod assistant_run_provider_retry_support;
@@ -511,6 +512,7 @@ use assistant_run_model_context_support::*;
 use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
 use assistant_run_option_followup_support::*;
+use assistant_run_point_list_support::*;
 pub(crate) use assistant_run_prompt_dimension_support::*;
 pub(crate) use assistant_run_prompt_request_support::*;
 use assistant_run_provider_retry_support::*;
@@ -42560,92 +42562,6 @@ fn assistant_run_answer_satisfies_retrieval_point_list(
         .filter(|row| output_text.contains(&row.name))
         .count();
     matched >= rows.len().min(3)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct AssistantRunPointListRow {
-    floor: String,
-    location: String,
-    name: String,
-    area_id: String,
-    type_label: String,
-}
-
-type AssistantRunFloorLocation = (String, String);
-
-fn assistant_run_point_list_rows_from_retrieval_evidence(
-    evidence_state: &Value,
-) -> Vec<AssistantRunPointListRow> {
-    let mut by_name = BTreeMap::<String, AssistantRunPointListRow>::new();
-    for item in evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("retrieval_evidence"))
-    {
-        let Some(content) = item.get("content_excerpt").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(name) = assistant_run_marker_value(content, "areaname") else {
-            continue;
-        };
-        if !assistant_run_text_has_elevator_point_signal(&name) {
-            continue;
-        }
-        let area_id = assistant_run_marker_value(content, "areaid").unwrap_or_default();
-        let (floor, location) = assistant_run_split_floor_location(&name);
-        let type_label = assistant_run_point_type_label(&name);
-        by_name
-            .entry(name.clone())
-            .or_insert(AssistantRunPointListRow {
-                floor,
-                location,
-                name,
-                area_id,
-                type_label,
-            });
-    }
-    by_name.into_values().collect()
-}
-
-fn assistant_run_marker_value(content: &str, marker: &str) -> Option<String> {
-    let marker = format!("## {marker}");
-    let tail = content.split_once(&marker)?.1.trim();
-    let value = tail.split("##").next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn assistant_run_text_has_elevator_point_signal(value: &str) -> bool {
-    prompt_contains_any(value, &["电梯", "扶梯", "梯控"])
-        || value.to_ascii_lowercase().contains("elevator")
-}
-
-fn assistant_run_point_type_label(name: &str) -> String {
-    if prompt_contains_any(name, &["扶梯", "手扶"]) {
-        "扶梯".to_string()
-    } else if prompt_contains_any(name, &["电梯", "直梯", "观光梯"]) {
-        "电梯".to_string()
-    } else {
-        "点位".to_string()
-    }
-}
-
-fn assistant_run_split_floor_location(name: &str) -> AssistantRunFloorLocation {
-    let mut split_at = 0usize;
-    for (index, ch) in name.char_indices() {
-        if ch.is_ascii_alphanumeric() {
-            split_at = index + ch.len_utf8();
-            continue;
-        }
-        break;
-    }
-    if split_at == 0 {
-        return ("".to_string(), name.to_string());
-    }
-    let floor = name[..split_at].to_string();
-    let location = name[split_at..].trim().to_string();
-    (floor, location)
 }
 
 async fn complete_assistant_run_answer_quality_judge(
