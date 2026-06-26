@@ -2,6 +2,33 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-26 P5 Platform API Lower-Hex Helper Local Verification
+
+- Scope:
+  - continue P5 behavior-preserving engineering governance after the dependency refresh;
+  - consolidate duplicated lowercase hex rendering helpers inside the `platform-api` library crate;
+  - keep public API, third-party API, auth, request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, and 8-server configuration unchanged.
+- Code change:
+  - made `hash_support::bytes_to_lower_hex` the crate-level internal helper for lowercase hex rendering;
+  - updated `external_action_dispatch_transport_support`, `external_feishu`, `external_wecom`, and `document_local_object_support` to reuse the helper;
+  - preserved HMAC signatures, Feishu signatures, WeCom signatures, local document content fingerprint output, `sha256_hex` output, leading zeroes, and lowercase hex formatting;
+  - left the standalone `document-fingerprint-backfill` bin target and other crates with local helpers to avoid widening internal helpers into public API or adding new cross-crate coupling.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api hash_support --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api external_action_dispatch_transport --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api feishu --lib`: passed, 7/7 tests;
+  - `cargo test -p platform-api wecom --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api local_document_content_fingerprint_reads_small_files --lib`: passed, 1/1 test;
+  - `cargo check -p platform-api`: passed;
+  - `cargo test -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - this is a local #653 code slice pending commit/push/deploy decision;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-26 P5 Third-Party Dependency Refresh Local Verification
 
 - Scope:

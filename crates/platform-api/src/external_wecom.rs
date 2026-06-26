@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::{collections::BTreeSet, error::Error, fmt};
 
+use crate::bytes_to_lower_hex;
+
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 
 #[derive(Clone, Debug)]
@@ -123,14 +125,6 @@ pub fn wecom_callback_signature(
     let mut hasher = Sha1::new();
     hasher.update(parts.join("").as_bytes());
     bytes_to_lower_hex(hasher.finalize().as_slice())
-}
-
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 pub fn validate_wecom_callback(

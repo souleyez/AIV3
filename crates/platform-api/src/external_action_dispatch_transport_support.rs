@@ -3,7 +3,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
-use crate::{external_channel_support::ExternalActionDispatchAuth, sha256_hex};
+use crate::{bytes_to_lower_hex, external_channel_support::ExternalActionDispatchAuth, sha256_hex};
 
 pub(crate) fn external_action_dispatch_headers(
     connection_id: &str,
@@ -110,14 +110,6 @@ fn insert_dispatch_header(
         .map_err(|_| format!("invalid_header_value:{name}"))?;
     headers.insert(reqwest::header::HeaderName::from_static(name), header_value);
     Ok(())
-}
-
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 #[cfg(test)]

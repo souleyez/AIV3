@@ -7,7 +7,7 @@ use std::{
     path::{Path as StdPath, PathBuf},
 };
 
-use crate::{zip_ingest_support::zip_ingest_env_u64, AppState};
+use crate::{bytes_to_lower_hex, zip_ingest_support::zip_ingest_env_u64, AppState};
 
 pub(crate) fn resolve_platform_local_object_path(object_key: &str) -> Option<PathBuf> {
     let raw = object_key.trim().trim_start_matches("file://");
@@ -111,14 +111,6 @@ fn local_document_content_fingerprint_from_object_key(object_key: &str) -> Optio
         bytes_to_lower_hex(hasher.finalize().as_slice()),
         total as i64,
     ))
-}
-
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 #[cfg(test)]

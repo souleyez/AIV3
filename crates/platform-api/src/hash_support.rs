@@ -8,7 +8,7 @@ pub(crate) fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
     bytes_to_lower_hex(hasher.finalize().as_slice())
 }
 
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+pub(crate) fn bytes_to_lower_hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         output.push_str(&format!("{byte:02x}"));
@@ -34,5 +34,10 @@ mod tests {
             sha256_hex([b"data".as_slice(), b":", b"max"]),
             sha256_hex([b"data:max".as_slice()])
         );
+    }
+
+    #[test]
+    fn bytes_to_lower_hex_preserves_leading_zeroes_and_lowercase() {
+        assert_eq!(bytes_to_lower_hex(&[0x00, 0x0f, 0xa1, 0xff]), "000fa1ff");
     }
 }

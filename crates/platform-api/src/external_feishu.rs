@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, error::Error, fmt};
 
+use crate::bytes_to_lower_hex;
+
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 
 #[derive(Clone, Debug)]
@@ -126,14 +128,6 @@ pub fn feishu_callback_signature(
     hasher.update(encrypt_key.as_bytes());
     hasher.update(raw_body.as_bytes());
     bytes_to_lower_hex(hasher.finalize().as_slice())
-}
-
-fn bytes_to_lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 pub fn validate_feishu_callback(
