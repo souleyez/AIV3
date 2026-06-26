@@ -5,10 +5,7 @@ use crate::assistant_run_resume_prompt_support::{
     prompt_requests_resume_project_ranking, prompt_requests_resume_skill_ranking,
 };
 use crate::prompt_match_support::{ascii_prompt_contains_any, prompt_contains_any};
-use crate::{
-    assistant_run_entity_scan_answer_dimension, assistant_run_prompt_requests_point_list_table,
-    AssistantRunEntityScanAnswerDimension,
-};
+use crate::{assistant_run_entity_scan_answer_dimension, AssistantRunEntityScanAnswerDimension};
 
 pub(crate) fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bool {
     let lower_prompt = prompt.to_ascii_lowercase();
@@ -338,6 +335,21 @@ pub(crate) fn assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt
     )
 }
 
+pub(crate) fn assistant_run_prompt_requests_point_list_table(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let has_point_subject = prompt_contains_any(
+        prompt,
+        &["智能梯控", "电梯", "扶梯", "梯控", "点位", "楼层", "位置"],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["elevator", "escalator", "point", "floor", "location"],
+    );
+    let has_table_or_list =
+        prompt_contains_any(prompt, &["有哪些", "出表", "表格", "列出", "按楼层"])
+            || ascii_prompt_contains_any(&lower, &["list", "table"]);
+    has_point_subject && has_table_or_list
+}
+
 fn prompt_requests_document_dimension_aggregate(prompt: &str) -> bool {
     if assistant_run_entity_scan_answer_dimension(prompt).is_some() {
         return true;
@@ -651,5 +663,21 @@ mod tests {
                 "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
             )
         );
+    }
+
+    #[test]
+    fn prompt_request_support_detects_point_list_table_prompts() {
+        assert!(assistant_run_prompt_requests_point_list_table(
+            "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
+        ));
+        assert!(assistant_run_prompt_requests_point_list_table(
+            "List elevator points by floor in a table"
+        ));
+        assert!(!assistant_run_prompt_requests_point_list_table(
+            "帮我总结电梯安全注意事项"
+        ));
+        assert!(!assistant_run_prompt_requests_point_list_table(
+            "按技能出现频次排序出表"
+        ));
     }
 }

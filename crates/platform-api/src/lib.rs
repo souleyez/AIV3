@@ -42573,21 +42573,6 @@ struct AssistantRunPointListRow {
 
 type AssistantRunFloorLocation = (String, String);
 
-fn assistant_run_prompt_requests_point_list_table(prompt: &str) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    let has_point_subject = prompt_contains_any(
-        prompt,
-        &["智能梯控", "电梯", "扶梯", "梯控", "点位", "楼层", "位置"],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &["elevator", "escalator", "point", "floor", "location"],
-    );
-    let has_table_or_list =
-        prompt_contains_any(prompt, &["有哪些", "出表", "表格", "列出", "按楼层"])
-            || ascii_prompt_contains_any(&lower, &["list", "table"]);
-    has_point_subject && has_table_or_list
-}
-
 fn assistant_run_point_list_rows_from_retrieval_evidence(
     evidence_state: &Value,
 ) -> Vec<AssistantRunPointListRow> {
