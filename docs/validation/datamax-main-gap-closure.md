@@ -2,6 +2,32 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-26 P5 Assistant Run Prompt Request Helper Local Verification
+
+- Scope:
+  - continue #659 P5 behavior-preserving engineering governance under `platform-api`;
+  - move assistant-run prompt request detection helpers for document entity scans, spreadsheet row-level analysis, deterministic aggregate supply, business metric aggregation, and resume company entity scans out of `lib.rs` into `crates/platform-api/src/assistant_run_prompt_request_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_prompt_request_support`;
+  - moved prompt detection logic for row-level spreadsheet questions, document entity scans, deterministic aggregate supply, document/business aggregate operations, and resume company entity scan prompts into the new helper module;
+  - made `assistant_run_entity_scan_answer_dimension` crate-visible so the new helper can reuse the existing entity dimension router without duplicating ranking or dimension logic;
+  - kept existing call sites and tests using the same helper names through crate-level re-export.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_prompt_request_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_deterministic_aggregate_intent_covers_customer_smoke_domains --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_document_entity_scan_detects_elevator_point_lists --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - this is a local helper split only;
+  - no GitHub push for #659 yet;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-26 P5 Rust Direct Dependency Manifest Refresh Local Verification
 
 - Scope:
