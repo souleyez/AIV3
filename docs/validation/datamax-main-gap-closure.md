@@ -20,8 +20,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
   - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- GitHub:
+  - pushed `e9eb66af Extract external conversation guard` to `origin/main`;
+  - DataMax CI run `28234840409` for `e9eb66afde4cb173de3a960775b2788191b6fae2` completed successfully;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, deterministic smoke self-tests, public guide check, and web build;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests.
 - Current state:
-  - local worktree contains the #654 code and docs slice pending commit/push;
+  - `origin/main` includes the #654 external conversation in-flight guard helper slice;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
