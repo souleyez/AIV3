@@ -33,9 +33,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo test -p platform-api local_document_content_fingerprint_reads_small_files --lib`: passed, 1/1 test;
   - `cargo test -p platform-api auth_session_support --lib`: passed, 2/2 tests;
   - `cargo test -p platform-api client_artifact_create_support_hashes_file_bytes --lib`: passed, 1/1 test.
+- GitHub:
+  - pushed `f162c291 Refresh third-party dependencies` to `origin/main`;
+  - DataMax CI run `28230418040` for `f162c29137759efc7e6ab9c5fcbcf488739a89a0` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - the current local dependency refresh commit contains this slice;
-  - local HEAD is 1 commit ahead of `origin/main`;
+  - `origin/main` includes the #652 dependency refresh code slice;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
