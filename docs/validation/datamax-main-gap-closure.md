@@ -23,8 +23,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo check -p platform-api`: passed;
   - `cargo test -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- GitHub:
+  - pushed `5409d452 Consolidate platform hex helpers` to `origin/main`;
+  - DataMax CI run `28233133694` for `5409d452` completed successfully;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests.
 - Current state:
-  - this is a local #653 code slice pending commit/push/deploy decision;
+  - `origin/main` includes the #653 lower-hex helper code slice;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.

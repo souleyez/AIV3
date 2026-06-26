@@ -40,7 +40,7 @@
 | 企业记忆/P2 | 多类型 summary-only dry-run 已覆盖 DOC/DOCX/PDF/XLSX/PPTX/MP4、简历、制度手册、经营/考勤表格。 | 新客户失败样例、新数据类型、新事实用途策略再扩样；真实写入仍未开放。 |
 | fingerprint/对象治理 | inventory、原因聚合、对象清理 dry-run plan、文件系统 preflight 已具备。 | missing object 修复、真实对象清理、重复对象合并仍停留在只读计划阶段。 |
 | 生产观测 | 未授权 operator/queue stats 路径已验证返回 401；观测 key 路径返回脱敏聚合。 | authenticated operator live 需要合法 operator 凭证或运维侧脱敏回执。 |
-| CI | 本地和 8 服务器 smoke 覆盖主要缺口；DataMax CI 已迁移到 8 服务器 self-hosted runner 并跑通。 | #652 依赖升级已推送；DataMax CI run `28230418040` 成功；尚未部署 8 服务器。 |
+| CI | 本地和 8 服务器 smoke 覆盖主要缺口；DataMax CI 已迁移到 8 服务器 self-hosted runner 并跑通。 | #653 lower-hex helper 收口已推送；DataMax CI run `28233133694` 成功；尚未部署 8 服务器。 |
 
 ## 2.1 待完成清单与完成标准
 
