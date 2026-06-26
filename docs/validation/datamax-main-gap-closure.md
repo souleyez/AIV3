@@ -21,9 +21,14 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
   - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- GitHub:
+  - pushed `af2f6344 Extract external channel auth helpers` to `origin/main`;
+  - DataMax CI run `28239272301` for `af2f634454790c1f53bad7849bd3d300e70076a9` completed successfully;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests.
 - Current state:
-  - local worktree contains the #657 external channel bearer auth helper slice pending broader local verification, commit, and push;
-  - no GitHub push, 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+  - `origin/main` includes the #657 external channel bearer auth helper slice;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
 
