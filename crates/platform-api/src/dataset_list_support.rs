@@ -14,7 +14,7 @@ pub(crate) async fn list_visible_dataset_summaries(
     current_user_id: Option<UserId>,
     local_thread_id: Option<&str>,
 ) -> std::result::Result<Vec<DatasetSummary>, ApiError> {
-    ensure_default_public_datasets(state).await?;
+    ensure_default_public_datasets(&state.storage, state.tenant_id).await?;
     let datasets = state
         .storage
         .datasets()

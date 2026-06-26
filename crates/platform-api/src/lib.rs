@@ -269,6 +269,7 @@ mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
 mod dataset_summary_support;
 mod dataset_update_support;
+mod default_public_dataset_support;
 mod document_chunk_list_support;
 mod document_chunk_support;
 mod document_compare_load_support;
@@ -547,6 +548,7 @@ use dataset_retrieval_evidence_support::*;
 use dataset_secret_binding_support::*;
 use dataset_summary_support::*;
 use dataset_update_support::*;
+use default_public_dataset_support::*;
 use document_chunk_list_support::*;
 use document_chunk_support::*;
 use document_compare_load_support::*;
@@ -923,14 +925,6 @@ const AUTH_AUDIT_LOCAL_DATA_CLAIM: &str = "auth.local_data_claim";
 const CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO: &str = "soulzyn@qq.com";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 const MODEL_GATEWAY_DEFAULT_LANE: &str = MODEL_LANE_ASSISTANT_CHAT;
-
-const DEFAULT_PUBLIC_DATASETS: &[(&str, &str, &str)] = &[
-    ("orders", "订单", "默认公开订单数据集。"),
-    ("customer-service", "客服", "默认公开客服数据集。"),
-    ("enterprise-qa", "企业问答", "默认公开企业问答数据集。"),
-    ("web-capture", "网页采集", "默认公开网页采集数据集。"),
-    ("unclassified", "未分类", "默认公开未分类数据集。"),
-];
 
 #[derive(Debug, Deserialize)]
 struct ConversationMemoryQuery {
@@ -3689,43 +3683,6 @@ async fn load_external_channel_assistant_run_for_owner_or_operator(
     Ok((run, Some(user.id), true))
 }
 
-pub(crate) async fn ensure_default_public_datasets(
-    state: &AppState,
-) -> std::result::Result<(), ApiError> {
-    let existing = state
-        .storage
-        .datasets()
-        .list_by_tenant(state.tenant_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let existing_keys: HashSet<String> = existing.into_iter().map(|dataset| dataset.key).collect();
-    for (key, title, description) in DEFAULT_PUBLIC_DATASETS {
-        if existing_keys.contains(*key) {
-            continue;
-        }
-        state
-            .storage
-            .datasets()
-            .create_with_metadata(
-                state.tenant_id,
-                NewDataset {
-                    key: (*key).to_string(),
-                    title: (*title).to_string(),
-                    description: Some((*description).to_string()),
-                    owner_user_id: None,
-                },
-                json!({
-                    "visibility": DatasetVisibility::Public.as_str(),
-                    "default_secret_binding_ids": [],
-                    "default_dataset": true,
-                }),
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-    }
-    Ok(())
-}
-
 async fn create_dataset_secret_binding(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5642,7 +5599,7 @@ async fn create_assistant_run_inner(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .or_else(|| header_local_thread_id.clone());
-    ensure_default_public_datasets(&state).await?;
+    ensure_default_public_datasets(&state.storage, state.tenant_id).await?;
     let visible_datasets = filter_visible_datasets(
         state
             .storage
