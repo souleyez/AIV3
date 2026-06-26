@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use contracts::CreateAssistantRunRequest;
+use serde_json::{json, Value};
 
 use crate::prompt_match_support::prompt_contains_any;
+use crate::{
+    assistant_run_prompt_requests_point_list_table, assistant_run_request_wants_json_output,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AssistantRunPointListRow {
@@ -51,6 +55,53 @@ pub(crate) fn assistant_run_point_list_rows_from_retrieval_evidence(
     by_name.into_values().collect()
 }
 
+pub(crate) fn assistant_run_answer_quality_point_list_controlled_answer(
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> Option<String> {
+    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
+        return None;
+    }
+    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
+    if rows.is_empty() {
+        return None;
+    }
+    if assistant_run_request_wants_json_output(request) {
+        let rows = rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "floor": row.floor,
+                    "location": row.location,
+                    "name": row.name,
+                    "areaid": row.area_id,
+                    "type": row.type_label,
+                })
+            })
+            .collect::<Vec<_>>();
+        return serde_json::to_string_pretty(&json!({
+            "status": "answered",
+            "source": "retrieval_point_list",
+            "question": request.prompt.trim(),
+            "rows": rows,
+        }))
+        .ok();
+    }
+    let mut lines = vec![
+        "根据已检索到的点位证据，智能梯控/电梯点位如下：".to_string(),
+        String::new(),
+        "| 楼层 | 位置 | 点位名称 | areaid | 类型 |".to_string(),
+        "|---|---|---|---|---|".to_string(),
+    ];
+    for row in rows {
+        lines.push(format!(
+            "| {} | {} | {} | {} | {} |",
+            row.floor, row.location, row.name, row.area_id, row.type_label
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
 fn assistant_run_marker_value(content: &str, marker: &str) -> Option<String> {
     let marker = format!("## {marker}");
     let tail = content.split_once(&marker)?.1.trim();
@@ -95,6 +146,40 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn point_list_request(prompt: &str, wants_json: bool) -> CreateAssistantRunRequest {
+        CreateAssistantRunRequest {
+            prompt: prompt.to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: wants_json.then(|| {
+                json!({
+                    "answer_policy": {
+                        "output_format": {"format": "json"}
+                    }
+                })
+            }),
+            current_artifact: None,
+            messages: Vec::new(),
+        }
+    }
+
+    fn point_list_evidence_state() -> Value {
+        json!({
+            "supplied_items": [
+                {
+                    "type": "retrieval_evidence",
+                    "content_excerpt": "## areaname B1F东电梯 ## areaid 4301116 ## areatype 4"
+                },
+                {
+                    "type": "retrieval_evidence",
+                    "content_excerpt": "## areaname B2观光电梯口 ## areaid 4301101 ## areatype 4"
+                }
+            ]
+        })
+    }
+
     #[test]
     fn point_list_support_extracts_unique_elevator_rows() {
         let rows = assistant_run_point_list_rows_from_retrieval_evidence(&json!({
@@ -137,5 +222,48 @@ mod tests {
             assistant_run_split_floor_location("东区观光梯"),
             ("".to_string(), "东区观光梯".to_string())
         );
+    }
+
+    #[test]
+    fn point_list_support_builds_table_controlled_answer() {
+        let answer = assistant_run_answer_quality_point_list_controlled_answer(
+            &point_list_evidence_state(),
+            &point_list_request("智能梯控/电梯点位有哪些？请按楼层和位置出表。", false),
+        )
+        .expect("point rows should build a table answer");
+
+        assert!(answer.contains("| 楼层 | 位置 | 点位名称 | areaid | 类型 |"));
+        assert!(answer.contains("| B1F | 东电梯 | B1F东电梯 | 4301116 | 电梯 |"));
+        assert!(answer.contains("| B2 | 观光电梯口 | B2观光电梯口 | 4301101 | 电梯 |"));
+    }
+
+    #[test]
+    fn point_list_support_builds_json_controlled_answer() {
+        let answer = assistant_run_answer_quality_point_list_controlled_answer(
+            &point_list_evidence_state(),
+            &point_list_request("智能梯控/电梯点位有哪些？请输出 JSON。", true),
+        )
+        .expect("point rows should build a json answer");
+        let parsed: Value = serde_json::from_str(&answer).expect("answer should be valid json");
+
+        assert_eq!(parsed["status"], json!("answered"));
+        assert_eq!(parsed["source"], json!("retrieval_point_list"));
+        assert_eq!(parsed["rows"][0]["name"], json!("B1F东电梯"));
+        assert_eq!(parsed["rows"][0]["areaid"], json!("4301116"));
+        assert!(!answer.contains("| 楼层 |"));
+    }
+
+    #[test]
+    fn point_list_support_skips_non_point_prompts_or_empty_evidence() {
+        assert!(assistant_run_answer_quality_point_list_controlled_answer(
+            &point_list_evidence_state(),
+            &point_list_request("帮我总结电梯安全注意事项", false),
+        )
+        .is_none());
+        assert!(assistant_run_answer_quality_point_list_controlled_answer(
+            &json!({"supplied_items": []}),
+            &point_list_request("智能梯控/电梯点位有哪些？请按楼层和位置出表。", false),
+        )
+        .is_none());
     }
 }

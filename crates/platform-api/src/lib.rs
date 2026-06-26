@@ -34040,7 +34040,7 @@ fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> O
         .map(str::to_string)
 }
 
-fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) -> bool {
+pub(crate) fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) -> bool {
     assistant_run_request_output_format(request).as_deref() == Some("json")
 }
 
@@ -42043,53 +42043,6 @@ fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
-}
-
-fn assistant_run_answer_quality_point_list_controlled_answer(
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-) -> Option<String> {
-    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
-        return None;
-    }
-    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
-    if rows.is_empty() {
-        return None;
-    }
-    if assistant_run_request_wants_json_output(request) {
-        let rows = rows
-            .iter()
-            .map(|row| {
-                json!({
-                    "floor": row.floor,
-                    "location": row.location,
-                    "name": row.name,
-                    "areaid": row.area_id,
-                    "type": row.type_label,
-                })
-            })
-            .collect::<Vec<_>>();
-        return serde_json::to_string_pretty(&json!({
-            "status": "answered",
-            "source": "retrieval_point_list",
-            "question": request.prompt.trim(),
-            "rows": rows,
-        }))
-        .ok();
-    }
-    let mut lines = vec![
-        "根据已检索到的点位证据，智能梯控/电梯点位如下：".to_string(),
-        String::new(),
-        "| 楼层 | 位置 | 点位名称 | areaid | 类型 |".to_string(),
-        "|---|---|---|---|---|".to_string(),
-    ];
-    for row in rows {
-        lines.push(format!(
-            "| {} | {} | {} | {} | {} |",
-            row.floor, row.location, row.name, row.area_id, row.type_label
-        ));
-    }
-    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
