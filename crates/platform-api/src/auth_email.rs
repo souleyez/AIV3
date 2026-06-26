@@ -4,11 +4,12 @@ use domain_model::{AuthChallengePurpose, EmailVerificationChallenge};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::env;
 use std::time::Duration as StdDuration;
 use storage::NewEmailVerificationChallenge;
 use uuid::Uuid;
+
+use crate::sha256_hex;
 
 const DEFAULT_CODE_BYTES_HEX_LEN: usize = 8;
 const DEFAULT_TTL_MINUTES: i64 = 10;
@@ -417,15 +418,16 @@ fn hash_otp_code(
     purpose: &AuthChallengePurpose,
     code: &str,
 ) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(pepper.as_bytes());
-    hasher.update(b":");
-    hasher.update(email_normalized.as_bytes());
-    hasher.update(b":");
-    hasher.update(purpose.as_str().as_bytes());
-    hasher.update(b":");
-    hasher.update(normalize_code(code).as_bytes());
-    format!("{:x}", hasher.finalize())
+    let normalized_code = normalize_code(code);
+    sha256_hex([
+        pepper.as_bytes(),
+        b":",
+        email_normalized.as_bytes(),
+        b":",
+        purpose.as_str().as_bytes(),
+        b":",
+        normalized_code.as_bytes(),
+    ])
 }
 
 #[cfg(test)]

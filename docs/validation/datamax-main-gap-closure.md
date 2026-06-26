@@ -2,6 +2,44 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-26 P5 Third-Party Dependency Refresh Local Verification
+
+- Scope:
+  - refresh third-party dependencies to the latest directly usable versions in the current workspace;
+  - adapt compile-time API changes from `sqlx 0.9`, `sha1/sha2 0.11`, `cbc 0.2`, and `hmac 0.13`;
+  - keep public API, third-party API, auth, request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, and 8-server configuration unchanged.
+- Dependency updates:
+  - `apps/web/package.json`: `next` upgraded to `16.2.9`, `react` and `react-dom` to `19.2.7`, and `echarts` to `6.1.0`;
+  - workspace `Cargo.toml`: `aes` upgraded to `0.9.1`, `async-nats` to `0.49.1`, `cbc` to `0.2.1`, `hmac` to `0.13.0`, `quick-xml` to `0.40.1`, `sha1` to `0.11.0`, `sha2` to `0.11.0`, and `sqlx` to `0.9.0`;
+  - `sqlx` runtime features were updated from the removed `runtime-tokio-rustls` feature to `runtime-tokio` plus `tls-rustls`.
+- Code compatibility changes:
+  - dynamic SQL built from internal allowlists/query builders is wrapped with `AssertSqlSafe` for `sqlx 0.9`;
+  - SHA output paths now render lowercase hex explicitly instead of relying on removed digest formatting behavior;
+  - Feishu/WeCom AES-CBC helpers use the `cbc 0.2` block mode traits and encrypt/decrypt methods;
+  - HMAC call sites import `KeyInit` where required by `hmac 0.13`.
+- Local verification:
+  - `pnpm outdated -r`: passed with no outdated direct frontend dependencies reported;
+  - `cargo update --dry-run --verbose`: passed with no directly updatable Rust dependencies remaining; only upstream-pinned transitive dependencies remain (`generic-array 0.14.7`, pinned through `crypto-common`, and `matchit 0.8.4`, pinned through `axum 0.8.9`);
+  - `cargo fmt --check`: passed;
+  - `cargo check -p platform-api`: passed;
+  - `cargo check -p assistant-run-worker -p chat-session-worker -p static-page-worker -p codex-host-agent`: passed;
+  - `cargo check --workspace`: passed;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `node --test apps/web/app/lib/html-artifact-utils.test.mjs`: passed, 12/12 tests;
+  - `cargo test -p platform-api external_action_dispatch_transport --lib`: passed, 4/4 tests;
+  - `cargo test -p platform-api feishu --lib`: passed, 7/7 tests;
+  - `cargo test -p platform-api wecom --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api sha256 --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api local_document_content_fingerprint_reads_small_files --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api auth_session_support --lib`: passed, 2/2 tests;
+  - `cargo test -p platform-api client_artifact_create_support_hashes_file_bytes --lib`: passed, 1/1 test.
+- Current state:
+  - the current local dependency refresh commit contains this slice;
+  - local HEAD is 1 commit ahead of `origin/main`;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-24 Streaming Smoke Self-Tests and Active Plan Status CI Receipt
 
 - Scope:

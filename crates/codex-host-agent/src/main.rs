@@ -19,7 +19,7 @@ use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
     EventSubscription,
 };
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -7879,7 +7879,7 @@ fn sha256_file_hex(path: &Path) -> Result<String> {
     })?;
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(bytes_to_lower_hex(hasher.finalize().as_slice()))
 }
 
 fn codex_host_task_event_name(output: &serde_json::Value) -> &'static str {

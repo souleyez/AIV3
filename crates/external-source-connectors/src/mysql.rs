@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{mysql::MySqlPoolOptions, MySqlPool, Row};
+use sqlx::{mysql::MySqlPoolOptions, AssertSqlSafe, MySqlPool, Row};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -516,7 +516,7 @@ pub async fn preview_mysql_table(
     config.validate()?;
     let plan = build_mysql_table_preview_query(config, table, limit)?;
     let pool = connect_mysql_pool(config).await?;
-    let rows = sqlx::query(&plan.sql)
+    let rows = sqlx::query(AssertSqlSafe(plan.sql.as_str()))
         .fetch_all(&pool)
         .await
         .map_err(sqlx_error)?;
@@ -530,7 +530,7 @@ pub async fn aggregate_mysql_table(
     config.validate()?;
     let plan = build_mysql_aggregate_query(config, request)?;
     let pool = connect_mysql_pool(config).await?;
-    let rows = sqlx::query(&plan.sql)
+    let rows = sqlx::query(AssertSqlSafe(plan.sql.as_str()))
         .fetch_all(&pool)
         .await
         .map_err(sqlx_error)?;
@@ -584,7 +584,7 @@ pub async fn fetch_mysql_documents_report_with_checkpoint(
             let plan = build_mysql_document_fetch_page_query(
                 config, mapping, checkpoint, page_limit, offset,
             )?;
-            let mut query = sqlx::query(&plan.sql);
+            let mut query = sqlx::query(AssertSqlSafe(plan.sql.as_str()));
             for param in &plan.params {
                 query = query.bind(param);
             }
@@ -2324,7 +2324,10 @@ fn mysql_document_external_id(table: &str, primary_key: &str, hashed: bool) -> S
     hasher.update(table.as_bytes());
     hasher.update(b"\0");
     hasher.update(primary_key.as_bytes());
-    format!("mysql:{table}:sha256:{:x}", hasher.finalize())
+    format!(
+        "mysql:{table}:sha256:{}",
+        bytes_to_lower_hex(hasher.finalize().as_slice())
+    )
 }
 
 fn build_mysql_document_body(
@@ -2379,7 +2382,18 @@ fn build_mysql_revision_external_id(
     hasher.update(mapping.table.as_bytes());
     hasher.update(b"\0");
     hasher.update(body.as_bytes());
-    format!("content_sha256:{:x}", hasher.finalize())
+    format!(
+        "content_sha256:{}",
+        bytes_to_lower_hex(hasher.finalize().as_slice())
+    )
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn json_string(value: &str) -> Value {

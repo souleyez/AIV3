@@ -342,9 +342,17 @@ fn local_fingerprint_for_object_key(
 
     Ok(LocalFingerprint {
         path,
-        content_sha256: format!("{:x}", hasher.finalize()),
+        content_sha256: bytes_to_lower_hex(hasher.finalize().as_slice()),
         content_size_bytes: total as i64,
     })
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn resolve_local_object_path(
@@ -555,7 +563,7 @@ mod tests {
         let expected_sha256 = {
             let mut hasher = Sha256::new();
             hasher.update(body);
-            format!("{:x}", hasher.finalize())
+            bytes_to_lower_hex(hasher.finalize().as_slice())
         };
 
         let fingerprint = local_fingerprint_for_object_key(&path.to_string_lossy())

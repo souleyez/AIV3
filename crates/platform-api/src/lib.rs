@@ -60232,7 +60232,7 @@ mod tests {
     fn encrypt_feishu_test_payload(payload: &Value, encrypt_key: &str) -> String {
         use aes::Aes256;
         use base64::{engine::general_purpose, Engine as _};
-        use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+        use cbc::cipher::{block_padding::NoPadding, BlockModeEncrypt, KeyIvInit};
         use sha2::{Digest, Sha256};
 
         let key = Sha256::digest(encrypt_key.as_bytes());
@@ -60244,7 +60244,7 @@ mod tests {
         let plaintext_len = plaintext.len();
         let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
             .expect("test AES encryptor should initialize")
-            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .encrypt_padded::<NoPadding>(&mut plaintext, plaintext_len)
             .expect("test plaintext is block aligned");
         let mut envelope = iv.to_vec();
         envelope.extend_from_slice(encrypted);
@@ -60254,7 +60254,7 @@ mod tests {
     fn encrypt_wecom_test_xml(xml: &str, receive_id: &str, encoding_aes_key: &str) -> String {
         use aes::Aes256;
         use base64::{engine::general_purpose, Engine as _};
-        use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+        use cbc::cipher::{block_padding::NoPadding, BlockModeEncrypt, KeyIvInit};
 
         let key = general_purpose::STANDARD
             .decode(format!("{encoding_aes_key}="))
@@ -60269,7 +60269,7 @@ mod tests {
         let plaintext_len = plaintext.len();
         let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &key[..16])
             .expect("test AES encryptor should initialize")
-            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .encrypt_padded::<NoPadding>(&mut plaintext, plaintext_len)
             .expect("test plaintext is block aligned");
         general_purpose::STANDARD.encode(encrypted)
     }

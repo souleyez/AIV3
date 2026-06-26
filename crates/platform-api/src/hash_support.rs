@@ -5,7 +5,15 @@ pub(crate) fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
     for part in parts {
         hasher.update(part);
     }
-    format!("{:x}", hasher.finalize())
+    bytes_to_lower_hex(hasher.finalize().as_slice())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 #[cfg(test)]

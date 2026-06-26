@@ -1,7 +1,6 @@
 use axum::http::HeaderMap;
 use contracts::{ClientArtifactView, CreateClientArtifactResponse, V3ClientArtifactManifestView};
 use domain_model::UserId;
-use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -16,7 +15,7 @@ use crate::{
         prepare_client_artifact_file_storage,
     },
     client_artifact_view_support::load_client_artifact_view,
-    ApiError, AppState,
+    sha256_hex, ApiError, AppState,
 };
 
 pub(crate) fn new_client_artifact_id() -> String {
@@ -24,9 +23,7 @@ pub(crate) fn new_client_artifact_id() -> String {
 }
 
 pub(crate) fn client_artifact_file_sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    sha256_hex([bytes])
 }
 
 pub(crate) async fn validate_client_artifact_create_request(

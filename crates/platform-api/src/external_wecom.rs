@@ -1,6 +1,6 @@
 use aes::Aes256;
 use base64::{engine::general_purpose, Engine as _};
-use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::NoPadding, BlockModeDecrypt, KeyIvInit};
 use chrono::{DateTime, Utc};
 use contracts::{
     ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
@@ -122,7 +122,15 @@ pub fn wecom_callback_signature(
     parts.sort();
     let mut hasher = Sha1::new();
     hasher.update(parts.join("").as_bytes());
-    format!("{:x}", hasher.finalize())
+    bytes_to_lower_hex(hasher.finalize().as_slice())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 pub fn validate_wecom_callback(
@@ -257,7 +265,7 @@ fn decrypt_wecom_encrypt(
                 format!("WeCom AES decryptor could not be initialized: {error}"),
             )
         })?
-        .decrypt_padded_mut::<NoPadding>(&mut ciphertext)
+        .decrypt_padded::<NoPadding>(&mut ciphertext)
         .map_err(|error| {
             WeComAdapterError::new(
                 "wecom_decrypt_failed",

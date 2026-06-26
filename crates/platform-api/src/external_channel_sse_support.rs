@@ -2,7 +2,6 @@ use axum::http::HeaderMap;
 use contracts::{ExternalBotMessageView, ExternalChannelEventResponse};
 use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration as StdDuration};
 
 use crate::{
@@ -30,7 +29,7 @@ use crate::{
         external_channel_static_page_customer_ready_text,
         external_channel_static_page_customer_ready_text_for_payload,
     },
-    external_channel_static_page_published_reply,
+    external_channel_static_page_published_reply, sha256_hex,
     sse_support::{sse_json_event, sse_text_delta_events},
     truncate_assistant_supply_text,
 };
@@ -448,10 +447,7 @@ pub(crate) fn external_channel_public_stream_has_event(
 
 pub(crate) fn external_channel_public_stream_dedupe_hash(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    format!("{digest:x}")
+    sha256_hex([bytes.as_slice()])
 }
 
 pub(crate) fn external_channel_public_stream_payload(mut payload: Value) -> Value {

@@ -107,7 +107,18 @@ fn local_document_content_fingerprint_from_object_key(object_key: &str) -> Optio
         hasher.update(&buffer[..read]);
     }
 
-    Some((format!("{:x}", hasher.finalize()), total as i64))
+    Some((
+        bytes_to_lower_hex(hasher.finalize().as_slice()),
+        total as i64,
+    ))
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 #[cfg(test)]

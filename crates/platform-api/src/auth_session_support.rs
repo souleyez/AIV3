@@ -2,13 +2,12 @@ use super::{
     auth_email, trim_optional, validate_required, AUTH_EMAIL_RESEND_AFTER_SECONDS,
     AUTH_SESSION_COOKIE_NAME, AUTH_SESSION_TTL_DAYS, DEFAULT_AUTH_SESSION_PEPPER,
 };
-use crate::ApiError;
+use crate::{sha256_hex, ApiError};
 use axum::http::{header, HeaderMap, HeaderValue};
 use chrono::{DateTime, Duration, Utc};
 use contracts::{AuthAuditEventView, AuthSessionView, AuthUserView};
 use domain_model::{AuthAuditEvent, AuthChallengePurpose, User, UserSession, UserSessionId};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub(crate) fn validate_auth_email(email: &str) -> std::result::Result<String, ApiError> {
@@ -175,11 +174,7 @@ fn safe_auth_audit_details(metadata: &Value) -> Value {
 }
 
 fn auth_sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    format!("{:x}", hasher.finalize())
+    sha256_hex(parts)
 }
 
 #[cfg(test)]

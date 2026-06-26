@@ -1,6 +1,6 @@
 use aes::Aes256;
 use base64::{engine::general_purpose, Engine as _};
-use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::NoPadding, BlockModeDecrypt, KeyIvInit};
 use chrono::{DateTime, Utc};
 use contracts::{
     ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
@@ -125,7 +125,15 @@ pub fn feishu_callback_signature(
     hasher.update(nonce.as_bytes());
     hasher.update(encrypt_key.as_bytes());
     hasher.update(raw_body.as_bytes());
-    format!("{:x}", hasher.finalize())
+    bytes_to_lower_hex(hasher.finalize().as_slice())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 pub fn validate_feishu_callback(
@@ -245,7 +253,7 @@ pub fn decrypt_feishu_encrypt(
                 format!("Feishu AES decryptor could not be initialized: {error}"),
             )
         })?
-        .decrypt_padded_mut::<NoPadding>(&mut ciphertext)
+        .decrypt_padded::<NoPadding>(&mut ciphertext)
         .map_err(|error| {
             FeishuAdapterError::new(
                 "feishu_decrypt_failed",
@@ -567,7 +575,7 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cbc::cipher::BlockEncryptMut;
+    use cbc::cipher::BlockModeEncrypt;
     use chrono::TimeZone;
 
     fn sample_config() -> FeishuAdapterConfig {
@@ -591,7 +599,7 @@ mod tests {
         let plaintext_len = plaintext.len();
         let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
             .expect("test AES encryptor should initialize")
-            .encrypt_padded_mut::<NoPadding>(&mut plaintext, plaintext_len)
+            .encrypt_padded::<NoPadding>(&mut plaintext, plaintext_len)
             .expect("test plaintext is block aligned");
         let mut envelope = iv.to_vec();
         envelope.extend_from_slice(encrypted);

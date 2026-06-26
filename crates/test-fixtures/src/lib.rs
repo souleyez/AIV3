@@ -5,6 +5,7 @@ use domain_model::{
     ReportModuleKind, ReportPlan, ReportPlanId, ReportPlanStatus, SecretBindingId, TenantId,
 };
 use serde_json::json;
+use sqlx::AssertSqlSafe;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -110,7 +111,9 @@ pub async fn local_postgres_storage() -> std::result::Result<PgStorage, String> 
 pub async fn reset_local_postgres_storage(storage: &PgStorage) -> Result<()> {
     ensure_safe_local_postgres_fixture_database(storage).await?;
     let truncate = format!("truncate table {} cascade", TABLES.join(", "));
-    sqlx::query(&truncate).execute(storage.pool()).await?;
+    sqlx::query(AssertSqlSafe(truncate.as_str()))
+        .execute(storage.pool())
+        .await?;
     storage.migrate().await?;
     Ok(())
 }

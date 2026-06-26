@@ -22,7 +22,7 @@ use domain_model::{
     WorkflowStatus, WorkflowTask, WorkflowTaskId, WorkflowTaskStatus,
 };
 use serde_json::{Map, Value};
-use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, Executor, PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use uuid::Uuid;
@@ -5630,7 +5630,7 @@ impl PgAssistantRunRepository {
                       created_at, updated_at
             "#
         );
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(AssertSqlSafe(sql))
             .bind(tenant_id.0)
             .bind(run_id.0)
             .bind(value)
