@@ -48,24 +48,24 @@ authors = ["AI Data Platform Team"]
 [workspace.dependencies]
 aes = "0.9.1"
 async-nats = "0.49.1"
-anyhow = "1.0.100"
-axum = { version = "0.8.6", features = ["json", "macros", "multipart"] }
+anyhow = "1.0.103"
+axum = { version = "0.8.9", features = ["json", "macros", "multipart"] }
 base64 = "0.22.1"
 cbc = "0.2.1"
-chrono = { version = "0.4.42", features = ["clock", "serde"] }
-futures-util = "0.3.31"
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
+futures-util = "0.3.32"
 hmac = "0.13.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 quick-xml = "0.40.1"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.150"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "uuid", "chrono", "json"] }
-thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["macros", "process", "rt-multi-thread", "signal"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["macros", "process", "rt-multi-thread", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.23.4", features = ["serde", "v4"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
