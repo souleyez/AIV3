@@ -1,4 +1,3 @@
-use crate::assistant_run_entity_scan_answer_dimension;
 use crate::assistant_run_resume_prompt_support::{
     prompt_requests_resume_certificate_ranking, prompt_requests_resume_company_ranking,
     prompt_requests_resume_education_ranking, prompt_requests_resume_experience_statistics,
@@ -6,6 +5,10 @@ use crate::assistant_run_resume_prompt_support::{
     prompt_requests_resume_project_ranking, prompt_requests_resume_skill_ranking,
 };
 use crate::prompt_match_support::{ascii_prompt_contains_any, prompt_contains_any};
+use crate::{
+    assistant_run_entity_scan_answer_dimension, assistant_run_prompt_requests_point_list_table,
+    AssistantRunEntityScanAnswerDimension,
+};
 
 pub(crate) fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bool {
     let lower_prompt = prompt.to_ascii_lowercase();
@@ -314,6 +317,27 @@ pub(crate) fn prompt_requests_deterministic_aggregate_supply(prompt: &str) -> bo
         || prompt_requests_business_metric_aggregate(prompt)
 }
 
+pub(crate) fn assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt: &str) -> bool {
+    if assistant_run_prompt_requests_point_list_table(prompt) {
+        return false;
+    }
+    matches!(
+        assistant_run_entity_scan_answer_dimension(prompt),
+        Some(
+            AssistantRunEntityScanAnswerDimension::Company
+                | AssistantRunEntityScanAnswerDimension::Skill
+                | AssistantRunEntityScanAnswerDimension::Project
+                | AssistantRunEntityScanAnswerDimension::Position
+                | AssistantRunEntityScanAnswerDimension::Person
+                | AssistantRunEntityScanAnswerDimension::Location
+                | AssistantRunEntityScanAnswerDimension::Certificate
+                | AssistantRunEntityScanAnswerDimension::Keyword
+                | AssistantRunEntityScanAnswerDimension::Year
+                | AssistantRunEntityScanAnswerDimension::Section
+        )
+    )
+}
+
 fn prompt_requests_document_dimension_aggregate(prompt: &str) -> bool {
     if assistant_run_entity_scan_answer_dimension(prompt).is_some() {
         return true;
@@ -610,5 +634,22 @@ mod tests {
         assert!(!prompt_requests_deterministic_aggregate_supply(
             "帮我写一段岗位技能介绍文案"
         ));
+    }
+
+    #[test]
+    fn prompt_request_support_fact_snapshot_replaces_only_supported_global_scan_prompts() {
+        assert!(assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+            "简历库里一共提到了多少个公司名？"
+        ));
+        assert!(assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+            "按技能出现频次排序出表"
+        ));
+        assert!(!assistant_run_fact_snapshot_can_replace_dataset_entity_scan("按年龄排序出表"));
+        assert!(!assistant_run_fact_snapshot_can_replace_dataset_entity_scan("按学历汇总候选人"));
+        assert!(
+            !assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+                "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
+            )
+        );
     }
 }

@@ -33420,27 +33420,6 @@ enum AssistantRunEntityScanAnswerDimension {
     ResumeProfileMatch,
 }
 
-fn assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt: &str) -> bool {
-    if assistant_run_prompt_requests_point_list_table(prompt) {
-        return false;
-    }
-    matches!(
-        assistant_run_entity_scan_answer_dimension(prompt),
-        Some(
-            AssistantRunEntityScanAnswerDimension::Company
-                | AssistantRunEntityScanAnswerDimension::Skill
-                | AssistantRunEntityScanAnswerDimension::Project
-                | AssistantRunEntityScanAnswerDimension::Position
-                | AssistantRunEntityScanAnswerDimension::Person
-                | AssistantRunEntityScanAnswerDimension::Location
-                | AssistantRunEntityScanAnswerDimension::Certificate
-                | AssistantRunEntityScanAnswerDimension::Keyword
-                | AssistantRunEntityScanAnswerDimension::Year
-                | AssistantRunEntityScanAnswerDimension::Section
-        )
-    )
-}
-
 pub(crate) fn assistant_run_entity_scan_answer_dimension(
     prompt: &str,
 ) -> Option<AssistantRunEntityScanAnswerDimension> {
