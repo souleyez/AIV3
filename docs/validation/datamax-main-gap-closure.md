@@ -2,6 +2,30 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-26 P5 External Conversation In-Flight Guard Helper Local Verification
+
+- Scope:
+  - continue #654 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the third-party external conversation in-flight guard out of `lib.rs` into `crates/platform-api/src/external_conversation_in_flight_support.rs`;
+  - keep public API, third-party API, auth, request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, and 8-server configuration unchanged.
+- Code change:
+  - added `external_conversation_in_flight_support` for `ExternalConversationInFlightGuard` and permit drop release behavior;
+  - kept `AppState.external_conversation_guard`, external channel busy-conversation processing fallback, and active conversation count behavior unchanged;
+  - moved the direct guard unit coverage from `lib.rs` to the new module and expanded it to assert active-count increments and releases.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_conversation_in_flight_support --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api generic_chat_same_conversation_in_flight_returns_processing_without_new_run --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Current state:
+  - local worktree contains the #654 code and docs slice pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-26 P5 Platform API Lower-Hex Helper Local Verification
 
 - Scope:

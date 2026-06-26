@@ -159,7 +159,7 @@ use std::{
     convert::Infallible,
     fs,
     path::{Path as StdPath, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration as StdDuration, Instant},
 };
 #[cfg(test)]
@@ -333,6 +333,7 @@ mod external_channel_static_page_template_reference_support;
 mod external_channel_static_page_terminal_reply;
 mod external_channel_support;
 mod external_channel_temporary_dataset_support;
+mod external_conversation_in_flight_support;
 mod external_conversation_timeline;
 mod external_database_source_config_support;
 mod external_document_object_support;
@@ -613,6 +614,7 @@ use external_channel_static_page_template_baseline::*;
 use external_channel_static_page_template_reference_support::*;
 use external_channel_support::*;
 use external_channel_temporary_dataset_support::*;
+use external_conversation_in_flight_support::*;
 use external_conversation_timeline::*;
 use external_database_source_config_support::*;
 use external_document_object_support::*;
@@ -1026,48 +1028,6 @@ impl AppState {
             gateway_limiter: Arc::new(GatewayRuntimeLimiter::new()),
             external_conversation_guard: Arc::new(ExternalConversationInFlightGuard::default()),
         }
-    }
-}
-
-#[derive(Debug, Default)]
-struct ExternalConversationInFlightGuard {
-    active: Mutex<HashSet<String>>,
-}
-
-#[derive(Debug)]
-struct ExternalConversationInFlightPermit {
-    guard: Arc<ExternalConversationInFlightGuard>,
-    key: String,
-}
-
-impl ExternalConversationInFlightGuard {
-    fn try_acquire(self: &Arc<Self>, key: String) -> Option<ExternalConversationInFlightPermit> {
-        let mut active = self.active.lock().expect("external conversation guard");
-        if !active.insert(key.clone()) {
-            return None;
-        }
-        Some(ExternalConversationInFlightPermit {
-            guard: Arc::clone(self),
-            key,
-        })
-    }
-
-    fn active_count(&self) -> usize {
-        self.active
-            .lock()
-            .expect("external conversation guard")
-            .len()
-    }
-}
-
-impl Drop for ExternalConversationInFlightPermit {
-    fn drop(&mut self) {
-        let mut active = self
-            .guard
-            .active
-            .lock()
-            .expect("external conversation guard");
-        active.remove(&self.key);
     }
 }
 
@@ -72708,25 +72668,6 @@ mod tests {
         .expect("assistant run count should be queryable");
         assert_eq!(run_count_after, run_count_before);
         clear_assistant_openclaw_env();
-    }
-
-    #[test]
-    fn external_channel_conversation_guard_allows_different_conversations() {
-        let guard = Arc::new(ExternalConversationInFlightGuard::default());
-        let first = guard
-            .try_acquire("tenant|channel|generic_chat|conversation-a".to_string())
-            .expect("first conversation should acquire");
-        assert!(guard
-            .try_acquire("tenant|channel|generic_chat|conversation-a".to_string())
-            .is_none());
-        let second = guard
-            .try_acquire("tenant|channel|generic_chat|conversation-b".to_string())
-            .expect("different conversation should acquire");
-        drop(second);
-        drop(first);
-        assert!(guard
-            .try_acquire("tenant|channel|generic_chat|conversation-a".to_string())
-            .is_some());
     }
 
     #[tokio::test]
