@@ -299,6 +299,7 @@ mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_action_prompt_support;
 mod external_channel_attachment_title_support;
+mod external_channel_auth_support;
 mod external_channel_connection_id_support;
 mod external_channel_conversation_history_support;
 mod external_channel_direct_reply_budget_support;
@@ -580,6 +581,7 @@ use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_action_prompt_support::*;
 use external_channel_attachment_title_support::*;
+use external_channel_auth_support::*;
 use external_channel_connection_id_support::*;
 use external_channel_conversation_history_support::*;
 use external_channel_direct_reply_budget_support::*;
@@ -13597,10 +13599,10 @@ fn ensure_external_channel_inbound_bearer_auth(
     if external_channel_inbound_token_expired(&connection.config_redacted, Utc::now()) {
         return Err(external_channel_auth_failed());
     }
-    let Some(provided_token) = authorization_bearer_token(headers) else {
+    let Some(provided_token) = external_channel_authorization_bearer_token(headers) else {
         return Err(external_channel_auth_failed());
     };
-    if !constant_time_str_eq(provided_token, &expected_token) {
+    if !external_channel_constant_time_str_eq(provided_token, &expected_token) {
         return Err(external_channel_auth_failed());
     }
     Ok(())
@@ -13637,30 +13639,6 @@ fn external_channel_source_document_scope_enabled(config: &Value) -> bool {
         ],
         false,
     )
-}
-
-fn authorization_bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut parts = value.split_whitespace();
-    let scheme = parts.next()?;
-    let token = parts.next()?;
-    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
-        return None;
-    }
-    Some(token)
-}
-
-fn constant_time_str_eq(left: &str, right: &str) -> bool {
-    let left = left.as_bytes();
-    let right = right.as_bytes();
-    let max_len = left.len().max(right.len());
-    let mut diff = left.len() ^ right.len();
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        diff |= usize::from(left_byte ^ right_byte);
-    }
-    diff == 0
 }
 
 fn ensure_external_channel_platform(
