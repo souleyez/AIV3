@@ -25,8 +25,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo check --workspace`: passed;
   - `cargo upgrade --dry-run --verbose`: no direct dependency upgrade rows remained;
   - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- GitHub:
+  - pushed `32f81fcd Refresh Rust dependency manifests` to `origin/main`;
+  - DataMax CI run `28240945428` for `32f81fcd29517c2f629936ac3bd4d805c91e8949` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - this is a local dependency manifest refresh only;
+  - `origin/main` includes the #658 Rust direct dependency manifest refresh;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
