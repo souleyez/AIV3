@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::react_agent_contract::AssistantRunReActDecision;
 use crate::react_agent_tools::react_final_answer_content_is_raw_observation;
 use serde_json::{json, Value};
 
@@ -296,10 +297,118 @@ pub(crate) fn assistant_run_react_has_completed_action(
     })
 }
 
+pub(crate) struct AssistantRunReactPendingToolOutput {
+    pub(crate) call_id: String,
+    pub(crate) repeated: bool,
+}
+
+pub(crate) fn assistant_run_react_replays_completed_tool_call(
+    decision: &AssistantRunReActDecision,
+    observations: &[Value],
+) -> Option<String> {
+    let call_id = assistant_run_react_call_id_from_value(&decision.arguments)?;
+    let already_completed = observations.iter().any(|observation| {
+        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
+            && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                matches!(status, "completed" | "failed" | "rejected" | "denied")
+            })
+    });
+    already_completed.then_some(call_id)
+}
+
+pub(crate) fn assistant_run_react_pending_tool_output(
+    observations: &[Value],
+) -> Option<AssistantRunReactPendingToolOutput> {
+    let pending_observation = observations.iter().rev().find(|observation| {
+        assistant_run_react_observation_status(observation).is_some_and(|status| {
+            matches!(
+                status,
+                "tool_calls_emitted"
+                    | "tool_call_requested"
+                    | "pending_tool_output"
+                    | "tool_output_missing"
+            )
+        })
+    })?;
+    let call_id = assistant_run_react_observation_call_id(pending_observation)?;
+    let resolved = observations.iter().any(|observation| {
+        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
+            && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                matches!(status, "completed" | "failed" | "rejected" | "denied")
+            })
+    });
+    if resolved {
+        return None;
+    }
+    let repeated = observations
+        .iter()
+        .rev()
+        .take(2)
+        .filter(|observation| {
+            assistant_run_react_observation_call_id(observation).as_deref()
+                == Some(call_id.as_str())
+                && assistant_run_react_observation_status(observation).is_some_and(|status| {
+                    matches!(
+                        status,
+                        "tool_calls_emitted"
+                            | "tool_call_requested"
+                            | "pending_tool_output"
+                            | "tool_output_missing"
+                    )
+                })
+        })
+        .count()
+        >= 2;
+
+    Some(AssistantRunReactPendingToolOutput { call_id, repeated })
+}
+
+pub(crate) fn assistant_run_react_repeats_no_progress_action(
+    decision: &AssistantRunReActDecision,
+    observations: &[Value],
+) -> bool {
+    let action_type = decision.action_type.as_str();
+    observations
+        .iter()
+        .rev()
+        .take(2)
+        .filter(|observation| {
+            observation
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "rejected" | "failed" | "denied"))
+                && observation
+                    .get("action_type")
+                    .or_else(|| observation.get("actionType"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == action_type)
+        })
+        .count()
+        >= 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::react_agent_contract::{AssistantRunReActActionType, AssistantRunReActStatus};
     use serde_json::json;
+
+    fn react_test_decision(
+        action_type: AssistantRunReActActionType,
+        arguments: Value,
+    ) -> AssistantRunReActDecision {
+        AssistantRunReActDecision {
+            status: AssistantRunReActStatus::Act,
+            intent: None,
+            action_type,
+            reason_summary: "test".to_string(),
+            arguments,
+            requires_confirmation: false,
+            answer: None,
+            citations: Vec::new(),
+            conversation_state: json!({}),
+        }
+    }
 
     #[test]
     fn completed_event_payload_preserves_optional_entrypoint_and_html_artifacts() {
@@ -552,6 +661,103 @@ mod tests {
         assert!(!assistant_run_react_has_completed_action(
             &observations,
             "read_document_detail"
+        ));
+    }
+
+    #[test]
+    fn react_replays_completed_tool_call_detects_completed_terminal_observation() {
+        let decision = react_test_decision(
+            AssistantRunReActActionType::RetrieveEvidence,
+            json!({"tool_call_id": "call-1"}),
+        );
+
+        for status in ["completed", "failed", "rejected", "denied"] {
+            assert_eq!(
+                assistant_run_react_replays_completed_tool_call(
+                    &decision,
+                    &[json!({"status": status, "tool_call_id": "call-1"})],
+                ),
+                Some("call-1".to_string())
+            );
+        }
+
+        assert_eq!(
+            assistant_run_react_replays_completed_tool_call(
+                &decision,
+                &[json!({"status": "pending_tool_output", "tool_call_id": "call-1"})],
+            ),
+            None
+        );
+        assert_eq!(
+            assistant_run_react_replays_completed_tool_call(
+                &decision,
+                &[json!({"status": "completed", "tool_call_id": "call-2"})],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn react_pending_tool_output_detects_missing_and_repeated_pending_calls() {
+        let pending = assistant_run_react_pending_tool_output(&[json!({
+            "status": "tool_call_requested",
+            "tool_call": {"toolCallId": "call-1"}
+        })])
+        .unwrap();
+        assert_eq!(pending.call_id, "call-1");
+        assert!(!pending.repeated);
+
+        let repeated = assistant_run_react_pending_tool_output(&[
+            json!({"status": "tool_calls_emitted", "tool_call_id": "call-2"}),
+            json!({"status": "tool_output_missing", "toolCallId": "call-2"}),
+        ])
+        .unwrap();
+        assert_eq!(repeated.call_id, "call-2");
+        assert!(repeated.repeated);
+
+        assert!(assistant_run_react_pending_tool_output(&[
+            json!({"status": "pending_tool_output", "tool_call_id": "call-3"}),
+            json!({"status": "completed", "tool_call_id": "call-3"}),
+        ])
+        .is_none());
+        assert!(assistant_run_react_pending_tool_output(&[json!({
+            "status": "pending_tool_output"
+        })])
+        .is_none());
+    }
+
+    #[test]
+    fn react_repeats_no_progress_action_requires_two_recent_terminal_failures() {
+        let decision = react_test_decision(
+            AssistantRunReActActionType::RetrieveEvidence,
+            json!({"query": "test"}),
+        );
+
+        assert!(assistant_run_react_repeats_no_progress_action(
+            &decision,
+            &[
+                json!({"status": "rejected", "action_type": "retrieve_evidence"}),
+                json!({"status": "failed", "actionType": "retrieve_evidence"}),
+            ],
+        ));
+        assert!(!assistant_run_react_repeats_no_progress_action(
+            &decision,
+            &[json!({"status": "rejected", "action_type": "retrieve_evidence"})],
+        ));
+        assert!(!assistant_run_react_repeats_no_progress_action(
+            &decision,
+            &[
+                json!({"status": "rejected", "action_type": "retrieve_evidence"}),
+                json!({"status": "failed", "actionType": "read_document_detail"}),
+            ],
+        ));
+        assert!(!assistant_run_react_repeats_no_progress_action(
+            &decision,
+            &[
+                json!({"status": "rejected", "action_type": "retrieve_evidence"}),
+                json!({"status": "denied", "actionType": "retrieve_evidence"}),
+                json!({"status": "completed", "action_type": "retrieve_evidence"}),
+            ],
         ));
     }
 }

@@ -43881,72 +43881,6 @@ fn build_react_protocol_repair_at_step(
     None
 }
 
-struct AssistantRunReactPendingToolOutput {
-    call_id: String,
-    repeated: bool,
-}
-
-fn assistant_run_react_replays_completed_tool_call(
-    decision: &AssistantRunNextAction,
-    observations: &[Value],
-) -> Option<String> {
-    let call_id = assistant_run_react_call_id_from_value(&decision.arguments)?;
-    let already_completed = observations.iter().any(|observation| {
-        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
-            && assistant_run_react_observation_status(observation).is_some_and(|status| {
-                matches!(status, "completed" | "failed" | "rejected" | "denied")
-            })
-    });
-    already_completed.then_some(call_id)
-}
-
-fn assistant_run_react_pending_tool_output(
-    observations: &[Value],
-) -> Option<AssistantRunReactPendingToolOutput> {
-    let pending_observation = observations.iter().rev().find(|observation| {
-        assistant_run_react_observation_status(observation).is_some_and(|status| {
-            matches!(
-                status,
-                "tool_calls_emitted"
-                    | "tool_call_requested"
-                    | "pending_tool_output"
-                    | "tool_output_missing"
-            )
-        })
-    })?;
-    let call_id = assistant_run_react_observation_call_id(pending_observation)?;
-    let resolved = observations.iter().any(|observation| {
-        assistant_run_react_observation_call_id(observation).as_deref() == Some(call_id.as_str())
-            && assistant_run_react_observation_status(observation).is_some_and(|status| {
-                matches!(status, "completed" | "failed" | "rejected" | "denied")
-            })
-    });
-    if resolved {
-        return None;
-    }
-    let repeated = observations
-        .iter()
-        .rev()
-        .take(2)
-        .filter(|observation| {
-            assistant_run_react_observation_call_id(observation).as_deref()
-                == Some(call_id.as_str())
-                && assistant_run_react_observation_status(observation).is_some_and(|status| {
-                    matches!(
-                        status,
-                        "tool_calls_emitted"
-                            | "tool_call_requested"
-                            | "pending_tool_output"
-                            | "tool_output_missing"
-                    )
-                })
-        })
-        .count()
-        >= 2;
-
-    Some(AssistantRunReactPendingToolOutput { call_id, repeated })
-}
-
 fn build_assistant_run_react_policy_repair_result(
     action: &AssistantRunNextAction,
     message: &str,
@@ -43988,30 +43922,6 @@ fn assistant_run_react_should_repair_terminal_action(
     action.action_type == AssistantRunReactActionType::FinalAnswer
         && assistant_run_react_scope_requires_supply(selected_scope)
         && !assistant_run_react_has_supply_observation(evidence_state, observations)
-}
-
-fn assistant_run_react_repeats_no_progress_action(
-    decision: &AssistantRunNextAction,
-    observations: &[Value],
-) -> bool {
-    let action_type = decision.action_type.as_str();
-    observations
-        .iter()
-        .rev()
-        .take(2)
-        .filter(|observation| {
-            observation
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| matches!(status, "rejected" | "failed" | "denied"))
-                && observation
-                    .get("action_type")
-                    .or_else(|| observation.get("actionType"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| value == action_type)
-        })
-        .count()
-        >= 2
 }
 
 fn react_requested_scope_denial(
