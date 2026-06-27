@@ -195,6 +195,7 @@ mod asset_library_view_support;
 mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
 mod assistant_run_answer_quality_autofix_support;
+mod assistant_run_answer_quality_budget_support;
 mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_context_package_support;
@@ -492,6 +493,7 @@ mod zip_ingest_support;
 
 use assistant_run_answer_policy_support::*;
 use assistant_run_answer_quality_autofix_support::*;
+use assistant_run_answer_quality_budget_support::*;
 #[cfg(test)]
 use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_package_support::*;
@@ -878,10 +880,6 @@ const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
-const ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET: usize = 1;
-const ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET: usize = 3;
-const ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET: usize = 4;
-const ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET: usize = 4;
 const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
 
 #[derive(Clone, Debug)]
@@ -897,14 +895,6 @@ struct AssistantRunReactOutcome {
 struct AssistantRunReactEvent {
     event_name: String,
     payload: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AssistantRunQualityBudget {
-    answer_retry_budget: usize,
-    react_step_budget: usize,
-    premium_action_budget: usize,
-    reason: &'static str,
 }
 
 const STATIC_PAGE_DRAFT_LIST_DEFAULT_LIMIT: i64 = 12;
@@ -41262,158 +41252,6 @@ fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value
         .collect()
 }
 
-#[cfg(test)]
-fn assistant_run_answer_quality_retry_budget(request: &CreateAssistantRunRequest) -> usize {
-    assistant_run_answer_quality_budget(request).answer_retry_budget
-}
-
-fn assistant_run_answer_quality_budget(
-    request: &CreateAssistantRunRequest,
-) -> AssistantRunQualityBudget {
-    let mut budget = if assistant_run_request_expresses_strong_complaint(request) {
-        AssistantRunQualityBudget {
-            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET,
-            react_step_budget: ASSISTANT_RUN_REACT_MAX_STEPS,
-            premium_action_budget: 1,
-            reason: "strong_complaint",
-        }
-    } else if assistant_run_request_expresses_dissatisfaction(request) {
-        AssistantRunQualityBudget {
-            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET,
-            react_step_budget: ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS,
-            premium_action_budget: 1,
-            reason: "dissatisfied",
-        }
-    } else {
-        AssistantRunQualityBudget {
-            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET,
-            react_step_budget: ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS,
-            premium_action_budget: 0,
-            reason: "default",
-        }
-    };
-    if let Some(env_budget) = assistant_run_answer_quality_retry_budget_from_env() {
-        budget.answer_retry_budget = env_budget.min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET);
-        budget.reason = "env_override";
-    }
-    budget.answer_retry_budget = budget
-        .answer_retry_budget
-        .min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET);
-    budget
-}
-
-fn assistant_run_answer_quality_budget_for_evidence(
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-) -> AssistantRunQualityBudget {
-    let mut budget = assistant_run_answer_quality_budget(request);
-    if budget.reason == "default"
-        && assistant_run_prompt_is_high_risk_quality_task(&request.prompt)
-        && assistant_run_supply_quality_suggests_parse_recovery(evidence_state)
-    {
-        budget.answer_retry_budget = budget.answer_retry_budget.max(2);
-        budget.premium_action_budget = budget.premium_action_budget.max(1);
-        budget.reason = "parse_quality_recovery";
-    }
-    budget
-}
-
-fn assistant_run_answer_quality_retry_budget_from_env() -> Option<usize> {
-    std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-}
-
-fn assistant_run_request_expresses_dissatisfaction(request: &CreateAssistantRunRequest) -> bool {
-    let mut texts = vec![request.prompt.as_str()];
-    texts.extend(
-        request
-            .messages
-            .iter()
-            .rev()
-            .take(6)
-            .map(|message| message.content.as_str()),
-    );
-    texts.into_iter().any(|text| {
-        let lower = text.to_ascii_lowercase();
-        prompt_contains_any(
-            text,
-            &[
-                "不满意",
-                "不太满意",
-                "客户不满",
-                "客户有些不满意",
-                "观感差",
-                "回答很差",
-                "回答太差",
-                "答得差",
-                "答非所问",
-                "不准确",
-                "不准",
-                "不对",
-                "错了",
-                "错误",
-                "乱答",
-                "瞎答",
-                "投诉",
-            ],
-        ) || ascii_prompt_contains_any(
-            &lower,
-            &[
-                "dissatisfied",
-                "unsatisfied",
-                "unhappy",
-                "wrong",
-                "incorrect",
-                "inaccurate",
-                "poor",
-                "bad",
-                "complaint",
-            ],
-        )
-    })
-}
-
-fn assistant_run_request_expresses_strong_complaint(request: &CreateAssistantRunRequest) -> bool {
-    let mut texts = vec![request.prompt.as_str()];
-    texts.extend(
-        request
-            .messages
-            .iter()
-            .rev()
-            .take(6)
-            .map(|message| message.content.as_str()),
-    );
-    texts.into_iter().any(|text| {
-        let lower = text.to_ascii_lowercase();
-        prompt_contains_any(
-            text,
-            &[
-                "严重不满",
-                "很不满意",
-                "非常不满意",
-                "客户很不满意",
-                "反复答错",
-                "多次答错",
-                "严重错误",
-                "线上事故",
-                "投诉",
-            ],
-        ) || ascii_prompt_contains_any(
-            &lower,
-            &[
-                "strong complaint",
-                "formal complaint",
-                "very dissatisfied",
-                "repeatedly wrong",
-                "critical failure",
-                "incident",
-                "escalation",
-            ],
-        )
-    })
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct AssistantRunAnswerQualityJudgeDecision {
     verdict: AssistantRunAnswerQualityJudgeVerdict,
@@ -41503,48 +41341,6 @@ fn assistant_run_answer_quality_judge_should_run(
         return true;
     }
     assistant_run_answer_is_short_for_structured_request(output_text, request, evidence_state)
-}
-
-fn assistant_run_prompt_is_high_risk_quality_task(prompt: &str) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    prompt_contains_any(
-        prompt,
-        &[
-            "是谁",
-            "谁是",
-            "哪些",
-            "多少",
-            "统计",
-            "汇总",
-            "排序",
-            "排行",
-            "排名",
-            "表格",
-            "出表",
-            "缺勤",
-            "工时",
-            "最长",
-            "最短",
-            "公司名",
-            "智能家居",
-            "智能梯控",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "who",
-            "which",
-            "how many",
-            "count",
-            "statistic",
-            "sort",
-            "rank",
-            "table",
-            "absence",
-            "work hour",
-        ],
-    ) || prompt_requests_document_entity_scan(prompt)
-        || prompt_requests_deterministic_aggregate_supply(prompt)
 }
 
 fn assistant_run_supply_quality_needs_judge(evidence_state: &Value) -> bool {

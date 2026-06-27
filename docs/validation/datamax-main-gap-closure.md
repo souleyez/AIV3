@@ -2,6 +2,36 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Budget Helper Local Verification
+
+- Scope:
+  - continue #692 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality retry budget helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_budget_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved retry-budget constants and `AssistantRunQualityBudget` into `assistant_run_answer_quality_budget_support`;
+  - moved dissatisfaction and strong-complaint detection helpers into the same module;
+  - moved high-risk quality prompt detection and evidence-aware parse recovery budget escalation into the same module;
+  - existing answer-quality judge/retry paths continue to call the same helper names through crate-local import.
+- Behavior preserved:
+  - default budget remains 1, dissatisfied budget remains 3, strong complaint budget remains 4, and all answer retry budgets are still clamped to 4;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET` override still wins and is clamped by the same max budget;
+  - recent user messages are still considered when detecting dissatisfaction or strong complaint;
+  - high-risk structured questions plus parse-quality recovery evidence still get increased answer retry and premium action budget;
+  - prompt matching still combines Chinese keywords, ASCII keywords, document entity scan intent, and deterministic aggregate intent.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_budget_support --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api answer_quality_budget --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 53/53 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings;
+  - `git diff --check`: passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Enqueue/Execution Helper Local Verification
 
 - Scope:
