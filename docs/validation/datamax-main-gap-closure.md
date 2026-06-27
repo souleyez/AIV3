@@ -2,6 +2,38 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Answer-Quality Supply Case Helper Local Verification
+
+- Scope:
+  - continue #686 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality low-quality case supply source/status helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_supply_quality_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_answer_quality_case_supply_sources` into `assistant_run_supply_quality_support`;
+  - moved `assistant_run_answer_quality_case_supply_status` into `assistant_run_supply_quality_support`;
+  - kept answer-quality low-quality case package construction using the same helper names through crate-local import.
+- Behavior preserved:
+  - supply source extraction still accepts both camelCase and snake_case count fields;
+  - duplicate source categories are still emitted once;
+  - fact snapshot availability still has priority over spreadsheet row analysis status;
+  - missing `supply_quality` still returns empty sources and `unknown` status.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api answer_quality_case_supply --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_collects_weak_insufficient_case --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_collects_missing_report_link_case --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_preserves_recovery_followup_context --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_budget_allows_parse_recovery_premium_action --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - #686 is locally verified and ready for scoped commit/push/CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Supply-Quality Parse Recovery Helper Local Verification
 
 - Scope:

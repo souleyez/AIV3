@@ -41446,67 +41446,6 @@ fn assistant_run_answer_quality_case_selected_scope_summary(selected_scope: &Val
     })
 }
 
-fn assistant_run_answer_quality_case_supply_sources(evidence_state: &Value) -> Vec<String> {
-    let Some(supply_quality) = evidence_state.get("supply_quality") else {
-        return Vec::new();
-    };
-    let mut sources = Vec::new();
-    for (field, source) in [
-        ("indexedEvidenceCount", "retrieval_evidence"),
-        ("indexed_evidence_count", "retrieval_evidence"),
-        ("datasetEntityScanCount", "dataset_entity_scan"),
-        ("dataset_entity_scan_count", "dataset_entity_scan"),
-        ("datasetFactSnapshotCount", "dataset_fact_snapshot"),
-        ("dataset_fact_snapshot_count", "dataset_fact_snapshot"),
-        ("spreadsheetRowAnalysisCount", "spreadsheet_row_analysis"),
-        ("spreadsheet_row_analysis_count", "spreadsheet_row_analysis"),
-        ("mediaContextCount", "media_context"),
-        ("media_context_count", "media_context"),
-        ("assetProfileHintCount", "asset_profile_hint"),
-        ("asset_profile_hint_count", "asset_profile_hint"),
-    ] {
-        if supply_quality
-            .get(field)
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            > 0
-            && !sources.iter().any(|existing| existing == source)
-        {
-            sources.push(source.to_string());
-        }
-    }
-    sources
-}
-
-fn assistant_run_answer_quality_case_supply_status(evidence_state: &Value) -> String {
-    let Some(supply_quality) = evidence_state.get("supply_quality") else {
-        return "unknown".to_string();
-    };
-    if supply_quality
-        .get("datasetFactSnapshotCount")
-        .or_else(|| supply_quality.get("dataset_fact_snapshot_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
-        return "fact_snapshot_available".to_string();
-    }
-    if supply_quality
-        .get("spreadsheetRowAnalysisCount")
-        .or_else(|| supply_quality.get("spreadsheet_row_analysis_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
-        return "spreadsheet_row_analysis_available".to_string();
-    }
-    supply_quality
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 fn assistant_run_answer_quality_exhausted_controlled_answer(
     evidence_state: &Value,
     request: &CreateAssistantRunRequest,
