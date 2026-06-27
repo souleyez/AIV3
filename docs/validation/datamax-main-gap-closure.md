@@ -28376,6 +28376,10 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with existing Next middleware deprecation and Turbopack trace warnings only;
   - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- GitHub Actions:
+  - DataMax CI run `28291424335` for commit `1d32ed63e21fc77ae4fff561d7169c3f91ccbd47` passed;
+  - `Rust Minimal` passed, including Rust format, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` passed, including smoke script syntax, deterministic smoke self-tests, generated public integration guide check, and web app build.
 - Safety:
   - no public API URL, auth method, required request field, existing response field, production schema, model routing config, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
