@@ -31,8 +31,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
   - `git diff --check`: passed.
+- GitHub:
+  - pushed `141f40f7 Extract react step budget helpers` to `origin/main`;
+  - DataMax CI run `28284189047` for `141f40f77c6b39e62dfcdcd32e3a270efe7ec615` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - #679 is locally complete and awaiting GitHub push plus DataMax CI observation;
+  - `origin/main` includes the #679 assistant-run ReAct step budget helper split;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
