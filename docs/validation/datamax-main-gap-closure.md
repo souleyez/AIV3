@@ -31,8 +31,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo check -q -p platform-api`: passed;
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- GitHub:
+  - pushed `3e00392d Extract react protocol repair helpers` to `origin/main`;
+  - DataMax CI run `28283470275` for `3e00392d43da35759c705d91df66d9500eb4e296` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - local worktree contains the #678 assistant-run ReAct protocol repair helper split, pending GitHub push and CI observation;
+  - `origin/main` includes the #678 assistant-run ReAct protocol repair helper split;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
