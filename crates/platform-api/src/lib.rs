@@ -43777,182 +43777,6 @@ fn build_assistant_run_react_continue_provider_input(
     sections.join("\n\n")
 }
 
-fn assistant_run_pending_model_completion_requests(output_artifacts: &Value) -> Vec<Value> {
-    value_array(output_artifacts.clone())
-        .into_iter()
-        .rev()
-        .filter_map(|artifact| assistant_run_safe_model_completion_request(&artifact))
-        .take(3)
-        .collect()
-}
-
-fn assistant_run_safe_model_completion_request(artifact: &Value) -> Option<Value> {
-    let request = assistant_run_model_completion_request_candidate(artifact)?;
-    if request.get("kind").and_then(Value::as_str)
-        != Some("video_extraction_model_completion_turn_request")
-    {
-        return None;
-    }
-    if request.get("required").and_then(Value::as_bool) != Some(true) {
-        return None;
-    }
-
-    let mut safe = Map::new();
-    assistant_run_copy_safe_scalar_fields(
-        &mut safe,
-        request,
-        &[
-            "kind",
-            "version",
-            "required",
-            "turn_owner",
-            "source_event",
-            "instruction",
-        ],
-    );
-
-    if let Some(context) = request.get("completion_context") {
-        let mut safe_context = Map::new();
-        assistant_run_copy_safe_scalar_fields(
-            &mut safe_context,
-            context,
-            &[
-                "title",
-                "status",
-                "warning_count",
-                "has_pptx",
-                "has_video_slides_markdown",
-                "has_subtitle_page_map",
-            ],
-        );
-        for key in [
-            "ready_file_kinds",
-            "html_artifact_ids",
-            "warning_codes",
-            "missing_required_file_kinds",
-        ] {
-            assistant_run_insert_safe_scalar_array_field(&mut safe_context, context, key, key, 20);
-        }
-        if let Some(primary_next_action) = context.get("primary_next_action") {
-            if let Some(safe_action) =
-                assistant_run_safe_model_completion_action(primary_next_action)
-            {
-                safe_context.insert("primary_next_action".to_string(), safe_action);
-            }
-        }
-        if !safe_context.is_empty() {
-            safe.insert(
-                "completion_context".to_string(),
-                Value::Object(safe_context),
-            );
-        }
-    }
-
-    if let Some(answer_contract) = request.get("answer_contract") {
-        let mut safe_contract = Map::new();
-        assistant_run_copy_safe_scalar_fields(
-            &mut safe_contract,
-            answer_contract,
-            &[
-                "must_write_in_model_voice",
-                "must_reference_observation_only",
-                "must_not_claim_missing_files",
-                "must_not_include_private_paths_or_urls",
-                "must_not_request_login_cookie_or_recording_bypass",
-                "must_keep_missing_items_explicit",
-                "no_host_composed_answer",
-            ],
-        );
-        if !safe_contract.is_empty() {
-            safe.insert("answer_contract".to_string(), Value::Object(safe_contract));
-        }
-    }
-
-    let mut source_artifact = Map::new();
-    assistant_run_copy_safe_scalar_fields(
-        &mut source_artifact,
-        artifact,
-        &[
-            "type",
-            "id",
-            "title",
-            "assistant_run_id",
-            "document_id",
-            "dataset_id",
-            "status",
-        ],
-    );
-    if !source_artifact.is_empty() {
-        safe.insert(
-            "source_artifact".to_string(),
-            Value::Object(source_artifact),
-        );
-    }
-
-    (!safe.is_empty()).then_some(Value::Object(safe))
-}
-
-fn assistant_run_model_completion_request_candidate<'a>(artifact: &'a Value) -> Option<&'a Value> {
-    for candidate in [
-        artifact.get("model_completion_turn_request"),
-        artifact.pointer("/completion_follow_up/model_follow_up"),
-        artifact.pointer("/completionFollowUp/modelFollowUp"),
-        artifact.pointer("/payload/model_completion_turn_request"),
-        artifact.pointer("/payload/completion_follow_up/model_follow_up"),
-        artifact.pointer("/payload/completionFollowUp/modelFollowUp"),
-    ] {
-        if candidate
-            .and_then(|value| value.get("kind"))
-            .and_then(Value::as_str)
-            == Some("video_extraction_model_completion_turn_request")
-        {
-            return candidate;
-        }
-    }
-    None
-}
-
-fn assistant_run_copy_safe_scalar_fields(
-    target: &mut Map<String, Value>,
-    source: &Value,
-    keys: &[&str],
-) {
-    for key in keys {
-        assistant_run_insert_safe_scalar_field(target, source, key, key);
-    }
-}
-
-fn assistant_run_insert_safe_scalar_array_field(
-    target: &mut Map<String, Value>,
-    source: &Value,
-    source_key: &str,
-    target_key: &str,
-    limit: usize,
-) {
-    if let Some(items) = source.get(source_key).and_then(Value::as_array) {
-        let safe_items = items
-            .iter()
-            .take(limit)
-            .filter_map(assistant_run_safe_artifact_scalar)
-            .collect::<Vec<_>>();
-        target.insert(target_key.to_string(), Value::Array(safe_items));
-    }
-}
-
-fn assistant_run_safe_model_completion_action(action: &Value) -> Option<Value> {
-    if let Some(value) = assistant_run_safe_artifact_scalar(action) {
-        return Some(value);
-    }
-
-    let mut safe_action = Map::new();
-    assistant_run_copy_safe_scalar_fields(
-        &mut safe_action,
-        action,
-        &["kind", "action", "code", "label", "summary"],
-    );
-    (!safe_action.is_empty()).then_some(Value::Object(safe_action))
-}
-
 fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
     runtime_mode != "placeholder" && env_flag("ASSISTANT_RUN_REACT_ENABLED", false)
 }
@@ -53244,7 +53068,7 @@ fn assistant_run_static_page_module_briefs(current_artifact: &Value) -> Vec<Valu
         .collect()
 }
 
-fn assistant_run_insert_safe_scalar_field(
+pub(crate) fn assistant_run_insert_safe_scalar_field(
     target: &mut Map<String, Value>,
     source: &Value,
     source_key: &str,
@@ -53258,7 +53082,24 @@ fn assistant_run_insert_safe_scalar_field(
     }
 }
 
-fn assistant_run_safe_artifact_scalar(value: &Value) -> Option<Value> {
+fn assistant_run_insert_safe_scalar_array_field(
+    target: &mut Map<String, Value>,
+    source: &Value,
+    source_key: &str,
+    target_key: &str,
+    limit: usize,
+) {
+    if let Some(items) = source.get(source_key).and_then(Value::as_array) {
+        let safe_items = items
+            .iter()
+            .take(limit)
+            .filter_map(assistant_run_safe_artifact_scalar)
+            .collect::<Vec<_>>();
+        target.insert(target_key.to_string(), Value::Array(safe_items));
+    }
+}
+
+pub(crate) fn assistant_run_safe_artifact_scalar(value: &Value) -> Option<Value> {
     match value {
         Value::Bool(_) | Value::Number(_) => Some(value.clone()),
         Value::String(text) => Some(json!(truncate_scope_candidate_text(text.trim()))),
