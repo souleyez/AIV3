@@ -2,6 +2,37 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Output Validation Helper Local Verification
+
+- Scope:
+  - continue #690 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality autofix output validation helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_autofix_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_answer_quality_autofix_output_validation` into `assistant_run_answer_quality_autofix_support`;
+  - moved answer-quality autofix failure type allowlist into `assistant_run_answer_quality_autofix_support`;
+  - moved answer-quality autofix file allowlist into `assistant_run_answer_quality_autofix_support`;
+  - kept fixed-task output validation using the same helper name through crate-local import.
+- Behavior preserved:
+  - output validation still accepts only `template_id=answer_quality_autofix`;
+  - status and failure type validation semantics are unchanged;
+  - `not_system_defect`, `needs_human`, `failed`, and `patch_ready` branches are unchanged;
+  - patch-ready output still requires changed files, tests, rollback notes, risk level, and allowed files;
+  - high-risk patch-ready output still routes to human review and keeps auto-apply disabled.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: passed, 22/22 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Current state:
+  - local workspace contains the #690 assistant-run answer-quality autofix output validation helper split;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Answer-Quality Autofix Fixed-Task Helper Local Verification
 
 - Scope:
