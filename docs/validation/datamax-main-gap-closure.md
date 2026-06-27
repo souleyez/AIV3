@@ -2,6 +2,34 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Supply-Quality Parse Recovery Helper Local Verification
+
+- Scope:
+  - continue #685 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the supply-quality parse recovery signal helper out of `lib.rs` into `crates/platform-api/src/assistant_run_supply_quality_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_supply_quality_suggests_parse_recovery` into `assistant_run_supply_quality_support`;
+  - kept answer-quality retry budget and low-quality case package call sites using the same helper name through crate-local import.
+- Behavior preserved:
+  - parse recovery is still suggested only from `evidence_state.supply_quality`;
+  - `lowTextEvidenceCount`, `documentDegradedParseCount`, `documentFailedCount`, or `documentReparsingCount` greater than zero still triggers recovery;
+  - `notes` containing `low_text_document_evidence` or `parse_quality_degraded` still triggers recovery;
+  - missing `supply_quality` or clean supply quality still does not trigger recovery.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api supply_quality_suggests_parse_recovery --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_budget_allows_parse_recovery_premium_action --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - #685 is locally verified and ready for scoped commit/push/CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Customer-Facing Sanitizer Helper Local Verification
 
 - Scope:

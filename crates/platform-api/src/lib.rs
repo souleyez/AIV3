@@ -41814,36 +41814,6 @@ fn assistant_run_answer_quality_retry_budget_from_env() -> Option<usize> {
         .and_then(|value| value.parse::<usize>().ok())
 }
 
-fn assistant_run_supply_quality_suggests_parse_recovery(evidence_state: &Value) -> bool {
-    let Some(supply_quality) = evidence_state.get("supply_quality") else {
-        return false;
-    };
-    [
-        "lowTextEvidenceCount",
-        "documentDegradedParseCount",
-        "documentFailedCount",
-        "documentReparsingCount",
-    ]
-    .iter()
-    .any(|key| {
-        supply_quality
-            .get(*key)
-            .and_then(Value::as_u64)
-            .map(|count| count > 0)
-            .unwrap_or(false)
-    }) || supply_quality
-        .get("notes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|note| {
-            matches!(
-                note.as_str(),
-                Some("low_text_document_evidence") | Some("parse_quality_degraded")
-            )
-        })
-}
-
 fn assistant_run_request_expresses_dissatisfaction(request: &CreateAssistantRunRequest) -> bool {
     let mut texts = vec![request.prompt.as_str()];
     texts.extend(

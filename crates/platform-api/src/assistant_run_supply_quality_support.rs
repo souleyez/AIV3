@@ -366,6 +366,36 @@ pub(crate) fn assistant_run_recommended_supply_actions(
     actions
 }
 
+pub(crate) fn assistant_run_supply_quality_suggests_parse_recovery(evidence_state: &Value) -> bool {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    [
+        "lowTextEvidenceCount",
+        "documentDegradedParseCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    }) || supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| {
+            matches!(
+                note.as_str(),
+                Some("low_text_document_evidence") | Some("parse_quality_degraded")
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +534,53 @@ mod tests {
                 "extract_video_ppt_transcript"
             ]
         );
+    }
+
+    #[test]
+    fn supply_quality_suggests_parse_recovery_from_counts() {
+        assert!(assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "lowTextEvidenceCount": 1,
+                    "documentDegradedParseCount": 0,
+                    "documentFailedCount": 0,
+                    "documentReparsingCount": 0
+                }
+            })
+        ));
+        assert!(assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "documentDegradedParseCount": 2
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn supply_quality_suggests_parse_recovery_from_notes_and_ignores_clean_supply() {
+        assert!(assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "notes": ["parse_quality_degraded"]
+                }
+            })
+        ));
+        assert!(!assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "lowTextEvidenceCount": 0,
+                    "documentDegradedParseCount": 0,
+                    "documentFailedCount": 0,
+                    "documentReparsingCount": 0,
+                    "notes": ["indexed_retrieval_evidence_available"]
+                }
+            })
+        ));
+        assert!(!assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "status": "supplied"
+            })
+        ));
     }
 }
