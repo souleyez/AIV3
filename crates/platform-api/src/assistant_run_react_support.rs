@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::react_agent_tools::react_final_answer_content_is_raw_observation;
 use serde_json::{json, Value};
 
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
@@ -155,6 +156,98 @@ pub(crate) fn assistant_run_react_returned_count(observation: &Value) -> usize {
         .and_then(Value::as_u64)
         .map(|value| value as usize)
         .unwrap_or_default()
+}
+
+pub(crate) fn assistant_run_react_direct_natural_answer_from_invalid_output(
+    output_text: &str,
+) -> Option<String> {
+    let trimmed = output_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if react_final_answer_content_is_raw_observation(trimmed)
+        || assistant_run_react_output_is_json_payload(trimmed)
+        || assistant_run_react_output_contains_internal_marker(trimmed)
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+pub(crate) fn assistant_run_react_output_is_json_payload(output_text: &str) -> bool {
+    let Some(candidate) = assistant_run_react_json_payload_candidate(output_text) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&candidate).is_ok()
+}
+
+pub(crate) fn assistant_run_react_json_payload_candidate(output_text: &str) -> Option<String> {
+    let trimmed = output_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```JSON"))
+        .or_else(|| trimmed.strip_prefix("```"));
+    if let Some(fenced) = fenced {
+        let inner = fenced.trim();
+        let inner = inner.strip_suffix("```").unwrap_or(inner).trim();
+        return Some(inner.to_string());
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+pub(crate) fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
+    let normalized = output_text.to_ascii_lowercase();
+    [
+        "[tool_call]",
+        "[/tool_call]",
+        "<tool_call",
+        "</tool_call",
+        "execution_trail",
+        "react_trace",
+        "tool_trace",
+        "runtime_manifest",
+        "provider_raw",
+        "safe_error_code",
+        "requires_confirmation",
+        "parse_degraded",
+        "low_text_coverage",
+        "model_status",
+        "retrieve_evidence:",
+        "read_document_detail:",
+        "upgrade_parse_vlm:",
+        "recall_conversation_memory:",
+        "codex_host_task:",
+        "create_static_page_draft:",
+        "update_static_page_module:",
+        "submit_static_page_image_preview:",
+        "render_static_page:",
+        "publish_static_page_revision:",
+        "create_report_draft:",
+        "\"action_type\"",
+        "\"actiontype\"",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+        || [
+            "[observation]",
+            "[/observation]",
+            "<observation",
+            "</observation",
+            "\"observation\"",
+            "\"observations\"",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+        || normalized.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("observation:") || line.starts_with("observations:")
+        })
 }
 
 #[cfg(test)]
@@ -316,5 +409,54 @@ mod tests {
             ),
             9
         );
+    }
+
+    #[test]
+    fn react_direct_natural_answer_accepts_only_plain_customer_text() {
+        assert_eq!(
+            assistant_run_react_direct_natural_answer_from_invalid_output(
+                "  可以，先按普通问答回答。  "
+            ),
+            Some("可以，先按普通问答回答。".to_string())
+        );
+        assert!(assistant_run_react_direct_natural_answer_from_invalid_output("").is_none());
+        assert!(
+            assistant_run_react_direct_natural_answer_from_invalid_output(
+                r#"{"status":"ok","action_type":"retrieve_evidence","items":[]}"#,
+            )
+            .is_none()
+        );
+        assert!(
+            assistant_run_react_direct_natural_answer_from_invalid_output(
+                "runtime_manifest: {\"provider_raw\": true}",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn react_json_payload_candidate_handles_fenced_and_raw_json() {
+        assert_eq!(
+            assistant_run_react_json_payload_candidate("```json\n{\"status\":\"ok\"}\n```"),
+            Some("{\"status\":\"ok\"}".to_string())
+        );
+        assert_eq!(
+            assistant_run_react_json_payload_candidate(" [1,2] "),
+            Some("[1,2]".to_string())
+        );
+        assert!(assistant_run_react_json_payload_candidate("not json").is_none());
+    }
+
+    #[test]
+    fn react_internal_marker_blocks_structural_observation_not_plain_word() {
+        assert!(!assistant_run_react_output_contains_internal_marker(
+            "My observation is that the answer can be plain text."
+        ));
+        assert!(assistant_run_react_output_contains_internal_marker(
+            "Observation: {\"items\":[{\"summary\":\"内部供料\"}]}",
+        ));
+        assert!(assistant_run_react_output_contains_internal_marker(
+            "[tool_call]{\"action_type\":\"retrieve_evidence\"}[/tool_call]",
+        ));
     }
 }

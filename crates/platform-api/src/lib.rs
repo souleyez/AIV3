@@ -697,7 +697,7 @@ use react_agent_contract::{
 };
 use react_agent_tools::{
     assistant_run_react_action_label, assistant_run_react_policy_observation,
-    execute_assistant_run_react_action, react_final_answer_content_is_raw_observation,
+    execute_assistant_run_react_action,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
 #[cfg(test)]
@@ -34564,98 +34564,6 @@ fn assistant_run_create_error_with_run_context(
     error
 }
 
-fn assistant_run_react_direct_natural_answer_from_invalid_output(
-    output_text: &str,
-) -> Option<String> {
-    let trimmed = output_text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if react_final_answer_content_is_raw_observation(trimmed)
-        || assistant_run_react_output_is_json_payload(trimmed)
-        || assistant_run_react_output_contains_internal_marker(trimmed)
-    {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-fn assistant_run_react_output_is_json_payload(output_text: &str) -> bool {
-    let Some(candidate) = assistant_run_react_json_payload_candidate(output_text) else {
-        return false;
-    };
-    serde_json::from_str::<Value>(&candidate).is_ok()
-}
-
-fn assistant_run_react_json_payload_candidate(output_text: &str) -> Option<String> {
-    let trimmed = output_text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let fenced = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```JSON"))
-        .or_else(|| trimmed.strip_prefix("```"));
-    if let Some(fenced) = fenced {
-        let inner = fenced.trim();
-        let inner = inner.strip_suffix("```").unwrap_or(inner).trim();
-        return Some(inner.to_string());
-    }
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
-pub(crate) fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
-    let normalized = output_text.to_ascii_lowercase();
-    [
-        "[tool_call]",
-        "[/tool_call]",
-        "<tool_call",
-        "</tool_call",
-        "execution_trail",
-        "react_trace",
-        "tool_trace",
-        "runtime_manifest",
-        "provider_raw",
-        "safe_error_code",
-        "requires_confirmation",
-        "parse_degraded",
-        "low_text_coverage",
-        "model_status",
-        "retrieve_evidence:",
-        "read_document_detail:",
-        "upgrade_parse_vlm:",
-        "recall_conversation_memory:",
-        "codex_host_task:",
-        "create_static_page_draft:",
-        "update_static_page_module:",
-        "submit_static_page_image_preview:",
-        "render_static_page:",
-        "publish_static_page_revision:",
-        "create_report_draft:",
-        "\"action_type\"",
-        "\"actiontype\"",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-        || [
-            "[observation]",
-            "[/observation]",
-            "<observation",
-            "</observation",
-            "\"observation\"",
-            "\"observations\"",
-        ]
-        .iter()
-        .any(|marker| normalized.contains(marker))
-        || normalized.lines().any(|line| {
-            let line = line.trim_start();
-            line.starts_with("observation:") || line.starts_with("observations:")
-        })
-}
-
 fn assistant_run_sanitize_customer_facing_output_artifacts(
     output_artifacts: Vec<Value>,
 ) -> Vec<Value> {
@@ -51906,6 +51814,15 @@ fn assistant_run_scope_with_visible_dataset_range(
         || selected_scope_has_document_selection(&selected_scope)
     {
         return selected_scope;
+    }
+    let candidate_policy = assistant_run_scope_candidate_policy(&selected_scope);
+    if candidate_policy == "ordinary_chat_without_forced_dataset"
+        && selected_dataset_ids_from_scope(&selected_scope).is_empty()
+    {
+        return assistant_run_scope_without_unavailable_requested_datasets(
+            selected_scope,
+            visible_datasets,
+        );
     }
     if assistant_run_scope_intent(&selected_scope) == "ordinary_chat" {
         return assistant_run_scope_without_unavailable_requested_datasets(
@@ -99676,6 +99593,55 @@ retrieve_evidence:
         assert_eq!(
             merged["supply_policy"]["recommendedActions"],
             json!(["retrieval.search"])
+        );
+    }
+
+    #[test]
+    fn assistant_run_visible_dataset_range_respects_no_forced_dataset_policy() {
+        let now = Utc::now();
+        let visible_dataset = Dataset {
+            id: DatasetId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            key: "support-kb".to_string(),
+            title: "客服知识库".to_string(),
+            description: Some("客服资料".to_string()),
+            lifecycle: DatasetLifecycle::Active,
+            visibility: DatasetVisibility::Public,
+            default_secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::from([("document_count".to_string(), json!(3))]),
+            created_at: now,
+            updated_at: now,
+        };
+        let planned_scope = json!({
+            "mode": "ordinary_chat",
+            "intent": "data_question",
+            "datasets": [],
+            "supply_policy": {
+                "intent": "data_question",
+                "retrievalPolicy": "not_requested",
+                "candidatePolicy": "ordinary_chat_without_forced_dataset",
+                "recommendedActions": ["ordinary_chat.answer"],
+                "noFakeData": true
+            }
+        });
+
+        let scoped = assistant_run_scope_with_visible_dataset_range(
+            planned_scope,
+            &[visible_dataset],
+            "请只回复 OK",
+        );
+
+        assert_eq!(scoped["mode"], json!("ordinary_chat"));
+        assert_eq!(scoped["datasets"], json!([]));
+        assert_eq!(scoped["selected"], Value::Null);
+        assert_eq!(
+            scoped["supply_policy"]["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+        assert_eq!(
+            scoped["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
         );
     }
 
