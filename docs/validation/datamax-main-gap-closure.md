@@ -2,6 +2,30 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Enqueue/Execution Helper Local Verification
+
+- Scope:
+  - continue #691 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality autofix live enqueue preflight and Codex execution construction out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_autofix_support.rs`;
+  - change only the visibility of shared `codex_host_fixed_task_bundle_manifest`, `codex_host_fixed_task_created_event`, and `platform_env_flag` to `pub(crate)` so the helper module can reuse existing fixed-task wiring.
+- Behavior preserved:
+  - answer-quality autofix still requires `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`;
+  - capability must still be present in `CODEX_HOST_TASK_ALLOWLIST`;
+  - Codex host execution context still carries `capability=answer_quality_autofix`, `template_id=answer_quality_autofix`, fixed task bundle, task-scoped memory policy, and runtime retry count;
+  - initial workflow event remains `codex_host_task.created`;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, runtime model route, or 8-server configuration changed.
+- Verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_support --lib`: 11/11 passed;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: 22/22 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings;
+  - `git diff --check`: passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Output Validation Helper Local Verification
 
 - Scope:

@@ -1,10 +1,20 @@
+use chrono::Utc;
 use contracts::{
     CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
     CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
+    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
+};
+use domain_model::{
+    AssistantRunId, TenantId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId,
+    WorkflowKind,
 };
 use serde_json::{json, Value};
+use workflow_engine::WorkflowCatalog;
 
-use crate::json_value_support::value_array;
+use crate::{
+    codex_host_fixed_task_bundle_manifest, codex_host_fixed_task_created_event, env_csv_contains,
+    json_value_support::value_array, platform_env_flag, ApiError,
+};
 
 pub(crate) fn assistant_run_answer_quality_autofix_fixed_task_from_case(
     case_package: &Value,
@@ -237,6 +247,81 @@ pub(crate) fn assistant_run_answer_quality_autofix_output_validation(output: &Va
     })
 }
 
+pub(crate) fn assistant_run_answer_quality_autofix_live_enqueue_preflight(
+    capability: &str,
+) -> std::result::Result<(), &'static str> {
+    if !platform_env_flag("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", false) {
+        return Err("answer_quality_autofix_disabled");
+    }
+    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+        return Err("codex_host_task_not_allowlisted");
+    }
+    Ok(())
+}
+
+pub(crate) fn assistant_run_answer_quality_autofix_codex_execution(
+    tenant_id: TenantId,
+    workflow_catalog: &WorkflowCatalog,
+    assistant_run_id: AssistantRunId,
+    fixed_task: CodexHostFixedTaskTemplateContextView,
+) -> std::result::Result<(WorkflowExecution, WorkflowEventRecord), ApiError> {
+    let definition = workflow_catalog
+        .find_definition(WorkflowKind::CodexHostTask)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "codex_host_task workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let capability = fixed_task.template_id.as_str().to_string();
+    let request = CodexHostTaskRequestView {
+        assistant_run_id,
+        capability: capability.clone(),
+        task: Some(
+            "Diagnose this DataMax low-quality answer case and produce only the fixed template output."
+                .to_string(),
+        ),
+        local_thread_id: None,
+        fixed_task: Some(fixed_task),
+        task_memory_policy: CodexHostTaskMemoryPolicyView::task_scoped(
+            assistant_run_id,
+            execution_id,
+        ),
+        safety: CodexHostTaskSafetyPolicyView::default(),
+    };
+    let mut context = match request.to_workflow_context() {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    context.insert(
+        "fixed_task_bundle".to_string(),
+        codex_host_fixed_task_bundle_manifest(capability.as_str()),
+    );
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    let execution = WorkflowExecution {
+        id: execution_id,
+        tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    };
+    let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
+    Ok((execution, initial_event))
+}
+
 fn assistant_run_answer_quality_autofix_failure_type_allowed(failure_type: &str) -> bool {
     matches!(
         failure_type,
@@ -264,8 +349,38 @@ fn assistant_run_answer_quality_autofix_file_allowed(file: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
 
     use super::*;
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    struct TestEnvVarRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl TestEnvVarRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for TestEnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn answer_quality_autofix_fixed_task_builds_allowlisted_package() {
@@ -448,6 +563,103 @@ mod tests {
         assert_eq!(
             high_risk["reason"],
             json!("high_risk_requires_human_review")
+        );
+    }
+
+    #[test]
+    fn answer_quality_autofix_live_enqueue_requires_dedicated_flag() {
+        let _lock = env_lock();
+        let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            "static_page_artifact,answer_quality_autofix",
+        );
+        let _autofix_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", "false");
+
+        let decision =
+            assistant_run_answer_quality_autofix_live_enqueue_preflight("answer_quality_autofix");
+
+        assert_eq!(decision, Err("answer_quality_autofix_disabled"));
+    }
+
+    #[test]
+    fn answer_quality_autofix_live_enqueue_allows_explicit_opt_in() {
+        let _lock = env_lock();
+        let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            "static_page_artifact,answer_quality_autofix",
+        );
+        let _autofix_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", "true");
+
+        let decision =
+            assistant_run_answer_quality_autofix_live_enqueue_preflight("answer_quality_autofix");
+
+        assert_eq!(decision, Ok(()));
+    }
+
+    #[test]
+    fn answer_quality_autofix_codex_execution_embeds_fixed_template_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let case_package = json!({
+            "template_id": "answer_quality_autofix",
+            "assistant_run_id": assistant_run_id.to_string(),
+            "low_quality_signals": ["user_complaint"],
+            "user_question": "客户说回答不对",
+            "customer_answer_excerpt": "资料不足。",
+            "evidence_summary": {"answer_supply_sources": ["dataset_fact_snapshot"]},
+            "trace_summary": {"events": ["assistant_run.answer_quality_autofix.case_collected"]}
+        });
+        let fixed_task = assistant_run_answer_quality_autofix_fixed_task_from_case(&case_package)
+            .expect("fixed task");
+
+        let (execution, initial_event) = assistant_run_answer_quality_autofix_codex_execution(
+            TenantId::new(),
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            fixed_task,
+        )
+        .expect("execution");
+
+        assert_eq!(execution.kind, WorkflowKind::CodexHostTask);
+        assert_eq!(
+            execution.context["capability"],
+            json!("answer_quality_autofix")
+        );
+        assert_eq!(
+            execution.context["template_id"],
+            json!("answer_quality_autofix")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["allowed_write_scope"]["files"][0],
+            json!("crates/platform-api/src/lib.rs")
+        );
+        assert_eq!(execution.context["fixed_task_bundle"]["version"], json!(1));
+        assert_eq!(
+            execution.context["fixed_task_bundle"]["template_id"],
+            json!("answer_quality_autofix")
+        );
+        assert!(execution.context["fixed_task_bundle"]["files"]
+            .as_array()
+            .expect("bundle files")
+            .iter()
+            .any(
+                |file| file["path"] == json!("README.md") && file["kind"] == json!("instructions")
+            ));
+        assert_eq!(
+            execution.context["task_memory_policy"]["kind"],
+            json!("task")
+        );
+        assert_eq!(
+            execution.context["task_memory_policy"]["isolated"],
+            json!(true)
+        );
+        assert_eq!(initial_event.event_name, "codex_host_task.created");
+        assert_eq!(
+            initial_event.payload["template_id"],
+            json!("answer_quality_autofix")
         );
     }
 }
