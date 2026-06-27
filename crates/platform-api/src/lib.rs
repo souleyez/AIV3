@@ -53,13 +53,12 @@ use contracts::{
     ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, ClientArtifactView,
     ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
     CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
-    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
-    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
-    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
-    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
-    CreateAssetLibraryRequest, CreateAssetLibraryResponse, CreateAssistantRunRequest,
-    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
-    CreateClientArtifactResponse, CreateClientConfigPackageRequest,
+    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
+    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
+    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
+    ConversationMemoryItemView, CreateAssetLibraryRequest, CreateAssetLibraryResponse,
+    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
+    CreateChatSessionResponse, CreateClientArtifactResponse, CreateClientConfigPackageRequest,
     CreateClientConfigPackageResponse, CreateConversationMemoryItemRequest,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
     CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
@@ -195,6 +194,7 @@ mod asset_library_validation_support;
 mod asset_library_view_support;
 mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
+mod assistant_run_answer_quality_autofix_support;
 mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_context_package_support;
@@ -491,6 +491,7 @@ mod workflow_transition_support;
 mod zip_ingest_support;
 
 use assistant_run_answer_policy_support::*;
+use assistant_run_answer_quality_autofix_support::*;
 #[cfg(test)]
 use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_package_support::*;
@@ -34997,83 +34998,6 @@ fn assistant_run_answer_quality_low_quality_case_package(
 fn assistant_run_answer_quality_report_link_expected(request: &CreateAssistantRunRequest) -> bool {
     assistant_run_xinbai_published_report_link_answer(&request.prompt).is_some()
         || external_channel_prompt_requests_static_page_report_workflow(&request.prompt)
-}
-
-fn assistant_run_answer_quality_autofix_fixed_task_from_case(
-    case_package: &Value,
-) -> Option<CodexHostFixedTaskTemplateContextView> {
-    if case_package.get("template_id").and_then(Value::as_str) != Some("answer_quality_autofix") {
-        return None;
-    }
-    let case_id = case_package
-        .get("case_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            case_package
-                .get("assistant_run_id")
-                .and_then(Value::as_str)
-                .map(|run_id| format!("assistant-run-{run_id}"))
-        });
-    Some(CodexHostFixedTaskTemplateContextView {
-        template_id: CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix,
-        version: 1,
-        assistant_run_id: case_package
-            .get("assistant_run_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        draft_id: None,
-        case_id,
-        dataset_scope: Value::Null,
-        requirements: Value::Null,
-        image2: Value::Null,
-        policies: Value::Null,
-        low_quality_signals: value_array(
-            case_package
-                .get("low_quality_signals")
-                .cloned()
-                .unwrap_or(Value::Null),
-        )
-        .into_iter()
-        .filter_map(|value| value.as_str().map(str::to_string))
-        .collect(),
-        user_question: case_package
-            .get("user_question")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        customer_answer: case_package
-            .get("customer_answer_excerpt")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        evidence_summary: case_package
-            .get("evidence_summary")
-            .cloned()
-            .unwrap_or(Value::Null),
-        trace_summary: case_package
-            .get("trace_summary")
-            .cloned()
-            .unwrap_or(Value::Null),
-        allowed_write_scope: Some(assistant_run_answer_quality_autofix_allowed_write_scope()),
-        human_review_policy:
-            CodexHostFixedTaskHumanReviewPolicyView::AutoForDiagnosisAndPatchProposal,
-    })
-}
-
-fn assistant_run_answer_quality_autofix_allowed_write_scope() -> CodexHostFixedTaskWriteScopeView {
-    CodexHostFixedTaskWriteScopeView {
-        files: vec![
-            "crates/platform-api/src/lib.rs".to_string(),
-            "fixtures/document-quality/**".to_string(),
-            "scripts/run-document-quality-smoke.ps1".to_string(),
-            "scripts/run-v3-quality-gate-smoke.ps1".to_string(),
-            "docs/validation/**".to_string(),
-        ],
-        symbols: vec![
-            "assistant_run_answer_quality_*".to_string(),
-            "assistant_run_react_*".to_string(),
-            "assistant_run_supply_quality_*".to_string(),
-        ],
-    }
 }
 
 async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
