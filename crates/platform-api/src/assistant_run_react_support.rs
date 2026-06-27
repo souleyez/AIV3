@@ -1,7 +1,11 @@
 use std::collections::BTreeSet;
 
-use crate::react_agent_contract::AssistantRunReActDecision;
+use crate::react_agent_contract::{AssistantRunReActActionType, AssistantRunReActDecision};
 use crate::react_agent_tools::react_final_answer_content_is_raw_observation;
+use crate::{
+    assistant_run_evidence_supplied_count, assistant_run_scope_intent,
+    selected_dataset_ids_from_scope, selected_scope_requests_conversation_memory,
+};
 use serde_json::{json, Value};
 
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
@@ -387,10 +391,53 @@ pub(crate) fn assistant_run_react_repeats_no_progress_action(
         >= 2
 }
 
+pub(crate) fn assistant_run_react_should_repair_terminal_action(
+    action: &AssistantRunReActDecision,
+    selected_scope: &Value,
+    evidence_state: &Value,
+    observations: &[Value],
+) -> bool {
+    action.action_type == AssistantRunReActActionType::FinalAnswer
+        && assistant_run_react_scope_requires_supply(selected_scope)
+        && !assistant_run_react_has_supply_observation(evidence_state, observations)
+}
+
+pub(crate) fn assistant_run_react_scope_requires_supply(selected_scope: &Value) -> bool {
+    assistant_run_scope_intent(selected_scope) != "ordinary_chat"
+        && (!selected_dataset_ids_from_scope(selected_scope).is_empty()
+            || selected_scope_requests_conversation_memory(selected_scope))
+}
+
+pub(crate) fn assistant_run_react_has_supply_observation(
+    evidence_state: &Value,
+    observations: &[Value],
+) -> bool {
+    assistant_run_evidence_supplied_count(evidence_state) > 0
+        || observations.iter().any(|observation| {
+            observation
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status == "completed")
+                && observation
+                    .get("action_type")
+                    .or_else(|| observation.get("actionType"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|action_type| {
+                        matches!(
+                            action_type,
+                            "retrieve_evidence"
+                                | "read_document_detail"
+                                | "upgrade_parse_vlm"
+                                | "recall_conversation_memory"
+                        )
+                    })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::react_agent_contract::{AssistantRunReActActionType, AssistantRunReActStatus};
+    use crate::react_agent_contract::AssistantRunReActStatus;
     use serde_json::json;
 
     fn react_test_decision(
@@ -758,6 +805,95 @@ mod tests {
                 json!({"status": "denied", "actionType": "retrieve_evidence"}),
                 json!({"status": "completed", "action_type": "retrieve_evidence"}),
             ],
+        ));
+    }
+
+    #[test]
+    fn react_terminal_action_requires_supply_for_selected_data_scope() {
+        let selected_scope = json!({
+            "mode": "selected",
+            "selected": [{"type": "dataset", "id": "00000000-0000-0000-0000-000000000001"}],
+            "intent": "data_question",
+        });
+        let ordinary_scope = json!({"mode": "ordinary_chat"});
+        let ordinary_selected_scope = json!({
+            "mode": "user_selected",
+            "selected": [{"type": "dataset", "id": "00000000-0000-0000-0000-000000000001"}],
+            "intent": "ordinary_chat",
+        });
+        let final_action = react_test_decision(
+            AssistantRunReActActionType::FinalAnswer,
+            json!({"content": "未供料回答"}),
+        );
+        let retrieve_action =
+            react_test_decision(AssistantRunReActActionType::RetrieveEvidence, json!({}));
+
+        assert!(assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &ordinary_scope,
+            &json!({"status": "not_requested", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &ordinary_selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &retrieve_action,
+            &selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({
+                "status": "completed",
+                "action_type": "retrieve_evidence",
+                "supplied_count": 0,
+            })],
+        ));
+        assert!(!assistant_run_react_should_repair_terminal_action(
+            &final_action,
+            &selected_scope,
+            &json!({
+                "status": "supplied",
+                "supplied_items": [{"type": "retrieval_evidence"}],
+            }),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn react_supply_observation_accepts_whitelisted_completed_actions_only() {
+        assert!(assistant_run_react_has_supply_observation(
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({"status": "completed", "actionType": "read_document_detail"})],
+        ));
+        assert!(assistant_run_react_has_supply_observation(
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({"status": "completed", "action_type": "upgrade_parse_vlm"})],
+        ));
+        assert!(assistant_run_react_has_supply_observation(
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({"status": "completed", "action_type": "recall_conversation_memory"})],
+        ));
+        assert!(!assistant_run_react_has_supply_observation(
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({"status": "failed", "action_type": "retrieve_evidence"})],
+        ));
+        assert!(!assistant_run_react_has_supply_observation(
+            &json!({"status": "empty", "supplied_items": []}),
+            &[json!({"status": "completed", "action_type": "web_search"})],
         ));
     }
 }

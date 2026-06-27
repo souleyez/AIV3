@@ -691,9 +691,11 @@ use model_gateway_status::*;
 use not_found_errors::*;
 use prompt_match_support::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
+#[cfg(test)]
+use react_agent_contract::AssistantRunReActActionType as AssistantRunReactActionType;
 use react_agent_contract::{
-    parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
-    AssistantRunReActDecision as AssistantRunNextAction, AssistantRunReActStatus,
+    parse_assistant_run_next_action, AssistantRunReActDecision as AssistantRunNextAction,
+    AssistantRunReActStatus,
 };
 use react_agent_tools::{
     assistant_run_react_action_label, assistant_run_react_policy_observation,
@@ -43913,17 +43915,6 @@ fn build_assistant_run_react_policy_repair_result(
     }
 }
 
-fn assistant_run_react_should_repair_terminal_action(
-    action: &AssistantRunNextAction,
-    selected_scope: &Value,
-    evidence_state: &Value,
-    observations: &[Value],
-) -> bool {
-    action.action_type == AssistantRunReactActionType::FinalAnswer
-        && assistant_run_react_scope_requires_supply(selected_scope)
-        && !assistant_run_react_has_supply_observation(evidence_state, observations)
-}
-
 fn react_requested_scope_denial(
     decision: &AssistantRunNextAction,
     selected_scope: &Value,
@@ -43961,38 +43952,6 @@ fn react_requested_scope_denial(
     }
 
     None
-}
-
-fn assistant_run_react_scope_requires_supply(selected_scope: &Value) -> bool {
-    assistant_run_scope_intent(selected_scope) != "ordinary_chat"
-        && (!selected_dataset_ids_from_scope(selected_scope).is_empty()
-            || selected_scope_requests_conversation_memory(selected_scope))
-}
-
-fn assistant_run_react_has_supply_observation(
-    evidence_state: &Value,
-    observations: &[Value],
-) -> bool {
-    assistant_run_evidence_supplied_count(evidence_state) > 0
-        || observations.iter().any(|observation| {
-            observation
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| status == "completed")
-                && observation
-                    .get("action_type")
-                    .or_else(|| observation.get("actionType"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|action_type| {
-                        matches!(
-                            action_type,
-                            "retrieve_evidence"
-                                | "read_document_detail"
-                                | "upgrade_parse_vlm"
-                                | "recall_conversation_memory"
-                        )
-                    })
-        })
 }
 
 fn ensure_react_requested_dataset_is_selected(
