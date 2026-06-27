@@ -37,6 +37,31 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Output Validation Helper 8-Server Deployment
+
+- Deployment:
+  - GitHub commit `cb8a9c612` was deployed to 8 server;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `be1a4814e` to `cb8a9c612`;
+  - the first SSH session disconnected during the Rust release build before any service restart;
+  - follow-up inspection showed the build was still running in the background and all four target services remained active;
+  - after the background build completed, a second `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker` passed explicitly;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `HTTP/1.1 200 OK`;
+  - `https://v3.elepcloud.com/`: `HTTP/1.1 200 OK`;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `cb8a9c612`.
+- GitHub Actions:
+  - DataMax CI run `28295001825` for commit `cb8a9c612` completed successfully after deployment;
+  - implementation DataMax CI run `28294791919` for commit `a32db8ba` completed successfully before deployment.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+
 ## 2026-06-27 P5 Assistant Run Answer-Quality Autofix Fixed-Task Helper Local Verification
 
 - Scope:
