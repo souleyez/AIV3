@@ -42724,16 +42724,6 @@ fn assistant_run_answer_quality_retry_evidence_state(
     evidence_state
 }
 
-fn assistant_run_assistant_message_content_from_artifacts(artifacts: &[Value]) -> Option<String> {
-    artifacts
-        .iter()
-        .find(|artifact| artifact.get("type").and_then(Value::as_str) == Some("assistant_message"))
-        .and_then(|artifact| artifact.get("content").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 async fn run_assistant_run_react_for_create(
     state: &AppState,
     request: &CreateAssistantRunRequest,

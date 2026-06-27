@@ -91,6 +91,18 @@ pub(crate) fn assistant_run_react_output_artifacts_from_observations(
     summaries
 }
 
+pub(crate) fn assistant_run_assistant_message_content_from_artifacts(
+    artifacts: &[Value],
+) -> Option<String> {
+    artifacts
+        .iter()
+        .find(|artifact| artifact.get("type").and_then(Value::as_str) == Some("assistant_message"))
+        .and_then(|artifact| artifact.get("content").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 pub(crate) fn bounded_duration_ms(duration_ms: u128) -> u64 {
     duration_ms.min(u64::MAX as u128) as u64
 }
@@ -994,6 +1006,30 @@ mod tests {
                 })
             ]
         );
+    }
+
+    #[test]
+    fn assistant_message_content_from_artifacts_extracts_first_non_empty_message() {
+        let artifacts = vec![
+            json!({"type": "html_artifact", "content": "ignored"}),
+            json!({"type": "assistant_message", "content": "  可以直接展示  "}),
+            json!({"type": "assistant_message", "content": "later ignored"}),
+        ];
+
+        assert_eq!(
+            assistant_run_assistant_message_content_from_artifacts(&artifacts),
+            Some("可以直接展示".to_string())
+        );
+    }
+
+    #[test]
+    fn assistant_message_content_from_artifacts_ignores_missing_or_blank_content() {
+        assert!(assistant_run_assistant_message_content_from_artifacts(&[
+            json!({"type": "assistant_message", "content": "   "}),
+            json!({"type": "assistant_message"}),
+            json!({"type": "html_artifact", "content": "not a message"})
+        ])
+        .is_none());
     }
 
     #[test]
