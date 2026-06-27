@@ -2,6 +2,38 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Customer-Facing Sanitizer Helper Local Verification
+
+- Scope:
+  - continue #684 P5 behavior-preserving engineering governance under `platform-api`;
+  - move customer-facing answer and assistant-message artifact sanitizer helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_sanitize_customer_facing_answer_text` into `assistant_run_react_support`;
+  - moved `assistant_run_sanitize_customer_facing_output_artifacts` into `assistant_run_react_support`;
+  - kept ReAct direct answer, answer-quality retry, ordinary response, and assistant-message artifact cleanup call sites using the same helper names through crate-local import.
+- Behavior preserved:
+  - raw parse status identifiers such as `parse_degraded`, `low_text_coverage`, `document_parse_status`, and `model_status` are still replaced with customer-facing Chinese descriptions;
+  - internal ReAct/tool/observation markers are still blocked with the same customer-facing retry message;
+  - only artifacts with `type=assistant_message` have `content` sanitized;
+  - non-message artifacts and other assistant-message fields are preserved.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 35/35 tests;
+  - `cargo test -q -p platform-api sanitize_customer_facing --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_sanitizer --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_quality_gate_detects_raw_tool_call_protocol_leak --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_react_natural_fallback --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_compact_natural_fallback --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - #684 is locally verified and ready for scoped commit/push/CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Assistant Message Artifact Replace Helper Local Verification
 
 - Scope:

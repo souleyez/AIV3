@@ -34562,50 +34562,6 @@ fn assistant_run_create_error_with_run_context(
     error
 }
 
-fn assistant_run_sanitize_customer_facing_output_artifacts(
-    output_artifacts: Vec<Value>,
-) -> Vec<Value> {
-    output_artifacts
-        .into_iter()
-        .map(|mut artifact| {
-            if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
-                if let Some(content) = artifact
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-                {
-                    set_payload_string(
-                        &mut artifact,
-                        "content",
-                        &assistant_run_sanitize_customer_facing_answer_text(&content),
-                    );
-                }
-            }
-            artifact
-        })
-        .collect()
-}
-
-fn assistant_run_sanitize_customer_facing_answer_text(output_text: &str) -> String {
-    let mut sanitized = output_text.trim().to_string();
-    for (raw, replacement) in [
-        (
-            "low_text_coverage_fallback_unavailable",
-            "解析质量较低，正文未成功提取",
-        ),
-        ("low_text_coverage", "解析质量较低"),
-        ("parse_degraded", "解析质量较低"),
-        ("document_parse_status", "文档解析状态"),
-        ("model_status", "解析状态"),
-    ] {
-        sanitized = sanitized.replace(raw, replacement);
-    }
-    if assistant_run_react_output_contains_internal_marker(&sanitized) {
-        return "本轮回答包含内部检索指令，系统已拦截未直接展示。请稍后重试，我会基于当前可见资料直接给出结论。".to_string();
-    }
-    sanitized
-}
-
 fn build_assistant_run_react_compact_natural_fallback_input(
     user_prompt: &str,
     evidence_state: &Value,

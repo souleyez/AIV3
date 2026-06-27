@@ -122,6 +122,47 @@ pub(crate) fn assistant_run_replace_assistant_message_content(
     output_artifacts
 }
 
+pub(crate) fn assistant_run_sanitize_customer_facing_output_artifacts(
+    output_artifacts: Vec<Value>,
+) -> Vec<Value> {
+    output_artifacts
+        .into_iter()
+        .map(|mut artifact| {
+            if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
+                if let Some(content) = artifact
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                {
+                    artifact["content"] =
+                        json!(assistant_run_sanitize_customer_facing_answer_text(&content));
+                }
+            }
+            artifact
+        })
+        .collect()
+}
+
+pub(crate) fn assistant_run_sanitize_customer_facing_answer_text(output_text: &str) -> String {
+    let mut sanitized = output_text.trim().to_string();
+    for (raw, replacement) in [
+        (
+            "low_text_coverage_fallback_unavailable",
+            "解析质量较低，正文未成功提取",
+        ),
+        ("low_text_coverage", "解析质量较低"),
+        ("parse_degraded", "解析质量较低"),
+        ("document_parse_status", "文档解析状态"),
+        ("model_status", "解析状态"),
+    ] {
+        sanitized = sanitized.replace(raw, replacement);
+    }
+    if assistant_run_react_output_contains_internal_marker(&sanitized) {
+        return "本轮回答包含内部检索指令，系统已拦截未直接展示。请稍后重试，我会基于当前可见资料直接给出结论。".to_string();
+    }
+    sanitized
+}
+
 pub(crate) fn bounded_duration_ms(duration_ms: u128) -> u64 {
     duration_ms.min(u64::MAX as u128) as u64
 }
@@ -1098,6 +1139,49 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn sanitize_customer_facing_answer_text_replaces_internal_parse_status_identifiers() {
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(
+            "当前解析状态为 parse_degraded，原因是 low_text_coverage。",
+        );
+
+        assert!(!sanitized.contains("parse_degraded"));
+        assert!(!sanitized.contains("low_text_coverage"));
+        assert!(sanitized.contains("解析质量较低"));
+    }
+
+    #[test]
+    fn sanitize_customer_facing_answer_text_blocks_internal_markers() {
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(
+            "Observation: {\"items\":[{\"summary\":\"内部供料\"}]}",
+        );
+
+        assert!(sanitized.contains("内部检索指令"));
+        assert!(!sanitized.contains("Observation:"));
+    }
+
+    #[test]
+    fn sanitize_customer_facing_output_artifacts_only_changes_assistant_messages() {
+        let sanitized = assistant_run_sanitize_customer_facing_output_artifacts(vec![
+            json!({
+                "type": "assistant_message",
+                "content": "当前解析状态为 parse_degraded，原因是 low_text_coverage。",
+                "source": "keep"
+            }),
+            json!({
+                "type": "html_artifact",
+                "content": "parse_degraded"
+            }),
+        ]);
+
+        let assistant_content = sanitized[0]["content"].as_str().unwrap_or_default();
+        assert!(!assistant_content.contains("parse_degraded"));
+        assert!(!assistant_content.contains("low_text_coverage"));
+        assert!(assistant_content.contains("解析质量较低"));
+        assert_eq!(sanitized[0]["source"], json!("keep"));
+        assert_eq!(sanitized[1]["content"], json!("parse_degraded"));
     }
 
     #[test]
