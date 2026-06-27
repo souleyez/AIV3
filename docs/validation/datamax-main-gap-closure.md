@@ -29,8 +29,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo check -q -p platform-api`: passed;
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- GitHub:
+  - pushed `dbd4659c Extract react invalid output guard helper` to `origin/main`;
+  - DataMax CI run `28278801864` for `dbd4659c8a312296f61c7616ddc9f8d363e29e5a` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - local tree contains the #671 helper split and documentation updates pending commit/push;
+  - `origin/main` includes the #671 assistant-run ReAct invalid output guard helper split;
   - an unrelated unstaged `crates/assistant-runtime/src/lib.rs` change is present and intentionally not included in this #671 scope;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
