@@ -2,6 +2,35 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run ReAct Observation Summary Helper Local Verification
+
+- Scope:
+  - continue #670 P5 behavior-preserving engineering governance under `platform-api`;
+  - move ReAct observation summary and returned-count helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_react_observation_summary` into `assistant_run_react_support`;
+  - moved `assistant_run_react_returned_count` into `assistant_run_react_support`;
+  - moved the ReAct trace message limit into the support module as a private constant;
+  - kept trace, provider input, natural fallback, and execution-trail call sites using the same helper names through crate-local import.
+- Behavior preserved:
+  - summary keeps `status`, `action_type`/`actionType`, denied count, returned count, detail target count, `safe_error_code`, and `safe_message`;
+  - returned count prefers non-empty `items`, then non-empty `supplied_items`, then `supplied_count`;
+  - `repair_code`/`error_code` and `message` still use ReAct trace redaction;
+  - raw `error` string still maps to `tool_failed` and `工具执行失败`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api assistant_run_react_trace_summary_is_redacted_and_counted --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - local tree contains the #670 helper split and documentation updates pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run ReAct Trace Redaction Helper Local Verification
 
 - Scope:

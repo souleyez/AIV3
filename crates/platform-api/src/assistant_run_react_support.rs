@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
+const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
+
 pub(crate) fn assistant_run_react_completed_event_payload(
     step_index: usize,
     action_type: &str,
@@ -74,6 +76,85 @@ pub(crate) fn redact_react_trace_text(raw: &str, max_chars: usize) -> String {
     } else {
         value
     }
+}
+
+pub(crate) fn assistant_run_react_observation_summary(observation: &Value) -> Value {
+    let status = observation
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let action_type = observation
+        .get("action_type")
+        .or_else(|| observation.get("actionType"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let denied_count = observation
+        .get("denied")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let returned_count = assistant_run_react_returned_count(observation);
+    let detail_target_count = observation
+        .get("detail_target_count")
+        .or_else(|| observation.get("detailTargetCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let safe_error_code = observation
+        .get("repair_code")
+        .or_else(|| observation.get("error_code"))
+        .and_then(Value::as_str)
+        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
+        .or_else(|| {
+            observation
+                .get("error")
+                .and_then(Value::as_str)
+                .map(|_| "tool_failed".to_string())
+        });
+    let safe_message = observation
+        .get("message")
+        .and_then(Value::as_str)
+        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
+        .or_else(|| {
+            observation
+                .get("error")
+                .and_then(Value::as_str)
+                .map(|_| "工具执行失败".to_string())
+        })
+        .unwrap_or_default();
+
+    json!({
+        "status": status,
+        "action_type": action_type,
+        "denied_count": denied_count,
+        "returned_count": returned_count,
+        "detail_target_count": detail_target_count,
+        "safe_error_code": safe_error_code,
+        "safe_message": safe_message,
+    })
+}
+
+pub(crate) fn assistant_run_react_returned_count(observation: &Value) -> usize {
+    if let Some(count) = observation
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0)
+    {
+        return count;
+    }
+    if let Some(count) = observation
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0)
+    {
+        return count;
+    }
+    observation
+        .get("supplied_count")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -197,5 +278,43 @@ mod tests {
     fn bounded_duration_ms_saturates_to_u64_max() {
         assert_eq!(bounded_duration_ms(42), 42);
         assert_eq!(bounded_duration_ms(u128::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn react_observation_summary_redacts_sensitive_message_and_counts_items() {
+        let summary = assistant_run_react_observation_summary(&json!({
+            "status": "completed",
+            "actionType": "read_document_detail",
+            "message": "token provider marker",
+            "detailTargetCount": 2,
+            "items": [{"id": "item-1"}],
+            "denied": ["document:denied"]
+        }));
+
+        assert_eq!(summary["action_type"], "read_document_detail");
+        assert_eq!(summary["returned_count"], 1);
+        assert_eq!(summary["denied_count"], 1);
+        assert_eq!(summary["detail_target_count"], 2);
+        assert_eq!(summary["safe_message"], "[redacted]");
+    }
+
+    #[test]
+    fn react_returned_count_prefers_real_items_then_supplied_items_then_count() {
+        assert_eq!(
+            assistant_run_react_returned_count(&json!({"items": [1, 2], "supplied_count": 9})),
+            2
+        );
+        assert_eq!(
+            assistant_run_react_returned_count(
+                &json!({"items": [], "supplied_items": [1], "supplied_count": 9})
+            ),
+            1
+        );
+        assert_eq!(
+            assistant_run_react_returned_count(
+                &json!({"items": [], "supplied_items": [], "supplied_count": 9})
+            ),
+            9
+        );
     }
 }

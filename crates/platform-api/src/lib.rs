@@ -879,7 +879,6 @@ const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
 const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
-const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
 const ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET: usize = 1;
 const ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET: usize = 3;
 const ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET: usize = 4;
@@ -43878,85 +43877,6 @@ fn assistant_run_react_trace_step(
         "safe_error_code": observation_summary.get("safe_error_code").cloned().unwrap_or(Value::Null),
         "safe_message": observation_summary.get("safe_message").and_then(Value::as_str).unwrap_or(""),
     })
-}
-
-fn assistant_run_react_observation_summary(observation: &Value) -> Value {
-    let status = observation
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let action_type = observation
-        .get("action_type")
-        .or_else(|| observation.get("actionType"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let denied_count = observation
-        .get("denied")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
-    let returned_count = assistant_run_react_returned_count(observation);
-    let detail_target_count = observation
-        .get("detail_target_count")
-        .or_else(|| observation.get("detailTargetCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let safe_error_code = observation
-        .get("repair_code")
-        .or_else(|| observation.get("error_code"))
-        .and_then(Value::as_str)
-        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
-        .or_else(|| {
-            observation
-                .get("error")
-                .and_then(Value::as_str)
-                .map(|_| "tool_failed".to_string())
-        });
-    let safe_message = observation
-        .get("message")
-        .and_then(Value::as_str)
-        .map(|value| redact_react_trace_text(value, ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT))
-        .or_else(|| {
-            observation
-                .get("error")
-                .and_then(Value::as_str)
-                .map(|_| "工具执行失败".to_string())
-        })
-        .unwrap_or_default();
-
-    json!({
-        "status": status,
-        "action_type": action_type,
-        "denied_count": denied_count,
-        "returned_count": returned_count,
-        "detail_target_count": detail_target_count,
-        "safe_error_code": safe_error_code,
-        "safe_message": safe_message,
-    })
-}
-
-fn assistant_run_react_returned_count(observation: &Value) -> usize {
-    if let Some(count) = observation
-        .get("items")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .filter(|count| *count > 0)
-    {
-        return count;
-    }
-    if let Some(count) = observation
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .filter(|count| *count > 0)
-    {
-        return count;
-    }
-    observation
-        .get("supplied_count")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or_default()
 }
 
 #[allow(dead_code)]
