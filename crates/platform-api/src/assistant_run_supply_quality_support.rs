@@ -8,6 +8,7 @@ use crate::assistant_run_scope_policy_support::{
 use crate::assistant_run_scope_selection_support::{
     assistant_run_scope_recommended_tool_actions, selected_dataset_ids_from_scope,
 };
+use crate::codex_host_fixed_task_public_artifact_url_allowed;
 
 pub(crate) fn assistant_run_codex_supply_quality(evidence_state: &Value) -> Value {
     evidence_state
@@ -499,6 +500,73 @@ pub(crate) fn assistant_run_answer_quality_has_deterministic_supply(
             })
 }
 
+pub(crate) fn assistant_run_output_artifacts_include_report_link(
+    output_artifacts: &[Value],
+) -> bool {
+    output_artifacts.iter().any(|artifact| {
+        let artifact_kind = artifact
+            .get("artifact_kind")
+            .or_else(|| artifact.get("artifactKind"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let artifact_type = artifact
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let has_static_page_type = matches!(
+            artifact_type,
+            "generated_artifact" | "external_channel_static_page_artifact" | "static_page_artifact"
+        ) || artifact_kind == "static_page";
+        let has_url = [
+            "public_url",
+            "publicUrl",
+            "generated_artifact_url",
+            "generatedArtifactUrl",
+            "download_url",
+            "downloadUrl",
+            "html_download_url",
+            "htmlDownloadUrl",
+        ]
+        .iter()
+        .any(|key| {
+            artifact
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(codex_host_fixed_task_public_artifact_url_allowed)
+                .unwrap_or(false)
+        }) || artifact
+            .get("artifact_links")
+            .or_else(|| artifact.get("artifactLinks"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|value| {
+                value
+                    .as_str()
+                    .map(codex_host_fixed_task_public_artifact_url_allowed)
+                    .unwrap_or(false)
+            });
+        has_static_page_type && has_url
+    })
+}
+
+pub(crate) fn assistant_run_answer_quality_repeated_fallback_or_timeout(
+    event_names: &[String],
+) -> bool {
+    event_names
+        .iter()
+        .filter(|event| {
+            let lower = event.to_ascii_lowercase();
+            lower.contains("fallback")
+                || lower.contains("timeout")
+                || lower.contains("timed_out")
+                || lower.contains("provider_failed")
+                || lower.contains("retry_exhausted")
+        })
+        .count()
+        >= 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,6 +866,74 @@ mod tests {
                     {"type": "asset_profile_hint"}
                 ]
             })
+        ));
+    }
+
+    #[test]
+    fn output_artifacts_include_report_link_requires_static_page_and_allowed_url() {
+        assert!(assistant_run_output_artifacts_include_report_link(&[
+            json!({
+                "type": "assistant_message",
+                "content": "已生成报表"
+            }),
+            json!({
+                "type": "generated_artifact",
+                "artifact_kind": "static_page",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
+            }),
+        ]));
+
+        assert!(!assistant_run_output_artifacts_include_report_link(&[
+            json!({
+                "type": "generated_artifact",
+                "artifact_kind": "static_page",
+                "public_url": "https://example.com/generated-artifacts/report/index.html"
+            }),
+            json!({
+                "type": "assistant_message",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/report/index.html"
+            }),
+        ]));
+    }
+
+    #[test]
+    fn output_artifacts_include_report_link_accepts_artifact_links_variants() {
+        assert!(assistant_run_output_artifacts_include_report_link(&[
+            json!({
+                "type": "external_channel_static_page_artifact",
+                "artifactLinks": [
+                    "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
+                ]
+            })
+        ]));
+
+        assert!(assistant_run_output_artifacts_include_report_link(&[
+            json!({
+                "type": "static_page_artifact",
+                "htmlDownloadUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
+            })
+        ]));
+    }
+
+    #[test]
+    fn answer_quality_repeated_fallback_or_timeout_requires_two_signals() {
+        assert!(assistant_run_answer_quality_repeated_fallback_or_timeout(
+            &[
+                "assistant_run.provider_timeout".to_string(),
+                "assistant_run.model_fallback_used".to_string(),
+            ]
+        ));
+        assert!(assistant_run_answer_quality_repeated_fallback_or_timeout(
+            &[
+                "assistant_run.provider_failed".to_string(),
+                "assistant_run.answer_quality_gate.retry_exhausted".to_string(),
+            ]
+        ));
+        assert!(!assistant_run_answer_quality_repeated_fallback_or_timeout(
+            &[
+                "assistant_run.provider_timeout".to_string(),
+                "assistant_run.completed".to_string(),
+            ]
         ));
     }
 }

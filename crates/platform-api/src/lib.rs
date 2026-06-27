@@ -34999,69 +34999,6 @@ fn assistant_run_answer_quality_report_link_expected(request: &CreateAssistantRu
         || external_channel_prompt_requests_static_page_report_workflow(&request.prompt)
 }
 
-fn assistant_run_output_artifacts_include_report_link(output_artifacts: &[Value]) -> bool {
-    output_artifacts.iter().any(|artifact| {
-        let artifact_kind = artifact
-            .get("artifact_kind")
-            .or_else(|| artifact.get("artifactKind"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let artifact_type = artifact
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let has_static_page_type = matches!(
-            artifact_type,
-            "generated_artifact" | "external_channel_static_page_artifact" | "static_page_artifact"
-        ) || artifact_kind == "static_page";
-        let has_url = [
-            "public_url",
-            "publicUrl",
-            "generated_artifact_url",
-            "generatedArtifactUrl",
-            "download_url",
-            "downloadUrl",
-            "html_download_url",
-            "htmlDownloadUrl",
-        ]
-        .iter()
-        .any(|key| {
-            artifact
-                .get(*key)
-                .and_then(Value::as_str)
-                .map(codex_host_fixed_task_public_artifact_url_allowed)
-                .unwrap_or(false)
-        }) || artifact
-            .get("artifact_links")
-            .or_else(|| artifact.get("artifactLinks"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|value| {
-                value
-                    .as_str()
-                    .map(codex_host_fixed_task_public_artifact_url_allowed)
-                    .unwrap_or(false)
-            });
-        has_static_page_type && has_url
-    })
-}
-
-fn assistant_run_answer_quality_repeated_fallback_or_timeout(event_names: &[String]) -> bool {
-    event_names
-        .iter()
-        .filter(|event| {
-            let lower = event.to_ascii_lowercase();
-            lower.contains("fallback")
-                || lower.contains("timeout")
-                || lower.contains("timed_out")
-                || lower.contains("provider_failed")
-                || lower.contains("retry_exhausted")
-        })
-        .count()
-        >= 2
-}
-
 fn assistant_run_answer_quality_autofix_fixed_task_from_case(
     case_package: &Value,
 ) -> Option<CodexHostFixedTaskTemplateContextView> {
