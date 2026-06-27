@@ -115,9 +115,7 @@ const BUSINESS_HINTS: &[(&str, &[&str])] = &[
     ),
     (
         "客服",
-        &[
-            "客服", "工单", "投诉", "满意", "售后", "咨询", "回复", "评价",
-        ],
+        &["客服", "工单", "投诉", "满意", "售后", "咨询", "评价"],
     ),
     (
         "企业问答",
@@ -3762,6 +3760,29 @@ mod tests {
         assert_eq!(
             plan.selected_scope["supply_policy"]["recommendedActions"],
             json!(["ordinary_chat.answer"])
+        );
+    }
+
+    #[test]
+    fn reply_only_instruction_does_not_force_dataset_scope() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "请只回复 OK",
+            visible_datasets: &[dataset("客服知识库", "support")],
+            selected_dataset_id: None,
+            conversation_memory_available: true,
+        });
+
+        assert!(plan.candidates.is_empty());
+        assert_eq!(plan.intent, "ordinary_chat");
+        assert_eq!(plan.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(plan.selected_scope["datasets"], json!([]));
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["retrievalPolicy"],
+            json!("not_requested")
         );
     }
 

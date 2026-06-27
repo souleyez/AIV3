@@ -2,6 +2,37 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Runtime Reply-Only Scope Guard Local Verification
+
+- Scope:
+  - continue #672 P5 behavior-preserving assistant scope-planner governance under `assistant-runtime`;
+  - prevent reply-only formatting instructions from forcing an unrelated dataset scope;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - removed the over-broad `回复` token from the `客服` business hint list;
+  - kept concrete support hints such as `客服`, `工单`, `投诉`, `满意`, `售后`, `咨询`, and `评价`;
+  - added `reply_only_instruction_does_not_force_dataset_scope`.
+- Behavior preserved:
+  - ordinary chat with no data need keeps `ordinary_chat_without_forced_dataset`;
+  - pure reply-only prompts such as `请只回复 OK` do not preselect a visible customer-service dataset;
+  - explicit data-grounded generation prompts such as `基于订单数据...` still preselect the relevant dataset;
+  - selected or inferred datasets still use the existing supply-policy shape when a real data need exists.
+- Local verification:
+  - `cargo test -q -p assistant-runtime reply_only_instruction_does_not_force_dataset_scope --lib`: passed, 1/1 test;
+  - `cargo test -q -p assistant-runtime plain_generation_with_business_terms_does_not_force_dataset_scope --lib`: passed, 1/1 test;
+  - `cargo test -q -p assistant-runtime explicit_data_need_in_generation_prompt_still_preselects_dataset --lib`: passed, 1/1 test;
+  - `cargo test -q -p assistant-runtime --lib`: passed, 35/35 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `git diff --check`: passed;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - local tree contains the #672 scope guard and documentation updates pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run ReAct Invalid Output Guard Helper Local Verification
 
 - Scope:
