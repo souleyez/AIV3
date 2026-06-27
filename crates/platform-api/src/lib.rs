@@ -34945,25 +34945,6 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     Ok(last_outcome)
 }
 
-fn assistant_run_replace_assistant_message_content(
-    mut output_artifacts: Vec<Value>,
-    content: &str,
-) -> Vec<Value> {
-    for artifact in output_artifacts.iter_mut() {
-        if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
-            set_payload_string(artifact, "content", content);
-            return output_artifacts;
-        }
-    }
-    output_artifacts.push(json!({
-        "type": "assistant_message",
-        "role": ChatMessageRole::Assistant.as_str(),
-        "content": content,
-        "source": "answer_quality_gate_exhausted_controlled_fallback",
-    }));
-    output_artifacts
-}
-
 fn assistant_run_answer_quality_low_quality_case_package(
     assistant_run_id: AssistantRunId,
     request: &CreateAssistantRunRequest,

@@ -103,6 +103,25 @@ pub(crate) fn assistant_run_assistant_message_content_from_artifacts(
         .map(ToOwned::to_owned)
 }
 
+pub(crate) fn assistant_run_replace_assistant_message_content(
+    mut output_artifacts: Vec<Value>,
+    content: &str,
+) -> Vec<Value> {
+    for artifact in output_artifacts.iter_mut() {
+        if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
+            artifact["content"] = json!(content);
+            return output_artifacts;
+        }
+    }
+    output_artifacts.push(json!({
+        "type": "assistant_message",
+        "role": "assistant",
+        "content": content,
+        "source": "answer_quality_gate_exhausted_controlled_fallback",
+    }));
+    output_artifacts
+}
+
 pub(crate) fn bounded_duration_ms(duration_ms: u128) -> u64 {
     duration_ms.min(u64::MAX as u128) as u64
 }
@@ -1030,6 +1049,55 @@ mod tests {
             json!({"type": "html_artifact", "content": "not a message"})
         ])
         .is_none());
+    }
+
+    #[test]
+    fn replace_assistant_message_content_updates_existing_message_and_preserves_other_artifacts() {
+        let artifacts = vec![
+            json!({"type": "html_artifact", "id": "artifact-1"}),
+            json!({
+                "type": "assistant_message",
+                "role": "assistant",
+                "content": "old",
+                "source": "existing_source",
+                "extra": {"keep": true}
+            }),
+            json!({"type": "assistant_message", "content": "later untouched"}),
+        ];
+
+        assert_eq!(
+            assistant_run_replace_assistant_message_content(artifacts, "new answer"),
+            vec![
+                json!({"type": "html_artifact", "id": "artifact-1"}),
+                json!({
+                    "type": "assistant_message",
+                    "role": "assistant",
+                    "content": "new answer",
+                    "source": "existing_source",
+                    "extra": {"keep": true}
+                }),
+                json!({"type": "assistant_message", "content": "later untouched"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn replace_assistant_message_content_adds_message_when_missing() {
+        assert_eq!(
+            assistant_run_replace_assistant_message_content(
+                vec![json!({"type": "html_artifact", "id": "artifact-1"})],
+                "fallback answer",
+            ),
+            vec![
+                json!({"type": "html_artifact", "id": "artifact-1"}),
+                json!({
+                    "type": "assistant_message",
+                    "role": "assistant",
+                    "content": "fallback answer",
+                    "source": "answer_quality_gate_exhausted_controlled_fallback",
+                }),
+            ]
+        );
     }
 
     #[test]

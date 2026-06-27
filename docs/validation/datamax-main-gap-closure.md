@@ -2,6 +2,35 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Assistant Message Artifact Replace Helper Local Verification
+
+- Scope:
+  - continue #683 P5 behavior-preserving engineering governance under `platform-api`;
+  - move assistant-message artifact replacement out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_replace_assistant_message_content` into `assistant_run_react_support`;
+  - kept ReAct natural fallback, answer-quality retry, and exhausted fallback call sites using the same helper name through crate-local import.
+- Behavior preserved:
+  - the first artifact with `type=assistant_message` still wins;
+  - existing assistant-message artifacts only have `content` replaced;
+  - all other artifact fields and subsequent artifacts are preserved;
+  - when no assistant-message artifact exists, a fallback assistant message is still appended with `role=assistant` and `source=answer_quality_gate_exhausted_controlled_fallback`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 32/32 tests;
+  - `cargo test -q -p platform-api replace_assistant_message_content --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_react_natural_fallback --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_compact_natural_fallback --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - #683 is locally verified and ready for scoped commit/push/CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Assistant Message Artifact Helper Local Verification
 
 - Scope:
