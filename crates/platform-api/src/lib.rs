@@ -43947,35 +43947,6 @@ fn assistant_run_react_pending_tool_output(
     Some(AssistantRunReactPendingToolOutput { call_id, repeated })
 }
 
-fn assistant_run_react_call_id_from_value(value: &Value) -> Option<String> {
-    value
-        .get("tool_call_id")
-        .or_else(|| value.get("toolCallId"))
-        .or_else(|| value.get("call_id"))
-        .or_else(|| value.get("callId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn assistant_run_react_observation_call_id(observation: &Value) -> Option<String> {
-    assistant_run_react_call_id_from_value(observation).or_else(|| {
-        observation
-            .get("tool_call")
-            .or_else(|| observation.get("toolCall"))
-            .and_then(assistant_run_react_call_id_from_value)
-    })
-}
-
-fn assistant_run_react_observation_status(observation: &Value) -> Option<&str> {
-    observation
-        .get("status")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 fn build_assistant_run_react_policy_repair_result(
     action: &AssistantRunNextAction,
     message: &str,
@@ -44017,20 +43988,6 @@ fn assistant_run_react_should_repair_terminal_action(
     action.action_type == AssistantRunReactActionType::FinalAnswer
         && assistant_run_react_scope_requires_supply(selected_scope)
         && !assistant_run_react_has_supply_observation(evidence_state, observations)
-}
-
-fn assistant_run_react_has_completed_action(observations: &[Value], action_type: &str) -> bool {
-    observations.iter().any(|observation| {
-        observation
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|status| status == "completed")
-            && observation
-                .get("action_type")
-                .or_else(|| observation.get("actionType"))
-                .and_then(Value::as_str)
-                .is_some_and(|value| value == action_type)
-    })
 }
 
 fn assistant_run_react_repeats_no_progress_action(

@@ -2,6 +2,36 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run ReAct Observation Helper Local Verification
+
+- Scope:
+  - continue #673 P5 behavior-preserving engineering governance under `platform-api`;
+  - move low-level ReAct observation helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_react_call_id_from_value` into `assistant_run_react_support`;
+  - moved `assistant_run_react_observation_call_id` into `assistant_run_react_support`;
+  - moved `assistant_run_react_observation_status` into `assistant_run_react_support`;
+  - moved `assistant_run_react_has_completed_action` into `assistant_run_react_support`;
+  - kept duplicate tool-call replay, pending tool output/liveness, report-choice precondition, and protocol-repair call sites using the same helper names through crate-local import.
+- Behavior preserved:
+  - tool call ids are read from `tool_call_id`, `toolCallId`, `call_id`, or `callId`;
+  - nested `tool_call`/`toolCall` id fallback is preserved;
+  - observation status is trimmed and empty status is ignored;
+  - completed-action checks still require `status=completed` and matching `action_type`/`actionType`.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api assistant_run_react_protocol_repair --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - local tree contains the #673 helper split and documentation updates pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Runtime Reply-Only Scope Guard Local Verification
 
 - Scope:

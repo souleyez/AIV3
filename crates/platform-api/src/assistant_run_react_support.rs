@@ -250,6 +250,52 @@ pub(crate) fn assistant_run_react_output_contains_internal_marker(output_text: &
         })
 }
 
+pub(crate) fn assistant_run_react_call_id_from_value(value: &Value) -> Option<String> {
+    value
+        .get("tool_call_id")
+        .or_else(|| value.get("toolCallId"))
+        .or_else(|| value.get("call_id"))
+        .or_else(|| value.get("callId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn assistant_run_react_observation_call_id(observation: &Value) -> Option<String> {
+    assistant_run_react_call_id_from_value(observation).or_else(|| {
+        observation
+            .get("tool_call")
+            .or_else(|| observation.get("toolCall"))
+            .and_then(assistant_run_react_call_id_from_value)
+    })
+}
+
+pub(crate) fn assistant_run_react_observation_status(observation: &Value) -> Option<&str> {
+    observation
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn assistant_run_react_has_completed_action(
+    observations: &[Value],
+    action_type: &str,
+) -> bool {
+    observations.iter().any(|observation| {
+        observation
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == "completed")
+            && observation
+                .get("action_type")
+                .or_else(|| observation.get("actionType"))
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == action_type)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +503,55 @@ mod tests {
         ));
         assert!(assistant_run_react_output_contains_internal_marker(
             "[tool_call]{\"action_type\":\"retrieve_evidence\"}[/tool_call]",
+        ));
+    }
+
+    #[test]
+    fn react_call_id_accepts_snake_camel_and_nested_tool_call() {
+        assert_eq!(
+            assistant_run_react_call_id_from_value(&json!({"tool_call_id": " call-1 "})),
+            Some("call-1".to_string())
+        );
+        assert_eq!(
+            assistant_run_react_call_id_from_value(&json!({"toolCallId": "call-2"})),
+            Some("call-2".to_string())
+        );
+        assert_eq!(
+            assistant_run_react_observation_call_id(&json!({"tool_call": {"callId": "call-3"}})),
+            Some("call-3".to_string())
+        );
+        assert!(assistant_run_react_call_id_from_value(&json!({"call_id": "  "})).is_none());
+    }
+
+    #[test]
+    fn react_observation_status_trims_and_rejects_empty() {
+        assert_eq!(
+            assistant_run_react_observation_status(&json!({"status": " completed "})),
+            Some("completed")
+        );
+        assert!(assistant_run_react_observation_status(&json!({"status": " "})).is_none());
+        assert!(assistant_run_react_observation_status(&json!({"status": 1})).is_none());
+    }
+
+    #[test]
+    fn react_has_completed_action_requires_completed_matching_action() {
+        let observations = vec![
+            json!({"status": "failed", "action_type": "list_report_options"}),
+            json!({"status": "completed", "actionType": "retrieve_evidence"}),
+            json!({"status": "completed", "action_type": "list_report_options"}),
+        ];
+
+        assert!(assistant_run_react_has_completed_action(
+            &observations,
+            "list_report_options"
+        ));
+        assert!(assistant_run_react_has_completed_action(
+            &observations,
+            "retrieve_evidence"
+        ));
+        assert!(!assistant_run_react_has_completed_action(
+            &observations,
+            "read_document_detail"
         ));
     }
 }
