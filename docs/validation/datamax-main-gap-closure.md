@@ -26,6 +26,30 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Enqueue/Execution Helper 8-Server Deployment
+
+- GitHub:
+  - pushed `f6bd4d443` (`Extract answer quality autofix enqueue execution`) to `origin/main`;
+  - DataMax CI run `28296432999` completed successfully;
+  - `Rust Minimal` and `No-Credential Smoke` completed successfully.
+- Deployment:
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `59f225c16` to `f6bd4d443`;
+  - an initial combined SSH command had quoting noise around head echo and checked health too early after restart, so it was not used as build evidence;
+  - follow-up inspection confirmed remote HEAD `f6bd4d443`, all target services active, and `/readyz` healthy;
+  - explicit `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker` completed successfully;
+  - restarted services after the explicit build: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server service checks after explicit build and restart:
+  - `systemctl is-active aiv3-platform-api.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `HTTP 200`;
+  - `https://v3.elepcloud.com/`: `HTTP 200`;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `f6bd4d443`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, runtime model route, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Autofix Output Validation Helper Local Verification
 
 - Scope:
