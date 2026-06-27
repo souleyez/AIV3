@@ -2,6 +2,41 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run ReAct Protocol Repair Helper Local Verification
+
+- Scope:
+  - continue #678 P5 behavior-preserving engineering governance under `platform-api`;
+  - move ReAct protocol repair helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `build_react_protocol_repair` into `assistant_run_react_support`;
+  - moved `build_react_protocol_repair_at_step` into `assistant_run_react_support`;
+  - moved `build_assistant_run_react_policy_repair_result` into `assistant_run_react_support`;
+  - moved `react_requested_scope_denial` into `assistant_run_react_support`;
+  - kept ReAct initial execution and continue execution call sites using the same helper names through crate-local import;
+  - left `ensure_react_requested_dataset_is_selected` and `ensure_scope_requests_conversation_memory` in `lib.rs` because they still depend on API error and JSON object helper boundaries.
+- Behavior preserved:
+  - duplicate tool-call replay still repairs before replaying a completed, failed, rejected, or denied observation;
+  - missing or repeated pending tool output still returns the existing `missing_tool_output` or `tool_call_liveness_stall` repair code;
+  - scoped `final_answer` before evidence supply still produces a policy observation;
+  - `report_choice` still requires a completed `list_report_options` observation;
+  - requested dataset or document outside the selected scope still returns `scope_denied`;
+  - repeated rejected/failed/denied same action still returns `repeated_no_progress_action`;
+  - repair payload, trail labels, denied entries, safe messages, and final-answer absence remain unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 23/23 tests;
+  - `cargo test -q -p platform-api assistant_run_react_protocol_repair --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_react_repairs_premature_final_answer_for_scoped_data --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only.
+- Current state:
+  - local worktree contains the #678 assistant-run ReAct protocol repair helper split, pending GitHub push and CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run ReAct Trace Step Helper Local Verification
 
 - Scope:

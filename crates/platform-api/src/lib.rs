@@ -691,15 +691,14 @@ use model_gateway_status::*;
 use not_found_errors::*;
 use prompt_match_support::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
+use react_agent_contract::parse_assistant_run_next_action;
 #[cfg(test)]
-use react_agent_contract::AssistantRunReActActionType as AssistantRunReactActionType;
 use react_agent_contract::{
-    parse_assistant_run_next_action, AssistantRunReActDecision as AssistantRunNextAction,
-    AssistantRunReActStatus,
+    AssistantRunReActActionType as AssistantRunReactActionType,
+    AssistantRunReActDecision as AssistantRunNextAction, AssistantRunReActStatus,
 };
 use react_agent_tools::{
-    assistant_run_react_action_label, assistant_run_react_policy_observation,
-    execute_assistant_run_react_action,
+    assistant_run_react_action_label, execute_assistant_run_react_action,
     AssistantRunReactToolResult as AssistantRunReactActionResult,
 };
 #[cfg(test)]
@@ -43692,171 +43691,6 @@ fn assistant_run_react_max_steps() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
         .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
-}
-
-#[allow(dead_code)]
-pub(crate) fn build_react_protocol_repair(
-    decision: &AssistantRunNextAction,
-    observations: &[Value],
-    selected_scope: &Value,
-    evidence_state: &Value,
-) -> Option<AssistantRunReactActionResult> {
-    build_react_protocol_repair_at_step(decision, observations, selected_scope, evidence_state, 0)
-}
-
-fn build_react_protocol_repair_at_step(
-    decision: &AssistantRunNextAction,
-    observations: &[Value],
-    selected_scope: &Value,
-    evidence_state: &Value,
-    step_index: usize,
-) -> Option<AssistantRunReactActionResult> {
-    if let Some(call_id) = assistant_run_react_replays_completed_tool_call(decision, observations) {
-        return Some(build_assistant_run_react_policy_repair_result(
-            decision,
-            "duplicate tool-call replay detected; continue from the existing observation instead of replaying the same call.",
-            step_index,
-            vec![format!("tool_call:{call_id}")],
-            "duplicate_tool_call_replay",
-        ));
-    }
-
-    if let Some(pending) = assistant_run_react_pending_tool_output(observations) {
-        let (message, repair_code) = if pending.repeated {
-            (
-                "tool-call liveness stall detected; request a continuation or choose a different whitelisted action.",
-                "tool_call_liveness_stall",
-            )
-        } else {
-            (
-                "tool-call output is missing; wait for or repair the tool observation before continuing.",
-                "missing_tool_output",
-            )
-        };
-        return Some(build_assistant_run_react_policy_repair_result(
-            decision,
-            message,
-            step_index,
-            vec![format!("tool_call:{}", pending.call_id)],
-            repair_code,
-        ));
-    }
-
-    if assistant_run_react_should_repair_terminal_action(
-        decision,
-        selected_scope,
-        evidence_state,
-        observations,
-    ) {
-        return Some(assistant_run_react_policy_observation(
-            decision,
-            "final_answer requires a supply observation; choose a whitelisted action before answering.",
-            step_index,
-        ));
-    }
-
-    if decision.status == AssistantRunReActStatus::ReportChoice
-        && !assistant_run_react_has_completed_action(observations, "list_report_options")
-    {
-        return Some(assistant_run_react_policy_observation(
-            decision,
-            "report_choice requires list_report_options observation before choosing a report path.",
-            step_index,
-        ));
-    }
-
-    if let Some(denied) = react_requested_scope_denial(decision, selected_scope) {
-        return Some(build_assistant_run_react_policy_repair_result(
-            decision,
-            "requested dataset or document is outside the current selected scope.",
-            step_index,
-            vec![denied],
-            "scope_denied",
-        ));
-    }
-
-    if assistant_run_react_repeats_no_progress_action(decision, observations) {
-        return Some(build_assistant_run_react_policy_repair_result(
-            decision,
-            "same no-progress action repeated; choose a different whitelisted action or cannot_answer.",
-            step_index,
-            vec![format!("repeated:{}", decision.action_type.as_str())],
-            "repeated_no_progress_action",
-        ));
-    }
-
-    None
-}
-
-fn build_assistant_run_react_policy_repair_result(
-    action: &AssistantRunNextAction,
-    message: &str,
-    step_index: usize,
-    denied: Vec<String>,
-    repair_code: &str,
-) -> AssistantRunReactActionResult {
-    AssistantRunReactActionResult {
-        observation: json!({
-            "status": "rejected",
-            "action_type": "policy_observation",
-            "actionType": "policy_observation",
-            "message": message,
-            "denied": denied,
-            "items": [],
-            "limits": {},
-            "repair_required": true,
-            "repair_code": repair_code,
-            "step": step_index,
-        }),
-        trail_step: json!({
-            "status": "rejected",
-            "label": "ReAct 协议修复",
-            "react_action": action.action_type.as_str(),
-            "message": message,
-            "react_step": step_index,
-            "at": Utc::now(),
-        }),
-        final_answer: None,
-    }
-}
-
-fn react_requested_scope_denial(
-    decision: &AssistantRunNextAction,
-    selected_scope: &Value,
-) -> Option<String> {
-    let requested_dataset_id = decision
-        .arguments
-        .get("dataset_id")
-        .or_else(|| decision.arguments.get("datasetId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(requested_dataset_id) = requested_dataset_id {
-        let selected_dataset_ids = selected_dataset_ids_from_scope(selected_scope);
-        let requested = Uuid::parse_str(requested_dataset_id).ok().map(DatasetId);
-        if requested.is_none_or(|requested| !selected_dataset_ids.contains(&requested)) {
-            return Some(format!("dataset:{requested_dataset_id}"));
-        }
-    }
-
-    let requested_document_id = decision
-        .arguments
-        .get("document_id")
-        .or_else(|| decision.arguments.get("documentId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(requested_document_id) = requested_document_id {
-        let selected_document_ids = selected_document_ids_from_scope(selected_scope);
-        let requested = Uuid::parse_str(requested_document_id).ok().map(DocumentId);
-        if !selected_document_ids.is_empty()
-            && requested.is_none_or(|requested| !selected_document_ids.contains(&requested))
-        {
-            return Some(format!("document:{requested_document_id}"));
-        }
-    }
-
-    None
 }
 
 fn ensure_react_requested_dataset_is_selected(
