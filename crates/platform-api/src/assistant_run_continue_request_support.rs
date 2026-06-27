@@ -1,5 +1,5 @@
 use contracts::{ContinueAssistantRunRequest, CreateAssistantRunRequest};
-use domain_model::AssistantRun;
+use domain_model::{AssistantRun, AssistantRunEvent};
 use serde_json::Value;
 
 use crate::json_value_support::value_array;
@@ -63,11 +63,24 @@ pub(crate) fn assistant_run_continue_request_from_completion_dispatch(
     })
 }
 
+pub(crate) fn assistant_run_model_completion_turn_consumed_event<'a>(
+    events: &'a [AssistantRunEvent],
+    idempotency_key: &str,
+) -> Option<&'a AssistantRunEvent> {
+    events.iter().rev().find(|event| {
+        event.event_name == "assistant_run.model_completion_turn_consumed"
+            && event.payload.get("idempotency_key").and_then(Value::as_str) == Some(idempotency_key)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use contracts::{AssistantRunMessageView, ContinueAssistantRunRequest};
-    use domain_model::{AssistantRun, AssistantRunId, ChatMessageRole, TenantId};
+    use domain_model::{
+        AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, ChatMessageRole,
+        TenantId,
+    };
     use serde_json::json;
 
     use super::*;
@@ -213,5 +226,57 @@ mod tests {
             error.payload.code,
             "missing_model_completion_turn_continue_request"
         );
+    }
+
+    fn test_consumed_event(sequence_no: i32, key: &str, event_name: &str) -> AssistantRunEvent {
+        AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId::new(),
+            run_id: AssistantRunId::new(),
+            sequence_no,
+            event_name: event_name.to_string(),
+            payload: json!({"idempotency_key": key}),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn continue_request_support_finds_latest_consumed_event_for_key() {
+        let events = vec![
+            test_consumed_event(
+                1,
+                "same-key",
+                "assistant_run.model_completion_turn_consumed",
+            ),
+            test_consumed_event(
+                2,
+                "other-key",
+                "assistant_run.model_completion_turn_consumed",
+            ),
+            test_consumed_event(
+                3,
+                "same-key",
+                "assistant_run.model_completion_turn_consumed",
+            ),
+        ];
+
+        let event = assistant_run_model_completion_turn_consumed_event(&events, "same-key")
+            .expect("matching consumed event should be found");
+
+        assert_eq!(event.sequence_no, 3);
+    }
+
+    #[test]
+    fn continue_request_support_ignores_non_consumed_events_or_wrong_keys() {
+        let events = vec![
+            test_consumed_event(1, "same-key", "assistant_run.completed"),
+            test_consumed_event(
+                2,
+                "other-key",
+                "assistant_run.model_completion_turn_consumed",
+            ),
+        ];
+
+        assert!(assistant_run_model_completion_turn_consumed_event(&events, "same-key").is_none());
     }
 }

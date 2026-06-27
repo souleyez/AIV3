@@ -2,6 +2,35 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Model Completion Consumed Event Helper Local Verification
+
+- Scope:
+  - continue #667 P5 behavior-preserving engineering governance under `platform-api`;
+  - move assistant-run model-completion consumed-event lookup out of `lib.rs` into `crates/platform-api/src/assistant_run_continue_request_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_model_completion_turn_consumed_event` into `assistant_run_continue_request_support`;
+  - kept the background model-completion turn consumer using the same helper name through crate-local import;
+  - preserved reverse scan order, exact event-name match, `payload.idempotency_key` match, and no-match `None` behavior.
+- Dependency audit:
+  - `pnpm outdated -r`: no outdated workspace package reported;
+  - `pnpm update -r --latest`: no package or lockfile change produced;
+  - `cargo update --dry-run --verbose`: no compatible lockfile update available; only `generic-array` and `matchit` are behind newer patch releases because they are constrained by upstream indirect dependencies;
+  - direct workspace Cargo dependency check against crates.io stable releases showed all direct dependencies current, with `image` specified as `0.25` and already locked to `0.25.10`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_continue_request_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api assistant_run_model_completion_dispatch_consumes_continue_once --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Current state:
+  - local tree contains the #667 helper split and documentation updates pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Completion Dispatch Continue Request Helper Local Verification
 
 - Scope:

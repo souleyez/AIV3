@@ -30812,16 +30812,6 @@ pub async fn consume_assistant_run_model_completion_turn_dispatch(
     }))
 }
 
-fn assistant_run_model_completion_turn_consumed_event<'a>(
-    events: &'a [AssistantRunEvent],
-    idempotency_key: &str,
-) -> Option<&'a AssistantRunEvent> {
-    events.iter().rev().find(|event| {
-        event.event_name == "assistant_run.model_completion_turn_consumed"
-            && event.payload.get("idempotency_key").and_then(Value::as_str) == Some(idempotency_key)
-    })
-}
-
 async fn create_conversation_memory_item(
     State(state): State<AppState>,
     headers: HeaderMap,
