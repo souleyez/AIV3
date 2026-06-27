@@ -34675,41 +34675,6 @@ fn build_assistant_run_react_compact_natural_fallback_input(
     sections.join("\n\n")
 }
 
-fn assistant_run_compact_evidence_items_for_natural_fallback(
-    evidence_state: &Value,
-    limit: usize,
-) -> Vec<Value> {
-    value_array(
-        evidence_state
-            .get("supplied_items")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-    )
-    .into_iter()
-    .take(limit)
-    .map(|item| {
-        json!({
-            "type": item.get("type").and_then(Value::as_str).unwrap_or("evidence"),
-            "summary": item
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(|value| truncate_assistant_supply_text(value, 260))
-                .unwrap_or_default(),
-            "source_locator": item.get("source_locator").cloned().unwrap_or(Value::Null),
-            "document_id": item.get("document_id").cloned().unwrap_or(Value::Null),
-            "chunk_index": item.get("chunk_index").cloned().unwrap_or(Value::Null),
-            "content_excerpt": item
-                .get("content_excerpt")
-                .or_else(|| item.get("content"))
-                .and_then(Value::as_str)
-                .map(|value| truncate_assistant_supply_text(value, 700))
-                .unwrap_or_default(),
-            "fallback_reason": item.get("fallback_reason").cloned().unwrap_or(Value::Null),
-        })
-    })
-    .collect()
-}
-
 async fn complete_assistant_run_react_natural_answer_fallback(
     chat_runtime: &LlmRuntimeSelection,
     provider_input: String,

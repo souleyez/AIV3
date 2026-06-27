@@ -10,7 +10,7 @@ use crate::react_agent_tools::{
 use crate::{
     assistant_run_evidence_supplied_count, assistant_run_scope_intent, env_flag,
     selected_dataset_ids_from_scope, selected_document_ids_from_scope,
-    selected_scope_requests_conversation_memory,
+    selected_scope_requests_conversation_memory, truncate_assistant_supply_text, value_array,
 };
 use chrono::Utc;
 use domain_model::{AssistantRunId, DatasetId, DocumentId};
@@ -428,6 +428,41 @@ pub(crate) fn assistant_run_react_attach_natural_fallback_runtime(
 
 pub(crate) fn assistant_run_react_unavailable_natural_answer_message() -> String {
     "模型暂时没有返回可展示的自然语言回答，请稍后重试或换一种问法。".to_string()
+}
+
+pub(crate) fn assistant_run_compact_evidence_items_for_natural_fallback(
+    evidence_state: &Value,
+    limit: usize,
+) -> Vec<Value> {
+    value_array(
+        evidence_state
+            .get("supplied_items")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .into_iter()
+    .take(limit)
+    .map(|item| {
+        json!({
+            "type": item.get("type").and_then(Value::as_str).unwrap_or("evidence"),
+            "summary": item
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(|value| truncate_assistant_supply_text(value, 260))
+                .unwrap_or_default(),
+            "source_locator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+            "document_id": item.get("document_id").cloned().unwrap_or(Value::Null),
+            "chunk_index": item.get("chunk_index").cloned().unwrap_or(Value::Null),
+            "content_excerpt": item
+                .get("content_excerpt")
+                .or_else(|| item.get("content"))
+                .and_then(Value::as_str)
+                .map(|value| truncate_assistant_supply_text(value, 700))
+                .unwrap_or_default(),
+            "fallback_reason": item.get("fallback_reason").cloned().unwrap_or(Value::Null),
+        })
+    })
+    .collect()
 }
 
 pub(crate) fn assistant_run_react_call_id_from_value(value: &Value) -> Option<String> {
@@ -1156,6 +1191,72 @@ mod tests {
             "chat"
         );
         assert!(assistant_run_react_unavailable_natural_answer_message().contains("请稍后重试"));
+    }
+
+    #[test]
+    fn react_compact_fallback_evidence_items_are_limited_and_safe() {
+        let long_summary = "摘要".repeat(180);
+        let long_content = "正文".repeat(420);
+        let items = assistant_run_compact_evidence_items_for_natural_fallback(
+            &json!({
+                "supplied_items": [
+                    {
+                        "type": "retrieval_evidence",
+                        "summary": long_summary,
+                        "source_locator": "document://doc-1/chunks/2",
+                        "document_id": "doc-1",
+                        "chunk_index": 2,
+                        "content": long_content,
+                        "fallback_reason": "expanded_supply"
+                    },
+                    {
+                        "summary": "second",
+                        "content_excerpt": "explicit excerpt"
+                    }
+                ]
+            }),
+            1,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], "retrieval_evidence");
+        assert_eq!(items[0]["source_locator"], "document://doc-1/chunks/2");
+        assert_eq!(items[0]["document_id"], "doc-1");
+        assert_eq!(items[0]["chunk_index"], 2);
+        assert_eq!(items[0]["fallback_reason"], "expanded_supply");
+        assert!(items[0]["summary"].as_str().unwrap_or("").chars().count() <= 260);
+        assert!(
+            items[0]["content_excerpt"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .count()
+                <= 700
+        );
+    }
+
+    #[test]
+    fn react_compact_fallback_evidence_items_default_missing_fields() {
+        let items = assistant_run_compact_evidence_items_for_natural_fallback(
+            &json!({
+                "supplied_items": [{
+                    "content_excerpt": "explicit excerpt"
+                }]
+            }),
+            4,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], "evidence");
+        assert_eq!(items[0]["summary"], "");
+        assert_eq!(items[0]["content_excerpt"], "explicit excerpt");
+        assert!(items[0]["source_locator"].is_null());
+        assert!(items[0]["document_id"].is_null());
+        assert!(items[0]["chunk_index"].is_null());
+        assert!(items[0]["fallback_reason"].is_null());
+        assert!(
+            assistant_run_compact_evidence_items_for_natural_fallback(&json!({}), 4).is_empty()
+        );
     }
 
     #[test]
