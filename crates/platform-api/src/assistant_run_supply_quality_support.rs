@@ -459,6 +459,46 @@ pub(crate) fn assistant_run_answer_quality_case_supply_status(evidence_state: &V
         .to_string()
 }
 
+pub(crate) fn assistant_run_answer_quality_has_deterministic_supply(
+    evidence_state: &Value,
+) -> bool {
+    let supply_quality_has_deterministic_rows = evidence_state
+        .get("supply_quality")
+        .map(|supply_quality| {
+            [
+                "datasetFactSnapshotCount",
+                "dataset_fact_snapshot_count",
+                "spreadsheetRowAnalysisCount",
+                "spreadsheet_row_analysis_count",
+                "databaseAggregateCount",
+                "database_aggregate_count",
+            ]
+            .iter()
+            .any(|key| {
+                supply_quality
+                    .get(*key)
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+            })
+        })
+        .unwrap_or(false);
+    supply_quality_has_deterministic_rows
+        || evidence_state
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|item| {
+                matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some(
+                        "dataset_fact_snapshot" | "database_aggregate" | "spreadsheet_row_analysis"
+                    )
+                )
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,5 +746,58 @@ mod tests {
             assistant_run_answer_quality_case_supply_status(&json!({})),
             "unknown"
         );
+    }
+
+    #[test]
+    fn answer_quality_has_deterministic_supply_from_quality_counts() {
+        assert!(assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supply_quality": {
+                    "datasetFactSnapshotCount": 0,
+                    "database_aggregate_count": 1
+                }
+            })
+        ));
+        assert!(assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supply_quality": {
+                    "spreadsheetRowAnalysisCount": 2
+                }
+            })
+        ));
+        assert!(!assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supply_quality": {
+                    "indexedEvidenceCount": 4
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn answer_quality_has_deterministic_supply_from_supplied_item_types() {
+        assert!(assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supplied_items": [
+                    {"type": "retrieval_evidence"},
+                    {"type": "dataset_fact_snapshot"}
+                ]
+            })
+        ));
+        assert!(assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supplied_items": [
+                    {"type": "database_aggregate"}
+                ]
+            })
+        ));
+        assert!(!assistant_run_answer_quality_has_deterministic_supply(
+            &json!({
+                "supplied_items": [
+                    {"type": "retrieval_evidence"},
+                    {"type": "asset_profile_hint"}
+                ]
+            })
+        ));
     }
 }

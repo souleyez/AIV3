@@ -28332,6 +28332,56 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-27 P5 Dependency Refresh and Assistant-Run Helper Batch 8-Server Deployment Verification
+
+- Deployment:
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `f2a630010` to `778ed1808`;
+  - deployed commit `778ed18088d1e23c540285e201893a248ca1ba2f` (`Record answer quality supply case helper CI receipt`);
+  - services restarted after successful builds: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`, `aiv3-codex-host-agent.service`, `aiv3-dataset-output-worker.service`, `aiv3-document-enrichment-worker.service`, `aiv3-external-action-worker.service`, `aiv3-external-source-worker.service`, `aiv3-ingest-worker.service`, `aiv3-media-worker.service`, `aiv3-memory-worker.service`, `aiv3-report-planner-worker.service`, `aiv3-report-render-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-web.service`.
+- 8-server build:
+  - Rust release build passed with `CC=clang CXX=clang++` for `platform-api`, assistant/chat/static-page workers, codex host agent, dataset/output/document/retrieval/external/source/media/memory/report workers, and `document-enrichment-worker`;
+  - the first build attempt with default `cc` failed because `aws-lc-sys` rejected the server GCC as affected by the known memcmp compiler bug; no service restart had occurred before that failure;
+  - `pnpm install --frozen-lockfile` and `pnpm build` in `apps/web` passed with existing Next middleware deprecation and Turbopack trace warnings only.
+- 8-server checks:
+  - all restarted `aiv3-*` services listed above returned `active`;
+  - platform API listened on `127.0.0.1:3000`;
+  - web UI listened on `*:3100`;
+  - `GET http://127.0.0.1:3000/healthz` returned `status=ok`;
+  - `GET http://127.0.0.1:3000/readyz` returned `status=ready`;
+  - `HEAD http://127.0.0.1:3100/` returned `200 OK`;
+  - public `https://v3.elepcloud.com/` returned HTTP 200;
+  - public `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html` returned HTTP 200;
+  - remote repo status after deployment was clean: `## main...origin/main`.
+- Scope and safety:
+  - this was a code deploy of already pushed `main`, not a new local code change;
+  - no public API URL, auth method, required request field, existing response field, production schema, model routing config, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was changed during deployment;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - 120 server was not touched.
+
+## 2026-06-27 P5 Assistant-Run Deterministic Supply Signal Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api`;
+  - move `assistant_run_answer_quality_has_deterministic_supply` from `lib.rs` into `assistant_run_supply_quality_support` so answer-quality supply diagnostics remain colocated.
+- Code change:
+  - added `assistant_run_answer_quality_has_deterministic_supply` to `crates/platform-api/src/assistant_run_supply_quality_support.rs`;
+  - kept deterministic count checks for `datasetFactSnapshotCount`/`dataset_fact_snapshot_count`, `spreadsheetRowAnalysisCount`/`spreadsheet_row_analysis_count`, and `databaseAggregateCount`/`database_aggregate_count`;
+  - kept deterministic `supplied_items` type checks for `dataset_fact_snapshot`, `database_aggregate`, and `spreadsheet_row_analysis`;
+  - kept the existing `deterministic_supply_ignored` low-quality signal call site unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_collects_weak_insufficient_case --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with existing Next middleware deprecation and Turbopack trace warnings only;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API URL, auth method, required request field, existing response field, production schema, model routing config, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
 ## 2026-06-19 P5 Client Artifact Public HTML Publish Orchestration Helper Local Verification
 
 - Purpose:

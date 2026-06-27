@@ -34994,44 +34994,6 @@ fn assistant_run_answer_quality_low_quality_case_package(
     }))
 }
 
-fn assistant_run_answer_quality_has_deterministic_supply(evidence_state: &Value) -> bool {
-    let supply_quality_has_deterministic_rows = evidence_state
-        .get("supply_quality")
-        .map(|supply_quality| {
-            [
-                "datasetFactSnapshotCount",
-                "dataset_fact_snapshot_count",
-                "spreadsheetRowAnalysisCount",
-                "spreadsheet_row_analysis_count",
-                "databaseAggregateCount",
-                "database_aggregate_count",
-            ]
-            .iter()
-            .any(|key| {
-                supply_quality
-                    .get(*key)
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    > 0
-            })
-        })
-        .unwrap_or(false);
-    supply_quality_has_deterministic_rows
-        || evidence_state
-            .get("supplied_items")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|item| {
-                matches!(
-                    item.get("type").and_then(Value::as_str),
-                    Some(
-                        "dataset_fact_snapshot" | "database_aggregate" | "spreadsheet_row_analysis"
-                    )
-                )
-            })
-}
-
 fn assistant_run_answer_quality_report_link_expected(request: &CreateAssistantRunRequest) -> bool {
     assistant_run_xinbai_published_report_link_answer(&request.prompt).is_some()
         || external_channel_prompt_requests_static_page_report_workflow(&request.prompt)
