@@ -3,6 +3,10 @@ use domain_model::AssistantRun;
 use serde_json::Value;
 
 use crate::json_value_support::value_array;
+use crate::ApiError;
+
+const ASSISTANT_RUN_COMPLETION_DISPATCH_DEFAULT_PROMPT: &str =
+    "后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。";
 
 pub(crate) fn assistant_run_create_request_from_continue(
     run: &AssistantRun,
@@ -20,6 +24,43 @@ pub(crate) fn assistant_run_create_request_from_continue(
         current_artifact: request.current_artifact.clone(),
         messages: request.messages.clone(),
     }
+}
+
+pub(crate) fn assistant_run_continue_request_from_completion_dispatch(
+    dispatch_request: &Value,
+) -> std::result::Result<ContinueAssistantRunRequest, ApiError> {
+    let continue_request = dispatch_request
+        .get("continue_request")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_model_completion_turn_continue_request",
+                "dispatch request requires continue_request".to_string(),
+            )
+        })?;
+    let prompt = continue_request
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| Some(ASSISTANT_RUN_COMPLETION_DISPATCH_DEFAULT_PROMPT.to_string()));
+    let max_steps = continue_request
+        .get("max_steps")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .or(Some(1));
+    let current_artifact = continue_request
+        .get("current_artifact")
+        .filter(|value| !value.is_null())
+        .cloned();
+
+    Ok(ContinueAssistantRunRequest {
+        prompt,
+        max_steps,
+        current_artifact,
+        messages: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -120,5 +161,57 @@ mod tests {
         assert!(create_request.scope_candidates.is_empty());
         assert_eq!(create_request.current_artifact, None);
         assert!(create_request.messages.is_empty());
+    }
+
+    #[test]
+    fn continue_request_support_parses_completion_dispatch_request() {
+        let request = assistant_run_continue_request_from_completion_dispatch(&json!({
+            "continue_request": {
+                "prompt": "  请继续输出最终结果  ",
+                "max_steps": 4,
+                "current_artifact": {"type": "video_ppt", "id": "artifact-1"}
+            }
+        }))
+        .expect("completion dispatch request should parse");
+
+        assert_eq!(request.prompt.as_deref(), Some("请继续输出最终结果"));
+        assert_eq!(request.max_steps, Some(4));
+        assert_eq!(
+            request.current_artifact,
+            Some(json!({"type": "video_ppt", "id": "artifact-1"}))
+        );
+        assert!(request.messages.is_empty());
+    }
+
+    #[test]
+    fn continue_request_support_defaults_completion_dispatch_values() {
+        let request = assistant_run_continue_request_from_completion_dispatch(&json!({
+            "continue_request": {
+                "prompt": "  ",
+                "current_artifact": null
+            }
+        }))
+        .expect("completion dispatch defaults should parse");
+
+        assert_eq!(
+            request.prompt.as_deref(),
+            Some(ASSISTANT_RUN_COMPLETION_DISPATCH_DEFAULT_PROMPT)
+        );
+        assert_eq!(request.max_steps, Some(1));
+        assert_eq!(request.current_artifact, None);
+        assert!(request.messages.is_empty());
+    }
+
+    #[test]
+    fn continue_request_support_rejects_missing_completion_dispatch_request() {
+        let error = assistant_run_continue_request_from_completion_dispatch(&json!({
+            "continueRequest": {}
+        }))
+        .expect_err("missing continue_request should be rejected");
+
+        assert_eq!(
+            error.payload.code,
+            "missing_model_completion_turn_continue_request"
+        );
     }
 }

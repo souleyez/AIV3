@@ -30812,45 +30812,6 @@ pub async fn consume_assistant_run_model_completion_turn_dispatch(
     }))
 }
 
-fn assistant_run_continue_request_from_completion_dispatch(
-    dispatch_request: &Value,
-) -> std::result::Result<ContinueAssistantRunRequest, ApiError> {
-    let continue_request = dispatch_request
-        .get("continue_request")
-        .filter(|value| value.is_object())
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "missing_model_completion_turn_continue_request",
-                "dispatch request requires continue_request".to_string(),
-            )
-        })?;
-    let prompt = continue_request
-        .get("prompt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            Some("后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。".to_string())
-        });
-    let max_steps = continue_request
-        .get("max_steps")
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .or(Some(1));
-    let current_artifact = continue_request
-        .get("current_artifact")
-        .filter(|value| !value.is_null())
-        .cloned();
-
-    Ok(ContinueAssistantRunRequest {
-        prompt,
-        max_steps,
-        current_artifact,
-        messages: Vec::new(),
-    })
-}
-
 fn assistant_run_model_completion_turn_consumed_event<'a>(
     events: &'a [AssistantRunEvent],
     idempotency_key: &str,
