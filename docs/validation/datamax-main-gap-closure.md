@@ -2,6 +2,31 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run Continue Request Helper Local Verification
+
+- Scope:
+  - continue #665 P5 behavior-preserving engineering governance under `platform-api`;
+  - move assistant-run continue-to-create request conversion out of `lib.rs` into `crates/platform-api/src/assistant_run_continue_request_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_continue_request_support`;
+  - moved `assistant_run_create_request_from_continue` into the new helper module;
+  - kept the continue quality-retry call site using the same helper name through crate-local import;
+  - preserved prompt trimming, `local_thread_id`, `startup_briefing`, `selected_scope`, `scope_candidates`, `context_policy_hint`, `current_artifact`, and `messages` mapping semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_continue_request_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_skips_satisfied_point_list_table --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Current state:
+  - local tree contains the #665 helper split and documentation updates pending commit/push;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run Point-List Satisfied Answer Helper Local Verification
 
 - Scope:
@@ -21,8 +46,13 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
   - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
   - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- GitHub:
+  - pushed `49ab729a Extract assistant point list satisfied helper` to `origin/main`;
+  - DataMax CI run `28273398300` for `49ab729a639365bed3d21654f9a9e8b019efea25` completed successfully;
+  - `Rust Minimal` completed successfully, including checkout, Rust/native toolchain check, `cargo fmt --check`, model gateway tests, and static page worker tests;
+  - `No-Credential Smoke` completed successfully, including checkout, Node toolchain check, dependency install, smoke script syntax checks, deterministic smoke self-tests, public guide check, and web build.
 - Current state:
-  - local tree contains the #664 helper split and documentation updates pending commit/push;
+  - `origin/main` includes the #664 assistant-run point-list satisfied answer helper split;
   - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.

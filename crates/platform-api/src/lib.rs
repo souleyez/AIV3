@@ -207,6 +207,7 @@ mod assistant_run_codex_promotion_gate_support;
 mod assistant_run_codex_shadow_gate_support;
 mod assistant_run_codex_shadow_support;
 mod assistant_run_codex_tool_output_support;
+mod assistant_run_continue_request_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_customer_codex_artifact_support;
 mod assistant_run_detail_support;
@@ -501,6 +502,7 @@ use assistant_run_codex_observability_support::*;
 use assistant_run_codex_promotion_gate_support::*;
 use assistant_run_codex_shadow_gate_support::*;
 use assistant_run_codex_shadow_support::*;
+use assistant_run_continue_request_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_customer_codex_artifact_support::*;
 use assistant_run_detail_support::*;
@@ -30297,24 +30299,6 @@ async fn continue_assistant_run_stream(
         Ok(Bytes::from(body))
     }));
     Ok(sse_stream_response(stream))
-}
-
-fn assistant_run_create_request_from_continue(
-    run: &AssistantRun,
-    request: &ContinueAssistantRunRequest,
-    continue_prompt: &str,
-    selected_scope: &Value,
-) -> CreateAssistantRunRequest {
-    CreateAssistantRunRequest {
-        prompt: continue_prompt.trim().to_string(),
-        local_thread_id: run.local_thread_id.clone(),
-        startup_briefing: Some(run.startup_briefing.clone()),
-        selected_scope: Some(selected_scope.clone()),
-        scope_candidates: value_array(run.scope_candidates.clone()),
-        context_policy_hint: Some(run.context_policy.clone()),
-        current_artifact: request.current_artifact.clone(),
-        messages: request.messages.clone(),
-    }
 }
 
 async fn continue_assistant_run_loaded(
