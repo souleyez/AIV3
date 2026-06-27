@@ -17,8 +17,27 @@ use domain_model::{AssistantRunId, DatasetId, DocumentId};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+pub(crate) const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
+pub(crate) const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
+pub(crate) const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
+
+const ASSISTANT_RUN_REACT_MAX_STEPS_ENV: &str = "ASSISTANT_RUN_REACT_MAX_STEPS";
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
-const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
+
+pub(crate) fn assistant_run_react_max_steps() -> usize {
+    assistant_run_react_max_steps_from_value(
+        std::env::var(ASSISTANT_RUN_REACT_MAX_STEPS_ENV)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn assistant_run_react_max_steps_from_value(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
+        .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
+}
 
 pub(crate) fn assistant_run_react_completed_event_payload(
     step_index: usize,
@@ -769,6 +788,24 @@ mod tests {
             citations: Vec::new(),
             conversation_state: json!({}),
         }
+    }
+
+    #[test]
+    fn react_max_steps_uses_default_and_clamps_env_values() {
+        assert_eq!(
+            assistant_run_react_max_steps_from_value(None),
+            ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS
+        );
+        assert_eq!(
+            assistant_run_react_max_steps_from_value(Some("bad")),
+            ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS
+        );
+        assert_eq!(assistant_run_react_max_steps_from_value(Some("0")), 1);
+        assert_eq!(
+            assistant_run_react_max_steps_from_value(Some("9")),
+            ASSISTANT_RUN_REACT_MAX_STEPS
+        );
+        assert_eq!(assistant_run_react_max_steps_from_value(Some("4")), 4);
     }
 
     #[test]

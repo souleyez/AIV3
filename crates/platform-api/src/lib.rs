@@ -877,9 +877,6 @@ const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
-const ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS: usize = 3;
-const ASSISTANT_RUN_REACT_MAX_STEPS: usize = 5;
-const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
 const ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET: usize = 1;
 const ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET: usize = 3;
 const ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET: usize = 4;
@@ -43683,14 +43680,6 @@ fn build_assistant_run_react_continue_provider_input(
     }
 
     sections.join("\n\n")
-}
-
-fn assistant_run_react_max_steps() -> usize {
-    std::env::var("ASSISTANT_RUN_REACT_MAX_STEPS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS)
-        .clamp(1, ASSISTANT_RUN_REACT_MAX_STEPS)
 }
 
 fn ensure_react_requested_dataset_is_selected(

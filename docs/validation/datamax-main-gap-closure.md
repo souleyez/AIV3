@@ -2,6 +2,41 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-27 P5 Assistant Run ReAct Step Budget Helper Local Verification
+
+- Scope:
+  - continue #679 P5 behavior-preserving engineering governance under `platform-api`;
+  - move ReAct step-budget constants and max-step helper out of `lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`;
+  - keep public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS` into `assistant_run_react_support`;
+  - moved `ASSISTANT_RUN_REACT_MAX_STEPS` into `assistant_run_react_support`;
+  - moved `ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT` into `assistant_run_react_support`;
+  - moved `assistant_run_react_max_steps` into `assistant_run_react_support`;
+  - added a pure value parser helper for deterministic max-step unit coverage without mutating process environment;
+  - kept existing ReAct initial execution, continue execution, answer-quality budget, and trace reason-summary call sites using the same names through crate-local import.
+- Behavior preserved:
+  - env key remains `ASSISTANT_RUN_REACT_MAX_STEPS`;
+  - missing or invalid env value still falls back to default 3;
+  - configured value still clamps to the 1..5 range;
+  - ReAct answer-quality budget still uses the same default and maximum step counts;
+  - continue execution still clamps caller-provided max steps to the same maximum;
+  - trace reason summary limit remains 240 characters.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 24/24 tests;
+  - `cargo test -q -p platform-api assistant_run_react_stops_at_configured_step_limit --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_react_protocol_repair --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: passed, 240/240 tests;
+  - `pnpm -C apps/web build`: passed with the existing Next middleware deprecation warning and existing Turbopack NFT trace warning only;
+  - `git diff --check`: passed.
+- Current state:
+  - #679 is locally complete and awaiting GitHub push plus DataMax CI observation;
+  - no 8-server deployment, service restart, source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+- Safety:
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
+
 ## 2026-06-27 P5 Assistant Run ReAct Protocol Repair Helper Local Verification
 
 - Scope:
