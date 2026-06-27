@@ -35,6 +35,29 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 - Safety:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, raw Authorization value, or production customer data was recorded.
 
+## 2026-06-27 P5 Assistant Run Report Link and Fallback Signal Helper 8-Server Deployment
+
+- Deployment:
+  - GitHub commit `cd21f9b34` was deployed to 8 server;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `945ca404d` to `cd21f9b34`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker` passed;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `HTTP/1.1 200 OK`;
+  - `https://v3.elepcloud.com/`: `HTTP/1.1 200 OK`;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `cd21f9b34`.
+- GitHub Actions:
+  - DataMax CI run `28292832355` for commit `cd21f9b34` completed successfully after deployment;
+  - implementation DataMax CI run `28292626270` for commit `8f58ecdf` completed successfully before deployment.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed.
+
 ## 2026-06-27 P5 Assistant Run Answer-Quality Supply Case Helper Local Verification
 
 - Scope:
