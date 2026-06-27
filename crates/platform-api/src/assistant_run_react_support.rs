@@ -54,6 +54,28 @@ pub(crate) fn assistant_run_react_output_artifacts_from_observations(
     summaries
 }
 
+pub(crate) fn bounded_duration_ms(duration_ms: u128) -> u64 {
+    duration_ms.min(u64::MAX as u128) as u64
+}
+
+pub(crate) fn redact_react_trace_text(raw: &str, max_chars: usize) -> String {
+    let value = raw.trim().chars().take(max_chars).collect::<String>();
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("secret")
+        || lower.contains("token")
+        || lower.contains("password")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("authorization")
+        || lower.contains("bearer ")
+        || lower.contains("sk-")
+    {
+        "[redacted]".to_string()
+    } else {
+        value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +177,25 @@ mod tests {
                 })
             ]
         );
+    }
+
+    #[test]
+    fn react_trace_text_trims_and_truncates_non_sensitive_text() {
+        assert_eq!(redact_react_trace_text("  abcdef  ", 3), "abc");
+    }
+
+    #[test]
+    fn react_trace_text_redacts_sensitive_tokens_after_truncation() {
+        assert_eq!(
+            redact_react_trace_text("Authorization: Bearer abc", 240),
+            "[redacted]"
+        );
+        assert_eq!(redact_react_trace_text("sk-test-key", 240), "[redacted]");
+    }
+
+    #[test]
+    fn bounded_duration_ms_saturates_to_u64_max() {
+        assert_eq!(bounded_duration_ms(42), 42);
+        assert_eq!(bounded_duration_ms(u128::MAX), u64::MAX);
     }
 }

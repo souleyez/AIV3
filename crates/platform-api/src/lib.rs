@@ -43959,28 +43959,6 @@ fn assistant_run_react_returned_count(observation: &Value) -> usize {
         .unwrap_or_default()
 }
 
-fn bounded_duration_ms(duration_ms: u128) -> u64 {
-    duration_ms.min(u64::MAX as u128) as u64
-}
-
-fn redact_react_trace_text(raw: &str, max_chars: usize) -> String {
-    let value = raw.trim().chars().take(max_chars).collect::<String>();
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("secret")
-        || lower.contains("token")
-        || lower.contains("password")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("authorization")
-        || lower.contains("bearer ")
-        || lower.contains("sk-")
-    {
-        "[redacted]".to_string()
-    } else {
-        value
-    }
-}
-
 #[allow(dead_code)]
 pub(crate) fn build_react_protocol_repair(
     decision: &AssistantRunNextAction,
