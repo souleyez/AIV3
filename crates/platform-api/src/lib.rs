@@ -43686,10 +43686,6 @@ fn build_assistant_run_react_continue_provider_input(
     sections.join("\n\n")
 }
 
-fn assistant_run_react_enabled(runtime_mode: &str) -> bool {
-    runtime_mode != "placeholder" && env_flag("ASSISTANT_RUN_REACT_ENABLED", false)
-}
-
 fn assistant_run_react_max_steps() -> usize {
     std::env::var("ASSISTANT_RUN_REACT_MAX_STEPS")
         .ok()
@@ -44050,50 +44046,6 @@ pub(crate) fn env_flag(key: &str, default_value: bool) -> bool {
             )
         })
         .unwrap_or(default_value)
-}
-
-fn assistant_run_is_plain_ordinary_chat_scope(
-    selected_scope: Option<&Value>,
-    evidence_state: Option<&Value>,
-    current_artifact: Option<&Value>,
-) -> bool {
-    if current_artifact.is_some() {
-        return false;
-    }
-    let Some(selected_scope) = selected_scope else {
-        return true;
-    };
-    let no_selected_supply = selected_dataset_ids_from_scope(selected_scope).is_empty()
-        && selected_document_ids_from_scope(selected_scope).is_empty()
-        && !selected_scope_requests_conversation_memory(selected_scope);
-    let ordinary_intent = assistant_run_scope_intent(selected_scope) == "ordinary_chat";
-    let no_evidence = evidence_state
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        .map(|status| matches!(status, "not_requested" | "empty"))
-        .unwrap_or(true)
-        && evidence_state
-            .map(|state| assistant_run_evidence_supplied_count(state) == 0)
-            .unwrap_or(true);
-
-    ordinary_intent && no_selected_supply && no_evidence
-}
-
-fn assistant_run_react_enabled_for_scope(
-    runtime_mode: &str,
-    selected_scope: &Value,
-    current_artifact: Option<&Value>,
-) -> bool {
-    assistant_run_react_enabled(runtime_mode)
-        && assistant_run_react_scope_allows_tools(selected_scope, current_artifact)
-}
-
-fn assistant_run_react_scope_allows_tools(
-    selected_scope: &Value,
-    current_artifact: Option<&Value>,
-) -> bool {
-    (assistant_run_scope_intent(selected_scope) != "ordinary_chat" || current_artifact.is_some())
-        && !assistant_run_is_plain_ordinary_chat_scope(Some(selected_scope), None, current_artifact)
 }
 
 fn push_unique_string(items: &mut Vec<String>, item: &str) {
