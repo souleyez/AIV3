@@ -28332,6 +28332,30 @@ Data-ingestion external fixed-task smoke:
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
 
+## 2026-06-27 P5 Assistant-Run Deterministic Supply Signal Helper 8-Server Deployment
+
+- Deployment:
+  - GitHub commit `c65f30756` was deployed to 8 server;
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `778ed1808` to `c65f30756`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker` passed;
+  - restarted services: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server service checks:
+  - `systemctl is-active aiv3-platform-api.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `HTTP/1.1 200 OK`;
+  - `https://v3.elepcloud.com/`: `HTTP/1.1 200 OK`;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `c65f30756`.
+- GitHub Actions:
+  - DataMax CI run `28291595761` for commit `c65f30756` completed successfully before deployment;
+  - DataMax CI run `28291424335` for implementation commit `1d32ed63` also completed successfully.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
+  - 120 server was not touched.
+
 ## 2026-06-27 P5 Dependency Refresh and Assistant-Run Helper Batch 8-Server Deployment Verification
 
 - Deployment:
