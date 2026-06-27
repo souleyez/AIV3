@@ -34606,30 +34606,6 @@ fn assistant_run_sanitize_customer_facing_answer_text(output_text: &str) -> Stri
     sanitized
 }
 
-fn build_assistant_run_react_natural_fallback_input(
-    base_input: String,
-    observations: &[Value],
-    reason: &str,
-) -> String {
-    let mut sections = vec![
-        base_input,
-        "ReAct 自然回答兜底要求：上一轮工具规划没有产出可直接展示给用户的最终回答。请改为面向用户直接自然语言作答；不要输出 JSON、observation、execution_trail、react_trace、tool_trace、runtime_manifest 或 provider 原始载荷。".to_string(),
-        "如果当前没有拿到 DataMax 可见证据，只在涉及 DataMax 数据/文档/权限/产物状态时说明“当前不可见/未供料”；普通问题继续用你的通用能力回答。".to_string(),
-        format!("兜底原因：{reason}"),
-    ];
-    if !observations.is_empty() {
-        let summaries = observations
-            .iter()
-            .map(assistant_run_react_observation_summary)
-            .collect::<Vec<_>>();
-        sections.push(format!(
-            "已执行动作摘要（仅用于判断下一句回答，不要原样输出）：{}",
-            serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string())
-        ));
-    }
-    sections.join("\n\n")
-}
-
 fn build_assistant_run_react_compact_natural_fallback_input(
     user_prompt: &str,
     evidence_state: &Value,
@@ -34732,17 +34708,6 @@ fn assistant_run_compact_evidence_items_for_natural_fallback(
         })
     })
     .collect()
-}
-
-fn assistant_run_react_step_limit_followup_message(evidence_state: &Value) -> String {
-    let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
-    if supplied_count > 0 {
-        return format!(
-            "我已检索到 {supplied_count} 条相关资料，但还没有定位到足够明确的专门流程条款。可以继续：请补充制度名称、页码或关键词；如果没有专门制度，我也可以先按已检索到的突发事件处置线索和通用养老机构应急规范，整理一版“现场处置、家属沟通、上报记录、后续复盘”的流程。"
-        );
-    }
-    "当前没有检索到可见资料。请补充相关制度文件、文档范围或关键词，我会继续检索并整理可执行流程。"
-        .to_string()
 }
 
 async fn complete_assistant_run_react_natural_answer_fallback(
@@ -42802,26 +42767,6 @@ fn assistant_run_assistant_message_content_from_artifacts(artifacts: &[Value]) -
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn assistant_run_react_attach_natural_fallback_runtime(
-    runtime_manifest: &mut Value,
-    reason: &str,
-    fallback_runtime_manifest: Value,
-) {
-    if let Some(object) = runtime_manifest.as_object_mut() {
-        object.insert(
-            "natural_answer_fallback".to_string(),
-            json!({
-                "reason": reason,
-                "runtime": fallback_runtime_manifest,
-            }),
-        );
-    }
-}
-
-fn assistant_run_react_unavailable_natural_answer_message() -> String {
-    "模型暂时没有返回可展示的自然语言回答，请稍后重试或换一种问法。".to_string()
 }
 
 async fn run_assistant_run_react_for_create(
