@@ -7,9 +7,13 @@ use crate::{
     selected_dataset_ids_from_scope, selected_document_ids_from_scope,
     selected_scope_requests_conversation_memory,
 };
+use chrono::Utc;
+use domain_model::AssistantRunId;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
+const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
 
 pub(crate) fn assistant_run_react_completed_event_payload(
     step_index: usize,
@@ -162,6 +166,97 @@ pub(crate) fn assistant_run_react_returned_count(observation: &Value) -> usize {
         .and_then(Value::as_u64)
         .map(|value| value as usize)
         .unwrap_or_default()
+}
+
+pub(crate) fn assistant_run_react_attach_trace(
+    runtime_manifest: &mut Value,
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) {
+    let trace = assistant_run_react_trace_manifest(trace_id, assistant_run_id, trace_steps);
+    if let Some(object) = runtime_manifest.as_object_mut() {
+        object.insert("react_trace".to_string(), trace);
+    } else {
+        *runtime_manifest = json!({
+            "runtime": runtime_manifest.clone(),
+            "react_trace": trace,
+        });
+    }
+}
+
+pub(crate) fn assistant_run_react_trace_manifest(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "steps": trace_steps,
+    })
+}
+
+pub(crate) fn assistant_run_react_trace_trail_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    trace_steps: &[Value],
+) -> Value {
+    json!({
+        "status": "completed",
+        "label": "ReAct 安全追踪",
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "step_count": trace_steps.len(),
+        "react_trace": trace_steps,
+        "at": Utc::now(),
+    })
+}
+
+pub(crate) fn assistant_run_react_invalid_trace_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    pass_number: usize,
+    safe_error_code: &str,
+    duration_ms: u128,
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "pass_number": pass_number,
+        "action_type": "invalid_action",
+        "reason_summary": "",
+        "status": "failed",
+        "denied_count": 0,
+        "returned_count": 0,
+        "duration_ms": bounded_duration_ms(duration_ms),
+        "safe_error_code": safe_error_code,
+        "safe_message": "模型未返回有效动作",
+    })
+}
+
+pub(crate) fn assistant_run_react_trace_step(
+    trace_id: Uuid,
+    assistant_run_id: Option<AssistantRunId>,
+    pass_number: usize,
+    action: &AssistantRunReActDecision,
+    observation_summary: &Value,
+    duration_ms: u128,
+) -> Value {
+    json!({
+        "trace_id": trace_id.to_string(),
+        "assistant_run_id": assistant_run_id.map(|id| id.to_string()),
+        "pass_number": pass_number,
+        "action_type": action.action_type.as_str(),
+        "reason_summary": redact_react_trace_text(&action.reason_summary, ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT),
+        "status": observation_summary.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "denied_count": observation_summary.get("denied_count").and_then(Value::as_u64).unwrap_or(0),
+        "returned_count": observation_summary.get("returned_count").and_then(Value::as_u64).unwrap_or(0),
+        "detail_target_count": observation_summary.get("detail_target_count").and_then(Value::as_u64).unwrap_or(0),
+        "duration_ms": bounded_duration_ms(duration_ms),
+        "safe_error_code": observation_summary.get("safe_error_code").cloned().unwrap_or(Value::Null),
+        "safe_message": observation_summary.get("safe_message").and_then(Value::as_str).unwrap_or(""),
+    })
 }
 
 pub(crate) fn assistant_run_react_direct_natural_answer_from_invalid_output(
@@ -660,6 +755,45 @@ mod tests {
             ),
             9
         );
+    }
+
+    #[test]
+    fn react_trace_step_manifest_and_trail_are_safe_and_counted() {
+        let mut decision = react_test_decision(
+            AssistantRunReActActionType::ReadDocumentDetail,
+            json!({"document_id": Uuid::nil().to_string()}),
+        );
+        decision.reason_summary = "读取公开摘要".to_string();
+        let trace_id = Uuid::nil();
+        let summary = json!({
+            "status": "completed",
+            "denied_count": 1,
+            "returned_count": 2,
+            "detail_target_count": 3,
+            "safe_error_code": "ok",
+            "safe_message": "工具完成",
+        });
+
+        let trace_step =
+            assistant_run_react_trace_step(trace_id, None, 2, &decision, &summary, u128::MAX);
+        assert_eq!(trace_step["trace_id"], trace_id.to_string());
+        assert_eq!(trace_step["pass_number"], 2);
+        assert_eq!(trace_step["action_type"], "read_document_detail");
+        assert_eq!(trace_step["reason_summary"], "读取公开摘要");
+        assert_eq!(trace_step["safe_message"], "工具完成");
+        assert_eq!(trace_step["duration_ms"], u64::MAX);
+
+        let trace_steps = vec![trace_step.clone()];
+        let manifest = assistant_run_react_trace_manifest(trace_id, None, &trace_steps);
+        assert_eq!(manifest["steps"][0], trace_step);
+
+        let trail_step = assistant_run_react_trace_trail_step(trace_id, None, &trace_steps);
+        assert_eq!(trail_step["step_count"], 1);
+        assert_eq!(trail_step["react_trace"][0], trace_step);
+
+        let mut runtime_manifest = json!({"runtime": "test"});
+        assistant_run_react_attach_trace(&mut runtime_manifest, trace_id, None, &trace_steps);
+        assert_eq!(runtime_manifest["react_trace"]["steps"][0], trace_step);
     }
 
     #[test]
