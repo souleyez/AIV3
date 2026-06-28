@@ -32,6 +32,29 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Judge Input/Env Helper 8-Server Deployment
+
+- GitHub:
+  - pushed `2a972ef6` (`Extract answer quality judge input helper`) to `origin/main`;
+  - DataMax CI run `28308582782` completed successfully.
+- Deployment:
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `7be907726` to `2a972ef62`;
+  - the first combined deploy command timed out from the local shell without usable build output; follow-up inspection confirmed remote HEAD `2a972ef62`, services still active, no cargo/rustc process left running, and health/ready/public checks healthy;
+  - explicit follow-up `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p static-page-worker` completed successfully;
+  - restarted services after the explicit build: `aiv3-platform-api.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server service checks after explicit build and restart:
+  - `systemctl is-active aiv3-platform-api.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service`: all active;
+  - `http://127.0.0.1:3000/healthz`: `status=ok`;
+  - `http://127.0.0.1:3000/readyz`: `status=ready`;
+  - `http://127.0.0.1:3100/`: `HTTP 200`;
+  - `https://v3.elepcloud.com/`: `HTTP 200`;
+  - one transient local curl during restart saw connection refused before readiness passed; the final health/ready/web/public checks were successful;
+  - 8-server repo status after deployment: clean;
+  - 8-server repo head after deployment: `2a972ef62`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, runtime model route, source sync, object cleanup, P2 real backfill, production prewarm enablement, production data mutation, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Judge Decision Helper Local Verification
 
 - Scope:
