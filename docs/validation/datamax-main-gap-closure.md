@@ -2,6 +2,31 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Weak-Confidence Marker Helper Local Verification
+
+- Scope:
+  - continue #697 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality weak-confidence marker detection out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`;
+  - keep retry reason ordering, judge should-run ordering, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_answer_contains_weak_confidence_marker` into `assistant_run_answer_quality_judge_support`;
+  - existing retry reason and judge should-run paths continue to call the same helper name through crate-local import.
+- Behavior preserved:
+  - Chinese markers still include `可能`, `大概`, `似乎`, `推测`, `猜测`, `不确定`, `不完整`, `部分数据`, and `部分资料`;
+  - ASCII markers still include `maybe`, `probably`, `likely`, `uncertain`, and `partial`;
+  - clear non-weak answers do not match.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api answer_quality_judge --lib`: 14/14 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 62/62 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Retry Allowed Helper Local Verification
 
 - Scope:

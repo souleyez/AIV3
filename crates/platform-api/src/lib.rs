@@ -41525,26 +41525,6 @@ pub(crate) fn assistant_run_answer_contains_insufficient_evidence_marker(
     .any(|marker| lower.contains(marker))
 }
 
-fn assistant_run_answer_contains_weak_confidence_marker(output_text: &str) -> bool {
-    let lower = output_text.to_ascii_lowercase();
-    prompt_contains_any(
-        output_text,
-        &[
-            "可能",
-            "大概",
-            "似乎",
-            "推测",
-            "猜测",
-            "不确定",
-            "不完整",
-            "部分数据",
-            "部分资料",
-        ],
-    ) || ["maybe", "probably", "likely", "uncertain", "partial"]
-        .iter()
-        .any(|marker| lower.contains(marker))
-}
-
 fn assistant_run_answer_quality_retry_scope(
     selected_scope: &Value,
     prompt: &str,

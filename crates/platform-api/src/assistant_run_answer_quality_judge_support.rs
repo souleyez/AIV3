@@ -157,6 +157,26 @@ pub(crate) fn assistant_run_answer_quality_retry_allowed(
     true
 }
 
+pub(crate) fn assistant_run_answer_contains_weak_confidence_marker(output_text: &str) -> bool {
+    let lower = output_text.to_ascii_lowercase();
+    prompt_contains_any(
+        output_text,
+        &[
+            "可能",
+            "大概",
+            "似乎",
+            "推测",
+            "猜测",
+            "不确定",
+            "不完整",
+            "部分数据",
+            "部分资料",
+        ],
+    ) || ["maybe", "probably", "likely", "uncertain", "partial"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 fn assistant_run_answer_reports_actual_parse_unavailable(
     output_text: &str,
     supply_quality: &Value,
@@ -509,6 +529,19 @@ mod tests {
         assert!(!assistant_run_answer_quality_retry_allowed(
             "原文内容尚未被平台解析。",
             &low_text_only
+        ));
+    }
+
+    #[test]
+    fn weak_confidence_marker_matches_chinese_and_ascii_terms() {
+        assert!(assistant_run_answer_contains_weak_confidence_marker(
+            "根据当前资料，可能是门店店总负责。"
+        ));
+        assert!(assistant_run_answer_contains_weak_confidence_marker(
+            "This is likely a partial answer."
+        ));
+        assert!(!assistant_run_answer_contains_weak_confidence_marker(
+            "总部视角应先展示区域、门店和品牌指标。"
         ));
     }
 
