@@ -41307,56 +41307,6 @@ fn assistant_run_answer_quality_judge_should_run(
     assistant_run_answer_is_short_for_structured_request(output_text, request, evidence_state)
 }
 
-fn assistant_run_supply_quality_needs_judge(evidence_state: &Value) -> bool {
-    let Some(supply_quality) = evidence_state.get("supply_quality") else {
-        return false;
-    };
-    [
-        "fallbackChunkCount",
-        "lowTextEvidenceCount",
-        "documentDegradedParseCount",
-        "documentNotReadyCount",
-        "documentFailedCount",
-        "documentReparsingCount",
-    ]
-    .iter()
-    .any(|key| {
-        supply_quality
-            .get(*key)
-            .and_then(Value::as_u64)
-            .map(|count| count > 0)
-            .unwrap_or(false)
-    }) || supply_quality
-        .get("notes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|note| {
-            matches!(
-                note.as_str(),
-                Some("fallback_visible_document_chunks_used")
-                    | Some("low_text_document_evidence")
-                    | Some("parse_quality_degraded")
-            )
-        })
-}
-
-fn assistant_run_answer_is_short_for_structured_request(
-    output_text: &str,
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-) -> bool {
-    if !assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
-        return false;
-    }
-    let supplied_count = evidence_state
-        .get("supply_quality")
-        .and_then(|quality| quality.get("suppliedItemCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    supplied_count > 0 && output_text.chars().count() < 80
-}
-
 fn assistant_run_answer_satisfies_spreadsheet_row_analysis(
     output_text: &str,
     request: &CreateAssistantRunRequest,

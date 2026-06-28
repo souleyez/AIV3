@@ -2,6 +2,7 @@ use contracts::CreateAssistantRunRequest;
 use serde_json::{json, Value};
 
 use crate::{
+    assistant_run_answer_quality_budget_support::assistant_run_prompt_is_high_risk_quality_task,
     assistant_run_model_evidence_state,
     assistant_run_react_support::assistant_run_react_json_payload_candidate,
     build_assistant_run_model_supply_brief,
@@ -73,6 +74,56 @@ pub(crate) fn build_assistant_run_answer_quality_judge_input(
         format!("候选答案：\n{answer_excerpt}"),
     ]
     .join("\n\n")
+}
+
+pub(crate) fn assistant_run_supply_quality_needs_judge(evidence_state: &Value) -> bool {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    [
+        "fallbackChunkCount",
+        "lowTextEvidenceCount",
+        "documentDegradedParseCount",
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    }) || supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| {
+            matches!(
+                note.as_str(),
+                Some("fallback_visible_document_chunks_used")
+                    | Some("low_text_document_evidence")
+                    | Some("parse_quality_degraded")
+            )
+        })
+}
+
+pub(crate) fn assistant_run_answer_is_short_for_structured_request(
+    output_text: &str,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    if !assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
+        return false;
+    }
+    let supplied_count = evidence_state
+        .get("supply_quality")
+        .and_then(|quality| quality.get("suppliedItemCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    supplied_count > 0 && output_text.chars().count() < 80
 }
 
 pub(crate) fn assistant_run_answer_quality_retry_reason_from_judge_decision(
@@ -200,6 +251,56 @@ mod tests {
         assert!(input.contains("供料摘要"));
         assert!(input.contains("候选答案"));
         assert!(!input.contains("TAIL_SHOULD_BE_TRUNCATED"));
+    }
+
+    #[test]
+    fn supply_quality_needs_judge_for_counts_and_notes() {
+        assert!(assistant_run_supply_quality_needs_judge(&json!({
+            "supply_quality": {
+                "fallbackChunkCount": 1
+            }
+        })));
+        assert!(assistant_run_supply_quality_needs_judge(&json!({
+            "supply_quality": {
+                "fallbackChunkCount": 0,
+                "notes": ["parse_quality_degraded"]
+            }
+        })));
+        assert!(!assistant_run_supply_quality_needs_judge(&json!({
+            "supply_quality": {
+                "fallbackChunkCount": 0,
+                "lowTextEvidenceCount": 0,
+                "notes": ["spreadsheet_row_analysis_available"]
+            }
+        })));
+        assert!(!assistant_run_supply_quality_needs_judge(&json!({})));
+    }
+
+    #[test]
+    fn short_structured_answer_requires_high_risk_prompt_and_supply() {
+        let structured = judge_request("这份 doc 里邓工是谁？请直接回答。");
+        let casual = judge_request("帮我润色一句普通问候。");
+        let evidence_state = json!({
+            "supply_quality": {
+                "suppliedItemCount": 2
+            }
+        });
+
+        assert!(assistant_run_answer_is_short_for_structured_request(
+            "邓工是项目负责人。",
+            &structured,
+            &evidence_state
+        ));
+        assert!(!assistant_run_answer_is_short_for_structured_request(
+            "普通问候可以写得更自然。",
+            &casual,
+            &evidence_state
+        ));
+        assert!(!assistant_run_answer_is_short_for_structured_request(
+            "邓工是项目负责人。",
+            &structured,
+            &json!({"supply_quality": {"suppliedItemCount": 0}})
+        ));
     }
 
     #[test]

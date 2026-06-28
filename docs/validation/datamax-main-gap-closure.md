@@ -2,6 +2,33 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Judge Trigger Helper Local Verification
+
+- Scope:
+  - continue #695 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality judge trigger helper predicates out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`;
+  - keep judge should-run ordering, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_supply_quality_needs_judge` into `assistant_run_answer_quality_judge_support`;
+  - moved `assistant_run_answer_is_short_for_structured_request` into the same module;
+  - existing judge should-run path continues to call the same helper names through crate-local import.
+- Behavior preserved:
+  - supply-quality judge trigger still checks `fallbackChunkCount`, `lowTextEvidenceCount`, `documentDegradedParseCount`, `documentNotReadyCount`, `documentFailedCount`, and `documentReparsingCount`;
+  - supply-quality judge trigger still checks notes `fallback_visible_document_chunks_used`, `low_text_document_evidence`, and `parse_quality_degraded`;
+  - short structured answer trigger still requires a high-risk structured prompt, `suppliedItemCount > 0`, and candidate answer shorter than 80 characters.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api answer_quality_judge --lib`: 11/11 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 59/59 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings;
+  - `git diff --check`: passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Judge Input/Env Helper Local Verification
 
 - Scope:
