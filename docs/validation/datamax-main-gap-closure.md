@@ -2,6 +2,37 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Judge Decision Helper Local Verification
+
+- Scope:
+  - continue #693 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality judge verdict/decision parsing helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`;
+  - keep judge trigger policy, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `AssistantRunAnswerQualityJudgeDecision` and `AssistantRunAnswerQualityJudgeVerdict` into `assistant_run_answer_quality_judge_support`;
+  - moved `parse_assistant_run_answer_quality_judge_decision` into the same module;
+  - moved `assistant_run_answer_quality_retry_reason_from_judge_decision` into the same module;
+  - existing answer-quality judge and retry paths continue to call the same helper names through crate-local import.
+- Behavior preserved:
+  - fenced JSON extraction still uses the ReAct JSON payload candidate helper;
+  - judge decision parsing still supports snake/camel fields for customer-safety, required actions, and premium action allowance;
+  - confidence remains clamped to `0.0..=1.0`;
+  - accept decisions still default to customer-safe, while retry/fallback decisions default to not customer-safe unless explicitly set;
+  - unsafe customer answer mapping still takes precedence over reason-specific retry mapping;
+  - reason values still map to the same `model_judge_*` retry reasons.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api answer_quality_judge --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 56/56 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings;
+  - `git diff --check`: passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Budget Helper Local Verification
 
 - Scope:

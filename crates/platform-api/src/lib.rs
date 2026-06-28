@@ -196,6 +196,7 @@ mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
 mod assistant_run_answer_quality_autofix_support;
 mod assistant_run_answer_quality_budget_support;
+mod assistant_run_answer_quality_judge_support;
 mod assistant_run_codex_action_contract_support;
 mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_context_package_support;
@@ -494,6 +495,7 @@ mod zip_ingest_support;
 use assistant_run_answer_policy_support::*;
 use assistant_run_answer_quality_autofix_support::*;
 use assistant_run_answer_quality_budget_support::*;
+use assistant_run_answer_quality_judge_support::*;
 #[cfg(test)]
 use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_package_support::*;
@@ -41252,23 +41254,6 @@ fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq)]
-struct AssistantRunAnswerQualityJudgeDecision {
-    verdict: AssistantRunAnswerQualityJudgeVerdict,
-    reason: String,
-    confidence: f64,
-    customer_safe: bool,
-    required_actions: Vec<String>,
-    premium_action_allowed: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AssistantRunAnswerQualityJudgeVerdict {
-    Accept,
-    Retry,
-    ControlledFallback,
-}
-
 async fn assistant_run_answer_quality_retry_reason_with_judge(
     output_text: &str,
     evidence_state: &Value,
@@ -41291,26 +41276,6 @@ async fn assistant_run_answer_quality_retry_reason_with_judge(
     )
     .await?;
     assistant_run_answer_quality_retry_reason_from_judge_decision(&decision)
-}
-
-fn assistant_run_answer_quality_retry_reason_from_judge_decision(
-    decision: &AssistantRunAnswerQualityJudgeDecision,
-) -> Option<&'static str> {
-    if !decision.customer_safe {
-        return Some("model_judge_customer_unsafe_answer");
-    }
-    match decision.verdict {
-        AssistantRunAnswerQualityJudgeVerdict::Accept => None,
-        AssistantRunAnswerQualityJudgeVerdict::Retry => match decision.reason.as_str() {
-            "parse_quality_insufficient" => Some("model_judge_parse_quality_insufficient"),
-            "incomplete_task" => Some("model_judge_incomplete_task"),
-            "ungrounded" => Some("model_judge_ungrounded_answer"),
-            "low_customer_confidence" => Some("model_judge_low_customer_confidence"),
-            "unsafe_internal_leak" => Some("model_judge_customer_unsafe_answer"),
-            _ => Some("model_judge_retry"),
-        },
-        AssistantRunAnswerQualityJudgeVerdict::ControlledFallback => None,
-    }
 }
 
 fn assistant_run_answer_quality_judge_should_run(
@@ -41545,62 +41510,6 @@ fn build_assistant_run_answer_quality_judge_input(
         format!("候选答案：\n{answer_excerpt}"),
     ]
     .join("\n\n")
-}
-
-fn parse_assistant_run_answer_quality_judge_decision(
-    raw: &str,
-) -> Option<AssistantRunAnswerQualityJudgeDecision> {
-    let candidate = assistant_run_react_json_payload_candidate(raw)?;
-    let value = serde_json::from_str::<Value>(&candidate).ok()?;
-    let verdict = value.get("verdict").and_then(Value::as_str)?;
-    let verdict = match verdict.trim().to_ascii_lowercase().as_str() {
-        "accept" => AssistantRunAnswerQualityJudgeVerdict::Accept,
-        "retry" => AssistantRunAnswerQualityJudgeVerdict::Retry,
-        "controlled_fallback" | "controlled-fallback" | "fallback" => {
-            AssistantRunAnswerQualityJudgeVerdict::ControlledFallback
-        }
-        _ => return None,
-    };
-    let reason = value
-        .get("reason")
-        .and_then(Value::as_str)
-        .map(|reason| reason.trim().to_ascii_lowercase())
-        .filter(|reason| !reason.is_empty())
-        .unwrap_or_else(|| "ok".to_string());
-    let confidence = value
-        .get("confidence")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0);
-    let customer_safe = value
-        .get("customer_safe")
-        .or_else(|| value.get("customerSafe"))
-        .and_then(Value::as_bool)
-        .unwrap_or(verdict == AssistantRunAnswerQualityJudgeVerdict::Accept);
-    let required_actions = value
-        .get("required_actions")
-        .or_else(|| value.get("requiredActions"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|action| !action.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let premium_action_allowed = value
-        .get("premium_action_allowed")
-        .or_else(|| value.get("premiumActionAllowed"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Some(AssistantRunAnswerQualityJudgeDecision {
-        verdict,
-        reason,
-        confidence,
-        customer_safe,
-        required_actions,
-        premium_action_allowed,
-    })
 }
 
 fn assistant_run_answer_quality_retry_reason(
