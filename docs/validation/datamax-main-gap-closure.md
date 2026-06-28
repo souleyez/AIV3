@@ -2,6 +2,34 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Retry Allowed Helper Local Verification
+
+- Scope:
+  - continue #696 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality retry guard helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`;
+  - keep retry reason ordering, judge should-run ordering, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_answer_quality_retry_allowed` into `assistant_run_answer_quality_judge_support`;
+  - moved the private `assistant_run_answer_reports_actual_parse_unavailable` helper into the same module;
+  - existing retry reason and judge should-run paths continue to call the same helper names through crate-local import.
+- Behavior preserved:
+  - `status=not_requested` still blocks answer-quality retry;
+  - missing `supply_quality` still blocks answer-quality retry;
+  - no selected dataset, supplied item, or conversation memory still blocks answer-quality retry;
+  - actual parse unavailable answers still block retry only when not-ready/failed/reparsing or low-text evidence is present and no stronger answerable supply exists;
+  - indexed evidence, fallback chunks, fact snapshots, spreadsheet rows, media context, or conversation memory still keep retry available for quality recovery.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api answer_quality_judge --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 61/61 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Judge Trigger Helper Local Verification
 
 - Scope:

@@ -5,7 +5,7 @@ use crate::{
     assistant_run_answer_quality_budget_support::assistant_run_prompt_is_high_risk_quality_task,
     assistant_run_model_evidence_state,
     assistant_run_react_support::assistant_run_react_json_payload_candidate,
-    build_assistant_run_model_supply_brief,
+    build_assistant_run_model_supply_brief, prompt_match_support::prompt_contains_any,
 };
 
 const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
@@ -124,6 +124,105 @@ pub(crate) fn assistant_run_answer_is_short_for_structured_request(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     supplied_count > 0 && output_text.chars().count() < 80
+}
+
+pub(crate) fn assistant_run_answer_quality_retry_allowed(
+    output_text: &str,
+    evidence_state: &Value,
+) -> bool {
+    if evidence_state.get("status").and_then(Value::as_str) == Some("not_requested") {
+        return false;
+    }
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    let selected_dataset_count = supply_quality
+        .get("selectedDatasetCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let supplied_item_count = supply_quality
+        .get("suppliedItemCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let conversation_memory_count = supply_quality
+        .get("conversationMemoryItemCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if selected_dataset_count == 0 && supplied_item_count == 0 && conversation_memory_count == 0 {
+        return false;
+    }
+    if assistant_run_answer_reports_actual_parse_unavailable(output_text, supply_quality) {
+        return false;
+    }
+    true
+}
+
+fn assistant_run_answer_reports_actual_parse_unavailable(
+    output_text: &str,
+    supply_quality: &Value,
+) -> bool {
+    let unavailable_count = [
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .filter_map(|key| supply_quality.get(*key).and_then(Value::as_u64))
+    .sum::<u64>();
+    let low_text_evidence_present = supply_quality
+        .get("lowTextEvidenceCount")
+        .and_then(Value::as_u64)
+        .map(|count| count > 0)
+        .unwrap_or_else(|| {
+            supply_quality
+                .get("notes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|note| note.as_str() == Some("low_text_document_evidence"))
+        });
+    if unavailable_count == 0 && !low_text_evidence_present {
+        return false;
+    }
+    let answerable_supply_count = [
+        "indexedEvidenceCount",
+        "fallbackChunkCount",
+        "datasetEntityScanCount",
+        "datasetFactSnapshotCount",
+        "spreadsheetRowAnalysisCount",
+        "mediaContextCount",
+        "conversationMemoryItemCount",
+    ]
+    .iter()
+    .filter_map(|key| supply_quality.get(*key).and_then(Value::as_u64))
+    .sum::<u64>();
+    let low_text_only_answerable_limit = u64::from(low_text_evidence_present);
+    if answerable_supply_count > low_text_only_answerable_limit {
+        return false;
+    }
+    prompt_contains_any(
+        output_text,
+        &[
+            "正在解析",
+            "解析中",
+            "解析失败",
+            "解析未完成",
+            "未解析完成",
+            "资料不足",
+            "信息不足",
+            "无法回答",
+            "无法确认",
+            "重解析",
+            "重试中",
+            "文档未就绪",
+            "低质量",
+            "解析质量",
+            "解析不完整",
+            "仅返回了标题字段",
+            "只返回了标题字段",
+            "原文内容尚未被平台解析",
+        ],
+    )
 }
 
 pub(crate) fn assistant_run_answer_quality_retry_reason_from_judge_decision(
@@ -300,6 +399,116 @@ mod tests {
             "邓工是项目负责人。",
             &structured,
             &json!({"supply_quality": {"suppliedItemCount": 0}})
+        ));
+    }
+
+    #[test]
+    fn retry_allowed_requires_requested_or_available_supply() {
+        assert!(!assistant_run_answer_quality_retry_allowed(
+            "需要补充资料。",
+            &json!({
+                "status": "not_requested",
+                "supply_quality": {
+                    "selectedDatasetCount": 1,
+                    "suppliedItemCount": 1
+                }
+            })
+        ));
+        assert!(!assistant_run_answer_quality_retry_allowed(
+            "需要补充资料。",
+            &json!({
+                "status": "supplied",
+                "supply_quality": {
+                    "selectedDatasetCount": 0,
+                    "suppliedItemCount": 0,
+                    "conversationMemoryItemCount": 0
+                }
+            })
+        ));
+        assert!(assistant_run_answer_quality_retry_allowed(
+            "当前回答缺少细节。",
+            &json!({
+                "status": "supplied",
+                "supply_quality": {
+                    "selectedDatasetCount": 1,
+                    "suppliedItemCount": 0,
+                    "conversationMemoryItemCount": 0
+                }
+            })
+        ));
+        assert!(assistant_run_answer_quality_retry_allowed(
+            "当前回答缺少细节。",
+            &json!({
+                "status": "supplied",
+                "supply_quality": {
+                    "selectedDatasetCount": 0,
+                    "suppliedItemCount": 0,
+                    "conversationMemoryItemCount": 1
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn retry_allowed_respects_real_parse_unavailable_answer() {
+        let parse_blocked = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "documentFailedCount": 1,
+                "indexedEvidenceCount": 0,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "datasetFactSnapshotCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0
+            }
+        });
+        assert!(!assistant_run_answer_quality_retry_allowed(
+            "这份文档解析失败，当前无法回答。",
+            &parse_blocked
+        ));
+
+        let expanded_supply = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "documentFailedCount": 1,
+                "indexedEvidenceCount": 1,
+                "fallbackChunkCount": 1,
+                "datasetEntityScanCount": 0,
+                "datasetFactSnapshotCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0
+            }
+        });
+        assert!(assistant_run_answer_quality_retry_allowed(
+            "这份文档解析失败，当前无法回答。",
+            &expanded_supply
+        ));
+
+        let low_text_only = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "lowTextEvidenceCount": 1,
+                "indexedEvidenceCount": 0,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "datasetFactSnapshotCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0
+            }
+        });
+        assert!(!assistant_run_answer_quality_retry_allowed(
+            "原文内容尚未被平台解析。",
+            &low_text_only
         ));
     }
 
