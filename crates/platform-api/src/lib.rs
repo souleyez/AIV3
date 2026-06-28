@@ -882,7 +882,6 @@ const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
 const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
-const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -32823,7 +32822,7 @@ fn build_assistant_run_continue_provider_input(
     sections.join("\n\n")
 }
 
-fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<String> {
+pub(crate) fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<String> {
     let status = evidence_state.get("status").and_then(Value::as_str)?;
     if status == "not_requested" {
         return None;
@@ -32947,7 +32946,7 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
     Some(lines.join("\n"))
 }
 
-fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
+pub(crate) fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
     let mut model_state = evidence_state.clone();
     if let Some(object) = model_state.as_object_mut() {
         if let Some((items, budget)) = object
@@ -41461,55 +41460,6 @@ async fn complete_assistant_run_answer_quality_judge(
     .await
     .ok()?;
     parse_assistant_run_answer_quality_judge_decision(&response.output_text)
-}
-
-fn assistant_run_answer_quality_judge_enabled() -> bool {
-    std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ENABLED")
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off"
-            )
-        })
-        .unwrap_or(true)
-}
-
-fn build_assistant_run_answer_quality_judge_input(
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-    output_text: &str,
-) -> String {
-    let supply_quality = evidence_state
-        .get("supply_quality")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
-    let supply_brief = build_assistant_run_model_supply_brief(evidence_state)
-        .unwrap_or_else(|| "无供料摘要。".to_string());
-    let answer_excerpt = output_text
-        .chars()
-        .take(ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS)
-        .collect::<String>();
-    [
-        "你是 DataMax AssistantRun 的内部回答质量判卷器，只能输出 JSON，不能回答用户。".to_string(),
-        "根据用户问题、供料状态、可回答证据摘要和候选答案，判断候选答案是否可以安全给客户。".to_string(),
-        "硬规则：如果已有证据但候选答案推脱、遗漏表格/统计/排序任务、没有回答实体问题、或含内部状态泄露，应 verdict=retry。".to_string(),
-        "如果解析质量明显阻塞且可通过升级解析恢复，required_actions 包含 upgrade_parse_vlm；但不要自行回答材料内容。".to_string(),
-        "如果确实不可答且没有可靠升级路径，可 verdict=controlled_fallback。".to_string(),
-        r#"只输出 JSON Schema：{"verdict":"accept|retry|controlled_fallback","reason":"ok|insufficient_evidence|ungrounded|incomplete_task|parse_quality_insufficient|low_customer_confidence|unsafe_internal_leak","confidence":0.0,"customer_safe":true,"required_actions":["retrieve_evidence","read_document_detail"],"premium_action_allowed":false}"#.to_string(),
-        format!("用户问题：{}", request.prompt.trim()),
-        format!(
-            "供料质量：{}",
-            serde_json::to_string(&supply_quality).unwrap_or_else(|_| "{}".to_string())
-        ),
-        format!("供料摘要：\n{supply_brief}"),
-        format!(
-            "可回答证据摘要：{}",
-            serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
-        ),
-        format!("候选答案：\n{answer_excerpt}"),
-    ]
-    .join("\n\n")
 }
 
 fn assistant_run_answer_quality_retry_reason(

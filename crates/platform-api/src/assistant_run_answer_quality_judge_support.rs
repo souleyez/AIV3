@@ -1,6 +1,13 @@
-use serde_json::Value;
+use contracts::CreateAssistantRunRequest;
+use serde_json::{json, Value};
 
-use crate::assistant_run_react_support::assistant_run_react_json_payload_candidate;
+use crate::{
+    assistant_run_model_evidence_state,
+    assistant_run_react_support::assistant_run_react_json_payload_candidate,
+    build_assistant_run_model_supply_brief,
+};
+
+const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AssistantRunAnswerQualityJudgeDecision {
@@ -17,6 +24,55 @@ pub(crate) enum AssistantRunAnswerQualityJudgeVerdict {
     Accept,
     Retry,
     ControlledFallback,
+}
+
+pub(crate) fn assistant_run_answer_quality_judge_enabled() -> bool {
+    std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ENABLED")
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+pub(crate) fn build_assistant_run_answer_quality_judge_input(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    output_text: &str,
+) -> String {
+    let supply_quality = evidence_state
+        .get("supply_quality")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
+    let supply_brief = build_assistant_run_model_supply_brief(evidence_state)
+        .unwrap_or_else(|| "无供料摘要。".to_string());
+    let answer_excerpt = output_text
+        .chars()
+        .take(ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS)
+        .collect::<String>();
+    [
+        "你是 DataMax AssistantRun 的内部回答质量判卷器，只能输出 JSON，不能回答用户。".to_string(),
+        "根据用户问题、供料状态、可回答证据摘要和候选答案，判断候选答案是否可以安全给客户。".to_string(),
+        "硬规则：如果已有证据但候选答案推脱、遗漏表格/统计/排序任务、没有回答实体问题、或含内部状态泄露，应 verdict=retry。".to_string(),
+        "如果解析质量明显阻塞且可通过升级解析恢复，required_actions 包含 upgrade_parse_vlm；但不要自行回答材料内容。".to_string(),
+        "如果确实不可答且没有可靠升级路径，可 verdict=controlled_fallback。".to_string(),
+        r#"只输出 JSON Schema：{"verdict":"accept|retry|controlled_fallback","reason":"ok|insufficient_evidence|ungrounded|incomplete_task|parse_quality_insufficient|low_customer_confidence|unsafe_internal_leak","confidence":0.0,"customer_safe":true,"required_actions":["retrieve_evidence","read_document_detail"],"premium_action_allowed":false}"#.to_string(),
+        format!("用户问题：{}", request.prompt.trim()),
+        format!(
+            "供料质量：{}",
+            serde_json::to_string(&supply_quality).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!("供料摘要：\n{supply_brief}"),
+        format!(
+            "可回答证据摘要：{}",
+            serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!("候选答案：\n{answer_excerpt}"),
+    ]
+    .join("\n\n")
 }
 
 pub(crate) fn assistant_run_answer_quality_retry_reason_from_judge_decision(
@@ -97,7 +153,54 @@ pub(crate) fn parse_assistant_run_answer_quality_judge_decision(
 
 #[cfg(test)]
 mod tests {
+    use contracts::CreateAssistantRunRequest;
+    use serde_json::json;
+
     use super::*;
+
+    fn judge_request(prompt: &str) -> CreateAssistantRunRequest {
+        CreateAssistantRunRequest {
+            prompt: prompt.to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn judge_input_contains_context_and_truncates_candidate_answer() {
+        let request = judge_request("请判断这份文档里邓工是谁？");
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "status": "grounded",
+                "suppliedItemCount": 1,
+                "indexedEvidenceCount": 1
+            },
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "content_excerpt": "邓工是项目负责人。"
+            }]
+        });
+        let output_text = format!(
+            "{}TAIL_SHOULD_BE_TRUNCATED",
+            "候选答案".repeat(ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS)
+        );
+
+        let input =
+            build_assistant_run_answer_quality_judge_input(&request, &evidence_state, &output_text);
+
+        assert!(input.contains("内部回答质量判卷器"));
+        assert!(input.contains("用户问题：请判断这份文档里邓工是谁？"));
+        assert!(input.contains("\"status\":\"grounded\""));
+        assert!(input.contains("供料摘要"));
+        assert!(input.contains("候选答案"));
+        assert!(!input.contains("TAIL_SHOULD_BE_TRUNCATED"));
+    }
 
     #[test]
     fn judge_decision_parses_fenced_json_and_maps_unsafe_retry() {

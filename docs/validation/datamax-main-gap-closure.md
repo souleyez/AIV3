@@ -2,6 +2,36 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-06-28 P5 Assistant Run Answer-Quality Judge Input/Env Helper Local Verification
+
+- Scope:
+  - continue #694 P5 behavior-preserving engineering governance under `platform-api`;
+  - move answer-quality judge enablement and provider input construction out of `lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`;
+  - keep judge trigger policy, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `assistant_run_answer_quality_judge_enabled` into `assistant_run_answer_quality_judge_support`;
+  - moved `build_assistant_run_answer_quality_judge_input` into the same module;
+  - moved the judge answer excerpt char limit into the same module;
+  - changed only `build_assistant_run_model_supply_brief` and `assistant_run_model_evidence_state` visibility to `pub(crate)` so the helper module can reuse existing context compaction.
+- Behavior preserved:
+  - env key remains `ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ENABLED`;
+  - unset env still enables the model judge by default;
+  - values `0`, `false`, and `off` still disable the judge;
+  - provider input still includes the same internal judge instructions, hard rules, JSON schema instruction, trimmed user prompt, supply-quality JSON, model supply brief, compact evidence state, and candidate answer excerpt;
+  - candidate answer excerpt remains capped at 1200 characters.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api answer_quality_judge --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api answer_quality --lib`: 57/57 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api static_page_render --lib`: 240/240 passed;
+  - `pnpm -C apps/web build`: passed with only existing Next middleware/proxy deprecation and Turbopack NFT trace warnings;
+  - `git diff --check`: passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Judge Decision Helper Local Verification
 
 - Scope:
