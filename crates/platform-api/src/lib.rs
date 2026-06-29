@@ -4952,8 +4952,17 @@ enum ExternalChannelEventSseState {
     ProcessLive {
         state: AppState,
         connection_id: String,
+        message: ExternalBotMessageView,
         receiver: tokio::sync::mpsc::UnboundedReceiver<ExternalChannelEventSseWorkerMessage>,
         answer_delta_emitted: bool,
+    },
+    FollowPublicEvents {
+        state: AppState,
+        run_id: AssistantRunId,
+        idempotency_key: String,
+        conversation_external_id: String,
+        started_at: Instant,
+        last_sequence_no: i32,
     },
     FollowStaticPage {
         state: AppState,
@@ -5015,6 +5024,7 @@ async fn external_channel_event_sse_next(
                     ExternalChannelEventSseState::ProcessLive {
                         state,
                         connection_id,
+                        message,
                         receiver,
                         answer_delta_emitted: false,
                     },
@@ -5040,7 +5050,7 @@ async fn external_channel_event_sse_next(
                 &state,
                 &connection_id,
                 &connection,
-                message,
+                message.clone(),
             )
             .await
             {
@@ -5062,11 +5072,15 @@ async fn external_channel_event_sse_next(
                     encoded.push_str(
                         &external_channel_sse_completion_with_done_persisted(
                             &state,
-                            response,
+                            response.clone(),
                             !should_follow || terminal_static_page,
                         )
                         .await,
                     );
+                    let should_follow_public_events =
+                        external_channel_response_should_follow_first_turn_public_events(
+                            &message, &response,
+                        );
                     let next_state = if should_follow && !terminal_static_page {
                         run_id
                             .map(|run_id| ExternalChannelEventSseState::FollowStaticPage {
@@ -5080,6 +5094,22 @@ async fn external_channel_event_sse_next(
                                 preview_emitted: false,
                             })
                             .unwrap_or(ExternalChannelEventSseState::End)
+                    } else if should_follow_public_events {
+                        if let Some(run_id) = run_id {
+                            let last_sequence_no =
+                                external_channel_public_stream_completed_sequence(&state, run_id)
+                                    .await;
+                            ExternalChannelEventSseState::FollowPublicEvents {
+                                state,
+                                run_id,
+                                idempotency_key,
+                                conversation_external_id,
+                                started_at: Instant::now(),
+                                last_sequence_no,
+                            }
+                        } else {
+                            ExternalChannelEventSseState::End
+                        }
                     } else {
                         ExternalChannelEventSseState::End
                     };
@@ -5092,6 +5122,7 @@ async fn external_channel_event_sse_next(
         ExternalChannelEventSseState::ProcessLive {
             state,
             connection_id,
+            message,
             mut receiver,
             answer_delta_emitted,
         } => match receiver.recv().await {
@@ -5100,6 +5131,7 @@ async fn external_channel_event_sse_next(
                 ExternalChannelEventSseState::ProcessLive {
                     state,
                     connection_id,
+                    message,
                     receiver,
                     answer_delta_emitted: true,
                 },
@@ -5122,6 +5154,7 @@ async fn external_channel_event_sse_next(
                     ExternalChannelEventSseState::ProcessLive {
                         state,
                         connection_id,
+                        message,
                         receiver,
                         answer_delta_emitted,
                     },
@@ -5163,12 +5196,16 @@ async fn external_channel_event_sse_next(
                         encoded.push_str(
                             &external_channel_sse_completion_with_done_persisted_and_delta(
                                 &state,
-                                response,
+                                response.clone(),
                                 !should_follow || terminal_static_page,
                                 !answer_delta_emitted,
                             )
                             .await,
                         );
+                        let should_follow_public_events =
+                            external_channel_response_should_follow_first_turn_public_events(
+                                &message, &response,
+                            );
                         let next_state = if should_follow && !terminal_static_page {
                             run_id
                                 .map(|run_id| ExternalChannelEventSseState::FollowStaticPage {
@@ -5182,6 +5219,24 @@ async fn external_channel_event_sse_next(
                                     preview_emitted: false,
                                 })
                                 .unwrap_or(ExternalChannelEventSseState::End)
+                        } else if should_follow_public_events {
+                            if let Some(run_id) = run_id {
+                                let last_sequence_no =
+                                    external_channel_public_stream_completed_sequence(
+                                        &state, run_id,
+                                    )
+                                    .await;
+                                ExternalChannelEventSseState::FollowPublicEvents {
+                                    state,
+                                    run_id,
+                                    idempotency_key,
+                                    conversation_external_id,
+                                    started_at: Instant::now(),
+                                    last_sequence_no,
+                                }
+                            } else {
+                                ExternalChannelEventSseState::End
+                            }
                         } else {
                             ExternalChannelEventSseState::End
                         };
@@ -5200,6 +5255,98 @@ async fn external_channel_event_sse_next(
                 ExternalChannelEventSseState::End,
             )),
         },
+        ExternalChannelEventSseState::FollowPublicEvents {
+            state,
+            run_id,
+            idempotency_key,
+            conversation_external_id,
+            started_at,
+            last_sequence_no,
+        } => {
+            tokio::time::sleep(StdDuration::from_secs(1)).await;
+            let events = state
+                .storage
+                .assistant_runs()
+                .list_events(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage);
+            let events = match events {
+                Ok(events) => events,
+                Err(error) => {
+                    return Some((
+                        Ok(Bytes::from(sse_error_event(error))),
+                        ExternalChannelEventSseState::End,
+                    ));
+                }
+            };
+            let replay =
+                external_channel_public_stream_replay_body(&events, Some(last_sequence_no));
+            let latest_sequence_no = external_channel_public_stream_latest_sequence_from_events(
+                &events,
+                last_sequence_no,
+            );
+            if !replay.is_empty() {
+                let mut encoded = replay;
+                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
+            }
+            if started_at.elapsed() >= StdDuration::from_secs(18) {
+                let text = "首轮回复已返回，后续动作仍在后台继续；可通过同一会话继续查询进度。";
+                let payload = external_channel_sse_public_payload(
+                    Some(run_id),
+                    &idempotency_key,
+                    &conversation_external_id,
+                    external_channel_static_page_sse_sequence("continue_polling"),
+                    "followup_action",
+                    "processing",
+                    text,
+                    None,
+                    Some(10),
+                    json!({
+                        "assistant_run_id": run_id,
+                        "idempotency_key": idempotency_key,
+                        "status": "processing",
+                        "text": text,
+                    }),
+                );
+                let mut encoded = external_channel_sse_event_with_delta(
+                    "external_channel.followup_action_continue_polling",
+                    payload,
+                    text,
+                );
+                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
+            }
+            Some((
+                Ok(Bytes::from(sse_json_event(
+                    "external_channel.heartbeat",
+                    external_channel_sse_public_payload(
+                        Some(run_id),
+                        &idempotency_key,
+                        &conversation_external_id,
+                        external_channel_static_page_sse_sequence("processing"),
+                        "followup_action",
+                        "processing",
+                        "DataMax 正在继续处理后续动作。",
+                        None,
+                        Some(1),
+                        json!({
+                            "assistant_run_id": run_id,
+                            "idempotency_key": idempotency_key,
+                            "status": "processing",
+                        }),
+                    ),
+                ))),
+                ExternalChannelEventSseState::FollowPublicEvents {
+                    state,
+                    run_id,
+                    idempotency_key,
+                    conversation_external_id,
+                    started_at,
+                    last_sequence_no: latest_sequence_no,
+                },
+            ))
+        }
         ExternalChannelEventSseState::FollowStaticPage {
             state,
             connection_id,
@@ -5401,6 +5548,57 @@ async fn external_channel_static_page_sse_preview_ready_events(
         payload,
     ));
     Some(encoded)
+}
+
+fn external_channel_response_should_follow_first_turn_public_events(
+    message: &ExternalBotMessageView,
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    if external_channel_response_is_static_page_pipeline(response) {
+        return false;
+    }
+    if response.reply.reply_type != ExternalBotReplyTypeView::Text {
+        return false;
+    }
+    let prompt = message.text.as_deref().unwrap_or_default();
+    external_channel_prompt_may_need_planned_action(prompt)
+}
+
+async fn external_channel_public_stream_completed_sequence(
+    state: &AppState,
+    run_id: AssistantRunId,
+) -> i32 {
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .unwrap_or_default();
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_name == "external_channel.completed"
+                && event.payload.get("schema").and_then(Value::as_str)
+                    == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        })
+        .map(|event| event.sequence_no)
+        .unwrap_or_else(|| external_channel_public_stream_latest_sequence_from_events(&events, 0))
+}
+
+fn external_channel_public_stream_latest_sequence_from_events(
+    events: &[AssistantRunEvent],
+    default_sequence_no: i32,
+) -> i32 {
+    events
+        .iter()
+        .filter(|event| {
+            event.payload.get("schema").and_then(Value::as_str)
+                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        })
+        .map(|event| event.sequence_no)
+        .max()
+        .unwrap_or(default_sequence_no)
 }
 
 async fn external_channel_static_page_sse_prompt_events(
@@ -11542,6 +11740,7 @@ async fn ingest_external_channel_message_with_connection_inner(
         assistant_request.messages =
             load_external_channel_conversation_history_messages(state, local_thread_id).await?;
     }
+    let first_visible_turn = assistant_run_request_is_first_visible_turn(&assistant_request);
     let mut selected_scope = assistant_request
         .selected_scope
         .clone()
@@ -11721,6 +11920,7 @@ async fn ingest_external_channel_message_with_connection_inner(
     )
     .await?
     {
+        let reply = external_channel_first_turn_reply_guard(first_visible_turn, &message, reply);
         return Ok((
             StatusCode::ACCEPTED,
             ExternalChannelEventResponse {
@@ -11857,6 +12057,7 @@ async fn ingest_external_channel_message_with_connection_inner(
     )
     .await?
     {
+        let reply = external_channel_first_turn_reply_guard(first_visible_turn, &message, reply);
         return Ok((
             StatusCode::ACCEPTED,
             ExternalChannelEventResponse {
@@ -11879,6 +12080,7 @@ async fn ingest_external_channel_message_with_connection_inner(
     )
     .await?
     {
+        let reply = external_channel_first_turn_reply_guard(first_visible_turn, &message, reply);
         return Ok((
             StatusCode::ACCEPTED,
             ExternalChannelEventResponse {
@@ -11902,6 +12104,7 @@ async fn ingest_external_channel_message_with_connection_inner(
     )
     .await?
     {
+        let reply = external_channel_first_turn_reply_guard(first_visible_turn, &message, reply);
         return Ok((
             StatusCode::ACCEPTED,
             ExternalChannelEventResponse {
@@ -11913,20 +12116,24 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
-    let external_action_plan = plan_and_record_external_action_run(
-        state,
-        connection_id,
-        run.id,
-        run.local_thread_id.as_deref(),
-        &assistant_request.prompt,
-        &selected_scope,
-        &scope_candidates,
-        &startup_briefing,
-        &external_evidence_state,
-        &message,
-        now,
-    )
-    .await?;
+    let external_action_plan = if first_visible_turn {
+        None
+    } else {
+        plan_and_record_external_action_run(
+            state,
+            connection_id,
+            run.id,
+            run.local_thread_id.as_deref(),
+            &assistant_request.prompt,
+            &selected_scope,
+            &scope_candidates,
+            &startup_briefing,
+            &external_evidence_state,
+            &message,
+            now,
+        )
+        .await?
+    };
     let reply = match external_action_plan.as_ref() {
         Some(ExternalChannelPlanOutcome::Action(plan)) => {
             external_channel_action_plan_reply(&message, plan)
@@ -12007,6 +12214,22 @@ async fn ingest_external_channel_message_with_connection_inner(
             "external channel static-page template prewarm enqueue failed"
         );
     }
+
+    let reply = external_channel_first_turn_reply_guard(first_visible_turn, &message, reply);
+    maybe_spawn_external_channel_first_turn_followup_actions(
+        state,
+        connection_id,
+        first_visible_turn,
+        run.id,
+        run.local_thread_id.clone(),
+        &assistant_request,
+        &selected_scope,
+        &scope_candidates,
+        &startup_briefing,
+        &external_evidence_state,
+        &message,
+        &reply,
+    );
 
     Ok((
         StatusCode::ACCEPTED,
@@ -12489,6 +12712,298 @@ async fn plan_and_record_external_action_run(
         .map_err(ApiError::from_storage)?;
 
     Ok(Some(ExternalChannelPlanOutcome::Action(plan)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_spawn_external_channel_first_turn_followup_actions(
+    state: &AppState,
+    connection_id: &str,
+    first_visible_turn: bool,
+    run_id: AssistantRunId,
+    local_thread_id: Option<String>,
+    assistant_request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    scope_candidates: &Value,
+    startup_briefing: &Value,
+    evidence_state: &Value,
+    message: &ExternalBotMessageView,
+    reply: &ExternalBotReplyView,
+) {
+    if !external_channel_first_turn_followup_actions_should_run(
+        first_visible_turn,
+        assistant_request,
+        message,
+        reply,
+    ) {
+        return;
+    }
+
+    let state = state.clone();
+    let connection_id = connection_id.to_string();
+    let prompt = assistant_request.prompt.clone();
+    let selected_scope = selected_scope.clone();
+    let scope_candidates = scope_candidates.clone();
+    let startup_briefing = startup_briefing.clone();
+    let evidence_state = evidence_state.clone();
+    let message = message.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run_external_channel_first_turn_followup_actions(
+            state,
+            connection_id,
+            run_id,
+            local_thread_id,
+            prompt,
+            selected_scope,
+            scope_candidates,
+            startup_briefing,
+            evidence_state,
+            message,
+        )
+        .await
+        {
+            tracing::warn!(
+                %error,
+                %run_id,
+                "external channel first-turn follow-up action planner failed"
+            );
+        }
+    });
+}
+
+fn external_channel_first_turn_followup_actions_should_run(
+    first_visible_turn: bool,
+    assistant_request: &CreateAssistantRunRequest,
+    message: &ExternalBotMessageView,
+    reply: &ExternalBotReplyView,
+) -> bool {
+    if !first_visible_turn {
+        return false;
+    }
+    if external_channel_message_requests_static_page_artifact(message, &assistant_request.prompt) {
+        return false;
+    }
+    if reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|card_type| card_type.contains("static_page"))
+    {
+        return false;
+    }
+    external_channel_prompt_may_need_planned_action(&assistant_request.prompt)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_external_channel_first_turn_followup_actions(
+    state: AppState,
+    connection_id: String,
+    run_id: AssistantRunId,
+    local_thread_id: Option<String>,
+    prompt: String,
+    selected_scope: Value,
+    scope_candidates: Value,
+    startup_briefing: Value,
+    evidence_state: Value,
+    message: ExternalBotMessageView,
+) -> std::result::Result<(), ApiError> {
+    append_external_channel_first_turn_followup_stream_status(
+        &state,
+        run_id,
+        &message,
+        "external_channel.followup_action_planning",
+        "action_planning",
+        "已完成首轮回复，DataMax 正在继续判断是否需要执行受控动作。",
+        None,
+    )
+    .await;
+
+    let now = Utc::now();
+    let outcome = plan_and_record_external_action_run(
+        &state,
+        &connection_id,
+        run_id,
+        local_thread_id.as_deref(),
+        &prompt,
+        &selected_scope,
+        &scope_candidates,
+        &startup_briefing,
+        &evidence_state,
+        &message,
+        now,
+    )
+    .await;
+    match outcome {
+        Ok(Some(ExternalChannelPlanOutcome::Action(plan))) => {
+            let reply = external_channel_action_plan_reply(&message, &plan);
+            append_external_channel_first_turn_followup_reply(
+                &state,
+                &connection_id,
+                run_id,
+                &message,
+                "external_channel.followup_action_planned",
+                "action_planned",
+                reply,
+            )
+            .await?;
+        }
+        Ok(Some(ExternalChannelPlanOutcome::SearchEvidenceRequired(plan))) => {
+            let reply = external_channel_search_evidence_required_reply(&message, &plan);
+            append_external_channel_first_turn_followup_reply(
+                &state,
+                &connection_id,
+                run_id,
+                &message,
+                "external_channel.followup_search_evidence_required",
+                "search_evidence_required",
+                reply,
+            )
+            .await?;
+        }
+        Ok(None) => {
+            append_external_channel_first_turn_followup_stream_status(
+                &state,
+                run_id,
+                &message,
+                "external_channel.followup_action_not_required",
+                "action_not_required",
+                "首轮回复后已复核本轮需求，当前无需额外受控动作。",
+                None,
+            )
+            .await;
+        }
+        Err(error) => {
+            let text = format!(
+                "首轮回复已返回；后台动作规划暂未完成，原因：{}。",
+                external_channel_public_text(error.payload.code.as_str())
+            );
+            append_external_channel_first_turn_followup_stream_status(
+                &state,
+                run_id,
+                &message,
+                "external_channel.followup_action_failed",
+                "action_planning_failed",
+                &text,
+                Some(json!({
+                    "type": "v3_followup_action_status",
+                    "status": "action_planning_failed",
+                    "reason": error.payload.code.as_str(),
+                })),
+            )
+            .await;
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+async fn append_external_channel_first_turn_followup_reply(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    public_event_name: &str,
+    status: &str,
+    reply: ExternalBotReplyView,
+) -> std::result::Result<(), ApiError> {
+    let now = Utc::now();
+    let internal_payload = json!({
+        "channel_connection_id": connection_id,
+        "platform": external_channel_platform_wire_value(&message.platform),
+        "conversation_external_id": message.conversation_external_id,
+        "message_external_id": message.message_external_id,
+        "source": "first_turn_followup_action",
+        "reply": reply,
+    });
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_first_turn_followup_action_reply"
+                    .to_string(),
+                payload: internal_payload.clone(),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    maybe_dispatch_external_channel_outbound_reply(
+        &state.storage,
+        state.tenant_id,
+        run_id,
+        "assistant_run.external_channel_first_turn_followup_action_reply",
+        &internal_payload,
+        now,
+    )
+    .await?;
+
+    let display_text = internal_payload
+        .get("reply")
+        .and_then(|reply| reply.get("text"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("DataMax 已继续处理本轮后续动作。");
+    append_external_channel_first_turn_followup_stream_status(
+        state,
+        run_id,
+        message,
+        public_event_name,
+        status,
+        display_text,
+        internal_payload
+            .get("reply")
+            .and_then(|reply| reply.get("card"))
+            .cloned(),
+    )
+    .await;
+    Ok(())
+}
+
+async fn append_external_channel_first_turn_followup_stream_status(
+    state: &AppState,
+    run_id: AssistantRunId,
+    message: &ExternalBotMessageView,
+    event_name: &str,
+    status: &str,
+    display_text: &str,
+    card: Option<Value>,
+) {
+    let data = json!({
+        "assistant_run_id": run_id,
+        "idempotency_key": message.idempotency_key,
+        "phase": "followup_action",
+        "status": status,
+        "text": display_text,
+        "card": card,
+    });
+    let payload = external_channel_sse_public_payload(
+        Some(run_id),
+        &message.idempotency_key,
+        &message.conversation_external_id,
+        external_channel_static_page_sse_sequence(status),
+        "followup_action",
+        status,
+        display_text,
+        None,
+        Some(5),
+        data,
+    );
+    let dedupe_key = format!(
+        "{event_name}:{}",
+        external_channel_public_stream_dedupe_hash(&payload)
+    );
+    let _ = persist_external_channel_public_stream_payload_or_original(
+        state,
+        Some(run_id),
+        event_name,
+        &dedupe_key,
+        payload,
+    )
+    .await;
 }
 
 async fn record_external_action_run_from_suggestion(
@@ -13038,6 +13553,10 @@ async fn maybe_dispatch_external_channel_outbound_reply(
                     conversation_external_id,
                 )
             }),
+        "assistant_run.external_channel_first_turn_followup_action_reply" => source_payload
+            .get("reply")
+            .cloned()
+            .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok()),
         _ => None,
     }) else {
         return Ok(());
@@ -21523,6 +22042,50 @@ fn external_channel_task_status_reply(
     }
 }
 
+fn external_channel_first_turn_reply_guard(
+    first_visible_turn: bool,
+    message: &ExternalBotMessageView,
+    mut reply: ExternalBotReplyView,
+) -> ExternalBotReplyView {
+    if !first_visible_turn || reply.reply_type != ExternalBotReplyTypeView::TaskStatus {
+        return reply;
+    }
+
+    let has_display_text = reply
+        .text
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|text| !text.is_empty());
+    if !has_display_text {
+        reply.text = Some(external_channel_first_turn_processing_text(
+            message,
+            reply.task_status.as_deref(),
+        ));
+    }
+    reply.reply_type = if reply.card.is_some() {
+        ExternalBotReplyTypeView::Card
+    } else {
+        ExternalBotReplyTypeView::Text
+    };
+    reply
+}
+
+fn external_channel_first_turn_processing_text(
+    message: &ExternalBotMessageView,
+    task_status: Option<&str>,
+) -> String {
+    let prompt = message.text.as_deref().unwrap_or_default();
+    if external_channel_message_requests_static_page_artifact(message, prompt)
+        || task_status.is_some_and(|status| status.starts_with("static_page_"))
+    {
+        return "我先按你的要求整理本轮资料和数据，并开始生成报表/页面；结果会在本会话继续返回，生成后也可以继续在原页面上修改。".to_string();
+    }
+    if matches!(task_status, Some("v3_search_evidence_required")) {
+        return "我先按普通对话接住这个问题：它需要补充受控搜索或供料证据，我已记录检索动作；拿到证据后会继续回答。你也可以直接补充来源、范围或关键词。".to_string();
+    }
+    "我先按普通对话接住这轮需求，相关动作已开始处理；后续结果会在本会话继续返回。".to_string()
+}
+
 fn external_channel_text_reply(
     message: &ExternalBotMessageView,
     text: impl Into<String>,
@@ -27462,17 +28025,31 @@ fn external_channel_model_tool_request(
     })
 }
 
-fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
-    vec![
+fn external_channel_model_tool_capability_guidance_lines(first_visible_turn: bool) -> Vec<String> {
+    let mut lines = vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/API/表/文件接入需求并生成待确认 staging plan，接入结果必须明确一个目标 DataMax 数据集或提出一个待创建/绑定的数据集；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
         "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
         "经营数据问题中提到取高、经营状况、风险识别、销售缺口、需要助推的门店、统计/汇总/排行、临时合同面积/坪效、客流统计/客流同比时，可能需要同步生成或更新经营报表；如果客户同时在问具体名单、原因或统计结论，仍必须正常回答客户问题，不要用“已收到/正在处理”截断答案，宿主会旁路挂载报表产物。".to_string(),
         "客户上传合同、客流表或模板文件并要求用于报表/静态页时，应把这些文件视为当前授权范围内的临时参考材料，用于补充坪效、客流同比、模板风格或模块排序；不要把它误判为 `document_processing`，除非用户明确要求解析状态、重解析、深解析或说资料无法读取。".to_string(),
         "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级解析或事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
-        "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
-        "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
-    ]
+    ];
+    if first_visible_turn {
+        lines.push(
+            "首轮能力触发规则：即使判断用户需要 DataMax 执行平台能力，也必须先给自然语言回复；本轮不要只输出 `<V3_TOOL_REQUEST>`。如果需要生成报表/静态页，正常回答业务结论和处理计划，宿主会旁路挂载或排队产物。"
+                .to_string(),
+        );
+    } else {
+        lines.push(
+            "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。"
+                .to_string(),
+        );
+    }
+    lines.push(
+        "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。"
+            .to_string(),
+    );
+    lines
 }
 
 fn external_channel_model_tool_request_pending_reply(
@@ -32556,6 +33133,13 @@ fn assistant_run_v3_awareness_policy_value() -> Value {
     })
 }
 
+fn assistant_run_request_is_first_visible_turn(request: &CreateAssistantRunRequest) -> bool {
+    request
+        .messages
+        .iter()
+        .all(|message| message.content.trim().is_empty())
+}
+
 fn build_assistant_run_provider_input_with_evidence(
     request: &CreateAssistantRunRequest,
     evidence_state: Option<&Value>,
@@ -32579,6 +33163,13 @@ fn build_assistant_run_provider_input_with_evidence(
             "系统能力背景：可普通聊天、检索供料、读取文档细节、读取音视频转写/场景等媒体细节、创建报表、规划/渲染/修改静态页、导出静态页 ZIP 交付包。涉及供料中的数据、指标、文档事实或产物状态时，不要编造；普通常识和开放问答仍可使用模型通用能力。".to_string(),
         ]
     };
+    let first_visible_turn = assistant_run_request_is_first_visible_turn(request);
+    if first_visible_turn {
+        sections.push(
+            "首轮对话策略：这是当前会话首个用户可见回合。无论用户是否同时要求生成报表、页面、入库、检索或执行动作，都必须先给一段自然语言回复，接住用户问题、说明你将如何处理；不要只输出 task_status、JSON、`<V3_TOOL_REQUEST>`、系统状态或让用户等待。后续动作由宿主、任务卡或流式事件继续执行。"
+                .to_string(),
+        );
+    }
     if assistant_run_scope_is_external_channel(selected_scope) {
         sections.push(
             "外部通道直答合同：本次输出会同步返回给第三方用户，必须直接回答用户问题；禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案。若文档未解析、不可见或供料不足，请直接说明当前可见状态和下一步，而不是承诺稍后输出。"
@@ -32594,7 +33185,9 @@ fn build_assistant_run_provider_input_with_evidence(
                     .to_string(),
             );
         }
-        sections.extend(external_channel_model_tool_capability_guidance_lines());
+        sections.extend(external_channel_model_tool_capability_guidance_lines(
+            first_visible_turn,
+        ));
     }
     sections.extend(assistant_run_v3_awareness_lines());
     if assistant_run_prompt_requests_v3_product_change(&request.prompt) {
@@ -59582,6 +60175,89 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_first_turn_task_status_gets_display_text() {
+        let mut message = sample_external_bot_message();
+        message.text = Some("生成一份门店经营报表页面".to_string());
+        message.render_mode = Some("artifact".to_string());
+        let reply = external_channel_first_turn_reply_guard(
+            true,
+            &message,
+            external_channel_task_status_reply(&message, "static_page_generation_pending"),
+        );
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("先按你的要求"));
+    }
+
+    #[test]
+    fn external_channel_followup_task_status_stays_machine_status() {
+        let message = sample_external_bot_message();
+        let reply = external_channel_first_turn_reply_guard(
+            false,
+            &message,
+            external_channel_task_status_reply(&message, "accepted"),
+        );
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("accepted"));
+        assert_eq!(reply.text, None);
+    }
+
+    #[test]
+    fn external_channel_first_turn_followup_actions_only_run_for_action_prompts() {
+        let mut message = sample_external_bot_message();
+        message.text = Some("请查询第三方产物状态".to_string());
+        let request = CreateAssistantRunRequest {
+            prompt: "请查询第三方产物状态".to_string(),
+            local_thread_id: Some("external-first-turn-action".to_string()),
+            startup_briefing: Some(json!({"surface": "external_channel"})),
+            selected_scope: Some(json!({"type": "external_channel"})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let reply = external_channel_text_reply(&message, "先给一轮自然回复。", "answered");
+
+        assert!(external_channel_first_turn_followup_actions_should_run(
+            true, &request, &message, &reply
+        ));
+        assert!(!external_channel_first_turn_followup_actions_should_run(
+            false, &request, &message, &reply
+        ));
+
+        let ordinary_request = CreateAssistantRunRequest {
+            prompt: "1+1等于几".to_string(),
+            ..request.clone()
+        };
+        assert!(!external_channel_first_turn_followup_actions_should_run(
+            true,
+            &ordinary_request,
+            &message,
+            &reply
+        ));
+
+        let mut static_page_message = message.clone();
+        static_page_message.text = Some("生成一份门店经营报表页面".to_string());
+        static_page_message.render_mode = Some("artifact".to_string());
+        let static_page_request = CreateAssistantRunRequest {
+            prompt: "生成一份门店经营报表页面".to_string(),
+            ..request
+        };
+        assert!(!external_channel_first_turn_followup_actions_should_run(
+            true,
+            &static_page_request,
+            &static_page_message,
+            &reply
+        ));
+    }
+
+    #[test]
     fn external_channel_static_page_progress_reply_uses_processing_public_status() {
         let reply = external_channel_task_status_reply_for_conversation(
             "room-1",
@@ -85456,6 +86132,65 @@ retrieve_evidence:
         assert!(input.contains("系统将结合知识库与数据源"));
         assert!(input.contains("若文档未解析、不可见或供料不足"));
         assert!(input.contains("用户问题：我刚刚上传的 documentExternalId 是不是已经能用了？"));
+    }
+
+    #[test]
+    fn assistant_run_provider_input_first_turn_answers_before_external_tools() {
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "生成一份门店经营报表页面".to_string(),
+                local_thread_id: Some("external-thread-first-turn".to_string()),
+                startup_briefing: Some(json!({"surface": "external_channel"})),
+                selected_scope: Some(json!({
+                    "type": "external_channel",
+                    "database_source_ids": ["hy-sql-report"]
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({
+                "status": "supplied",
+                "supplied_items": [{"type": "database_aggregate"}],
+                "supply_quality": {"databaseAggregateCount": 1}
+            })),
+        );
+
+        assert!(input.contains("首轮对话策略"));
+        assert!(input.contains("必须先给一段自然语言回复"));
+        assert!(input.contains("本轮不要只输出 `<V3_TOOL_REQUEST>`"));
+        assert!(!input.contains("请只输出一行 `<V3_TOOL_REQUEST>`"));
+    }
+
+    #[test]
+    fn assistant_run_provider_input_non_first_turn_keeps_external_tool_request_contract() {
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "继续生成报表页面".to_string(),
+                local_thread_id: Some("external-thread-followup".to_string()),
+                startup_briefing: Some(json!({"surface": "external_channel"})),
+                selected_scope: Some(json!({
+                    "type": "external_channel",
+                    "database_source_ids": ["hy-sql-report"]
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: vec![AssistantRunMessageView {
+                    role: ChatMessageRole::Assistant,
+                    content: "上一轮已经给过自然语言说明。".to_string(),
+                }],
+            },
+            Some(&json!({
+                "status": "supplied",
+                "supplied_items": [{"type": "database_aggregate"}],
+                "supply_quality": {"databaseAggregateCount": 1}
+            })),
+        );
+
+        assert!(!input.contains("首轮对话策略"));
+        assert!(input.contains("请只输出一行 `<V3_TOOL_REQUEST>"));
     }
 
     #[test]
