@@ -5,29 +5,14 @@ export const metadata = {
 
 const DOWNLOAD_LINKS = [
   {
-    title: 'Codex 镜像源',
-    href: '/downloads/codex/openai-codex-install.ps1',
-    text: 'OpenAI Codex Windows 安装脚本镜像。',
-  },
-  {
-    title: '下载中心',
-    href: '/downloads/codex/',
-    text: '终端安装包、镜像源、校验文件。',
-  },
-  {
     title: 'V3企业定制agent终端 Windows',
     href: '/downloads/codex/V3企业定制agent终端-Windows.zip',
-    text: 'Windows 版。',
+    text: 'Windows 版，内置 Codex runtime。',
   },
   {
     title: 'V3企业定制agent终端 macOS',
     href: '/downloads/codex/V3企业定制agent终端-macOS.zip',
-    text: 'macOS 版。',
-  },
-  {
-    title: 'SHA256 校验',
-    href: '/downloads/codex/SHA256SUMS.txt',
-    text: '文件完整性校验。',
+    text: 'macOS 版，内置 Codex runtime。',
   },
 ];
 
@@ -82,7 +67,7 @@ export default function V3LandingPage() {
             文档、数据库、网页和业务系统统一接入，自动生成问答、报表、HTML 产物和第三方回调能力。
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-            <a href="/downloads/codex/" style={{
+            <a href="#codex-downloads" style={{
               color: '#07111f',
               background: '#f8d36f',
               textDecoration: 'none',
@@ -149,7 +134,7 @@ export default function V3LandingPage() {
           />
         </div>
       </section>
-      <section style={{
+      <section id="codex-downloads" style={{
         width: 'min(1320px, calc(100vw - 40px))',
         margin: '0 auto',
         padding: '0 0 56px',
@@ -175,7 +160,7 @@ export default function V3LandingPage() {
               fontWeight: 900,
               letterSpacing: 0,
             }}>
-              CODEX EXECUTOR MIRROR
+              V3 AGENT TERMINAL
             </span>
             <h2 style={{
               margin: 0,
@@ -193,7 +178,7 @@ export default function V3LandingPage() {
               fontWeight: 700,
               lineHeight: 1.7,
             }}>
-              Codex 镜像源、终端安装包、校验文件。
+              下载一个客户端包即可完成安装试用，Codex runtime 已随包内置。
             </p>
           </div>
           <div style={{
