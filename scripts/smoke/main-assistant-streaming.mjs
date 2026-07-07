@@ -337,16 +337,30 @@ function parseFixtureSse(args, mode, chunks) {
 }
 
 function buildStreamingSummary(args, runId, createResult, continueResult) {
+  const createDeltaCount = createResult.deltaCount || 0;
+  const continueDeltaCount = continueResult.deltaCount || 0;
+  const checks = {
+    createStreamPassed: createResult.ok === true,
+    continueStreamPassed: continueResult.ok === true,
+    createAssistantRunIdPresent: Boolean(createResult.assistantRunId),
+    liveDeltaPresent: !args.requireLiveDelta || (createDeltaCount > 0 && continueDeltaCount > 0),
+    multipleDeltasWhenRequired: !args.requireMultipleDeltas || (createDeltaCount > 1 && continueDeltaCount > 1),
+    completedResponsesPresent: createResult.completedResponsePresent === true
+      && continueResult.completedResponsePresent === true,
+    noDuplicateFinalDelta: !createResult.duplicateFinalDeltaLikely
+      && !continueResult.duplicateFinalDeltaLikely,
+  };
   const summary = {
     runId,
     baseUrl: args.baseUrl,
-    ok: createResult.ok && continueResult.ok,
+    ok: Object.values(checks).every(Boolean),
+    checks,
     createOk: createResult.ok,
     continueOk: continueResult.ok,
     requireLiveDelta: args.requireLiveDelta,
     requireMultipleDeltas: args.requireMultipleDeltas,
-    createDeltaCount: createResult.deltaCount || 0,
-    continueDeltaCount: continueResult.deltaCount || 0,
+    createDeltaCount,
+    continueDeltaCount,
     createFirstDeltaAtMs: createResult.firstDeltaAtMs ?? null,
     continueFirstDeltaAtMs: continueResult.firstDeltaAtMs ?? null,
     createLatencyMs: createResult.latencyMs ?? null,
@@ -354,10 +368,6 @@ function buildStreamingSummary(args, runId, createResult, continueResult) {
     assistantRunId: createResult.assistantRunId || null,
     generatedAt: new Date().toISOString(),
   };
-
-  if (args.requireLiveDelta) {
-    summary.ok = summary.ok && summary.createDeltaCount > 0 && summary.continueDeltaCount > 0;
-  }
   return summary;
 }
 
@@ -421,10 +431,32 @@ async function runSelfTest(args) {
     'duplicate-guard',
     splitFixtureStream(duplicateStream),
   );
+  const noDeltaStream = [
+    buildSseFrame('assistant_run.accepted', { status: 'accepted', assistant_run_id: 'run-no-delta-self-test' }),
+    buildSseFrame('assistant_run.completed', {
+      response: {
+        assistant_run_id: 'run-no-delta-self-test',
+        assistant_message: { content: '完成事件到了，但没有实时 delta。' },
+      },
+    }),
+    buildSseFrame('done', { status: 'done' }),
+  ].join('');
+  const noDeltaResult = parseFixtureSse(
+    { ...fixtureArgs, requireMultipleDeltas: false },
+    'no-delta-guard',
+    splitFixtureStream(noDeltaStream),
+  );
   const summary = {
     ...buildStreamingSummary(fixtureArgs, runId, createResult, continueResult),
     selfTest: true,
   };
+  const noDeltaSummary = buildStreamingSummary(fixtureArgs, runId, createResult, noDeltaResult);
+  const duplicateSummary = buildStreamingSummary(
+    { ...fixtureArgs, requireMultipleDeltas: false },
+    runId,
+    duplicateResult,
+    continueResult,
+  );
   const checks = {
     selfTestUsesFixtureBaseUrl: fixtureArgs.baseUrl === 'https://doc.elepcloud.com',
     createAcceptedDeltaCompletedDoneParsed: createResult.acceptedCount === 1
@@ -448,6 +480,14 @@ async function runSelfTest(args) {
     summaryRequiresLiveDeltas: summary.ok === true
       && summary.createDeltaCount === 2
       && summary.continueDeltaCount === 2,
+    summaryChecksMachineOk: summary.checks.createStreamPassed === true
+      && summary.checks.continueStreamPassed === true
+      && summary.checks.liveDeltaPresent === true
+      && summary.checks.multipleDeltasWhenRequired === true,
+    noDeltaSummaryFails: noDeltaSummary.ok === false
+      && noDeltaSummary.checks.liveDeltaPresent === false,
+    duplicateSummaryFails: duplicateSummary.ok === false
+      && duplicateSummary.checks.noDuplicateFinalDelta === false,
   };
   const ok = Object.values(checks).every(Boolean);
   const report = {
@@ -455,9 +495,11 @@ async function runSelfTest(args) {
       ...summary,
       ok,
       checks,
+      noDeltaSummary,
+      duplicateSummary,
       generatedAt: new Date().toISOString(),
     },
-    results: [createResult, continueResult, duplicateResult],
+    results: [createResult, continueResult, duplicateResult, noDeltaResult],
   };
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
@@ -510,13 +552,7 @@ async function main() {
   }
 
   const results = [createResult, continueResult];
-  const ok = results.every((item) => item.ok);
   const summary = buildStreamingSummary(args, runId, createResult, continueResult);
-  summary.ok = ok;
-
-  if (args.requireLiveDelta) {
-    summary.ok = summary.ok && summary.createDeltaCount > 0 && summary.continueDeltaCount > 0;
-  }
 
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });

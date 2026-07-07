@@ -1,11 +1,11 @@
 use serde_json::{json, Map, Value};
 
 use crate::{
-    assistant_run_compact_dataset_entity_scan_payload, assistant_run_model_compact_json_value,
-    assistant_run_model_dataset_entity_scan_item, assistant_run_model_dataset_fact_snapshot_item,
-    truncate_assistant_supply_text, ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT,
-    ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT,
-    ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT,
+    assistant_run_compact_dataset_entity_scan_payload, truncate_assistant_supply_text,
+    ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT,
+    ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT, ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT,
+    ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT,
 };
 
 pub(crate) fn assistant_run_model_supply_item_for_context(item: &Value) -> Value {
@@ -26,6 +26,205 @@ pub(crate) fn assistant_run_model_supply_item_for_context(item: &Value) -> Value
             ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
             12,
         ),
+    }
+}
+
+pub(crate) fn assistant_run_model_compact_json_value(
+    value: &Value,
+    text_limit: usize,
+    array_limit: usize,
+) -> Value {
+    match value {
+        Value::String(text) => Value::String(truncate_assistant_supply_text(text, text_limit)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(array_limit)
+                .map(|item| assistant_run_model_compact_json_value(item, text_limit, array_limit))
+                .collect(),
+        ),
+        Value::Object(object) => {
+            let mut compact = Map::new();
+            for (key, child) in object {
+                compact.insert(
+                    key.clone(),
+                    assistant_run_model_compact_json_value(child, text_limit, array_limit),
+                );
+            }
+            Value::Object(compact)
+        }
+        _ => value.clone(),
+    }
+}
+
+fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
+    json!({
+        "type": "dataset_entity_scan",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "score": item.get("score").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "entity_count": item.get("entity_count").cloned().unwrap_or(Value::Null),
+        "organization_count": item.get("organization_count").cloned().unwrap_or(Value::Null),
+        "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
+        "candidate_term_count": item.get("candidate_term_count").cloned().unwrap_or(Value::Null),
+        "company_rows": item.get("company_rows").cloned().unwrap_or(Value::Null),
+        "skill_rows": item.get("skill_rows").cloned().unwrap_or(Value::Null),
+        "project_rows": item.get("project_rows").cloned().unwrap_or(Value::Null),
+        "position_rows": item.get("position_rows").cloned().unwrap_or(Value::Null),
+        "location_rows": item.get("location_rows").cloned().unwrap_or(Value::Null),
+        "person_rows": item.get("person_rows").cloned().unwrap_or(Value::Null),
+        "school_rows": item.get("school_rows").cloned().unwrap_or(Value::Null),
+        "degree_rows": item.get("degree_rows").cloned().unwrap_or(Value::Null),
+        "certificate_rows": item.get("certificate_rows").cloned().unwrap_or(Value::Null),
+        "keyword_rows": item.get("keyword_rows").cloned().unwrap_or(Value::Null),
+        "year_rows": item.get("year_rows").cloned().unwrap_or(Value::Null),
+        "section_rows": item.get("section_rows").cloned().unwrap_or(Value::Null),
+        "paragraph_rows": item.get("paragraph_rows").cloned().unwrap_or(Value::Null),
+        "table_rows": item.get("table_rows").cloned().unwrap_or(Value::Null),
+        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
+        "resume_profile_rows": item.get("resume_profile_rows").cloned().unwrap_or(Value::Null),
+        "resume_project_delivery_rows": item.get("resume_project_delivery_rows").cloned().unwrap_or(Value::Null),
+        "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
+        "entities": item.get("entities").cloned().unwrap_or(Value::Null),
+        "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
+        "limits": item.get("limits").cloned().unwrap_or(Value::Null),
+        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows as authoritative structured scan tables when answering entity/document dimension questions. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows over top-k retrieval chunks. Cite scanned_document_count and row counts when giving totals. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
+    })
+}
+
+fn assistant_run_model_dataset_fact_snapshot_item(item: &Value) -> Value {
+    json!({
+        "type": "dataset_fact_snapshot",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "snapshot_kind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
+        "snapshot_key": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "source_document_count": item.get("source_document_count").cloned().unwrap_or(Value::Null),
+        "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
+        "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
+        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
+        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks.")),
+    })
+}
+
+pub(crate) fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("item");
+    let source = item
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("retrieval_evidence");
+    let summary = assistant_run_model_text_field(item, &["summary", "content_excerpt"])?;
+    let locator = item
+        .get("source_locator")
+        .or_else(|| item.get("sourceLocator"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let document_id = item
+        .get("document_id")
+        .or_else(|| item.get("documentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut parts = vec![
+        format!("{item_type}/{source}"),
+        format!(
+            "摘要={}",
+            truncate_assistant_supply_text(
+                &summary,
+                if matches!(item_type, "dataset_entity_scan" | "dataset_fact_snapshot") {
+                    ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT
+                } else {
+                    ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT
+                }
+            )
+        ),
+    ];
+    if let Some(locator) = locator {
+        parts.push(format!("来源={locator}"));
+    }
+    if let Some(document_id) = document_id {
+        parts.push(format!("document_id={document_id}"));
+    }
+    if item_type == "asset_profile_hint" {
+        if let Some(title) = item
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!(
+                "标题={}",
+                truncate_assistant_supply_text(title, ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT)
+            ));
+        }
+        if let Some(asset_kind) = item
+            .get("asset_kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("资产={asset_kind}"));
+        }
+        let noun_terms = item
+            .get("noun_terms")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .take(6)
+            .collect::<Vec<_>>();
+        if !noun_terms.is_empty() {
+            parts.push(format!("名词={}", noun_terms.join("、")));
+        }
+    }
+    if let Some(media) = assistant_run_model_media_brief(item) {
+        parts.push(media);
+    }
+    Some(parts.join("；"))
+}
+
+pub(crate) fn assistant_run_model_memory_item_brief(item: &Value) -> Option<String> {
+    let summary = assistant_run_model_text_field(item, &["summary"])?;
+    Some(truncate_assistant_supply_text(
+        &summary,
+        ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT,
+    ))
+}
+
+pub(crate) fn assistant_run_model_detail_target_brief(target: &Value) -> Option<String> {
+    let document_id = target
+        .get("document_id")
+        .or_else(|| target.get("documentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let reason = target
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("detail_first_scope");
+    let source_locator = target
+        .get("source_locator")
+        .or_else(|| target.get("sourceLocator"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    if source_locator.is_empty() {
+        Some(format!("document_id={document_id}, reason={reason}"))
+    } else {
+        Some(format!(
+            "document_id={document_id}, reason={reason}, source={source_locator}"
+        ))
     }
 }
 
@@ -319,10 +518,77 @@ fn assistant_run_model_copy_text(
     }
 }
 
+fn assistant_run_model_media_brief(item: &Value) -> Option<String> {
+    let media = item
+        .get("media_context")
+        .or_else(|| item.get("mediaContext"))?;
+    let kind = media
+        .get("media_kind")
+        .or_else(|| media.get("mediaKind"))
+        .and_then(Value::as_str)
+        .unwrap_or("media");
+    let parse_status = media
+        .get("parse_status")
+        .or_else(|| media.get("parseStatus"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let transcript_count = media
+        .get("transcript_windows")
+        .or_else(|| media.get("transcriptWindows"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let scene_count = media
+        .get("scene_windows")
+        .or_else(|| media.get("sceneWindows"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let ocr_count = media
+        .get("keyframe_ocr_snippets")
+        .or_else(|| media.get("keyframeOcrSnippets"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Some(format!(
+        "媒体={kind}/{parse_status}/transcript:{transcript_count}/scene:{scene_count}/ocr:{ocr_count}"
+    ))
+}
+
+fn assistant_run_model_text_field(item: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        item.get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compact_json_value_truncates_nested_text_and_arrays() {
+        let value = json!({
+            "title": "ABCDEFG",
+            "rows": [
+                {"name": "row-1", "note": "123456"},
+                {"name": "row-2", "note": "abcdef"},
+                {"name": "row-3", "note": "ignored"}
+            ],
+            "metadata": {"description": "长文本内容"}
+        });
+
+        let compact = assistant_run_model_compact_json_value(&value, 3, 2);
+
+        assert_eq!(compact["title"], json!("ABC"));
+        assert_eq!(compact["rows"].as_array().unwrap().len(), 2);
+        assert_eq!(compact["rows"][0]["note"], json!("123"));
+        assert_eq!(compact["metadata"]["description"], json!("长文本"));
+    }
 
     #[test]
     fn retrieval_evidence_context_keeps_safe_manifest_hints_only() {
@@ -463,5 +729,61 @@ mod tests {
         assert_eq!(model_item["noun_terms"][0], json!("女装"));
         assert!(!serialized.contains("raw_provider_payload"));
         assert!(!serialized.contains("must not enter model context"));
+    }
+
+    #[test]
+    fn supply_item_brief_keeps_asset_terms_media_and_locator() {
+        let item = json!({
+            "type": "asset_profile_hint",
+            "source": "asset_profile",
+            "summary": "夏季女装陈列视频摘要",
+            "source_locator": "视频 00:10",
+            "document_id": "doc-video",
+            "title": "门店陈列视频",
+            "asset_kind": "video",
+            "noun_terms": ["女装", "陈列", "导购", "", "夏季", "新品", "橱窗", "超出限制"],
+            "media_context": {
+                "media_kind": "video",
+                "parse_status": "parsed",
+                "transcript_windows": [{}, {}],
+                "scene_windows": [{}],
+                "keyframe_ocr_snippets": [{}, {}, {}]
+            }
+        });
+
+        let brief = assistant_run_model_supply_item_brief(&item).unwrap();
+
+        assert!(brief.contains("asset_profile_hint/asset_profile"));
+        assert!(brief.contains("摘要=夏季女装陈列视频摘要"));
+        assert!(brief.contains("来源=视频 00:10"));
+        assert!(brief.contains("document_id=doc-video"));
+        assert!(brief.contains("标题=门店陈列视频"));
+        assert!(brief.contains("资产=video"));
+        assert!(brief.contains("名词=女装、陈列、导购、夏季、新品、橱窗"));
+        assert!(!brief.contains("超出限制"));
+        assert!(brief.contains("媒体=video/parsed/transcript:2/scene:1/ocr:3"));
+    }
+
+    #[test]
+    fn memory_and_detail_briefs_keep_existing_format() {
+        let memory = json!({"summary": " 用户要求在已发布报表上继续修改 "});
+        let target = json!({
+            "documentId": "doc-1",
+            "reason": "media_detail",
+            "sourceLocator": "第 2 页"
+        });
+
+        assert_eq!(
+            assistant_run_model_memory_item_brief(&memory),
+            Some("用户要求在已发布报表上继续修改".to_string())
+        );
+        assert_eq!(
+            assistant_run_model_detail_target_brief(&target),
+            Some("document_id=doc-1, reason=media_detail, source=第 2 页".to_string())
+        );
+        assert_eq!(
+            assistant_run_model_detail_target_brief(&json!({"reason": "missing_doc"})),
+            None
+        );
     }
 }

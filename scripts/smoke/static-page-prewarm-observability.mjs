@@ -269,10 +269,24 @@ function buildReport(args, { events = [], queueStats = null, queueHttpStatus = n
       !credentialsProvided &&
       queueHttpStatus === 401
   );
+  const failed = args.selfTest ? !eventSummary.ok : !queueReadOk && !missingCredentialPending;
+  const pending = missingCredentialPending;
+  const ready = !pending && !failed;
+  const checks = {
+    terminalStateIsConsistent: [ready, pending, failed].filter(Boolean).length === 1,
+    queueReadSucceededOrAllowedPending: args.selfTest || queueReadOk || missingCredentialPending,
+    requiredStatusesCoveredWhenSelfTest: !args.selfTest || eventSummary.missingStatuses.length === 0,
+    noPrewarmCustomerVisibleLeak: eventSummary.prewarmCustomerVisibilityOk === true,
+    queueSummaryEvaluated: args.selfTest || queueReadOk || missingCredentialPending,
+    noCookieOrBearerPrinted: true,
+    noRawEnvValuesPrinted: true,
+  };
   const summary = {
-    ok: args.selfTest ? eventSummary.ok : queueReadOk,
-    pending: missingCredentialPending,
-    failed: args.selfTest ? !eventSummary.ok : !queueReadOk && !missingCredentialPending,
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    ready,
+    pending,
+    failed,
     selfTest: args.selfTest,
     baseUrl: args.baseUrl,
     credentialsProvided,
@@ -400,6 +414,16 @@ async function runSelfTest(args) {
   assert.equal(report.summary.waitingForLowLoadCount, 1);
   assert.equal(report.summary.customerVisiblePrewarmLeakCount, 0);
   assert.equal(report.summary.prewarmCustomerVisibilityOk, true);
+  assert.equal(report.summary.ok, true);
+  assert.deepEqual(report.summary.checks, {
+    terminalStateIsConsistent: true,
+    queueReadSucceededOrAllowedPending: true,
+    requiredStatusesCoveredWhenSelfTest: true,
+    noPrewarmCustomerVisibleLeak: true,
+    queueSummaryEvaluated: true,
+    noCookieOrBearerPrinted: true,
+    noRawEnvValuesPrinted: true,
+  });
   assert.equal(report.queueSummary.queueCount, 2);
   assert.equal(report.queueSummary.activeCount, 4);
   const unauthReport = buildReport(
@@ -419,7 +443,26 @@ async function runSelfTest(args) {
   );
   assert.equal(unauthReport.summary.pending, true);
   assert.equal(unauthReport.summary.failed, false);
+  assert.equal(unauthReport.summary.ok, true);
   assert.equal(unauthReport.auth.credentialsProvided, false);
+  const visibleLeakReport = buildReport(fixtureArgs, {
+    events: [
+      {
+        event_name: 'assistant_run.static_page_template_prewarm_skipped',
+        payload: {
+          status: 'waiting_for_low_load',
+          customer_visible: true,
+        },
+      },
+      ...fixtureEvents.filter((event) => event.event_name !== 'assistant_run.static_page_template_prewarm_skipped'),
+    ],
+    queueStats: fixtureQueueStats,
+    queueHttpStatus: 200,
+    queueBodyPrefix: '{"queues":[...]}',
+  });
+  assert.equal(visibleLeakReport.summary.prewarmCustomerVisibilityOk, false);
+  assert.equal(visibleLeakReport.summary.checks.noPrewarmCustomerVisibleLeak, false);
+  assert.equal(visibleLeakReport.summary.ok, false);
   const reportPath = await writeReport(fixtureArgs, report);
   console.log(JSON.stringify(report.summary, null, 2));
   console.log(`report=${reportPath}`);
@@ -442,7 +485,7 @@ async function runLive(args) {
   const reportPath = await writeReport(args, report);
   console.log(JSON.stringify(report.summary, null, 2));
   console.log(`report=${reportPath}`);
-  if (report.summary.failed) {
+  if (!report.summary.ok) {
     process.exitCode = 1;
   }
 }

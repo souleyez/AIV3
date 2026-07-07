@@ -98,6 +98,49 @@ function firstDifferenceLine(left, right) {
   return null;
 }
 
+function sha256LooksValid(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
+function buildSummary(args, receipt) {
+  const missingMirrorAllowed = receipt.mirror_bytes === null && args.allowMissingMirror === true;
+  const ready = receipt.ok === true && receipt.in_sync === true;
+  const pending = receipt.ok === true && missingMirrorAllowed;
+  const failed = receipt.ok !== true;
+  const checks = {
+    terminalStateIsConsistent: [ready, pending, failed].filter(Boolean).length === 1,
+    sourceDocumentRead: Number(receipt.source_bytes || 0) > 0,
+    mirrorDocumentPresentOrAllowedMissing: receipt.mirror_bytes !== null || args.allowMissingMirror === true,
+    inSyncOrAllowedMissing: receipt.in_sync === true || missingMirrorAllowed,
+    checksumPresent: sha256LooksValid(receipt.source_sha256)
+      && (receipt.mirror_sha256 === null || sha256LooksValid(receipt.mirror_sha256)),
+    driftHasDifferenceWhenBothFilesExist: receipt.ok === true
+      || receipt.mirror_bytes === null
+      || Boolean(receipt.first_difference),
+    diffExcerptBounded: !receipt.first_difference
+      || (
+        String(receipt.first_difference.source_excerpt || '').length <= 180
+        && String(receipt.first_difference.mirror_excerpt || '').length <= 180
+      ),
+    readOnly: true,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean) && receipt.ok === true,
+    checks,
+    ready,
+    pending,
+    failed,
+    selfTest: receipt.mode === 'self_test',
+    in_sync: receipt.in_sync === true,
+    allow_missing_mirror: args.allowMissingMirror === true,
+    source_doc: receipt.source_doc || null,
+    mirror_doc: receipt.mirror_doc || null,
+    source_bytes: receipt.source_bytes ?? null,
+    mirror_bytes: receipt.mirror_bytes ?? null,
+    first_difference_line: receipt.first_difference?.line || null,
+  };
+}
+
 async function readText(filePath, allowMissing = false) {
   try {
     return await readFile(filePath, 'utf8');
@@ -121,12 +164,53 @@ function selfTest() {
   if (!diff || diff.line !== 2 || diff.source_excerpt !== 'beta' || diff.mirror_excerpt !== 'gamma') {
     throw new Error('firstDifferenceLine self-test failed');
   }
-  return {
+  const receipt = {
     mode: 'self_test',
     ok: true,
+    in_sync: true,
+    source_doc: 'self-test-source.md',
+    mirror_doc: 'self-test-mirror.md',
+    source_bytes: Buffer.byteLength(left),
+    mirror_bytes: Buffer.byteLength(left),
     source_hash: sha256(left),
     mirror_hash: sha256(left),
+    source_sha256: sha256(left),
+    mirror_sha256: sha256(left),
+    first_difference: null,
+    self_test_cases: {
+      firstDifferenceLineFindsChangedLine: diff.line === 2
+        && diff.source_excerpt === 'beta'
+        && diff.mirror_excerpt === 'gamma',
+      missingMirrorCanBePending: false,
+      driftReceiptFails: false,
+    },
   };
+  const missingMirrorReceipt = {
+    ...receipt,
+    mode: 'check',
+    in_sync: false,
+    mirror_bytes: null,
+    mirror_sha256: null,
+  };
+  const missingMirrorSummary = buildSummary({ allowMissingMirror: true }, missingMirrorReceipt);
+  const driftReceipt = {
+    ...receipt,
+    mode: 'check',
+    ok: false,
+    in_sync: false,
+    first_difference: diff,
+  };
+  const driftSummary = buildSummary({ allowMissingMirror: false }, driftReceipt);
+  receipt.self_test_cases.missingMirrorCanBePending = missingMirrorSummary.ok === true
+    && missingMirrorSummary.pending === true
+    && missingMirrorSummary.ready === false;
+  receipt.self_test_cases.driftReceiptFails = driftSummary.ok === false
+    && driftSummary.failed === true
+    && driftSummary.checks.driftHasDifferenceWhenBothFilesExist === true;
+  receipt.summary = buildSummary({ allowMissingMirror: false }, receipt);
+  receipt.ok = receipt.summary.ok && Object.values(receipt.self_test_cases).every(Boolean);
+  receipt.summary.ok = receipt.ok;
+  return receipt;
 }
 
 async function checkSync(args) {
@@ -149,6 +233,8 @@ async function checkSync(args) {
     mirror_sha256: mirrorHash,
     first_difference: inSync || mirrorText === null ? null : firstDifferenceLine(sourceText, mirrorText),
   };
+  receipt.summary = buildSummary(args, receipt);
+  receipt.ok = receipt.summary.ok;
   if (!receipt.ok) {
     const detail = receipt.first_difference
       ? `first difference line ${receipt.first_difference.line}`

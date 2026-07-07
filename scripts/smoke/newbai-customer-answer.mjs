@@ -389,11 +389,31 @@ function buildReport(fixtures, resultsByCaseId, sourceMode) {
   const ordinaryQuestionMisrouteCount = caseResults.filter((item) =>
     item.failure_reasons.includes('ordinary_question_misroute'),
   ).length;
+  const ready = caseResults.every((item) => item.passed);
+  const safety = {
+    dataMaxCalled: false,
+    providerCalled: false,
+    databaseMutated: false,
+    staticPagePublished: false,
+    reportRenderEnqueued: false,
+    postgresLexicalEnabled: false,
+  };
+  const summary = buildSummary({
+    caseResults,
+    sourceMode,
+    internalLeakCount,
+    forbiddenClaimCount,
+    templateSideEffectCount,
+    ordinaryQuestionMisrouteCount,
+    safety,
+  });
 
   return {
     smoke: 'newbai-customer-answer',
     generated_at: new Date().toISOString(),
-    ready: caseResults.every((item) => item.passed),
+    ok: summary.ok,
+    ready,
+    summary,
     source_mode: sourceMode,
     case_count: caseResults.length,
     passed_case_count: caseResults.filter((item) => item.passed).length,
@@ -410,15 +430,57 @@ function buildReport(fixtures, resultsByCaseId, sourceMode) {
       item.failure_reasons.includes('template_reuse_language_missing'),
     ).length,
     evaluator_guard_count: buildSyntheticGuardFixtures().length,
-    safety: {
-      dataMaxCalled: false,
-      providerCalled: false,
-      databaseMutated: false,
-      staticPagePublished: false,
-      reportRenderEnqueued: false,
-      postgresLexicalEnabled: false,
-    },
+    safety,
     cases: caseResults,
+  };
+}
+
+function buildSummary({
+  caseResults,
+  sourceMode,
+  internalLeakCount,
+  forbiddenClaimCount,
+  templateSideEffectCount,
+  ordinaryQuestionMisrouteCount,
+  safety,
+}) {
+  const caseCount = caseResults.length;
+  const passedCaseCount = caseResults.filter((item) => item.passed).length;
+  const answerPatternMatchCount = caseResults.filter((item) => item.answer_pattern_matched).length;
+  const evidenceUseOkCount = caseResults.filter((item) => item.evidence_use_ok).length;
+  const templateReuseFailureCount = caseResults.filter((item) =>
+    item.failure_reasons.includes('template_reuse_language_missing'),
+  ).length;
+  const checks = {
+    allCasesPassed: caseCount > 0 && passedCaseCount === caseCount,
+    allAnswerPatternsMatched: answerPatternMatchCount === caseCount,
+    allEvidenceUseOk: evidenceUseOkCount === caseCount,
+    noInternalLeaks: internalLeakCount === 0,
+    noForbiddenFalseClaims: forbiddenClaimCount === 0,
+    noTemplateOrReportSideEffects: templateSideEffectCount === 0,
+    noOrdinaryQuestionMisroute: ordinaryQuestionMisrouteCount === 0,
+    noLiveMutation: safety.dataMaxCalled === false
+      && safety.providerCalled === false
+      && safety.databaseMutated === false
+      && safety.staticPagePublished === false
+      && safety.reportRenderEnqueued === false
+      && safety.postgresLexicalEnabled === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    source_mode: sourceMode,
+    case_count: caseCount,
+    passed_case_count: passedCaseCount,
+    failed_case_count: caseCount - passedCaseCount,
+    answer_pattern_match_count: answerPatternMatchCount,
+    evidence_use_ok_count: evidenceUseOkCount,
+    internal_leak_count: internalLeakCount,
+    forbidden_claim_count: forbiddenClaimCount,
+    template_side_effect_count: templateSideEffectCount,
+    ordinary_question_misroute_count: ordinaryQuestionMisrouteCount,
+    template_reuse_failure_count: templateReuseFailureCount,
+    evaluator_guard_count: buildSyntheticGuardFixtures().length,
   };
 }
 

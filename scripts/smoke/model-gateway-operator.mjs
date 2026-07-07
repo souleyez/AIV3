@@ -242,6 +242,20 @@ function forbiddenSecretSignal(value) {
   );
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function assertSummaryFailure(name, report, expectedCheckName) {
+  const summary = buildSummary(report);
+  if (summary.ok !== false) {
+    throw new Error(`self-test expected summary failure for ${name}`);
+  }
+  if (expectedCheckName && summary.checks?.[expectedCheckName] !== false) {
+    throw new Error(`self-test expected ${expectedCheckName} to fail for ${name}`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.selfTest) {
@@ -501,7 +515,7 @@ async function main() {
   );
   console.log(`summary=${reportMd}`);
 
-  if (failed) {
+  if (failed || report.summary?.ok === false) {
     process.exitCode = 1;
   }
 }
@@ -560,7 +574,8 @@ async function runSelfTest(args) {
   if (forbiddenSecretSignal(statusFixture) || forbiddenSecretSignal(profilesFixture)) {
     throw new Error('self-test fixture unexpectedly matched forbidden secret signals');
   }
-  if (!forbiddenSecretSignal({ api_key: 'sk-testfixture123456789' })) {
+  const apiKeyShapedFixture = 'sk-' + 'testfixture123456789';
+  if (!forbiddenSecretSignal({ api_key: apiKeyShapedFixture })) {
     throw new Error('self-test secret detector did not catch API key-shaped data');
   }
 
@@ -672,6 +687,50 @@ async function runSelfTest(args) {
     },
   };
 
+  const reportSummary = buildSummary(report);
+  if (reportSummary.ok !== true || reportSummary.pending !== true || reportSummary.self_test !== true) {
+    throw new Error('self-test expected the pending fixture summary to pass');
+  }
+
+  const conflictingTerminalReport = cloneJson(report);
+  conflictingTerminalReport.ready = true;
+  conflictingTerminalReport.pending = true;
+  assertSummaryFailure(
+    'conflicting terminal state',
+    conflictingTerminalReport,
+    'terminalStateIsConsistent',
+  );
+
+  const missingProfileTestReport = cloneJson(report);
+  missingProfileTestReport.ready = true;
+  missingProfileTestReport.pending = false;
+  missingProfileTestReport.failed = false;
+  missingProfileTestReport.auth.credentials_provided = true;
+  missingProfileTestReport.expected.profile_test_requested = true;
+  missingProfileTestReport.checks = missingProfileTestReport.checks
+    .filter((check) => check.name !== 'authenticated operator credentials provided');
+  missingProfileTestReport.checks.push({
+    name: 'authenticated operator status and profile list load',
+    status: 'passed',
+  });
+  missingProfileTestReport.checks.push({
+    name: 'profile test endpoint',
+    status: 'skipped',
+  });
+  assertSummaryFailure(
+    'missing requested profile test',
+    missingProfileTestReport,
+    'profileTestGateRespected',
+  );
+
+  const secretLeakReport = cloneJson(report);
+  secretLeakReport.model_gateway.primary_profile.leaked_api_key = apiKeyShapedFixture;
+  assertSummaryFailure(
+    'provider secret-shaped report data',
+    secretLeakReport,
+    'noProviderSecretRecorded',
+  );
+
   const { reportJson, reportMd } = await writeReports(args, report, '-self-test');
   console.log(
     JSON.stringify(
@@ -689,9 +748,15 @@ async function runSelfTest(args) {
     )
   );
   console.log(`summary=${reportMd}`);
+  if (report.summary?.ok === false) {
+    process.exitCode = 1;
+  }
 }
 
 async function writeReports(args, report, suffix = '') {
+  const summary = buildSummary(report);
+  report.summary = summary;
+  report.ok = summary.ok;
   await mkdir(args.outputDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const reportJson = join(process.cwd(), args.outputDir, `${stamp}${suffix}.json`);
@@ -701,11 +766,82 @@ async function writeReports(args, report, suffix = '') {
   return { reportJson, reportMd };
 }
 
+function checkStatus(report, name) {
+  const item = (report.checks || []).find((check) => check.name === name);
+  return item?.status || null;
+}
+
+function buildSummary(report) {
+  const checkItems = Array.isArray(report.checks) ? report.checks : [];
+  const failedCheckCount = checkItems.filter((check) => check.status === 'failed').length;
+  const passedCheckCount = checkItems.filter((check) => check.status === 'passed').length;
+  const pendingCheckCount = checkItems.filter((check) => check.status === 'pending').length;
+  const skippedCheckCount = checkItems.filter((check) => check.status === 'skipped').length;
+  const attentionCheckCount = checkItems.filter((check) => check.status === 'attention').length;
+  const terminalStateCount = [report.ready, report.pending, report.failed].filter(Boolean).length;
+  const unauthStatus = checkStatus(
+    report,
+    'unauthenticated model-gateway status returns auth_session_required',
+  );
+  const authStatus = checkStatus(report, 'authenticated operator credentials provided')
+    || checkStatus(report, 'authenticated operator status and profile list load');
+  const primaryProfileStatus = checkStatus(
+    report,
+    'expected primary model profile is enabled and visible in status',
+  ) || checkStatus(report, 'fixture primary model profile is enabled and visible in status');
+  const sanitizedStatus = checkStatus(report, 'operator model-gateway responses are sanitized')
+    || checkStatus(report, 'operator model-gateway fixture responses are sanitized');
+  const profileTestStatus = checkStatus(report, 'profile test endpoint returns sanitized probe result')
+    || checkStatus(report, 'profile test endpoint');
+  const safety = report.safety_contract || {};
+  const checks = {
+    terminalStateIsConsistent: terminalStateCount === 1
+      && report.failed === (report.ready !== true && report.pending !== true),
+    unauthenticatedGuardPassed: unauthStatus === 'passed',
+    credentialsGateRespected: report.auth?.credentials_provided === true
+      ? authStatus === 'passed'
+      : report.pending === true && authStatus === 'pending',
+    primaryProfilePassedWhenAuthenticated: report.auth?.credentials_provided !== true
+      || primaryProfileStatus === 'passed',
+    sanitizedResponsesPassedWhenAuthenticated: report.auth?.credentials_provided !== true
+      || sanitizedStatus === 'passed',
+    profileTestGateRespected: report.expected?.profile_test_requested === true
+      ? profileTestStatus === 'passed'
+      : profileTestStatus === 'skipped' || profileTestStatus === null,
+    noFailedChecks: failedCheckCount === 0,
+    noAuthMaterialRecorded: report.auth?.cookie_recorded === false
+      && report.auth?.local_key_recorded === false
+      && safety.no_cookie_or_local_key_in_report === true,
+    noProviderSecretRecorded: safety.no_provider_secret_in_report === true
+      && !forbiddenSecretSignal(report),
+    noPublicContractChange: safety.no_public_third_party_contract_change === true,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    ready: report.ready === true,
+    pending: report.pending === true,
+    failed: report.failed === true,
+    self_test: report.self_test === true,
+    auth_method: report.auth?.method || null,
+    credentials_provided: report.auth?.credentials_provided === true,
+    expected_profile_id: report.expected?.profile_id || null,
+    expected_provider: report.expected?.provider || null,
+    expected_model: report.expected?.model || null,
+    passed_check_count: passedCheckCount,
+    pending_check_count: pendingCheckCount,
+    skipped_check_count: skippedCheckCount,
+    attention_check_count: attentionCheckCount,
+    failed_check_count: failedCheckCount,
+  };
+}
+
 function renderMarkdown(report) {
   const lines = [
     '# Model Gateway Operator Smoke',
     '',
     `- Status: ${report.ready ? 'passed' : report.pending ? 'pending' : 'failed'}`,
+    `- Machine summary: ${report.summary?.ok ? 'passed' : 'failed'}`,
     `- Base URL: ${report.base_url}`,
     `- Started: ${report.started_at}`,
     `- Finished: ${report.finished_at}`,

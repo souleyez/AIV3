@@ -2,6 +2,4225 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-07-04 P5 External Channel Streaming Smoke Machine Summary Local Verification
+
+- Scope:
+  - continue #895 after the artifact-count breakdown;
+  - add machine-readable live summary `ok/checks` fields to `scripts/smoke/external-channel-streaming-10way.mjs`;
+  - make normal artifact leaks visible both as per-task failure and as a top-level summary failure reason;
+  - keep third-party API fields, response schema, auth, dataset scope, source sync, object cleanup, production data, and 8-server configuration unchanged.
+- Code change:
+  - `summarizeRun` now computes `ok`, `checks.allTasksPassed`, `checks.noNormalArtifactLeak`, and `checks.noDuplicateFinalMessages`;
+  - live and self-test reports share the same summary-level machine checks;
+  - self-test now builds a normal-answer artifact leak summary and asserts `ok=false`, `failedCount=1`, and `normalArtifactLeakCount=1`.
+- Local verification:
+  - `node scripts\smoke\external-channel-streaming-10way.mjs --self-test`: passed with `summaryMachineOk=true`, `normalArtifactLeakSummaryFails=true`, and `normalArtifactLinkGuardWorks=true`;
+  - `node --check scripts\smoke\external-channel-streaming-10way.mjs`: passed;
+  - `git diff --check -- scripts\smoke\external-channel-streaming-10way.mjs`: passed with working-copy LF-to-CRLF warning only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this smoke summary improvement is local only until committed/deployed/copied with the repo;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Streaming Smoke Artifact Count Breakdown Local Verification
+
+- Scope:
+  - continue #894 after the 8-server speed smoke made it clear that normal third-party Q&A artifact leakage must be visible in the smoke summary, not only in per-task checks;
+  - split `scripts/smoke/external-channel-streaming-10way.mjs` artifact summary into total, normal-leak, static-page, and reconnect counts;
+  - keep third-party API fields, response schema, auth, dataset scope, source sync, object cleanup, production data, and 8-server configuration unchanged.
+- Code change:
+  - added `normalArtifactLeakCount`, `staticPageArtifactCount`, and `reconnectArtifactCount` to the smoke summary;
+  - kept `artifactCount` as the total real artifact-link count across task classes;
+  - changed the static-page self-test assertion to use `staticPageArtifactCount`, so normal artifact leaks cannot satisfy the static-page artifact requirement;
+  - added `normalArtifactLeakCountZero` self-test assertion for normal fixture streams.
+- Local verification:
+  - `node scripts\smoke\external-channel-streaming-10way.mjs --self-test`: passed with `normalArtifactLeakCount=0`, `staticPageArtifactCount=2`, and `normalArtifactLinkGuardWorks=true`;
+  - `node --check scripts\smoke\external-channel-streaming-10way.mjs`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this smoke summary improvement is local only until committed/deployed/copied with the repo;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Streaming Smoke Normal Artifact Guard Local Verification
+
+- Scope:
+  - continue #893 after live smoke showed normal third-party Q&A could return a static-page artifact link while the smoke still reported success;
+  - make `scripts/smoke/external-channel-streaming-10way.mjs` fail normal Q&A tasks that leak artifact/public/generated/download URLs;
+  - keep static-page task success semantics, reconnect checks, third-party API fields, response schema, auth, dataset scope, source sync, object cleanup, production data, and 8-server configuration unchanged.
+- Code change:
+  - normal stream success now requires `noArtifactLink`;
+  - normal task checks now include `noArtifactLink`;
+  - self-test includes a negative fixture where a normal answer contains `card.public_url` and `artifact_links`, proving the guard fails that task while ordinary normal fixtures still pass.
+- Local verification:
+  - `node scripts\smoke\external-channel-streaming-10way.mjs --self-test`: passed, `normalArtifactLinkGuardWorks=true`;
+  - `node --check scripts\smoke\external-channel-streaming-10way.mjs`: passed;
+  - `git diff --check -- scripts\smoke\external-channel-streaming-10way.mjs`: passed with working-copy LF-to-CRLF warning only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this smoke guard is local only until committed/deployed/copied with the repo;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Ordinary Q&A Static-Page Event Guard Local Verification
+
+- Scope:
+  - continue #892 after the link-negation fix;
+  - add a closer-to-runtime regression proving normal-mode third-party ordinary Q&A does not record static-page reuse/template-match events when the prompt explicitly says not to return historical page links;
+  - keep positive old-artifact delivery behavior, static-page generation/reuse behavior, third-party API fields, response schema, auth, dataset scope, source sync, object cleanup, production data, and 8-server configuration unchanged.
+- Code change:
+  - extended `external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request` with a normal-mode prompt using the same dataset scope that can overlap an accepted template baseline;
+  - the normal-mode negated prompt asserts no static-page reply, no new draft, no `assistant_run.external_channel_static_page_stable_artifact_reused`, no `assistant_run.external_channel_static_page_relaxed_template_matched`, no static-page queue events, and no Codex fixed-task events.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api static_page_prompt --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_normal_mode_history_link_negation --lib`: 1/1 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this local fix is not yet present on 8-server until a release build/deploy is run;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Ordinary Q&A Static-Page Link Negation Local Verification
+
+- Scope:
+  - follow up the live 8-server smoke where third-party ordinary Q&A completed quickly but still appended an existing Xinbai static-page link;
+  - close the static-page stable artifact reuse path when the user explicitly says not to return historical page/report links;
+  - keep third-party API fields, response schema, status URL shape, auth, dataset scope, static-page positive generation/reuse requests, source sync, object cleanup, production data, and 8-server configuration unchanged.
+- Live observation before local fix:
+  - 8-server `generic-chat-main` normal-mode prompt `请用两句话回答：这是第三方普通问答速度 smoke，不要生成报表，不要返回历史页面链接。` returned in about 3.6 seconds;
+  - the final reply incorrectly included `页面链接` and a `v3_static_page_pipeline` card with the accepted Xinbai generated-artifact URL;
+  - assistant run events showed `assistant_run.external_channel_static_page_stable_artifact_reused` and `assistant_run.external_channel_static_page_relaxed_template_matched` before `external_channel.completed`.
+- Code change:
+  - `static_page_prompt_requests_existing_artifact_delivery(prompt)` now returns false when the prompt negates artifact generation or link delivery;
+  - `static_page_prompt_negates_artifact_generation(prompt)` now also covers explicit link-delivery negations such as `不要返回历史页面链接`, `不要发之前生成过的报表链接`, `不要提供页面链接`, and equivalent English compact forms;
+  - external-channel static-page artifact detection has regression coverage for both artifact-mode and normal-mode ordinary Q&A prompts that negate historical link return.
+- Local verification:
+  - `cargo test -q -p platform-api static_page_prompt --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_negated_generation_request --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_normal_mode_history_link_negation --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request --lib`: 1/1 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this local fix is not yet present on 8-server until a release build/deploy is run;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 Main Assistant Runtime Fallback Attempts Local Verification
+
+- Scope:
+  - continue #890 after the live speed smoke showed main-site assistant runs still depend on one `ASSISTANT_RUN` provider path;
+  - reuse the existing `ASSISTANT_RUN_FALLBACK_*` runtime contract already used by external-channel fallback, without changing public API or default behavior;
+  - keep third-party API fields, main-site request/response shape, static-page behavior, source sync, object cleanup, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_chat_runtime_attempts(primary)` alongside the existing external-channel attempt builder;
+  - main assistant create/continue provider execution now tries the primary runtime first and, only when a distinct `ASSISTANT_RUN_FALLBACK_*` runtime is configured, tries that fallback after provider failure;
+  - fallback attempts use their own env prefix, so `ASSISTANT_RUN_FALLBACK_RUNTIME_BASE_URL`, API path, API key, model, timeout, and reasoning settings are respected;
+  - provider attempt/fallback started/fallback completed events are recorded with sanitized attempt metadata only: label, env prefix, mode, provider, model, lane, error code/status, and runtime summary; provider error body and prompt/input are not recorded.
+- Behavior preserved:
+  - with no fallback env, main assistant still has a single primary attempt;
+  - a fallback equal to the primary runtime is ignored;
+  - existing per-provider retry/backoff still runs inside each attempt;
+  - third-party direct-reply fallback and model-pool behavior are not changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_model_pool_support --lib`: 6/6 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p llm-gateway openai_compatible_connect_timeout_defaults_and_clamps_env --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_negated_generation_request --lib`: 1/1 passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this local fix is not yet present on 8-server until a release build/deploy is run;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-04 Live Speed Smoke Follow-up: Provider Connect Timeout and Negated Static-Page Reuse Guard
+
+- Scope:
+  - follow up the 8-server live speed smoke after the reported deployment;
+  - reduce OpenAI-compatible provider connection stalls without lowering answer quality or truncating valid long streaming responses;
+  - close the third-party ordinary-answer false static-page link path exposed by the same smoke.
+- Live observation before local fix:
+  - 8-server health/ready were reachable, but the main-site smoke accepted the assistant run quickly and then failed after a long provider stall;
+  - the failed run recorded provider `rightcode`, model `gpt-5.5`, and a streaming request failure against `https://right.codes/codex/v1/chat/completions`;
+  - third-party ordinary Q&A returned quickly, but a prompt explicitly saying not to generate reports/pages could still receive an old Xinbai static-page link when the request carried static-page artifact metadata.
+- Code change:
+  - `llm-gateway` now applies a default OpenAI-compatible HTTP connect timeout of 10 seconds, configurable by `LLM_GATEWAY_OPENAI_COMPATIBLE_CONNECT_TIMEOUT_MS` and clamped to 60 seconds;
+  - the change intentionally does not set or shorten total request timeout, so established long streaming answers are not cut off;
+  - `platform-api` now checks `static_page_prompt_negates_artifact_generation(prompt)` before accepting `artifact_type=static_page`;
+  - added a regression path proving a negated ordinary answer does not reuse a stable static-page artifact, create a static-page draft, enqueue Image2/Codex, or record static-page reuse events even when the message still carries `artifact_type=static_page`.
+- Local verification:
+  - `cargo test -q -p llm-gateway openai_compatible_connect_timeout_defaults_and_clamps_env --lib`: 1/1 passed;
+  - `cargo test -q -p llm-gateway openai_compatible_provider_applies_configured_timeout --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_negated_generation_request --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api static_page_prompt_intent_support --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api static_page_stable_artifact_key_uses_canonical_dataset_not_temporary_dataset --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p llm-gateway`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - this local fix is not yet present on 8-server until a release build/deploy is run;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Terminal Source Event Helper Local Verification
+
+- Scope:
+  - continue #888 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply terminal source event recognition use a shared Rust helper;
+  - keep latest-terminal-event selection order, completed/failed publish event coverage, outbound reply dispatch trigger behavior, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_is_terminal_source_event(event_name)`;
+  - changed `maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event` in `lib.rs` to call the helper while preserving reverse-order latest event selection;
+  - added a module test proving only static-page publish completed/failed source events are treated as terminal outbound reply sources.
+- Behavior preserved:
+  - latest terminal source event search still scans events from newest to oldest;
+  - static-page publish completed and failed events still trigger outbound reply dispatch;
+  - follow-up action reply and outbound dispatch audit events do not become terminal source events.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 20/20 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Header Blocked Result Helper Local Verification
+
+- Scope:
+  - continue #887 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch header/signature construction failure payload assembly use a shared Rust helper;
+  - keep header construction, request signing, blocked event-name selection, dispatch audit payload fields, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_header_blocked_dispatch_result(reason, endpoint_host, auth_mode)`;
+  - changed outbound reply dispatch flow in `lib.rs` to call the helper for `external_action_dispatch_headers(...)` errors;
+  - added a module test covering header error reason, endpoint host, auth mode, and blocked status preservation.
+- Behavior preserved:
+  - header/signature failures still record `assistant_run.external_channel_outbound_reply_dispatch_blocked`;
+  - dispatch payload still includes `status=dispatch_blocked`, `endpoint_configured=true`, `endpoint_host`, `auth_mode`, and the original header error reason;
+  - connection, endpoint, auth, transport, and HTTP response branches were not otherwise changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 19/19 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Response Summary Helper Local Verification
+
+- Scope:
+  - continue #886 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch HTTP response text parsing, safe summary construction, and external request id extraction use a shared Rust helper;
+  - keep response body redaction, request id alias support, HTTP status event selection, dispatch audit payload fields, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_response_summary(response_text)`;
+  - changed outbound reply dispatch flow in `lib.rs` to call the helper before building the final HTTP dispatch result;
+  - added a module test covering JSON response summary redaction, camelCase request id extraction, and plain-text body redaction.
+- Behavior preserved:
+  - JSON responses still go through `action_response_summary`;
+  - external request ids still accept the existing alias set through `external_action_response_request_id`;
+  - plain response text remains redacted and only exposes safe metadata.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Body Helper Local Verification
+
+- Scope:
+  - continue #885 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch payload body serialization use a shared Rust helper;
+  - keep payload shape, serialization error code/text, request signing body bytes, endpoint/auth selection, dispatch audit payload fields, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_body(payload)`;
+  - changed outbound reply dispatch flow in `lib.rs` to call the helper while preserving the existing `external_channel_outbound_reply_payload_failed` error mapping;
+  - added a module test proving the serialized body parses back to the same outbound payload value.
+- Behavior preserved:
+  - outbound reply payload still serializes through `serde_json::to_vec`;
+  - signing and dispatch still use the same serialized JSON body bytes;
+  - blocked, request-failed, client-build, and HTTP dispatch result branches were not otherwise changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 17/17 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt`: applied formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Client Helper Local Verification
+
+- Scope:
+  - continue #884 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch client timeout and builder use shared Rust helpers;
+  - keep 12-second timeout semantics, client build error code/text, endpoint/auth selection, request signing, dispatch result payload fields, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_TIMEOUT_SECS`;
+  - added `external_channel_outbound_reply_dispatch_client()`;
+  - changed outbound reply dispatch flow in `lib.rs` to use the helper while preserving the existing `external_channel_outbound_reply_dispatch_client_failed` error mapping.
+- Behavior preserved:
+  - outbound reply dispatch still uses a 12-second reqwest client timeout;
+  - client build failures still map to the same internal error code and message shape;
+  - blocked, request-failed, and final HTTP dispatch result branches were not otherwise changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt`: applied import ordering;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Request-Failed Dispatch Result Helper Local Verification
+
+- Scope:
+  - continue #883 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch request-failed result payload assembly use a shared Rust helper;
+  - keep failed event-name selection, dispatch audit payload fields, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_request_failed_dispatch_result(endpoint_host, auth_mode, request_error_kind)`;
+  - changed outbound reply dispatch flow in `lib.rs` to use the helper for `reqwest` send errors;
+  - removed now-unused runtime imports for request-failed status/reason constants from `lib.rs`.
+- Behavior preserved:
+  - transport send failures still record `assistant_run.external_channel_outbound_reply_dispatch_failed`;
+  - request-failed dispatch payload still includes `status=dispatch_failed`, `endpoint_configured=true`, `endpoint_host`, `auth_mode`, `reason=request_failed`, and `request_error_kind`;
+  - blocked and final HTTP response branches were not changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 15/15 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Static Page Negated Artifact Guard Local Verification
+
+- Scope:
+  - continue #882 under `platform-api`;
+  - prevent ordinary third-party questions that explicitly say not to generate reports/pages from entering the static-page artifact reuse/generation path;
+  - keep explicit static-page/report generation, existing published-link delivery, stable artifact reuse for positive report requests, third-party API fields, public response schema, runtime model routing, source sync, object cleanup, production data mutation, and 8-server configuration unchanged.
+- Code change:
+  - added `static_page_prompt_negates_artifact_generation(prompt)`;
+  - made `static_page_prompt_allows_default_template_reuse(prompt)` return false when the prompt explicitly negates report/page generation;
+  - made `external_channel_prompt_requests_static_page_report_workflow(prompt)` return false for explicit negated generation prompts before the broader report/artifact heuristics run.
+- Behavior fixed:
+  - prompts such as `请直接回答不要生成报表` stay ordinary Q&A and do not trigger stable static-page artifact reuse;
+  - prompts such as `先普通回答这个报表问题，不要生成页面` do not append a report link through default template reuse;
+  - prompts asking to resend an already generated report link, including `不要重新生成，直接把之前生成过的报表链接再发我一下`, still retain existing-artifact delivery semantics.
+- Local verification:
+  - `cargo test -q -p platform-api static_page_prompt_intent_support --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact_ignores_negated_generation_request --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_artifact --lib`: 19/19 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Blocked Dispatch Result Helper Local Verification
+
+- Scope:
+  - continue #881 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch blocked result payload assembly use a shared Rust helper;
+  - keep blocked event-name selection, dispatch audit payload fields, optional field omission rules, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_blocked_dispatch_result(reason, endpoint_configured, endpoint_host, auth_mode)`;
+  - changed outbound reply dispatch flow in `lib.rs` to use the helper for connection-missing, connection-disabled, endpoint-missing, endpoint-invalid, auth-missing, and header/signing blocked branches;
+  - moved blocked dispatch status import under `#[cfg(test)]` after runtime code no longer needs it directly.
+- Behavior preserved:
+  - connection missing/disabled blocked results still omit endpoint/auth details;
+  - endpoint missing still records `endpoint_configured=false`;
+  - invalid endpoint still records `endpoint_configured=true`;
+  - auth missing and header/signing failures still preserve endpoint host and auth mode where available;
+  - request-failed and final HTTP dispatch branches were not changed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 14/14 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply HTTP Dispatch Result Helper Local Verification
+
+- Scope:
+  - continue #880 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch HTTP result event/status selection and final dispatch payload assembly use shared Rust helpers;
+  - keep HTTP success range semantics, dispatched/failed event-name selection, dispatch audit payload fields, response summary shape, external request id propagation, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_event_name_for_http_status(http_status)`;
+  - added `external_channel_outbound_reply_dispatch_status_for_http_status(http_status)`;
+  - added `external_channel_outbound_reply_http_dispatch_result(endpoint_host, auth_mode, http_status, response_summary, external_request_id)`;
+  - changed outbound reply dispatch flow in `lib.rs` to use these helpers for the final HTTP response branch;
+  - moved a dispatch-event constant import under `#[cfg(test)]` after the helper removed runtime usage.
+- Behavior preserved:
+  - HTTP 2xx outbound reply callbacks still record dispatched event/status;
+  - non-2xx outbound reply callbacks still record failed event/status;
+  - final dispatch audit payload still includes `endpoint_configured`, `endpoint_host`, `auth_mode`, `http_status`, `response_summary`, and `external_request_id`;
+  - mock endpoint dispatch still posts the same signed outbound reply payload and records the same public artifact reply fields.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt`: applied import ordering;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply HTTP Status Helper Local Verification
+
+- Scope:
+  - continue #879 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch HTTP success classification use a shared Rust helper;
+  - keep success range semantics, dispatched/failed event-name selection, dispatch status payload fields, audit payload schema, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_http_status_success(http_status)`;
+  - changed outbound reply dispatch flow in `lib.rs` to use the helper for success classification;
+  - added a module test covering 199, 200, 204, 299, 300, and 500.
+- Behavior preserved:
+  - HTTP 2xx outbound reply callbacks still record dispatched status/event;
+  - non-2xx outbound reply callbacks still record failed status/event;
+  - mock endpoint dispatch still posts the same signed payload and public artifact reply fields.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 12/12 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Audit Text Helper Local Verification
+
+- Scope:
+  - continue #878 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch audit text presence and preview extraction use shared Rust helpers;
+  - keep audit payload schema, text-present semantics, preview budget, dispatch payload shape, summary JSON shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_text_present(text)`;
+  - added `external_channel_outbound_reply_text_preview(text)`;
+  - changed outbound reply dispatch audit payload `text_present` and `text_preview` fields to use the helpers;
+  - added a module test covering missing text, whitespace-only text, present text, empty preview fallback, and long-text truncation.
+- Behavior preserved:
+  - missing or whitespace-only reply text still reports `text_present=false`;
+  - non-empty reply text still reports `text_present=true`;
+  - text preview still uses the existing 240-character `truncate_assistant_supply_text` budget.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 11/11 passed;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Endpoint Configured Helper Local Verification
+
+- Scope:
+  - continue #877 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch summary endpoint-configured detection use a shared Rust helper;
+  - keep endpoint presence semantics, endpoint-host semantics, summary JSON shape, endpoint/auth selection, dispatch payload shape, audit payload shape, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_endpoint_configured(dispatch_url)`;
+  - changed outbound reply dispatch summary `endpoint_configured` calculation to use the helper;
+  - added a module test covering present redacted URL, present HTTPS URL, and missing URL;
+  - renamed the endpoint-host helper test to reflect parseable-host behavior rather than implying scheme validation.
+- Behavior preserved:
+  - any configured outbound reply dispatch URL value still reports `endpoint_configured=true`;
+  - missing outbound reply dispatch URL still reports `endpoint_configured=false`;
+  - invalid/redacted URL values still may be configured but expose `endpoint_host=null` in summary output.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 10/10 passed;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Endpoint Host Helper Local Verification
+
+- Scope:
+  - continue #876 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch summary endpoint-host extraction use a shared Rust helper;
+  - keep endpoint-host semantics, summary string values, summary JSON shape, endpoint/auth selection, dispatch payload shape, audit payload shape, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_endpoint_host(dispatch_url)`;
+  - changed outbound reply dispatch summary `endpoint_host` calculation to use the helper;
+  - added a module test covering HTTPS host, HTTP host with port, invalid/redacted URL, and missing URL.
+- Behavior preserved:
+  - valid outbound reply dispatch URLs still expose only the parsed host string in summary output;
+  - invalid or redacted dispatch URL values still report `endpoint_host=null`;
+  - missing dispatch URL still reports `endpoint_host=null`.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 9/9 passed;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Auth Source Selection Helper Local Verification
+
+- Scope:
+  - continue #875 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch summary auth-source selection use a shared Rust helper;
+  - keep auth-source precedence, summary string values, summary JSON shape, endpoint/auth selection, dispatch payload shape, audit payload shape, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_auth_source(reply_auth_configured, action_auth_fallback_available)`;
+  - changed outbound reply dispatch summary auth-source selection to use the helper;
+  - added a module test covering reply-specific priority, action-dispatch fallback, and no-auth fallback.
+- Behavior preserved:
+  - reply-specific outbound auth still takes precedence when both reply-specific auth and action-dispatch fallback auth are configured;
+  - action-dispatch auth is still used as fallback when reply-specific auth is absent;
+  - missing auth still reports `auth_source=none`.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 8/8 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Ready Helper Local Verification
+
+- Scope:
+  - continue #874 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch summary readiness use a shared Rust helper;
+  - keep readiness semantics, summary string values, summary JSON shape, endpoint/auth selection, dispatch payload shape, audit payload shape, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_outbound_reply_dispatch_ready(endpoint_configured, auth_configured)`;
+  - changed outbound reply dispatch summary `ready` calculation to use the helper;
+  - added a module test covering all four endpoint/auth boolean combinations.
+- Behavior preserved:
+  - outbound reply dispatch summary still reports ready only when both endpoint and auth are configured;
+  - endpoint-only, auth-only, and neither-configured cases still report `ready=false`;
+  - existing auth-source and endpoint-host summary behavior is unchanged.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 7/7 passed;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Auth Source Helper Local Verification
+
+- Scope:
+  - continue #873 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch summary `auth_source` values use shared Rust constants;
+  - keep summary string values, summary JSON shape, endpoint/auth selection, dispatch payload shape, audit payload shape, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `EXTERNAL_CHANNEL_OUTBOUND_REPLY_AUTH_SOURCE_REPLY_SPECIFIC`, `EXTERNAL_CHANNEL_OUTBOUND_REPLY_AUTH_SOURCE_ACTION_DISPATCH_FALLBACK`, and `EXTERNAL_CHANNEL_OUTBOUND_REPLY_AUTH_SOURCE_NONE`;
+  - changed outbound reply dispatch summary auth-source selection and module assertions to use the shared constants;
+  - left external action dispatch failure-kind/reason handling unchanged because that is a separate action-dispatch contract.
+- Behavior preserved:
+  - reply-specific outbound auth still reports `auth_source=reply_specific`;
+  - action-dispatch fallback auth still reports `auth_source=action_dispatch_fallback`;
+  - missing auth still reports `auth_source=none`;
+  - readiness still requires both endpoint and auth to be configured.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 6/6 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Payload Wire Helper Local Verification
+
+- Scope:
+  - continue #872 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch payload `event_type` and `trigger` values use shared Rust constants;
+  - keep wire string values, payload shape, audit payload shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `EXTERNAL_CHANNEL_OUTBOUND_REPLY_EVENT_TYPE_ASSISTANT_REPLY` and `EXTERNAL_CHANNEL_OUTBOUND_REPLY_TRIGGER_ASYNC_RESULT_COMPLETED`;
+  - changed outbound reply payload builder and outbound reply mock endpoint assertions to use the shared constants;
+  - kept unrelated `assistant_reply` strings outside this outbound reply payload contract unchanged.
+- Behavior preserved:
+  - outbound reply payloads still expose `event_type=assistant_reply`;
+  - outbound reply payloads still expose `trigger=async_result_completed`;
+  - mock endpoint dispatch still verifies the same signed request body and public artifact reply fields.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Reason Helper Local Verification
+
+- Scope:
+  - continue #871 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch audit reason values use shared Rust constants;
+  - keep reason string values, audit query output, event-name output, dispatch payload shape, audit payload shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added outbound reply dispatch reason constants for connection missing, connection disabled, endpoint missing, endpoint invalid, auth missing, and request failed;
+  - changed outbound reply dispatch blocked/failed audit payloads and outbound reply audit tests to use those constants;
+  - left external action dispatch, image extraction, and unrelated request-failed handling unchanged.
+- Behavior preserved:
+  - missing connection still records `connection_missing`;
+  - disabled connection still records `connection_disabled`;
+  - missing reply endpoint still records `reply_dispatch_endpoint_missing`;
+  - invalid reply endpoint still records `reply_dispatch_endpoint_invalid`;
+  - missing reply auth still records `reply_dispatch_auth_missing`;
+  - outbound reply request failure still records `request_failed`.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_integration_audit_filter_selects_outbound_reply_items --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Status Helper Local Verification
+
+- Scope:
+  - continue #870 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch audit statuses use shared Rust constants and a status-from-event helper;
+  - keep status string values, audit query output, event-name output, dispatch payload shape, audit payload shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added outbound reply dispatch status constants for `dispatch_blocked`, `dispatch_failed`, and `dispatched`;
+  - added `external_channel_outbound_reply_dispatch_status_from_event_name()` to map the three outbound reply dispatch event names to their audit statuses;
+  - changed outbound reply audit fallback status derivation, blocked/failed/success dispatch payloads, and outbound reply audit tests to use the shared constants;
+  - left external action dispatch SQL/status handling unchanged.
+- Behavior preserved:
+  - outbound reply audit items still expose `dispatch_blocked`, `dispatch_failed`, and `dispatched`;
+  - missing endpoint still records a blocked audit event instead of failing the run;
+  - successful third-party reply dispatch still posts the same signed payload and records one dispatched audit event.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_integration_audit_filter_selects_outbound_reply_items --lib`: 1/1 passed;
+  - `cargo fmt`: applied mechanical formatting after status constant replacement;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Source Event Helper Local Verification
+
+- Scope:
+  - continue #869 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the source event names consumed by outbound reply dispatch use shared Rust constants;
+  - keep source event string values, first-turn followup reply recording, static-page publish completed/failed reply conversion, latest-terminal-event dispatch selection, dispatch payload shape, audit payload shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added outbound reply source-event constants for static-page publish completed, static-page publish failed, and first-turn followup action reply;
+  - added `external_channel_outbound_reply_terminal_source_event_names()` for latest terminal-event selection;
+  - changed `append_external_channel_first_turn_followup_reply`, `maybe_dispatch_external_channel_outbound_reply`, latest-terminal dispatch selection, and outbound reply tests to use the shared constants.
+- Behavior preserved:
+  - outbound reply dispatch still consumes `assistant_run.external_channel_static_page_publish_completed`;
+  - outbound reply dispatch still consumes `assistant_run.external_channel_static_page_publish_failed`;
+  - first-turn followup action replies still record and dispatch `assistant_run.external_channel_first_turn_followup_action_reply`;
+  - unrelated static-page publish/recovery event-name call sites were left unchanged in this slice.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing --lib`: 1/1 passed;
+  - `cargo fmt`: applied mechanical formatting after source-event constant replacement;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Event Name Helper Local Verification
+
+- Scope:
+  - continue #868 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch blocked/failed/dispatched event names use shared Rust constants;
+  - keep event name string values, audit query item selection, duplicate suppression, blocked/failed/dispatched append behavior, audit payload shape, endpoint/auth selection, request signing, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added outbound reply dispatch event-name constants and `external_channel_outbound_reply_dispatch_event_names()` in `external_channel_outbound_reply_dispatch_support`;
+  - changed the external integration audit query to bind the shared event-name list with `event_name = any($3)`;
+  - changed duplicate suppression prefix checks, blocked/failed/dispatched event append calls, and related tests to use the shared constants.
+- Behavior preserved:
+  - dispatch-blocked events still use `assistant_run.external_channel_outbound_reply_dispatch_blocked`;
+  - dispatch-failed events still use `assistant_run.external_channel_outbound_reply_dispatch_failed`;
+  - dispatch-success events still use `assistant_run.external_channel_outbound_reply_dispatch_dispatched`;
+  - audit filtering still selects outbound reply items and excludes action items.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_integration_audit_filter_selects_outbound_reply_items --lib`: 1/1 passed;
+  - `cargo fmt`: applied mechanical formatting after constant replacement;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only;
+  - `rg -n 'assistant_run\.external_channel_outbound_reply_dispatch_(blocked|failed|dispatched)' crates/platform-api/src -g '*.rs'`: only the three constant definitions remain.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Outbound Reply Dispatch Schema Helper Local Verification
+
+- Scope:
+  - continue #867 P5 behavior-preserving engineering governance under `platform-api`;
+  - make outbound reply dispatch payload and dispatch-audit payload schema names use shared Rust constants;
+  - keep public JSON schema values, dispatch payload shape, audit payload shape, signing behavior, endpoint/auth selection, source event handling, idempotency, public reply conversion, third-party API, public API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `EXTERNAL_CHANNEL_OUTBOUND_REPLY_SCHEMA_V1` and `EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_AUDIT_SCHEMA_V1` in `external_channel_outbound_reply_dispatch_support`;
+  - changed payload builders and module tests to use those constants;
+  - changed the outbound reply mock endpoint integration assertion in `lib.rs` to use the shared schema constant.
+- Behavior preserved:
+  - outbound reply payloads still publish `v3.external_channel.outbound_reply.v1`;
+  - outbound reply dispatch audit payloads still publish `v3.external_channel.outbound_reply.dispatch_audit.v1`;
+  - mock endpoint dispatch still verifies the same signed request body and public artifact reply fields.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_outbound_reply_dispatch_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api external_outbound_reply_dispatch_posts_static_page_result_to_mock_endpoint --lib`: 1/1 passed;
+  - `cargo fmt`: applied mechanical import ordering after the helper replacement;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Normal Q&A SSE Assertion Helper Local Verification
+
+- Scope:
+  - continue #866 P5 behavior-preserving engineering governance under `platform-api`;
+  - make `lib.rs` normal Q&A external-channel stream integration-test assertions use the shared SSE event/schema helpers;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, started payload shape, retrieval payload shape, live delta payload shape, completed payload shape, done payload shape, answer-retrying payload shape, public response cleanup path, public text replacement/redaction/truncation rules, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed normal Q&A stream schema assertions to use `EXTERNAL_CHANNEL_SSE_SCHEMA_V1`;
+  - changed retrieval-started, delta, completed, and done assertions to use the existing SSE event helpers;
+  - kept the negative `external_channel.accepted` assertion as an explicit sentinel because accepted is not a valid public SSE helper/event.
+- Behavior preserved:
+  - normal Q&A streams still emit started, retrieval-started, delta, completed, and done frames in the same order;
+  - live answer delta still appears before completed;
+  - accepted is still asserted absent from the public stream.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after assertion helper-call replacement;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Static Page SSE Assertion Helper Local Verification
+
+- Scope:
+  - continue #865 P5 behavior-preserving engineering governance under `platform-api`;
+  - make `lib.rs` static-page and needs-input SSE integration-test assertions use the shared SSE event/schema helpers;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, preview payload shape, queued/published payload shape, needs-input payload shape, issue/continue-polling payload shape, text delta behavior, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed needs-input/completed/done assertions to use `external_channel_sse_needs_input_event_name()`, `external_channel_sse_completed_event_name()`, and `external_channel_sse_done_event_name()`;
+  - changed static-page queued/published/issue/continue-polling/delta assertions to use the existing static-page and delta event helpers;
+  - changed local schema assertions in this static-page/needs-input block to use `EXTERNAL_CHANNEL_SSE_SCHEMA_V1`;
+  - left normal Q&A stream assertions for the next #866 slice.
+- Behavior preserved:
+  - wire events and schema remain unchanged;
+  - static-page queued, preview-ready, published, issue, continue-polling, stable-reuse, and completed SSE outputs remain guarded by the same integration tests;
+  - this slice only removes duplicated string literals from test assertions.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after assertion helper-call replacement;
+  - `cargo test -q -p platform-api external_channel_recovery_followup_becomes_needs_input_reply_and_sse_event --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel SSE Test Event Helper Local Verification
+
+- Scope:
+  - continue #864 P5 behavior-preserving engineering governance under `platform-api`;
+  - make remaining `lib.rs` public SSE integration-test event-name references use the shared SSE event helpers;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, preview payload shape, queued/published payload shape, answer-retrying payload shape, text delta behavior, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed public-stream persistence/dedupe integration tests to use `external_channel_static_page_sse_queued_event_name()` and `external_channel_static_page_sse_published_event_name()`;
+  - changed the answer-retrying live stream regression to use `external_channel_answer_retrying_sse_event_name()` and `external_channel_sse_delta_event_name()`;
+  - verified remaining `external_channel.*` string literals in `lib.rs` are non-SSE source labels, not public event names.
+- Behavior preserved:
+  - queued frames still use `external_channel.static_page_queued`;
+  - published frames still use `external_channel.static_page_published`;
+  - retry frames still use `external_channel.answer_retrying`;
+  - live answer delta frames still use `external_channel.delta`;
+  - wire values remain guarded by the shared SSE support contract tests.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after test helper-call replacement;
+  - `cargo test -q -p platform-api external_channel_public_stream_event_persists_dedupes_and_filters_internal_events --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-04 P5 External Channel Static Page Preview Ready Helper Local Verification
+
+- Scope:
+  - continue #863 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the static-page preview-ready follow-stream replay path reuse the shared static-page preview-ready SSE event helper;
+  - keep public SSE schema, event name, dedupe key content, sequence number, display text, status/status_url/poll fields, preview payload shape, text delta behavior, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed the static-page preview-ready follow-stream dedupe key prefix, persisted event name, and SSE frame event in `lib.rs` to use `external_channel_static_page_sse_preview_ready_event_name()`;
+  - left the helper wire-contract assertions in `external_channel_sse_support` as the single source of truth for `external_channel.static_page_preview_ready`.
+- Behavior preserved:
+  - preview-ready frames still emit and persist `external_channel.static_page_preview_ready`;
+  - dedupe keys still have the same string content;
+  - preview status, card payload, preview URL fallback, text delta, sequence `30`, and follow-stream replay behavior remain unchanged.
+- Local verification:
+  - initial parallel cargo tests emitted passed test summaries but hit command timeout during cargo process teardown, so each targeted test was rerun with a clean exit;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo fmt`: applied mechanical formatting check path;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Followup Action Event Helper Local Verification
+
+- Scope:
+  - continue #862 P5 behavior-preserving engineering governance under `platform-api`;
+  - split first-turn followup-action public SSE event names into shared named helpers;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, done payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing/heartbeat payload shape, followup-action planning/planned/search-evidence/not-required/failed/continue-polling payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, needs-input payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added followup-action SSE event helpers for continue-polling, planning, planned, search-evidence-required, action-not-required, and action-failed;
+  - changed first-turn followup stream production paths in `lib.rs` to call the helpers;
+  - extended the SSE wire-contract helper test to cover all six followup-action public event names.
+- Behavior preserved:
+  - followup-action public stream still emits the same six event names;
+  - followup-action phase/status values, display text, poll interval, dedupe hash input, persisted public payload shape, and first-turn action planning gates remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api external_channel_action_planning_gates_plain_questions --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_channel_first_turn_followup_actions_only_run_for_action_prompts --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Answer Retrying Shared Event Helper Local Verification
+
+- Scope:
+  - continue #861 P5 behavior-preserving engineering governance under `platform-api`;
+  - promote the existing live-sink answer-retrying SSE event-name helper into the shared SSE support event-name helper set;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, done payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing/heartbeat payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, needs-input payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `external_channel_answer_retrying_sse_event_name` from `external_channel_sse_live_sink` into `external_channel_sse_support`;
+  - changed `external_channel_sse_live_sink` to import the shared helper instead of defining the answer-retrying event name locally;
+  - extended the SSE wire-contract helper test to cover `external_channel.answer_retrying`.
+- Behavior preserved:
+  - live answer retry progress still emits `external_channel.answer_retrying`;
+  - dedupe keys, retry sequence, phase/status `answering`/`retrying`, retry text, status URL, poll interval, persisted assistant-run event name, and accepted-fallback ordering remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper import changes;
+  - `cargo test -q -p platform-api external_channel_sse_live_sink --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib`: 1/1 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Heartbeat Event Helper Local Verification
+
+- Scope:
+  - continue #860 P5 behavior-preserving engineering governance under `platform-api`;
+  - add a named external-channel heartbeat SSE event helper and make heartbeat frames in `lib.rs` reuse it;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, done payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing/heartbeat payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, needs-input payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_sse_heartbeat_event_name`;
+  - changed followup-action heartbeat and static-page heartbeat SSE frames to use the heartbeat event helper.
+- Behavior preserved:
+  - heartbeat frames still emit `external_channel.heartbeat`;
+  - heartbeat sequence, phase/status `processing`, polling interval, display text, and public payload shape remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Completed And Done Event Helper Local Verification
+
+- Scope:
+  - continue #859 P5 behavior-preserving engineering governance under `platform-api`;
+  - make completed/done SSE event helpers reusable by the production external-channel stream paths in `lib.rs`;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, done payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, needs-input payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - promoted `external_channel_sse_done_event_name` from test-only to crate-local production helper;
+  - changed completed-event dedupe key, persisted event name, SSE event frame, and completed-sequence scan to use `external_channel_sse_completed_event_name`;
+  - changed external-channel stream `done` frames in `lib.rs` to use `external_channel_sse_done_event_name`.
+- Behavior preserved:
+  - completed frames still emit and persist `external_channel.completed`;
+  - done frames still emit `done` with `{"ok": true}`;
+  - completed dedupe keys still have the same string content, and completed/done sequencing remains unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Needs Input Event Helper Local Verification
+
+- Scope:
+  - continue #858 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the third-party needs-input SSE event helper available to production code and use it for needs-input event persistence/emission in `lib.rs`;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, needs-input payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - promoted `external_channel_sse_needs_input_event_name` from test-only to crate-local production helper;
+  - changed needs-input dedupe key, persisted event name, and SSE event frame to use the needs-input event helper.
+- Behavior preserved:
+  - needs-input frames still emit and persist `external_channel.needs_input`;
+  - needs-input dedupe keys still have the same string content;
+  - sequence `70`, phase/status `needs_input`, card payload, text fallback, status URL/poll fields, completed/done behavior, and public payload shape remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Static Page Planning Event Helper Local Verification
+
+- Scope:
+  - continue #857 P5 behavior-preserving engineering governance under `platform-api`;
+  - add a named static-page planning SSE event helper and make planning-event persistence/emission in `lib.rs` reuse it;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_planning_event_name`;
+  - changed static-page planning dedupe key, persisted event name, and SSE event frame to use the planning event helper;
+  - extended the static-page SSE event-name helper assertion coverage for the planning helper.
+- Behavior preserved:
+  - planning frames still emit and persist `external_channel.static_page_planning`;
+  - planning dedupe keys still have the same string content;
+  - planning sequence `10`, status `static_page_planning`, display text, summary payload, data snapshot fields, and next-step field remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Static Page Queued And Continue Polling Event Helper Local Verification
+
+- Scope:
+  - continue #856 P5 behavior-preserving engineering governance under `platform-api`;
+  - make static-page queued and continue-polling SSE event persistence/emission in `lib.rs` reuse named event helpers;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page queued/planning/preview/progress/continue-polling payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - promoted `external_channel_static_page_sse_queued_event_name` from test-only to crate-local production helper;
+  - changed static-page queued dedupe key, persisted event name, and SSE event frame to use the queued event helper;
+  - changed static-page continue-polling persisted event name and SSE event frame to use the existing continue-polling event helper.
+- Behavior preserved:
+  - queued frames still emit and persist `external_channel.static_page_queued`;
+  - continue-polling frames still emit and persist `external_channel.static_page_continue_polling`;
+  - queued dedupe keys still have the same string content, status/sequence/polling fields and payload shape remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Static Page Delta Event Helper Local Verification
+
+- Scope:
+  - continue #855 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the remaining static-page related text-delta SSE encoders in `lib.rs` reuse the named external-channel delta event helper;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page queued/planning/preview/progress payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed static-page queued completion text deltas to call `external_channel_sse_delta_event_name`;
+  - changed static-page preview-ready text deltas to call `external_channel_sse_delta_event_name`;
+  - changed static-page planning text deltas to call `external_channel_sse_delta_event_name`.
+- Behavior preserved:
+  - all changed delta frames still emit `external_channel.delta`;
+  - queued, preview-ready, and planning companion JSON events still use their existing event names, dedupe keys, sequence numbers, payloads, and display text;
+  - no new stream event type, persistence branch, task status, or model/provider path was introduced.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper-call replacement;
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel Static Page Preview Event Helper Production Check Local Verification
+
+- Scope:
+  - continue #854 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the third-party idempotent replay static-page preview-emitted check reuse the named static-page preview-ready SSE event helper;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, static-page preview payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed the idempotent replay `preview_emitted` check to call `external_channel_static_page_sse_preview_ready_event_name`;
+  - changed the static-page preview SSE assertion to use the same helper.
+- Behavior preserved:
+  - preview-ready frames still emit `external_channel.static_page_preview_ready`;
+  - the idempotent replay branch still prevents duplicate preview-ready emission while following a non-terminal static-page run;
+  - status `static_page_preview_ready`, sequence `30`, preview URL fields, progress following state, completed/done behavior, and public static-page payload shape remain unchanged.
+- Local verification:
+  - `cargo test -q -p platform-api static_page_sse --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Completed Event Helper Production Check Local Verification
+
+- Scope:
+  - continue #853 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the completed SSE event-name helper available to production code and use it for the third-party idempotent replay completed-event check;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - promoted `external_channel_sse_completed_event_name` from test-only to crate-local production helper;
+  - changed the idempotent replay `public_completed_emitted` check to call the helper;
+  - changed nearby stream/replay assertions to use the same helper.
+- Behavior preserved:
+  - completed frames still emit `external_channel.completed`;
+  - the idempotent replay branch still checks whether a public completed event was already persisted before deciding to synthesize a completion frame;
+  - replay, terminal static-page, done, started, processing, retrieval-started, delta, and completion payload behavior remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper visibility and assertion updates;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Processing Event Name Helper Local Verification
+
+- Scope:
+  - continue #852 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the third-party `/events/stream` idempotent-processing SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, started/retrieval/processing payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_processing_sse_event_name`;
+  - changed the idempotent existing-message/no-run stream branch to call the processing event-name helper;
+  - extended the lifecycle wire-contract test to assert started, processing, and retrieval-started event-name helpers.
+- Behavior preserved:
+  - processing frames still emit `external_channel.processing`;
+  - the no-run idempotent stream branch still emits started, processing, and done frames;
+  - processing phase/status, display text `同一幂等键的消息正在处理中。`, default sequence, and payload `{"status":"processing"}` remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Started Event Name Helper Local Verification
+
+- Scope:
+  - continue #851 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the third-party `/events/stream` started SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_started_sse_event_name`;
+  - changed `ingest_external_channel_event_stream` to call the started event-name helper;
+  - changed stream replay, normal stream, and live stream tests to assert the helper-derived event name.
+- Behavior preserved:
+  - started frames still emit `external_channel.started`;
+  - sequence `0`, phase `started`, status `started`, pending event id, display text, conversation/message/idempotency fields, and started payload remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api generic_chat_page_event_stream --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_sse_live_sink --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Live Sink Answer Retrying Event Helper Local Verification
+
+- Scope:
+  - continue #850 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the live answer-retrying SSE event name and dedupe-key prefix into named helpers while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, live answer retry payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_answer_retrying_sse_event_name`;
+  - added `external_channel_answer_retrying_sse_dedupe_key`;
+  - changed `ExternalChannelAnswerDeltaSink::emit_answer_retrying` and its wire-contract test to use the helpers.
+- Behavior preserved:
+  - live retry progress events still emit `external_channel.answer_retrying`;
+  - retry dedupe keys still use `external_channel.answer_retrying:{reason}:{sequence}`;
+  - missing run context suppression, status `retrying`, phase `answering`, reason, retryable flag, display text, status URL, poll interval `15`, and sequence start `55` remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api external_channel_sse_live_sink --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Live Sink Delta Event Name Helper Local Verification
+
+- Scope:
+  - continue #849 P5 behavior-preserving engineering governance under `platform-api`;
+  - make the external-channel live answer-delta sink reuse the existing named delta SSE event helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, live answer delta payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed `ExternalChannelAnswerDeltaSink::emit` to call `external_channel_sse_delta_event_name`;
+  - changed the live sink delta wire-contract test to assert the emitted event via the same helper.
+- Behavior preserved:
+  - live answer delta frames still emit `external_channel.delta`;
+  - empty delta suppression, delta index, delta text, retry progress event, retry sequence, status URL, and polling interval remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after import/test updates;
+  - `cargo test -q -p platform-api external_channel_sse_live_sink --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Retrieval Started Event Name Helper Local Verification
+
+- Scope:
+  - continue #848 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the retrieval-started SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_retrieval_started_sse_event_name`;
+  - changed `external_channel_retrieval_started_sse_event` to call the retrieval-started event-name helper;
+  - changed the retrieval-started wire-contract test to assert the helper directly.
+- Behavior preserved:
+  - retrieval-started frames still emit `external_channel.retrieval_started`;
+  - sequence `5`, phase `retrieval`, status `processing`, conversation/message/idempotency fields, schema, and display text remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Delta Event Name Helper Local Verification
+
+- Scope:
+  - continue #847 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the external-channel SSE delta event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_sse_delta_event_name`;
+  - changed completion SSE encoding and `external_channel_sse_event_with_delta` to call the delta event-name helper;
+  - changed delta event assertions to use the helper.
+- Behavior preserved:
+  - public delta frames still emit `external_channel.delta`;
+  - completion, queued, needs-input, static-page progress, status URL, poll interval, sequence, completed text, and done behavior remain unchanged;
+  - `external_channel_sse_event_with_delta` still emits the public delta frame before the named event.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test updates;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Done Event Name Helper Local Verification
+
+- Scope:
+  - continue #846 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the completion test path final `done` SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added test-scoped `external_channel_sse_done_event_name`;
+  - changed the test-only completion SSE helper to call the done event-name helper;
+  - changed the queued completion test to assert absence via the done event-name helper.
+- Behavior preserved:
+  - final done event still uses `done` when `include_done=true`;
+  - the no-done test still proves no done event is emitted when `include_done=false`;
+  - completion, queued, needs-input, status URL, poll interval, sequence, and completed text behavior remain unchanged;
+  - production code path remains unchanged because the helper is test-scoped.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Completed Event Name Helper Local Verification
+
+- Scope:
+  - continue #845 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the completion test path completed SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added test-scoped `external_channel_sse_completed_event_name`;
+  - changed the test-only completion SSE helper to call the completed event-name helper;
+  - extended the queued completion test to assert the helper directly.
+- Behavior preserved:
+  - completion still emits `external_channel.completed`;
+  - sequence `100`, completed text fallback, optional `done` handling, queued event, needs-input event, status URL, and poll interval behavior remain unchanged;
+  - production code path remains unchanged because the helper is test-scoped.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Needs Input Event Name Helper Local Verification
+
+- Scope:
+  - continue #844 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the completion test path needs-input SSE event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added test-scoped `external_channel_sse_needs_input_event_name`;
+  - changed the test-only completion SSE helper to call the needs-input event-name helper;
+  - extended the needs-input detection test to assert the helper directly.
+- Behavior preserved:
+  - needs-input completion still emits `external_channel.needs_input`;
+  - `status=needs_input`, sequence `70`, status URL, poll interval, sanitized/default prompt text, and completed event behavior remain unchanged;
+  - production code path remains unchanged because the helper is test-scoped.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Queued Event Name Helper Local Verification
+
+- Scope:
+  - continue #843 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page queued SSE event name used by the completion test path into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added test-scoped `external_channel_static_page_sse_queued_event_name`;
+  - changed the test-only completion SSE helper to call the queued event-name helper;
+  - extended the queued completion test to assert the queued event-name helper directly.
+- Behavior preserved:
+  - queued static-page completion still emits `external_channel.static_page_queued`;
+  - completion sequence `20`, `status=static_page_generation_queued`, status URL, poll interval, completed event, and no-done behavior remain unchanged;
+  - production code path remains unchanged because the queued helper is test-scoped.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Published Event Name Helper Local Verification
+
+- Scope:
+  - continue #842 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE published/reused event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_published_event_name`;
+  - changed `external_channel_static_page_sse_event_name` to call the new published event-name helper;
+  - extended the event-name test to assert the published event-name helper directly.
+- Behavior preserved:
+  - `static_page_published` and `static_page_stable_artifact_reused` still map to `external_channel.static_page_published`;
+  - preview-ready, issue, continue-polling, publish-progress, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Preview Ready Event Name Helper Local Verification
+
+- Scope:
+  - continue #841 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE preview-ready event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_preview_ready_event_name`;
+  - changed `external_channel_static_page_sse_event_name` to call the new preview-ready event-name helper;
+  - extended the event-name test to assert the preview-ready event-name helper directly.
+- Behavior preserved:
+  - `static_page_effect_image_ready` still maps to `external_channel.static_page_preview_ready`;
+  - published/reused, issue, continue-polling, publish-progress, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Issue Event Name Helper Local Verification
+
+- Scope:
+  - continue #840 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE issue event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_issue_event_name`;
+  - changed `external_channel_static_page_sse_event_name` to call the new issue event-name helper;
+  - extended the event-name test to assert the issue event-name helper directly.
+- Behavior preserved:
+  - `static_page_publish_failed`, `static_page_publish_cancelled`, and `static_page_publish_needs_human` still map to `external_channel.static_page_issue`;
+  - preview-ready, published/reused, continue-polling, publish-progress, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Publish Progress Event Name Helper Local Verification
+
+- Scope:
+  - continue #839 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE publish-progress event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_publish_progress_event_name`;
+  - changed `external_channel_static_page_sse_event_name` to call the new publish-progress event-name helper;
+  - extended the event-name test to assert the publish-progress event-name helper directly.
+- Behavior preserved:
+  - `static_page_publish_queued`, `static_page_publish_running`, and `static_page_publish_retrying` still map to `external_channel.static_page_publish_progress`;
+  - preview-ready, published/reused, issue, continue-polling, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Continue Polling Event Name Helper Local Verification
+
+- Scope:
+  - continue #838 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE continue-polling event name into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_continue_polling_event_name`;
+  - changed `external_channel_static_page_sse_event_name` to call the new continue-polling event-name helper;
+  - changed static-page SSE continue-polling dedupe-key construction and test event emission to call the new helper;
+  - extended the event-name test to assert the continue-polling event-name helper directly.
+- Behavior preserved:
+  - `static_page_continue_polling` still maps to `external_channel.static_page_continue_polling`;
+  - continue-polling dedupe keys still use `external_channel.static_page_continue_polling:{public_status}:{progress_key}`;
+  - preview-ready, published/reused, issue, publish-progress, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Static Page Dedupe Key Helper Local Verification
+
+- Scope:
+  - continue #837 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE progress and continue-polling dedupe-key formatting into a named helper while preserving the public dedupe key string shape;
+  - keep public SSE schema, event names, dedupe key content, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_dedupe_key`;
+  - changed static-page SSE progress payload dedupe-key construction to call the new helper;
+  - changed static-page SSE continue-polling payload dedupe-key construction to call the new helper;
+  - extended the event-name/progress-key test to assert the dedupe key string shape directly.
+- Behavior preserved:
+  - progress dedupe keys remain `{event_name}:{public_status}:{progress_key}`;
+  - continue-polling dedupe keys remain `external_channel.static_page_continue_polling:{public_status}:{progress_key}`;
+  - event names, public statuses, progress keys, and payload fields remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Generic Progress Event Name Helper Local Verification
+
+- Scope:
+  - continue #836 P5 behavior-preserving engineering governance under `platform-api`;
+  - split the static-page SSE generic progress event-name fallback into a named helper while preserving the public wire event name;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_generic_progress_event_name`;
+  - changed the default branch of `external_channel_static_page_sse_event_name` to call the new helper;
+  - extended the event-name test to assert the generic progress fallback and unknown status mapping directly.
+- Behavior preserved:
+  - unknown or uncategorized static-page statuses still map to `external_channel.static_page_progress`;
+  - preview-ready, published/reused, issue, continue-polling, and publish-progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Preview And Continue Polling Status Helpers Local Verification
+
+- Scope:
+  - continue #835 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE preview-ready and continue-polling event-name status checks into named helpers while preserving emitted public event names;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_preview_ready_status`;
+  - added `external_channel_static_page_sse_continue_polling_status`;
+  - changed `external_channel_static_page_sse_event_name` to call the new preview-ready and continue-polling status helpers;
+  - extended the event-name test to assert preview-ready and continue-polling group classification directly.
+- Behavior preserved:
+  - `static_page_effect_image_ready` still maps to `external_channel.static_page_preview_ready`;
+  - `static_page_continue_polling` still maps to `external_channel.static_page_continue_polling`;
+  - published/reused, issue, publish-progress, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Published Or Reused Status Helper Local Verification
+
+- Scope:
+  - continue #834 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE published/reused event-name status group checks into a named helper while preserving emitted public event names;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_published_or_reused_status`;
+  - changed `external_channel_static_page_sse_event_name` to call the new published/reused status helper;
+  - extended the event-name test to assert reused/published status group classification directly.
+- Behavior preserved:
+  - `static_page_published` and `static_page_stable_artifact_reused` still map to `external_channel.static_page_published`;
+  - non-published progress statuses do not match the published/reused helper;
+  - preview-ready, issue, publish-progress, continue-polling, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Event Name Status Group Helpers Local Verification
+
+- Scope:
+  - continue #833 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE event-name issue and publish-progress status group checks into named helpers while preserving emitted public event names;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_issue_status`;
+  - added `external_channel_static_page_sse_publish_progress_status`;
+  - changed `external_channel_static_page_sse_event_name` to call the new status group helpers;
+  - extended the event-name test to assert issue and publish-progress group classification directly.
+- Behavior preserved:
+  - `static_page_publish_failed`, `static_page_publish_cancelled`, and `static_page_publish_needs_human` still map to `external_channel.static_page_issue`;
+  - `static_page_publish_queued`, `static_page_publish_running`, and `static_page_publish_retrying` still map to `external_channel.static_page_publish_progress`;
+  - preview-ready, published/reused, continue-polling, and generic progress event names remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Terminal Status Helper Local Verification
+
+- Scope:
+  - continue #832 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE terminal status classification into a status-only helper while preserving response-level terminal detection;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_terminal_status`;
+  - changed `external_channel_static_page_sse_is_terminal` to call the status-only helper after deriving the public SSE status;
+  - extended the static-page status test to assert terminal and non-terminal status classifications directly.
+- Behavior preserved:
+  - terminal statuses remain `static_page_published`, `static_page_stable_artifact_reused`, `static_page_publish_cancelled`, `static_page_publish_failed`, and `static_page_publish_needs_human`;
+  - `static_page_publish_running` and `static_page_continue_polling` remain non-terminal;
+  - response-level terminal detection still uses promoted public SSE status before classification.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Public Artifact Text Helper Local Verification
+
+- Scope:
+  - continue #831 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE progress public artifact link text construction into a named helper while preserving published/reused artifact messaging;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sse_public_artifact_text`;
+  - changed `external_channel_static_page_sse_progress_text` to call the helper when a public artifact URL is available;
+  - extended the progress-text test to assert the helper returns the same linked public artifact text for the published status and returns none for a non-terminal publish-running status.
+- Behavior preserved:
+  - `static_page_published` and `static_page_stable_artifact_reused` still emit the customer-ready text with the public artifact link;
+  - non-terminal states with a public URL do not bypass the existing progress/fallback text unless the public status is promoted to a published terminal state;
+  - focus-aware customer-ready text and markdown link formatting remain unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Progress Runtime Field Helper Local Verification
+
+- Scope:
+  - continue #830 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE progress runtime heartbeat/elapsed/reason extraction into a named helper while preserving progress dedupe-key fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageSseProgressRuntimeField`;
+  - added `external_channel_static_page_sse_progress_runtime_field`;
+  - changed `external_channel_static_page_sse_progress_key_fields` to use the runtime helper;
+  - extended the progress-key test to assert runtime heartbeat extraction directly.
+- Behavior preserved:
+  - runtime field priority remains `heartbeat_count`, then `elapsed_ms`, then `reason`;
+  - missing or non-object runtime data still produces an empty runtime field;
+  - final `status|public_url|preview|runtime` progress key remains unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Progress Asset Fields Helper Local Verification
+
+- Scope:
+  - continue #829 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE progress public URL and preview field extraction into a named helper while preserving progress dedupe-key fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageSseProgressAssetFields`;
+  - added `external_channel_static_page_sse_progress_asset_fields`;
+  - changed `external_channel_static_page_sse_progress_key_fields` to use the asset helper;
+  - extended the progress-key test to assert public URL and preview alias extraction.
+- Behavior preserved:
+  - public URL alias priority remains `public_url`, then `generated_artifact_url`, then `artifact_public_url`;
+  - preview alias priority remains `preview_asset_key`, then `preview_url`, then `render_asset_url`;
+  - final `status|public_url|preview|runtime` progress key remains unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Progress Key Fields Helper Local Verification
+
+- Scope:
+  - continue #828 P5 behavior-preserving engineering governance under `platform-api`;
+  - split static-page SSE progress dedupe-key field extraction into a named helper while preserving the final key string;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageSseProgressKeyFields`;
+  - added `external_channel_static_page_sse_progress_key_fields`;
+  - changed `external_channel_static_page_sse_progress_key` to format the same key from the helper fields;
+  - extended the progress-key test to assert the individual status/public-url/preview/runtime fields and final dedupe key string.
+- Behavior preserved:
+  - status promotion, public URL alias priority, preview alias priority, runtime heartbeat/elapsed/reason priority, and final `status|public_url|preview|runtime` key format stay unchanged;
+  - progress and continue-polling dedupe keys continue to include the same progress key;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Public JSON Event Helper Local Verification
+
+- Scope:
+  - continue #827 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public SSE JSON event encoding so callers consistently pass payloads through the existing public stream payload cleanup before `sse_json_event`;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_sse_public_json_event`;
+  - changed test-only completion queued/needs-input/completed events to use the helper;
+  - changed generic `external_channel_sse_event_with_delta` to use the helper;
+  - added a direct helper test proving event name output is preserved and internal dedupe/response/runtime fields are still removed.
+- Behavior preserved:
+  - all affected SSE JSON events still emit through `sse_json_event` with the same event names;
+  - public stream payload cleanup still removes internal dedupe, full response, and runtime event data before streaming;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Completion Helper Reuse Local Verification
+
+- Scope:
+  - continue #826 P5 behavior-preserving engineering governance under `platform-api`;
+  - make test-only SSE completion construction reuse the existing run identity and polling field helpers instead of directly reading the same public response fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - updated `external_channel_sse_completion_with_done` to call `external_channel_sse_run_identity`;
+  - updated queued and needs-input completion payload construction to call `external_channel_sse_polling_fields`;
+  - extended the queued completion test to assert idempotency key, trimmed status URL, and poll interval remain on the public SSE payload.
+- Behavior preserved:
+  - `external_channel.static_page_queued` still carries the same assistant run id, idempotency key, status URL, poll interval, card, sequence, and display text;
+  - `external_channel.needs_input` still carries the same status URL and poll interval when a card provides them;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after helper reuse/test assertion changes;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 40/40 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Run Identity Helper Local Verification
+
+- Scope:
+  - continue #825 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize `assistant_run_id` and `idempotency_key` extraction for static-page SSE public responses while preserving existing progress and continue-polling payload fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelSseRunIdentity`;
+  - added `external_channel_sse_run_identity`;
+  - changed static-page progress and continue-polling SSE payload builders to use the helper;
+  - added a direct helper test proving `assistant_run_id` and `idempotency_key` are preserved.
+- Behavior preserved:
+  - static-page progress payloads keep the same `assistant_run_id` and `idempotency_key`;
+  - continue-polling payloads keep the same `assistant_run_id` and `idempotency_key`;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 40/40 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Conversation Id Helper Local Verification
+
+- Scope:
+  - continue #824 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize `conversation_external_id` extraction for SSE public responses while preserving existing completion, progress, and continue-polling payload fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_sse_conversation_external_id`;
+  - changed completion, static-page progress, and continue-polling SSE builders to use the helper;
+  - added a direct helper test proving the value comes from `reply.target_conversation_external_id`.
+- Behavior preserved:
+  - SSE payloads continue to use the public reply target conversation id;
+  - no public response field or SSE event name changed;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 39/39 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Polling Fields Helper Local Verification
+
+- Scope:
+  - continue #823 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize `status_url` and `poll_after_seconds` extraction for SSE public responses while preserving existing progress and continue-polling payload fields;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelSsePollingFields`;
+  - added `external_channel_sse_polling_fields`;
+  - changed static-page progress and continue-polling payload builders to use the helper;
+  - added a direct helper test proving whitespace-trimmed `status_url` and numeric string `poll_after_seconds` still flow through the public response card.
+- Behavior preserved:
+  - static-page progress payloads keep the same `status_url` and `poll_after_seconds` values;
+  - continue-polling payloads keep the same explicit poll interval or `30` second fallback;
+  - no cleanup result or internal runtime field is exposed.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 38/38 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Completion Queued Event Helper Local Verification
+
+- Scope:
+  - continue #822 P5 behavior-preserving engineering governance under `platform-api`;
+  - isolate the test-only SSE completion queued-event detection into a named helper while preserving the exact existing trigger condition;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, completion payload shape, public response cleanup path, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added cfg-test helper `external_channel_sse_completion_should_emit_static_page_queued_event`;
+  - updated test-only `external_channel_sse_completion_with_done` to use the helper;
+  - added a direct helper test proving only exact `v3_static_page_image2_pipeline` cards trigger the extra queued event, while nearby Image2 step cards and normal cards do not.
+- Behavior preserved:
+  - completion SSE test helper still emits `external_channel.static_page_queued` only for the exact pipeline card type;
+  - non-test `platform-api` builds do not include the test-only helper;
+  - public SSE payload shape remains unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - first `cargo check -q -p platform-api` attempt reported the helper as dead code in non-test builds; added `#[cfg(test)]` and reran successfully;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 37/37 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Public Response Helper Local Verification
+
+- Scope:
+  - continue #821 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize SSE-module public response sanitization through a local helper that uses the response cleanup-result path while returning only the sanitized public response to SSE builders;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_sse_public_response`;
+  - changed SSE completion/progress/continue-polling builders to call the local helper instead of expanding the cleanup-result tuple at each call site;
+  - added a direct SSE helper test proving retryable cancelled static-page responses still become pollable public responses and hide internal runtime fields.
+- Behavior preserved:
+  - existing SSE callers still receive the same public payload shape;
+  - response cleanup-result remains internal and is not exposed in SSE payloads;
+  - retryable cancelled static-page responses still surface as `processing` / `static_page_continue_polling` with a poll interval.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Channel SSE Public Response Cleanup Path Local Verification
+
+- Scope:
+  - continue #820 P5 behavior-preserving engineering governance under `platform-api`;
+  - route SSE completion/progress/continue-polling response sanitization through the response-layer cleanup-result helper without exposing cleanup internals in the public SSE payload;
+  - keep public SSE schema, event names, sequence numbers, display text, status/status_url/poll fields, public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed `external_channel_sse_completion_with_done`, `external_channel_static_page_sse_progress_payload`, and `external_channel_static_page_sse_continue_polling_payload` to use `external_channel_public_response_with_result`;
+  - kept cleanup result internal and intentionally unused at the SSE payload boundary;
+  - added a retryable-cancelled static-page progress payload test proving the public event remains `static_page_continue_polling`, gets a poll interval, and hides internal runtime fields.
+- Behavior preserved:
+  - existing SSE callers still receive the same public payload shape;
+  - retryable cancelled static-page progress is still exposed as a continue-polling event instead of a terminal failure;
+  - internal `runtime_manifest` remains absent from the public progress payload.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the SSE helper wiring/test addition;
+  - `cargo test -q -p platform-api external_channel_sse --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Response Cleanup Result Local Verification
+
+- Scope:
+  - continue #819 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a response-layer helper that returns both the sanitized external channel response and the internal public reply cleanup result while preserving the existing response-only public response entrypoint;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, post-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_response_with_result`;
+  - changed `external_channel_public_response` to delegate to the new helper and return only the response;
+  - kept the compatibility reply-only public reply entrypoint and made its retained local-only role explicit with `#[allow(dead_code)]`;
+  - added a direct module test covering response-layer cleanup result propagation for retryable cancelled static-page ArtifactLink replies.
+- Behavior preserved:
+  - existing callers of `external_channel_public_response` still receive only the sanitized response;
+  - response-level sanitization still uses the same terminal conversion and finalization path as reply-level sanitization;
+  - retryable cancelled static-page ArtifactLink replies still become pollable as `processing`;
+  - ArtifactLink replies with a public URL still expose a single customer-visible report link.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - first combined verification attempt exposed a test type mismatch (`assistant_run_id` expects `AssistantRunId`, not `String`) and a compatibility-helper dead-code warning; the test now leaves `assistant_run_id` empty and the retained reply-only entrypoint is explicitly marked `#[allow(dead_code)]`;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Top-Level Cleanup Result Local Verification
+
+- Scope:
+  - continue #818 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a top-level public reply helper that returns both the terminal/finalized public reply and the internal cleanup result while preserving the existing reply-only public reply entrypoint;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, post-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_with_result`;
+  - changed `external_channel_public_reply` to delegate to the new helper and return only the reply;
+  - kept the compatibility finalize reply-only helper and made its retained local-only role explicit with `#[allow(dead_code)]`;
+  - added a direct module test covering top-level cleanup result for retryable cancelled static-page ArtifactLink replies.
+- Behavior preserved:
+  - existing callers of `external_channel_public_reply` still receive only the sanitized reply;
+  - terminal conversion still runs before finalization;
+  - retryable cancelled static-page ArtifactLink replies still become pollable as `processing`;
+  - ArtifactLink replies with a public URL still expose a single customer-visible report link.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Finalize Cleanup Result Local Verification
+
+- Scope:
+  - continue #817 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a finalize-layer helper that returns both the finalized public reply and the internal cleanup result while preserving the existing reply-only finalize helper;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, post-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_finalize_with_result`;
+  - changed `external_channel_public_reply_finalize` to delegate to the new helper and return only the reply;
+  - added a direct module test covering finalize-layer cleanup result for retryable cancelled static-page ArtifactLink replies.
+- Behavior preserved:
+  - existing callers of `external_channel_public_reply_finalize` and `external_channel_public_reply` still receive only the sanitized reply;
+  - retryable cancelled static-page replies still become pollable as `processing`;
+  - ArtifactLink replies with a public URL still append a customer-visible report link once.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 34/34 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Prepared Cleanup Result Local Verification
+
+- Scope:
+  - continue #816 P5 behavior-preserving engineering governance under `platform-api`;
+  - propagate the internal public reply cleanup result through prepared public reply application so prepared-layer tests can verify cleanup phase outcomes directly;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, post-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed `external_channel_public_reply_apply_prepared` to return `ExternalChannelPublicReplyCleanupResult`;
+  - kept existing callers free to ignore the result;
+  - extended the prepared cleanup test to assert the default cleanup result for an already-published static-page reply.
+- Behavior preserved:
+  - prepared public reply application still delegates to the same policy application helper;
+  - published static-page replies still expose the same public artifact fields and hide preview/runtime fields;
+  - callers that ignore the return value continue to observe the same reply mutation behavior.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the return-value/test addition;
+  - first `cargo test -q -p platform-api external_channel_public_reply --lib` / `external_channel_static_page_reply --lib` attempt failed with Rust E0308 because `external_channel_public_reply_apply_prepared` still had a trailing semicolon after changing the return type; removed the semicolon and reran;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 33/33 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Cleanup Result Local Verification
+
+- Scope:
+  - continue #815 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a small internal cleanup result from public reply policy application so tests can directly verify pre-card and post-card cleanup phases;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, post-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelPublicReplyCleanupResult`;
+  - changed `external_channel_public_reply_apply_policy` to return the cleanup result while preserving all existing mutation order;
+  - added a direct module test covering pre-card continue-polling marking and post-card public ArtifactLink attachment through the returned result.
+- Behavior preserved:
+  - callers may ignore the return value and receive the same reply mutation behavior;
+  - retryable cancelled static-page replies still become pollable as `processing`;
+  - ArtifactLink replies with a public URL still append a customer-visible report link once.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the result/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 33/33 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Post Card Cleanup Helper Local Verification
+
+- Scope:
+  - continue #814 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the post-card public reply cleanup phase that normalizes artifact links and attaches the resolved public ArtifactLink markdown link;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, pre-card cleanup, card policy application, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_post_card_cleanup`;
+  - changed `external_channel_public_reply_apply_policy` to delegate artifact-link normalization plus resolved ArtifactLink attachment to the helper after card policy application;
+  - added a direct module test covering duplicate public artifact-link normalization and markdown link attachment.
+- Behavior preserved:
+  - artifact links are still deduped after card policy application;
+  - ArtifactLink replies with a resolvable public URL still append a single customer-visible markdown link;
+  - static-page artifact-link suppression/allowance continues to be controlled by the existing policy.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 32/32 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Pre Card Cleanup Helper Local Verification
+
+- Scope:
+  - continue #813 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the pre-card public reply cleanup phase that marks retryable cancelled static-page replies as continue-polling and then sanitizes public text/task-status;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_pre_card_cleanup`;
+  - changed `external_channel_public_reply_apply_policy` to delegate continue-polling plus text/task-status cleanup to that helper before card policy application;
+  - added a direct module test covering retryable cancelled static-page continuation marking, customer-visible `processing` status, and public text cleanup.
+- Behavior preserved:
+  - continue-polling card mutation still occurs before task-status cleanup so retryable cancelled static-page work stays pollable;
+  - public text cleanup still removes internal generation/provider terms;
+  - later card, artifact-link, and resolved ArtifactLink policy phases are unchanged.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 31/31 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Text Status Cleanup Helper Local Verification
+
+- Scope:
+  - continue #812 P5 behavior-preserving engineering governance under `platform-api`;
+  - split public reply text cleanup and task-status cleanup into direct helper functions for smaller diagnostics and future third-party output formatting fixes;
+  - keep public text replacement/redaction/truncation rules, card-aware task-status mapping, terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, cancelled continue-polling behavior, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_clean_text`;
+  - added `external_channel_public_reply_clean_task_status`;
+  - changed `external_channel_public_reply_clean_text_and_task_status` to delegate to the two helpers;
+  - added direct module tests for public text replacement/internal-term cleanup and card-aware cancelled static-page task-status normalization.
+- Behavior preserved:
+  - existing public reply cleanup still runs in the same order through policy application;
+  - text cleanup still removes internal generation terms from third-party replies;
+  - retryable cancelled static-page task status still stays customer-pollable as `processing`.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 30/30 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Terminal Helper Local Verification
+
+- Scope:
+  - continue #811 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize terminal public artifact reply conversion behind a named helper before public reply finalization;
+  - keep terminal public artifact reply conversion behavior, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_terminal`;
+  - changed `external_channel_public_reply` to run terminal conversion through the helper and then call `external_channel_public_reply_finalize`;
+  - added a direct module test proving non-static public replies pass through terminal conversion unchanged.
+- Behavior preserved:
+  - public reply still applies terminal conversion before preparation/finalization;
+  - non-static text/card/task-status/artifact-link state is unchanged by the terminal helper;
+  - static-page public cleanup continues to be covered by the existing finalize and static-page terminal reply tests.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 28/28 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Finalize Helper Local Verification
+
+- Scope:
+  - continue #810 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize final public reply preparation plus prepared-application into a single finalize helper after terminal conversion;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, prepared application order, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_finalize`;
+  - changed `external_channel_public_reply` to run terminal public artifact conversion and then delegate preparation/application to the finalize helper;
+  - added a direct module test covering finalization of a static-page public reply, public URL insertion, preview link pruning, runtime-manifest sanitization, and task-status preservation.
+- Behavior preserved:
+  - public reply still applies terminal conversion before finalization;
+  - finalization still uses the same prepare and apply-prepared helpers;
+  - published static-page cards still expose public artifact links and remove preview/internal fields according to the existing sanitizer behavior.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 27/27 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Prepared Application Helper Local Verification
+
+- Scope:
+  - continue #809 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize application of the prepared public reply context/policy bundle to reply state;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, prepared context shape, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_prepared`;
+  - changed `external_channel_public_reply` to apply the prepared bundle through the helper instead of passing prepared fields inline;
+  - added a direct module test covering prepared static-page cleanup, public artifact URL insertion, preview link pruning, runtime-manifest sanitization, and task-status preservation.
+- Behavior preserved:
+  - public reply still first converts terminal static-page replies, then prepares context/policy, then applies the same cleanup sequence;
+  - prepared static-page replies still keep the existing public task-status mapping behavior;
+  - published static-page cards still publish public artifact links and remove preview/internal fields.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 26/26 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Preparation Helper Local Verification
+
+- Scope:
+  - continue #808 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public reply static-page context resolution and computed policy into an explicit preparation helper before policy application;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelPublicReplyPrepared`;
+  - added `external_channel_public_reply_prepare`;
+  - changed `external_channel_public_reply` to use the prepared static-page flag, public artifact URL, and policy before applying the existing public reply cleanup sequence;
+  - added a direct module test covering static-page context resolution, public URL enrichment, and policy values through the new preparation helper.
+- Behavior preserved:
+  - public reply still first converts terminal static-page replies, then resolves context/policy, then applies the same public cleanup sequence;
+  - published static-page cards still expose public artifact links while hiding preview-only links;
+  - static-page public URL enrichment still mutates the reply card before final card/link policy application.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 25/25 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Policy Application Helper Local Verification
+
+- Scope:
+  - continue #807 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the ordered application of computed public reply policy to reply state;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, artifact-links policy application, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_policy`;
+  - changed `external_channel_public_reply` to call the helper instead of sequencing the five cleanup/apply steps inline;
+  - added a direct module test covering text link attachment, artifact-link dedupe, task status preservation, and card sanitization through the helper.
+- Behavior preserved:
+  - public reply policy still applies in the same order: continue-polling card mutation, text/status cleanup, card cleanup, artifact-link normalization, then final ArtifactLink attachment;
+  - ArtifactLink replies with a resolvable public URL still append a single markdown link and keep one public artifact link;
+  - normal cards still pass through public card sanitization.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 24/24 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Artifact Links Policy Apply Helper Local Verification
+
+- Scope:
+  - continue #806 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize application of the computed public reply artifact-links policy to reply artifact links;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, cancelled continue-polling behavior, reply text cleanup, task status cleanup, card policy application, card sanitization, static-page link pruning, resolved ArtifactLink attachment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_artifact_links_policy`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining the artifact-link normalization assignment;
+  - added a direct module test covering suppressed static-page link clearing, allowed static-page dedupe, and non-static dedupe while policy artifact-link inclusion is false.
+- Behavior preserved:
+  - suppressed static-page artifact links are still cleared;
+  - allowed static-page artifact links still use the existing first-public-link dedupe contract;
+  - non-static replies still dedupe links even when the static-page artifact-link flag is false.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 23/23 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Card Policy Apply Helper Local Verification
+
+- Scope:
+  - continue #805 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize application of the computed public reply card policy to reply cards;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, cancelled continue-polling behavior, reply text cleanup, task status cleanup, artifact link normalization, resolved ArtifactLink attachment, card sanitization, static-page link pruning, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_card_policy`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining the `reply.card.take().map(...)` branch;
+  - added a direct module test covering static-page card sanitization/link injection via policy and no-card no-op behavior.
+- Behavior preserved:
+  - cards still pass through `external_channel_public_reply_card`;
+  - allowed static-page cards still receive `public_url`, `generated_artifact_url`, and `artifact_links` from the resolved public artifact URL;
+  - suppressed preview links are still removed when the policy says not to include preview links;
+  - replies without a card still do not synthesize a card.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 22/22 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Continue Polling Policy Apply Helper Local Verification
+
+- Scope:
+  - continue #804 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize application of the public reply cancelled-continue policy to the reply card;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, policy calculation, artifact-link inclusion semantics, preview-link inclusion semantics, reply text cleanup, task status cleanup, artifact link normalization, resolved ArtifactLink attachment, card sanitization, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_apply_continue_polling_policy`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining the `cancelled_should_continue` card mutation branch;
+  - added a direct module test covering disabled policy no-op, enabled policy with no card no-op, and enabled policy with object card rewriting status plus defaulting `poll_after_seconds`.
+- Behavior preserved:
+  - disabled continue-polling policy still leaves the card unchanged;
+  - enabled continue-polling policy without a card still does not synthesize a card;
+  - enabled continue-polling policy with a card still rewrites status to `static_page_continue_polling` and defaults polling to 30 seconds.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 21/21 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Policy Helper Local Verification
+
+- Scope:
+  - continue #803 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public reply artifact-link, preview-link, and cancelled-continue decisions into one policy helper consumed by public reply cleanup;
+  - keep terminal public artifact reply conversion, static-page detection/enrichment, public URL extraction priority, individual artifact-link inclusion semantics, preview-link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, artifact link normalization, resolved ArtifactLink attachment, card sanitization, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelPublicReplyPolicy`;
+  - added `external_channel_public_reply_policy`;
+  - changed `external_channel_public_reply` to use the policy helper instead of inlining three separate policy variables;
+  - added a direct module test covering normal replies, static-page preview-ready replies, retryable cancelled static-page replies, and published static-page replies.
+- Behavior preserved:
+  - non-static replies still include artifact and preview links by default;
+  - preview-ready static-page replies still expose preview links but suppress artifact links;
+  - retryable cancelled static-page replies still request continued polling without exposing artifact or preview links;
+  - published static-page replies still expose artifact links and suppress preview links.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the policy helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 20/20 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Static Page Context Helper Local Verification
+
+- Scope:
+  - continue #802 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public reply static-page detection plus public artifact URL enrichment before public link policy decisions;
+  - keep terminal public artifact reply conversion, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, artifact link normalization, resolved ArtifactLink attachment, card sanitization, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_static_page_context`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining static-page detection and `external_channel_static_page_public_artifact_url_after_enrichment`;
+  - added a direct module test covering non-static replies returning `(false, None)` and static-page replies returning `(true, Some(public_url))` while preserving the card public URL.
+- Behavior preserved:
+  - non-static replies still skip static-page public artifact enrichment;
+  - static-page-like replies still run the existing enrichment before artifact-link and preview-link policy decisions;
+  - resolved static-page public artifact URLs still flow into later public card and artifact-link cleanup.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 19/19 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Text And Status Helper Local Verification
+
+- Scope:
+  - continue #801 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public reply text normalization and task status public mapping before public card cleanup;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, artifact link normalization, resolved ArtifactLink attachment, card sanitization, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_clean_text_and_task_status`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining `reply.text` and `reply.task_status` normalization;
+  - added a direct module test covering public text replacement, retryable cancelled static-page task status mapping to `processing`, and absent text/status remaining absent.
+- Behavior preserved:
+  - public reply text still removes implementation vocabulary such as Image2/Cloudflare/Codex through the existing text sanitizer;
+  - retryable cancelled static-page publish status still remains pollable as `processing`;
+  - replies without text or task status still do not receive synthetic values.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Resolved ArtifactLink Helper Local Verification
+
+- Scope:
+  - continue #800 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the final ArtifactLink public URL resolution and markdown attachment branch in public reply cleanup;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, artifact link normalization, card sanitization, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_attach_resolved_artifact_link`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining the final ArtifactLink URL extraction and artifact-link attachment branch;
+  - added a direct module test covering non-ArtifactLink no-op, ArtifactLink without URL no-op, and ArtifactLink with URL dedupe plus stable markdown attachment on repeated calls.
+- Behavior preserved:
+  - non-ArtifactLink replies still do not receive an artifact link from this branch;
+  - ArtifactLink replies without a resolvable public artifact URL still remain unchanged;
+  - ArtifactLink replies with a public URL still keep a single public link and append the public markdown link only once.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 17/17 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Card Helper Local Verification
+
+- Scope:
+  - continue #799 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize public reply card processing that applies public-card sanitization, static-page link pruning, and resolved public artifact URL injection;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, artifact link normalization, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_card`;
+  - changed `external_channel_public_reply` to call the helper instead of inlining card sanitization, static-page link pruning, and public URL injection in the `reply.card` map closure;
+  - added a direct module test covering normal card internal-field stripping, suppressed static-page public URL/artifact-link removal with preview preservation, and allowed static-page public URL replacement with preview removal.
+- Behavior preserved:
+  - normal public cards are still sanitized through `external_channel_public_card_value`;
+  - static-page cards still use `prune_external_channel_public_card_links` with the same artifact/preview inclusion flags;
+  - allowed static-page cards still receive `public_url`, `generated_artifact_url`, and single-item `artifact_links` from the resolved public artifact URL.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Reply Artifact Links Normalization Helper Local Verification
+
+- Scope:
+  - continue #798 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the public reply `artifact_links` normalization that clears suppressed static-page links or delegates to the existing public artifact-link dedupe helper;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_normalize_artifact_links`;
+  - changed `external_channel_public_reply` to use the helper instead of inlining the clear-or-dedupe branch;
+  - added a direct module test covering suppressed static-page link clearing, allowed static-page first-public-link preservation through the existing dedupe helper, and non-static dedupe behavior.
+- Behavior preserved:
+  - static-page replies with suppressed artifact links still publish no `artifact_links`;
+  - static-page replies allowed to include artifact links still keep the existing first allowed public artifact URL only;
+  - non-static replies still use the existing public artifact-link dedupe helper.
+- Local verification:
+  - `cargo fmt`: applied mechanical formatting after the helper/test addition;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: initially failed because the new test expected multiple distinct public artifact links, while the existing dedupe contract keeps only the first allowed public link;
+  - `cargo fmt`: applied mechanical formatting after correcting the test to the existing contract;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 15/15 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Static-Page Continue Polling Card Helper Local Verification
+
+- Scope:
+  - continue #797 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the public card mutation that changes retryable cancelled static-page publish cards into `static_page_continue_polling`;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling decision semantics, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_card_mark_continue_polling`;
+  - changed the cancelled-continue branch in `external_channel_public_reply` to use the helper instead of inlining object mutation;
+  - added a direct module test covering status rewrite, preservation of an existing `poll_after_seconds`, defaulting missing `poll_after_seconds` to 30, and non-object no-op behavior.
+- Behavior preserved:
+  - retryable cancelled static-page publish cards still become `static_page_continue_polling`;
+  - existing polling hints are still preserved;
+  - cards missing a polling hint still receive the existing default of 30 seconds;
+  - non-object card values still remain unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 14/14 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public Static-Page Card Artifact URL Helper Local Verification
+
+- Scope:
+  - continue #796 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the public card mutation that injects `public_url`, `generated_artifact_url`, and `artifact_links` after a static-page public artifact URL has been resolved;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_card_attach_artifact_url`;
+  - changed the static-page public-card branch in `external_channel_public_reply` to use the helper instead of inlining object mutation;
+  - added a direct module test covering object-card field writes and non-object no-op behavior.
+- Behavior preserved:
+  - object cards still receive `public_url`, `generated_artifact_url`, and single-item `artifact_links` with the resolved public artifact URL;
+  - non-object card values still remain unchanged;
+  - the helper is called only after the existing `include_artifact_links` and resolved-public-url checks.
+- Local verification:
+  - `cargo fmt --check`: initially requested standard rustfmt wrapping on one assertion;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Public ArtifactLink Attach Helper Local Verification
+
+- Scope:
+  - continue #795 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the public reply mutation that attaches a resolved public artifact URL to `artifact_links` and reply text for `ArtifactLink` replies;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_attach_artifact_link`;
+  - changed the `ArtifactLink` branch in `external_channel_public_reply` to use the helper after resolving the public artifact URL;
+  - added a direct module test covering existing-link dedupe behavior and one-time Markdown link text attachment.
+- Behavior preserved:
+  - existing artifact URL values are still not duplicated in `artifact_links`;
+  - reply text still appends `页面链接：[点击查看报表](...)` when a public URL is available;
+  - re-running the attachment still keeps text stable because the existing text helper suppresses duplicate URL insertion.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 12/12 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Cancelled Continue Helper Local Verification
+
+- Scope:
+  - continue #794 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the public reply decision for retryable cancelled static-page publish states that should continue polling;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_cancelled_should_continue`;
+  - changed `external_channel_public_reply` to use the helper instead of inlining the card/task-status expression;
+  - added a direct module test covering retryable cancelled, plain cancelled, and published static-page replies.
+- Behavior preserved:
+  - `static_page_publish_cancelled` still becomes `static_page_continue_polling` only when the card carries an existing background continuation signal;
+  - plain cancelled static-page publish replies still do not continue polling;
+  - non-cancelled published replies still do not continue polling even when they carry a retryable-looking nested signal.
+- Local verification:
+  - `cargo fmt --check`: initially requested standard rustfmt wrapping on one assignment line;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 11/11 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Preview Link Inclusion Helper Local Verification
+
+- Scope:
+  - continue #793 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the static-page public reply decision for whether preview links should be retained in public cards;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, preview link inclusion semantics, preview-ready-only behavior, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_should_include_preview_link`;
+  - changed `external_channel_public_reply` to use the helper instead of inlining the static-page preview-link inclusion expression;
+  - added a direct module test covering non-static replies, preview-ready static-page replies, and published static-page replies.
+- Behavior preserved:
+  - non-static replies still keep preview links by default;
+  - static-page preview links are still retained only when the card/task status maps to `static_page_preview_ready`;
+  - published static-page replies still do not keep preview-only fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 10/10 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Artifact Link Inclusion Helper Local Verification
+
+- Scope:
+  - continue #792 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the static-page public reply decision for whether artifact links should be included;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion semantics, provisional existing artifact suppression, accepted template baseline allowance, preview link rules, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_public_reply_should_include_artifact_links`;
+  - changed `external_channel_public_reply` to use the helper instead of inlining the static-page artifact-link inclusion expression;
+  - added a direct module test covering non-static replies, published static-page replies, and provisional existing-artifact suppression for artifact-link replies.
+- Behavior preserved:
+  - non-static replies still keep artifact links by default;
+  - published static-page replies still allow artifact links through the existing card-aware status helper;
+  - provisional existing artifact replies still do not force artifact links merely because the reply type is `ArtifactLink`.
+- Local verification:
+  - `cargo fmt --check`: initially requested standard rustfmt wrapping on the new helper/test lines;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Public Artifact URL After Enrichment Local Verification
+
+- Scope:
+  - continue #791 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the static-page public-reply sequence of enriching a reply card before extracting the public artifact URL;
+  - keep static-page-like detection, terminal public artifact reply conversion, card enrichment, public URL extraction priority, artifact link inclusion rules, preview link rules, cancelled continue-polling behavior, reply text cleanup, task status cleanup, report-card enrichment public behavior, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_public_artifact_url_after_enrichment`;
+  - changed `external_channel_public_reply` to call the new helper for static-page-like replies instead of manually calling card enrichment before URL extraction;
+  - kept `external_channel_static_page_enrich_reply_card` in use by the new helper;
+  - added a direct module test covering focused URL return after card enrichment and existing link-only reply fallback.
+- Behavior preserved:
+  - static-page public replies still enrich cards before public artifact URL extraction;
+  - replies with no card but an existing allowed artifact link still return that link;
+  - existing public reply artifact-link and preview-link inclusion rules still run after the same URL value is resolved.
+- Local verification:
+  - `cargo fmt --check`: initially requested standard rustfmt wrapping on a new assertion;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 62/62 passed;
+  - `cargo test -q -p platform-api external_channel_public_reply --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed without new warnings;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Reply Card Try-Enrich Helper Local Verification
+
+- Scope:
+  - continue #790 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a testable `ExternalBotReplyView` static-page card enrichment success/no-op boundary in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep report-card enrichment public behavior, reply-card mutation behavior, missing-card no-op behavior, report title insertion, generic-title replacement, specific-title preservation, focused public URL alias application, artifact link replacement, download/data field insertion, object mutation order, no-public-URL no-op behavior, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_try_enrich_reply_card` returning `true` only when a reply has a card and the nested report-card enrichment applies;
+  - changed `external_channel_static_page_enrich_reply_card` to delegate to the try helper while preserving its previous `()` no-op API;
+  - added a direct module test covering successful nested reply-card enrichment plus no-card no-op reporting.
+- Behavior preserved:
+  - existing callers still use `external_channel_static_page_enrich_reply_card` with no behavior-contract change;
+  - nested card enrichment still delegates to the report-card try helper;
+  - replies without cards remain unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 61/61 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Try-Enrich Helper Local Verification
+
+- Scope:
+  - continue #789 P5 behavior-preserving engineering governance under `platform-api`;
+  - expose a testable static-page report card enrichment success/no-op boundary in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep reply card enrichment public behavior, report title insertion, generic-title replacement, specific-title preservation, focused public URL alias application, artifact link replacement, download/data field insertion, object mutation order, no-public-URL no-op behavior, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_try_enrich_report_card` returning `true` only when enrichment values are derived and applied;
+  - changed `external_channel_static_page_enrich_report_card` to delegate to the try helper while preserving its previous `()` no-op API;
+  - added a direct module test covering successful Xinbai focused report-card enrichment plus missing-public-URL no-op reporting.
+- Behavior preserved:
+  - existing callers still use `external_channel_static_page_enrich_report_card` with no behavior-contract change;
+  - successful enrichment still applies the same identity and download mutation helpers in the same order;
+  - missing public artifact URL still leaves the card unchanged.
+- Local verification:
+  - `cargo fmt --check`: initially requested standard rustfmt wrapping on the new assertion;
+  - `cargo fmt`: applied mechanical formatting;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 60/60 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with working-copy LF-to-CRLF warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Identity Apply Helper Local Verification
+
+- Scope:
+  - continue #788 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card identity mutation in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep report title insertion, generic-title replacement, specific-title preservation, focused public URL alias application, artifact link replacement, download/data field insertion, object mutation order, no-public-URL no-op behavior, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_apply_report_card_identity`;
+  - changed `external_channel_static_page_apply_report_card_enrichment` to call the identity helper before inserting downloads;
+  - added a direct module test covering generic title replacement, specific report title preservation, focused public URL alias updates, custom download URL preservation, and artifact link replacement.
+- Behavior preserved:
+  - identity application still delegates to the existing title and focused URL helpers;
+  - download field insertion still runs after identity mutation;
+  - custom non-matching URL aliases are still preserved.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 59/59 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Enrichment Identity Value Local Verification
+
+- Scope:
+  - continue #787 P5 behavior-preserving engineering governance under `platform-api`;
+  - make static-page report card enrichment carry identity and downloads value objects in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep public URL extraction, focused URL application, report title insertion, download/data field insertion, existing-value preservation, object mutation order, no-public-URL no-op behavior, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - changed `ExternalChannelStaticPageReportCardEnrichment` to carry `identity: ExternalChannelStaticPageReportCardIdentity` instead of duplicating raw public URL, focused public URL, and report title fields;
+  - changed `external_channel_static_page_report_card_enrichment` to return the identity value object directly;
+  - changed `external_channel_static_page_apply_report_card_enrichment` to read title and focused URL mutation inputs from `enrichment.identity`;
+  - updated direct module tests to assert and construct enrichment through the nested identity value object.
+- Behavior preserved:
+  - enrichment still combines the same resolved identity and downloads values;
+  - title insertion and focused URL mutation still receive the same string values;
+  - direct report-card enrichment tests still cover focused URL, title fallback, downloads, and no-public-URL no-op.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 58/58 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Identity Helper Local Verification
+
+- Scope:
+  - continue #786 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card public URL, focused URL, and report title derivation in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep public URL extraction priority, focus query application, generic-title replacement, Xinbai title fallback, no-public-URL no-op behavior, download/data derivation, report-card enrichment shape, object mutation order, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageReportCardIdentity`;
+  - added `external_channel_static_page_report_card_identity`;
+  - changed `external_channel_static_page_report_card_enrichment` to derive identity first, then derive downloads from the resolved focused public URL and report title;
+  - added a direct module test covering raw public URL, focused public URL, Xinbai title fallback, and missing-public-URL no-op.
+- Behavior preserved:
+  - public artifact URL and focused URL are still produced by existing helpers;
+  - report title is still produced by existing title fallback logic;
+  - enrichment still returns `None` when no public artifact URL exists.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 58/58 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Downloads Derivation Helper Local Verification
+
+- Scope:
+  - continue #785 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card download/data value derivation in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep data URL fallback, explicit export URL priority, Xinbai sibling export fallback, existing non-empty `downloadExports` priority, report-card enrichment shape, object mutation order, focused public URL behavior, title fallback, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_card_downloads`;
+  - changed `external_channel_static_page_report_card_enrichment` to use the downloads derivation helper after resolving the public URL and report title;
+  - added a direct module test covering explicit table/PPT/markdown URL priority, Xinbai data URL fallback, and existing `downloadExports` preservation.
+- Behavior preserved:
+  - report card download values are still computed from the same existing helper functions;
+  - explicit export URLs still win over sibling fallback URLs;
+  - existing non-empty download export arrays are still preserved.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 57/57 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Downloads Value Helper Local Verification
+
+- Scope:
+  - continue #784 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card download/data derived fields in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep data URL insertion, table data URL insertion, PPT URL insertion, markdown/text URL insertion, download export insertion, existing-value preservation, focused public URL behavior, title fallback, report card enrichment, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageReportCardDownloads`;
+  - changed `ExternalChannelStaticPageReportCardEnrichment` to carry the downloads value object;
+  - changed `external_channel_static_page_insert_report_card_downloads` to accept the downloads value object instead of five separate download/data parameters;
+  - updated direct module tests to construct and assert through the downloads value object.
+- Behavior preserved:
+  - missing report-card download fields are still filled through `external_channel_static_page_card_insert_if_missing`;
+  - existing `data_url`, `text_download_url`, and non-empty `download_exports` values are still preserved;
+  - enrichment still computes download fields before mutating the card object.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 56/56 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Enrichment Value Helper Local Verification
+
+- Scope:
+  - continue #783 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card derived enrichment values in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep public URL extraction priority, focus query application, title fallback, data/export URL derivation, default download export generation, object mutation order, no-public-URL no-op behavior, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `ExternalChannelStaticPageReportCardEnrichment`;
+  - added `external_channel_static_page_report_card_enrichment`;
+  - changed `external_channel_static_page_apply_report_card_enrichment` to accept the enrichment value object instead of eight separate derived parameters;
+  - changed `external_channel_static_page_enrich_report_card` to compute enrichment before mutating the report card object;
+  - added a direct module test covering focused public URL, Xinbai title fallback, sibling data/export URLs, default download export generation, and missing-public-URL no-op.
+- Behavior preserved:
+  - report card enrichment still derives the same focused URL, report title, data URL, export URLs, and download exports through the existing helpers;
+  - report card object mutation still runs after all derived values are computed;
+  - cards without a public artifact URL are still ignored.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 56/56 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Enrichment Apply Helper Local Verification
+
+- Scope:
+  - continue #782 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card object mutation order in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep title insertion order, focus URL alias application, artifact link replacement, data/download/default export insertion, public URL extraction priority, focus query application, no-public-URL no-op behavior, export URL tuple order, export file names, export key order, explicit export URL priority, sibling export fallback, generic-title replacement, specific-title preservation, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_apply_report_card_enrichment`;
+  - changed `external_channel_static_page_enrich_report_card` to call the helper after computing title, focused URL, export URLs, and download exports;
+  - added a direct module test covering title insertion, specific title preservation, focused alias updates, `artifact_links`, data/download field insertion, and empty `download_exports` fill.
+- Behavior preserved:
+  - report card object mutation still runs in title insertion, focused URL application, then download insertion order;
+  - existing specific `report_title` is still preserved;
+  - focused `artifact_links` and download fields are still written through the existing helpers.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 55/55 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Public URL Helper Local Verification
+
+- Scope:
+  - continue #781 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card raw public URL extraction and focused public URL calculation in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep public URL extraction priority, focus query application, no-public-URL no-op behavior, export URL tuple order, export file names, export key order, explicit export URL priority, sibling export fallback, title key order, generic-title replacement, specific-title preservation, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_card_public_urls`;
+  - changed `external_channel_static_page_enrich_report_card` to call the helper before title, data, export URL, and download export enrichment;
+  - added a direct module test covering raw public URL preservation, focus query application, and missing public URL no-op.
+- Behavior preserved:
+  - raw public URL is still read through `external_channel_public_artifact_url_from_value`;
+  - focused public URL is still produced by `external_channel_static_page_public_url_with_payload_focus`;
+  - cards without a public artifact URL are still ignored.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 54/54 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Export URL Helper Local Verification
+
+- Scope:
+  - continue #780 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card table-data, PPT, and markdown export URL tuple construction in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep export URL tuple order, export file names, export key order, explicit export URL priority, sibling export fallback, title key order, generic-title replacement, specific-title preservation, focused public URL application, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_card_export_urls`;
+  - changed `external_channel_static_page_enrich_report_card` to receive the table-data, PPT, and markdown URLs from the helper;
+  - added a direct module test covering explicit URL priority and Xinbai sibling fallback for all three export URL types.
+- Behavior preserved:
+  - explicit table-data/PPT/markdown URLs still win when provided through existing aliases;
+  - missing Xinbai export URLs still fall back to `table-data.csv`, `report.ppt`, and `report.md` siblings;
+  - the tuple order remains table-data, PPT, markdown.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 53/53 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Export File Name Helper Local Verification
+
+- Scope:
+  - continue #779 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page table-data, PPT, and markdown export file names in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep export file names, export key order, explicit export URL priority, sibling export fallback, title key order, generic-title replacement, specific-title preservation, focused public URL application, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_table_data_export_file_name`;
+  - added `external_channel_static_page_ppt_download_export_file_name`;
+  - added `external_channel_static_page_markdown_download_export_file_name`;
+  - changed static-page card enrichment and default download export sibling URL construction to use the file-name helpers;
+  - added a direct module test covering the three existing export file names.
+- Behavior preserved:
+  - table-data export still uses `table-data.csv`;
+  - PPT export still uses `report.ppt`;
+  - markdown export still uses `report.md`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 52/52 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Export Key Helper Local Verification
+
+- Scope:
+  - continue #778 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page table-data, PPT, and markdown export key ordering in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep export key order, explicit export URL priority, sibling export fallback, title key order, generic-title replacement, specific-title preservation, focused public URL application, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_table_data_export_keys`;
+  - added `external_channel_static_page_ppt_download_export_keys`;
+  - added `external_channel_static_page_markdown_download_export_keys`;
+  - changed `external_channel_static_page_enrich_report_card` to call the helpers instead of inline key arrays;
+  - added a direct module test covering the three existing export-key orders.
+- Behavior preserved:
+  - table-data keys are still processed as `table_data_url`, `tableDataUrl`, `csv_url`, `csvUrl`;
+  - PPT keys are still processed as `ppt_download_url`, `pptDownloadUrl`, `ppt_url`, `pptUrl`;
+  - markdown/text keys are still processed in the existing markdown/text/md alias order.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 51/51 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Title Key Helper Local Verification
+
+- Scope:
+  - continue #777 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card title key ordering in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep title key order, generic-title replacement, specific-title preservation, focused public URL application, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_card_title_keys`;
+  - changed `external_channel_static_page_insert_report_card_titles` to use the key-list helper;
+  - added a direct module test covering existing title key order.
+- Behavior preserved:
+  - report card titles are still processed in `title`, `report_title`, `display_title` order;
+  - generic and missing title handling remains unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 50/50 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Title Insert Helper Local Verification
+
+- Scope:
+  - continue #776 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card `title` / `report_title` / `display_title` insertion in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep generic-title replacement, specific-title preservation, focused public URL application, alias order, alias replacement predicate, report card data/download/default export insertion, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_insert_report_card_titles`;
+  - changed `external_channel_static_page_enrich_report_card` to call the helper before focused URL and download insertion;
+  - added a direct module test covering generic title replacement, blank display title fill, and specific report title preservation.
+- Behavior preserved:
+  - generic `title` is still replaced with the computed report title;
+  - specific `report_title` is still preserved;
+  - blank `display_title` is still filled.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 49/49 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Report Card Download Insert Helper Local Verification
+
+- Scope:
+  - continue #775 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report card data/download/default export insertion in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep existing-value preservation, null/empty-array fill semantics, markdown/text URL duplication, focused public URL application, alias order, alias replacement predicate, single-item `artifact_links` replacement, static-page report card schema, export links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_insert_report_card_downloads`;
+  - changed `external_channel_static_page_enrich_report_card` to call the helper after title and focused URL enrichment;
+  - added a direct module test covering existing value preservation, missing/null field fill, empty `download_exports` fill, and markdown/text URL handling.
+- Behavior preserved:
+  - existing `data_url` and `text_download_url` are still preserved;
+  - null `table_data_url`, missing `ppt_download_url`, missing `markdown_download_url`, and empty `download_exports` are still filled;
+  - the helper only groups existing insert-if-missing behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 48/48 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Unchanged Helper Local Verification
+
+- Scope:
+  - continue #774 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL unchanged/no-op predicate in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep exact equality semantics, focused public URL application, alias order, alias replacement predicate, alias loop application, forced `public_url` replacement, trimmed raw URL matching, custom URL preservation, missing alias no-op behavior, single-item `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_focused_public_url_is_unchanged`;
+  - changed `external_channel_static_page_apply_focused_public_url` to call the unchanged predicate before alias and `artifact_links` updates;
+  - added a direct module test covering exact match, focused URL mismatch, and whitespace-wrapped raw URL mismatch.
+- Behavior preserved:
+  - unchanged URL still returns before alias updates and keeps existing `artifact_links`;
+  - focused URL differences still update aliases and `artifact_links`;
+  - no trimming was added to the unchanged predicate.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 47/47 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Alias Loop Helper Local Verification
+
+- Scope:
+  - continue #773 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL alias loop application in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep focused public URL application, alias order, alias replacement predicate, single-alias write semantics, forced `public_url` replacement, trimmed raw URL matching, custom URL preservation, missing alias no-op behavior, single-item `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_apply_focused_public_url_aliases`;
+  - changed `external_channel_static_page_apply_focused_public_url` to call the alias-loop helper before updating focused `artifact_links`;
+  - added a direct module test covering updated alias count, forced `public_url`, matching alias updates, and custom URL preservation.
+- Behavior preserved:
+  - the same alias list is still processed in the same order;
+  - applicable aliases still receive the focused URL and custom aliases are still preserved;
+  - `artifact_links` is still updated after alias processing.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 46/46 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Alias Apply Helper Local Verification
+
+- Scope:
+  - continue #772 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL single-alias application in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep focused public URL application, alias order, alias replacement predicate, forced `public_url` replacement, trimmed raw URL matching, custom URL preservation, missing alias no-op behavior, single-item `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_apply_focused_public_url_alias`;
+  - changed `external_channel_static_page_apply_focused_public_url` to call the helper inside its alias loop;
+  - added a direct module test covering returned update flags, forced `public_url` update, trimmed raw URL update, custom URL preservation, and missing alias no-op.
+- Behavior preserved:
+  - applicable aliases are still written with the focused public URL string;
+  - non-applicable custom aliases are still not overwritten;
+  - the outer focused URL function still updates `artifact_links` separately after alias processing.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 45/45 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Artifact Links Helper Local Verification
+
+- Scope:
+  - continue #771 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL artifact links value construction in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep focused public URL application, alias order, alias replacement predicate, forced `public_url` replacement, trimmed raw URL matching, custom URL preservation, missing alias no-op behavior, single-item `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_focused_public_url_artifact_links`;
+  - changed `external_channel_static_page_apply_focused_public_url` to use the helper for the focused `artifact_links` value;
+  - added a direct module test covering the single-item artifact links array shape.
+- Behavior preserved:
+  - focused URL application still replaces `artifact_links` with a one-item array containing the focused public URL;
+  - unchanged raw/focused URL still returns before touching `artifact_links`;
+  - alias replacement behavior remains unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 44/44 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Alias Predicate Helper Local Verification
+
+- Scope:
+  - continue #770 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL alias replacement predicate in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep focused public URL application, alias order, forced `public_url` replacement, trimmed raw URL matching, custom URL preservation, missing alias no-op behavior, `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_should_apply_focused_public_url_alias`;
+  - changed `external_channel_static_page_apply_focused_public_url` to call the helper instead of carrying the predicate inline;
+  - added a direct module test covering forced `public_url`, trimmed raw URL match, custom URL rejection, and missing alias rejection.
+- Behavior preserved:
+  - `public_url` is still always replaced when a focused URL differs from the raw URL;
+  - non-`public_url` aliases are still replaced only when their trimmed value equals the raw URL;
+  - custom URLs and missing aliases are still left untouched.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new assertions;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 43/43 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-07-03 P5 External Static-Page Focused Public URL Alias List Helper Local Verification
+
+- Scope:
+  - continue #769 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page focused public URL alias ordering in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep focused public URL application, forced `public_url` replacement, matching-alias-only replacement, custom URL preservation, `artifact_links` replacement, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_focused_public_url_aliases`;
+  - changed `external_channel_static_page_apply_focused_public_url` to iterate the helper instead of an inline alias array;
+  - added a direct module test covering alias order.
+- Behavior preserved:
+  - `public_url` remains the first and always-applied alias;
+  - `generated_artifact_url`, `download_url`, and `html_download_url` remain in their previous order;
+  - non-matching custom URLs are still preserved and `artifact_links` still points at the focused URL.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 42/42 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Download Exports Non-Empty Array Helper Local Verification
+
+- Scope:
+  - continue #768 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page explicit download export non-empty array predicate in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep snake/camel field precedence, non-empty array requirement, empty-array rejection, non-array rejection, explicit download export precedence, new-bai default download export generation, generic empty export fallback, default download export order, table/PPT/Markdown file names, sibling URL derivation, data URL attachment, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_download_exports_is_non_empty_array`;
+  - changed `external_channel_static_page_explicit_download_exports` to use the helper as the existing filter predicate;
+  - added a direct module test covering non-empty array, empty array, non-array object, and null.
+- Behavior preserved:
+  - only non-empty arrays are accepted as explicit download exports;
+  - empty arrays, non-array objects, and null still fail the explicit export filter;
+  - fallback generation behavior remains unchanged after explicit export filtering.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new test formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 41/41 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Explicit Download Exports Value Helper Local Verification
+
+- Scope:
+  - continue #767 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page explicit download export raw value lookup in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep snake/camel field precedence, non-empty array requirement, explicit download export precedence, new-bai default download export generation, generic empty export fallback, default download export order, table/PPT/Markdown file names, sibling URL derivation, data URL attachment, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_explicit_download_exports_value`;
+  - changed `external_channel_static_page_explicit_download_exports` to call the helper before applying the existing non-empty array filter;
+  - added a direct module test covering snake-case precedence, camel-case fallback, and missing value.
+- Behavior preserved:
+  - `download_exports` still takes precedence over `downloadExports`;
+  - empty arrays and non-array values still fail the explicit export filter;
+  - camel-case values are still used only when snake-case is missing.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the extracted filter closure;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 40/40 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Default Download Exports For Payload Helper Local Verification
+
+- Scope:
+  - continue #766 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page default download export fallback selection in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep explicit download export precedence, new-bai default download export generation, generic empty export fallback, default download export order, table/PPT/Markdown file names, sibling URL derivation, data URL attachment, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_default_download_exports_for_payload`;
+  - changed `external_channel_static_page_download_exports_from_payload` to call the helper after explicit download exports are checked;
+  - added a direct module test covering new-bai default export generation and generic empty export fallback.
+- Behavior preserved:
+  - explicit `download_exports` / `downloadExports` still win before default generation;
+  - new-bai payloads still receive table data, PPT, and Markdown default export entries;
+  - generic payloads still receive an empty export array.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 39/39 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Download Export Title Helper Local Verification
+
+- Scope:
+  - continue #765 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page default download export title selection in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep explicit report title handling, default report title text, default download export order, table/PPT/Markdown file names, sibling URL derivation, data URL attachment, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_download_export_title`;
+  - changed `external_channel_static_page_download_exports` to call the helper instead of inlining the default title fallback;
+  - added a direct module test covering explicit title and default title behavior.
+- Behavior preserved:
+  - explicit report titles still pass through unchanged;
+  - missing report titles still fall back to `DataMax 经营分析报表`;
+  - download export entries still receive the same title value as before.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 38/38 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Download Export File URLs Helper Local Verification
+
+- Scope:
+  - continue #764 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page default download export sibling URL construction in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep default download export order, table/PPT/Markdown file names, sibling URL derivation, title fallback, data URL attachment, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_download_export_file_urls`;
+  - changed `external_channel_static_page_download_exports` to use the helper for table data, PPT, and Markdown URLs before constructing export entries;
+  - added a direct module test covering the three default sibling file URLs from an index URL with query parameters.
+- Behavior preserved:
+  - default exports remain ordered as table data, PPT, then Markdown;
+  - sibling URLs still resolve to `table-data.csv`, `report.ppt`, and `report.md`;
+  - focus/query parameters on the public URL are still removed by existing sibling URL normalization.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new test formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 37/37 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Xinbai Template Reference Text Helper Local Verification
+
+- Scope:
+  - continue #763 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page new-bai primary report template reference text matching in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep URL detection, template reference ID detection, template reference text match terms, title fallback, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_template_reference_text_is_xinbai_primary`;
+  - changed `external_channel_static_page_is_xinbai_primary_report` to delegate the final template-reference text check to the helper;
+  - added a direct module test covering Chinese new-bai text, ASCII `xinbai`, generic template text, and missing template reference.
+- Behavior preserved:
+  - `xinbai`, `新百`, and `新世界百货` template-reference text matches still classify as new-bai primary reports;
+  - generic and missing template references still do not classify as new-bai primary reports by themselves;
+  - URL and template reference ID matching remain earlier independent exits.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new test formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 36/36 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Xinbai Template Reference ID Helper Local Verification
+
+- Scope:
+  - continue #762 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page new-bai primary report template reference ID matching in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep URL detection, template reference ID match terms, template reference text detection, title fallback, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_template_reference_id_is_xinbai_primary`;
+  - changed `external_channel_static_page_is_xinbai_primary_report` to call the helper after URL detection and before template reference text detection;
+  - added a direct module test covering the two known ID patterns, a generic ID, and missing ID.
+- Behavior preserved:
+  - `xinbai-functional-modular-template-20260604` and `xinbai_business_report` ID matches still classify as new-bai primary reports;
+  - generic and missing IDs still do not classify as new-bai primary reports by themselves;
+  - URL matching and template reference text matching remain separate fallbacks.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new test formatting;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Xinbai Public URL Helper Local Verification
+
+- Scope:
+  - continue #761 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page new-bai primary report public URL matching in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep URL match terms, template reference ID detection, template reference text detection, title fallback, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_public_url_is_xinbai_primary`;
+  - changed `external_channel_static_page_is_xinbai_primary_report` to call the helper before applying existing template reference checks;
+  - added a direct module test covering the three known URL patterns and a non-new-bai URL.
+- Behavior preserved:
+  - `xinbai-functional-modular-template-20260604`, `xinbai-functional-modular-report`, and `/xinbai/` URL matches still classify as new-bai primary reports;
+  - template reference ID and template reference text matching still run when URL matching does not apply;
+  - non-new-bai URLs still require template reference evidence before using the new-bai report title/export fallback.
+- Local verification:
+  - `cargo fmt`: run to apply rustfmt to the new helper signature;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 34/34 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Report Title Fallback Helper Local Verification
+
+- Scope:
+  - continue #760 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report title fallback selection in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep title field precedence, generic-title handling, new-bai report detection, default title fallback, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_title_fallback`;
+  - changed `external_channel_static_page_report_title` to delegate generic/missing-title fallback to the helper after specific title candidate handling;
+  - added a direct module test covering new-bai fallback detection and generic non-new-bai default fallback.
+- Behavior preserved:
+  - specific configured titles still win before fallback;
+  - generic titles still fall back through the same new-bai detection path;
+  - new-bai payloads still resolve to `XINBAI_PUBLISHED_REPORT_TITLE`;
+  - non-new-bai generic or missing titles still resolve to `DataMax 经营分析报表`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 33/33 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with Windows line-ending warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Report Title Candidate Helper Local Verification
+
+- Scope:
+  - continue #759 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page report title candidate lookup in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep title field precedence, generic-title handling, new-bai title fallback, static-page report card schema, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_report_title_candidate`;
+  - changed `external_channel_static_page_report_title` to call the helper before applying the existing generic-title and new-bai fallback rules;
+  - added a direct module test covering configured title priority, nested artifact title fallback, and missing-title None.
+- Behavior preserved:
+  - `report_title` / `reportTitle` still win over display/artifact/title aliases;
+  - nested artifact payload title aliases are still read through the existing artifact payload precedence helper;
+  - generic titles are still handled by `external_channel_static_page_report_title` after candidate lookup;
+  - missing titles still fall back to `DataMax 经营分析报表` unless new-bai detection applies.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 32/32 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after running `cargo fmt` for the new helper formatting.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Download Export Entry Helper Local Verification
+
+- Scope:
+  - continue #758 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page download export entry construction in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep default download export ordering, field names, labels, formats, titles, URLs, table `data_url`, new-bai default export construction, static-page report card schema, explicit export precedence, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_download_export_entry`;
+  - reused it in `external_channel_static_page_download_exports` for table data, PPT, and Markdown entries;
+  - added a direct module test covering entry field shape and optional `data_url` behavior.
+- Behavior preserved:
+  - default exports remain ordered as table data, PPT, then Markdown;
+  - table data entries still include `data_url`;
+  - PPT and Markdown entries still omit `data_url`;
+  - all labels, formats, titles, and URL values are unchanged.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 31/31 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Sibling File URL Value Helper Local Verification
+
+- Scope:
+  - continue #757 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize static-page sibling file URL to `Value` conversion in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep sibling URL construction, explicit export URL precedence, new-bai default export construction, static-page report card schema, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_sibling_file_url_value`;
+  - reused it in `external_channel_static_page_export_url` and `external_channel_static_page_download_exports`;
+  - added a direct module test covering focus-query sibling URL construction and malformed URL null fallback.
+- Behavior preserved:
+  - sibling file URLs still come from the existing `static_page_artifact_sibling_url` helper;
+  - focus query parameters are still dropped by the sibling URL helper;
+  - malformed public URLs still become `Value::Null`;
+  - new-bai default data/table/PPT/Markdown export entries keep the same URL values.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 30/30 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after running `cargo fmt` for the new test formatting.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Explicit Download Exports Helper Local Verification
+
+- Scope:
+  - continue #756 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize explicit static-page download export array lookup in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep explicit `download_exports`/`downloadExports` precedence, non-empty array requirement, new-bai default export construction, static-page report card schema, export URL fallback, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_explicit_download_exports`;
+  - changed `external_channel_static_page_download_exports_from_payload` to call the helper before its existing new-bai default export fallback;
+  - added a direct module test covering snake-case priority, camel-case fallback, empty-array ignore behavior, and non-array ignore behavior.
+- Behavior preserved:
+  - `download_exports` still takes priority over `downloadExports`;
+  - only non-empty arrays are accepted as explicit export lists;
+  - empty or non-array explicit values still fall through to the existing default/fallback behavior;
+  - new-bai reports without explicit export lists still receive generated table/PPT/Markdown export entries.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 29/29 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Explicit Export URL Helper Local Verification
+
+- Scope:
+  - continue #755 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize explicit static-page export URL lookup in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep explicit export URL precedence, generated sibling fallback, new-bai default export links, static-page report card schema, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_explicit_export_url`;
+  - changed `external_channel_static_page_export_url` to call the helper before its existing new-bai sibling-file fallback;
+  - added a direct module test covering disallowed URL skip, nested payload fallback, and missing-value None.
+- Behavior preserved:
+  - explicit allowed export URLs still win before generated sibling URLs;
+  - disallowed/non-DataMax URLs are still ignored;
+  - nested artifact payload values are still read through the existing artifact payload precedence helper;
+  - generic reports without explicit export URLs still return `Value::Null`.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 28/28 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Focused Public URL Alias Helper Local Verification
+
+- Scope:
+  - continue #754 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize focused static-page public URL alias synchronization in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep static-page report card schema, focused URL generation, export links, artifact links, title enrichment, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_apply_focused_public_url`;
+  - replaced the inline focused URL alias update block in `external_channel_static_page_enrich_report_card`;
+  - added direct module tests for matching-alias update behavior and unchanged-URL no-op behavior.
+- Behavior preserved:
+  - when focus changes the public URL, `public_url` is still always updated;
+  - `generated_artifact_url`, `download_url`, and `html_download_url` are still updated only when their current value matches the raw public URL after trimming;
+  - existing custom download URLs remain untouched;
+  - `artifact_links` is still replaced with the focused public URL only when the public URL changes.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 27/27 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Artifact Stability Payload Helper Local Verification
+
+- Scope:
+  - continue #753 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the pure `dataset_artifact_key` and `baseline_status` artifact-stability payload lookup in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep static-page published reply card schema, artifact stability precedence, output artifact schema, fixed-task recovery, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_artifact_stability_payload_value`;
+  - replaced the inline `payload.get(...)` / `/artifact_stability/...` / `/source_refs/artifact_stability/...` lookup chains for `dataset_artifact_key` and `baseline_status` in `external_channel_static_page_published_reply`;
+  - added a direct module test covering root priority, `artifact_stability` fallback, `source_refs.artifact_stability` fallback, and missing-value null fallback.
+- Behavior preserved:
+  - root fields still win over nested artifact-stability values;
+  - `artifact_stability` still wins over `source_refs.artifact_stability`;
+  - missing values still become `Value::Null`.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 25/25 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed, with existing Windows LF-to-CRLF working-copy warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Dynamic Contract Payload Helper Local Verification
+
+- Scope:
+  - continue #752 P5 behavior-preserving engineering governance under `platform-api`;
+  - centralize the pure "read dynamic_page_contract from artifact-shaped payload and normalize it" composition in `crates/platform-api/src/external_channel_public_artifact.rs`;
+  - keep static-page dynamic contract defaults, artifact payload precedence, published reply card schema, output artifact schema, fixed-task recovery, static-page publish recovery, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_dynamic_page_contract_from_payload`;
+  - replaced three local `external_channel_static_page_artifact_payload_value(..., "dynamic_page_contract")` plus `normalize_static_page_dynamic_page_contract(...)` compositions in `lib.rs`;
+  - added direct module tests for nested `output.artifact.dynamic_page_contract` extraction plus normalization and missing-contract default fallback.
+- Behavior preserved:
+  - dynamic contracts are still read with the existing artifact payload precedence: root, `artifact`, `output`, then `output.artifact`;
+  - missing contract still falls back to the default dynamic page contract;
+  - user-provided contract values still merge into the default while controlled time-range fields remain excluded by the existing normalizer.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_public_artifact --lib`: 24/24 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api static_page_dynamic_contract_support --lib`: 5/5 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new helper/tests;
+  - `git diff --check`: passed, with existing Windows LF-to-CRLF working-copy warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Recovery Source-Refs Helper Local Verification
+
+- Scope:
+  - continue #751 P5 behavior-preserving engineering governance under `platform-api`;
+  - extract the pure recovery source-refs fallback selection from `lib.rs` into `crates/platform-api/src/external_channel_static_page_status_source_refs.rs`;
+  - keep `lib.rs` responsible for draft id parsing, `PgStorage` reads, storage error mapping, static-page publish recovery, fixed-task reply generation, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_static_page_recovery_status_source_refs`;
+  - changed `external_channel_static_page_recovery_source_refs` to call the helper with `Some(&draft.source_refs)` when a draft is loaded and with `None` when falling back to `run.selected_scope`;
+  - added direct module tests for draft source refs priority and run selected-scope fallback.
+- Behavior preserved:
+  - recovery still prefers persisted draft `source_refs` when a valid draft id is present and storage returns the draft;
+  - recovery still falls back to the assistant run selected scope when there is no valid draft id or no loaded draft;
+  - both paths still pass through `external_channel_static_page_status_source_refs`, so only the safe status source fields are exposed.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_static_page_status_source_refs --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api external_channel_fixed_task_status_support --lib`: 18/18 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the helper;
+  - `git diff --check`: passed, with existing Windows LF-to-CRLF working-copy warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Recovery Helper Local Verification
+
+- Scope:
+  - continue #750 P5 behavior-preserving engineering governance under `platform-api`;
+  - move static-page recovery helper logic out of `lib.rs` into `crates/platform-api/src/external_channel_fixed_task_status_support.rs`;
+  - keep static-page publish recovery, workflow execution id selection, publish queued payload lookup, published-artifact detection, fixed-task reply generation, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `external_channel_static_page_run_has_published_artifact` into `external_channel_fixed_task_status_support`;
+  - moved `external_channel_static_page_recovery_workflow_execution_id` into `external_channel_fixed_task_status_support`;
+  - moved `external_channel_static_page_recovery_publish_queued_payload` into `external_channel_fixed_task_status_support`;
+  - added direct module tests for valid generated-artifact URL detection, latest prior publish queued payload matching, future publish queued event exclusion, and workflow id fallback from publish context.
+- Behavior preserved:
+  - published-artifact detection still requires `type=external_channel_static_page_artifact` and an allowed generated artifact `public_url`;
+  - recovery workflow id still prefers `codex_host_workflow_execution_id`, then `workflow_execution_id`, then `execution_id` from the exec event;
+  - publish queued fallback still reads only prior or same-sequence `assistant_run.external_channel_static_page_publish_queued` events and matches workflow id when available;
+  - storage-backed source ref recovery remains in `lib.rs` because it still performs async storage reads.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_fixed_task_status_support --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 39/39 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new tests;
+  - `git diff --check`: passed, with existing Windows LF-to-CRLF working-copy warnings only.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Static-Page Event Lookup Helper Local Verification
+
+- Scope:
+  - continue #749 P5 behavior-preserving engineering governance under `platform-api`;
+  - move static-page reply event lookup helpers out of `lib.rs` into `crates/platform-api/src/external_channel_fixed_task_status_support.rs`;
+  - keep static-page publish/preview progress reply ordering, Codex heartbeat detection, image job named-event detection, fixed-task reply generation, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `external_channel_static_page_latest_codex_heartbeat_after` into `external_channel_fixed_task_status_support`;
+  - moved `external_channel_static_page_latest_named_event` into `external_channel_fixed_task_status_support`;
+  - added direct module tests for latest heartbeat selection after a sequence threshold and latest named-event lookup.
+- Behavior preserved:
+  - Codex heartbeat lookup still accepts only `codex_host_task.cloudflare_heartbeat` and `codex_host_task.exec_heartbeat`;
+  - heartbeat lookup still ignores events at or before the requested sequence number and returns the latest later heartbeat;
+  - named-event lookup still scans from newest to oldest and returns no event when the name is absent.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_fixed_task_status_support --lib`: 15/15 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_reply --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 39/39 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new tests.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 External Fixed-Task Reply Status Mapping Helper Local Verification
+
+- Scope:
+  - continue #748 P5 behavior-preserving engineering governance under `platform-api`;
+  - move fixed-task external-channel processing and terminal reply status/text mappings out of `lib.rs` into `crates/platform-api/src/external_channel_fixed_task_status_support.rs`;
+  - keep external reply envelope, card schema, artifact links, runtime event summary, recipient delivery fields, public task status mapping, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `external_channel_fixed_task_processing_text`;
+  - added `external_channel_fixed_task_processing_poll_after_seconds`;
+  - added `external_channel_fixed_task_terminal_state`;
+  - added `external_channel_fixed_task_terminal_task_status`;
+  - added `external_channel_fixed_task_terminal_text`;
+  - updated `lib.rs` fixed-task reply builders to call these support helpers instead of carrying local match tables.
+- Behavior preserved:
+  - data-ingestion, static-page, answer-quality, and unknown fixed-task processing texts stay unchanged;
+  - retrying still polls after 30 seconds, running after 15 seconds, and failed/cancelled terminal states do not request another poll;
+  - `codex_host.fixed_task.completed`, `needs_human`, `rejected`, and queued/unknown events still map to `completed`, `needs_human`, `failed`, and `queued`;
+  - static-page completed terminal status still maps to `static_page_published`; other templates still use their existing status prefix.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_fixed_task_status_support --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_channel_fixed_task_reply --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 39/39 passed;
+  - `cargo test -q -p platform-api static_page_fixed_task --lib`: 7/7 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Fixed-Task Static Page HTML Output Helper Local Verification
+
+- Scope:
+  - continue #747 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the fixed-task static-page HTML extraction helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep static-page fixed-task output recovery, HTML fragment wrapping, full-document preservation, output alias search order, artifact publication, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `external_channel_static_page_html_from_fixed_task_output` into `assistant_run_codex_fixed_task_support`;
+  - moved its private `external_channel_standalone_html_document` wrapper into the same support module;
+  - added direct module tests for fragment wrapping, full HTML document preservation, top-level `html_text` alias extraction, and missing/empty HTML rejection.
+- Behavior preserved:
+  - HTML is still read from `/artifact/html`, `/artifact/html_text`, `/artifact/index_html`, `/html`, then `/html_text`;
+  - HTML fragments are still wrapped in a standalone `zh-CN` document with viewport metadata;
+  - full `<!doctype html>` or `<html` documents are still trimmed and preserved without double-wrapping;
+  - missing or blank HTML still returns no recovered HTML.
+- Local verification:
+  - `cargo test -q -p platform-api external_channel_static_page_html_from_fixed_task_output --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 34/34 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 39/39 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new tests.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Transition Audit Helper Local Verification
+
+- Scope:
+  - continue #746 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task transition audit event type and transition helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep fixed-task queued/rejected/completed/needs-human audit event routing, workflow started/step-completed/step-failed mapping, validation dispatch, output summary, safe error redaction, assistant-run event persistence, exception email side effect, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `CodexHostFixedTaskAuditEvent` into `assistant_run_codex_fixed_task_support` with crate-visible fields for the existing persistence path;
+  - moved `codex_host_fixed_task_transition_audit_event` into `assistant_run_codex_fixed_task_support`;
+  - left `record_codex_host_fixed_task_audit_event` and `send_codex_host_fixed_task_exception_email` in `lib.rs`, so storage writes and notification side effects remain outside the pure support module;
+  - added direct support tests for queued audit payloads, valid static-page completion audit payloads, and failed-step rejection with sensitive error redaction.
+- Behavior preserved:
+  - `workflow.started` still emits `codex_host.fixed_task.queued` without human notification;
+  - valid static-page output still emits `codex_host.fixed_task.completed` with accepted validation and no human notification;
+  - `workflow.step_failed` still emits `codex_host.fixed_task.rejected`, includes a safe validation error summary, and notifies humans;
+  - unsupported workflow events, missing fixed-task context, or non-Codex workflows still skip audit generation through the same option-returning contract.
+- Local verification:
+  - `cargo test -q -p platform-api codex_host_fixed_task_transition_audit_event --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 30/30 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 39/39 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new support tests.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Base Payload Helper Local Verification
+
+- Scope:
+  - continue #745 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task audit base payload helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep fixed-task queued/rejected/completed audit event routing, external reply status URL path, recipient delivery summary, write-scope counts, safe exposure flags, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_base_payload` into `assistant_run_codex_fixed_task_support`;
+  - changed `external_channel_assistant_run_reply_status_url_str` visibility to `pub(crate)` so the support module can reuse the existing internal URL builder;
+  - added direct module tests for safe control-field copying, third-party status link generation, write-scope file counting, safe exposure flags, and null fallbacks when delivery context is absent.
+- Behavior preserved:
+  - status URLs still point to `/v1/external/channels/{connection_id}/assistant-runs/{run_id}/reply`;
+  - `recipient_delivery`, `permission_review_status`, `editable_after_publish`, `human_review_policy`, `publish_mode`, and `allowed_write_file_count` remain in the audit payload;
+  - raw prompt/diff/provider log/secret exposure flags remain false and raw fixed-task prompt content is not copied into the base payload;
+  - missing assistant-run or delivery context still emits null status URL, method, delivery, and policy fields.
+- Local verification:
+  - `cargo test -q -p platform-api codex_host_fixed_task_base_payload --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 27/27 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 36/36 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new test assertions.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Output Validation Helper Local Verification
+
+- Scope:
+  - continue #744 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task output validation dispatch helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep fixed-task output extraction, template dispatch, static-page artifact validation, answer-quality autofix validation, data-ingestion analysis validation, fixed-task transition audit event routing, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_output_validation_summary` into `assistant_run_codex_fixed_task_support`;
+  - removed the now-unused `assistant_run_data_ingestion_output_validation_support::*` import from `lib.rs`;
+  - added direct module tests for missing output, template mismatch, unknown template id, static-page success, invalid public URL, missing validation report, terminal `needs_human`/`failed` statuses, and unknown static-page status.
+- Behavior preserved:
+  - missing output, template mismatch, unknown template id, invalid generated-artifact URL, and missing validation report still reject auto-apply;
+  - static-page `success` still requires a generated-artifact public URL and validation report before auto-apply;
+  - static-page `needs_human` and `failed` remain accepted terminal states without auto-apply;
+  - answer-quality autofix and data-ingestion analysis output validation still dispatch through their existing validators.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 25/25 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_output_validation_summary --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 34/34 passed;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_output_validation_support --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: 22/22 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed after formatting the new test assertions.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Json Extra Helper Local Verification
+
+- Scope:
+  - continue #743 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task JSON payload merge helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep fixed-task queued/rejected/completed audit payload construction, key overwrite semantics, non-object no-op behavior, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `JsonObjectExtra` and its `Value::with_extra` implementation into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level trait and implementation from `lib.rs`;
+  - added direct module tests for object merge, key overwrite, non-object `extra` no-op, and non-object target no-op.
+- Behavior preserved:
+  - object `extra` fields still merge into the target object;
+  - existing keys are still overwritten by `extra`;
+  - non-object target or non-object `extra` still returns the original target unchanged.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 20/20 passed;
+  - `cargo test -q -p platform-api json_object_extra --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 29/29 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Template Id Helper Local Verification
+
+- Scope:
+  - continue #742 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task template-id extraction helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep template-id precedence, fixed-task transition audit event routing, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_template_id_from_context` into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level implementation from `lib.rs`;
+  - added direct module tests for top-level `template_id`, nested `/fixed_task/template_id`, missing context, and non-string values.
+- Behavior preserved:
+  - top-level `template_id` still takes precedence over nested fixed-task template id;
+  - nested `/fixed_task/template_id` still works when the top-level value is absent;
+  - missing or non-string values still return no template id, leaving the existing transition audit path to skip unsupported contexts.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_template_id_from_context --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 29/29 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Output Extraction Helper Local Verification
+
+- Scope:
+  - continue #741 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task output extraction helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep direct and nested fixed-task output extraction behavior, fixed-task transition audit events, data-ingestion analysis result extraction, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_extract_output` into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level implementation from `lib.rs`;
+  - added direct module tests for direct template output, nested `fixedTaskOutput` extraction, template mismatch rejection, and missing template output rejection.
+- Behavior preserved:
+  - direct output whose `template_id` matches the expected template is still accepted;
+  - nested output is still searched through `fixed_task_output`, `fixedTaskOutput`, `template_output`, `templateOutput`, `result`, and `output`;
+  - mismatched or missing `template_id` still returns no extracted output, leaving validation to reject through existing paths.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 16/16 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_extract_output --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 27/27 passed;
+  - `cargo test -q -p platform-api data_ingestion_analysis --lib`: 1/1 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Safe Text Helper Local Verification
+
+- Scope:
+  - continue #740 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task safe-text redaction helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep audit text truncation, fixed-task event summaries, output validation summaries, static-page publish validation summary redaction, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_safe_text` into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level implementation from `lib.rs`;
+  - updated `external_channel_static_page_publish_validation` to import the helper from the fixed-task support module directly;
+  - added direct module tests for redacting sensitive markers and preserving compacted/truncated safe excerpts.
+- Behavior preserved:
+  - safe text is still normalized through `truncate_assistant_supply_text(..., 500)`;
+  - `database_url`, `postgres://`, `mysql://`, `sk-`, `api_token`, `authorization:`, and `bearer ` markers still redact to `[redacted]`;
+  - safe whitespace-heavy text still compacts before audit output;
+  - long safe text still caps at 500 characters.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 14/14 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_safe_text --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api external_channel_static_page_publish_validation --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 25/25 passed;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_output_validation_support --lib`: 8/8 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Sensitive Text Helper Local Verification
+
+- Scope:
+  - continue #739 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task recursive sensitive-text detection helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep sensitive connection/credential detection, data-ingestion output validation rejection behavior, fixed-task validation summary, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_value_contains_sensitive_text` and its private string matcher into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level implementation from `lib.rs`;
+  - changed data-ingestion output validation to import the helper from the fixed-task support module directly;
+  - added direct module tests for sensitive string markers, nested sensitive values, sensitive object keys, and safe/null/numeric/object values.
+- Behavior preserved:
+  - `database_url`, `postgres://`, `mysql://`, `api_key`, `api_token`, `authorization:`, `bearer `, `password=`, and `sk-` markers are still rejected case-insensitively where applicable;
+  - arrays and objects are still scanned recursively;
+  - object keys as well as string values still participate in sensitive-text detection;
+  - safe non-string values and safe summaries still pass.
+- Local verification:
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 12/12 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_value_contains_sensitive_text --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_output_validation_support --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 23/23 passed;
+  - `cargo test -q -p platform-api external_channel_data_ingestion --lib`: 5/5 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Validation Sanitizer Helper Local Verification
+
+- Scope:
+  - continue #738 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task validation sanitizer helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep validation reason redaction behavior, fixed-task audit event payload shape, output validation summary, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_sanitize_validation` into `assistant_run_codex_fixed_task_support`;
+  - removed the root-level implementation;
+  - added direct module tests for sensitive reason redaction, safe reason passthrough, non-string reason passthrough, and non-reason field preservation.
+- Behavior preserved:
+  - string `reason` values still pass through `codex_host_fixed_task_safe_text`;
+  - sensitive `reason` values still become `[redacted]`;
+  - safe `reason` values are unchanged;
+  - non-string `reason` values and other validation fields are left unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_sanitize_validation --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 20/20 passed;
+  - `cargo test -q -p platform-api external_channel_fixed_task --lib`: 13/13 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Public Artifact URL Helper Local Verification
+
+- Scope:
+  - continue #737 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task public artifact URL allowlist helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep generated-artifact URL allowlist behavior, pending placeholder rejection, static-page and fixed-task reply link filtering, output validation, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_public_artifact_url_allowed` into `assistant_run_codex_fixed_task_support`;
+  - removed the duplicate root-level implementation and root-level direct test;
+  - added a support-module direct test covering absolute generated-artifact URLs, relative generated-artifact URLs, trimmed relative URLs, pending directory placeholders, pending-prefixed placeholders, and external origins.
+- Behavior preserved:
+  - `https://v3.elepcloud.com/generated-artifacts/...` still passes;
+  - `/generated-artifacts/...` still passes;
+  - `/generated-artifacts/pending...` and `/generated-artifacts/pending/...` still fail;
+  - generated-artifact-looking URLs on external origins still fail.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 7/7 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task_public_artifact_url --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api external_channel_static_page --lib`: 134/134 passed;
+  - `cargo test -q -p platform-api external_channel_fixed_task --lib`: 13/13 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Output Summary Helper Local Verification
+
+- Scope:
+  - continue #736 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the Codex host fixed-task output summary helper out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep output summary field names, row-count passthrough, artifact URL allowlist behavior, test-command and warning redaction, human-review reason redaction, fixed-task transition events, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_output_summary` into `assistant_run_codex_fixed_task_support`;
+  - reused the existing `codex_host_fixed_task_public_artifact_url_allowed`, `codex_host_fixed_task_safe_text`, and `value_array` helpers from the extracted module;
+  - added direct module tests for missing output, summary counts, generated-artifact URL passthrough, pending/external URL filtering, and sensitive text redaction.
+- Behavior preserved:
+  - missing output still reports `status=missing`, null artifact URL, zero changed files, empty test command list, and `fixed_task_output_missing`;
+  - generated-artifact public URLs still pass through while pending placeholders and external origins are filtered to null;
+  - source summary, validation checks, recommended actions, changed files, and tests added are still counted without exposing raw arrays;
+  - test commands, validation warnings, and human-review reasons still pass through `codex_host_fixed_task_safe_text` before entering audit payloads.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api external_channel_fixed_task --lib`: 13/13 passed;
+  - `cargo test -q -p platform-api external_channel_data_ingestion --lib`: 5/5 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Data-Ingestion Output Validation Helper Local Verification
+
+- Scope:
+  - continue #735 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the data-ingestion analysis fixed-task output validation helper out of `lib.rs` into `crates/platform-api/src/assistant_run_data_ingestion_output_validation_support.rs`;
+  - keep accepted statuses, unsafe-change review behavior, sensitive connection text rejection, data quality/source summary/validation check requirements, staging spec requirement, fixed-task output validation switch, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_data_ingestion_output_validation_support` and moved `assistant_run_data_ingestion_analysis_output_validation` into it;
+  - changed `codex_host_fixed_task_value_contains_sensitive_text` to `pub(crate)` so the extracted validation helper can reuse the existing sensitive-text guard;
+  - migrated the existing analysis-ready, unsafe-change, and sensitive-connection tests into the new module and added mismatch/status/missing-field/staging-spec/terminal-status coverage.
+- Behavior preserved:
+  - template mismatch and unknown status still reject with `needs_human`;
+  - sensitive database URL, API token, bearer, password, or key-like content still rejects before auto-apply;
+  - production writes, credentials, public API changes, and schema changes still require human review without auto-apply;
+  - `failed` and `needs_human` outputs still pass through as terminal non-auto-apply statuses;
+  - `analysis_ready` and `staging_spec_ready` still require source summary, validation checks, and data quality report, and `staging_spec_ready` still requires a staging spec object or array.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_output_validation_support --lib`: 8/8 passed;
+  - `cargo test -q -p platform-api data_ingestion_analysis --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api external_channel_data_ingestion --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api codex_host_fixed_task --lib`: 15/15 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: 18/18 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Platform Env Flag Helper Local Verification
+
+- Scope:
+  - continue #734 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the shared boolean environment flag helper out of `lib.rs` into `crates/platform-api/src/platform_env_support.rs`;
+  - keep true-value parsing, default fallback behavior, Codex host task gates, answer-quality autofix gates, static-page prewarm gates, model/provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `platform_env_support` and moved `platform_env_flag` into it;
+  - re-exported the helper through the crate root with `pub(crate) use platform_env_support::*` so existing support modules and `lib.rs` call sites keep the same `crate::platform_env_flag` path.
+- Behavior preserved:
+  - missing env vars still return the supplied default;
+  - `1`, `true`, `yes`, and `on` still enable the flag case-insensitively after trimming;
+  - all other values still evaluate to false.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo test -q -p platform-api platform_env_support --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_support --lib`: 11/11 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: 35/35 passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 3/3 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Codex Host Fixed-Task Manifest and Created Event Helper Local Verification
+
+- Scope:
+  - continue #733 P5 behavior-preserving engineering governance under `platform-api`;
+  - move Codex host fixed-task bundle manifest and created-event helpers out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_fixed_task_support.rs`;
+  - keep fixed-task manifest file list, created-event payload fields, workflow event sequencing, answer-quality autofix execution creation, customer Codex sidecar execution creation, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - moved `codex_host_fixed_task_bundle_manifest` into `assistant_run_codex_fixed_task_support`;
+  - moved `codex_host_fixed_task_created_event` into `assistant_run_codex_fixed_task_support`;
+  - kept existing callers resolving the same helper names through crate-local imports.
+- Behavior preserved:
+  - bundle manifest still includes `task.json`, `README.md`, `schemas/output.schema.json`, optional `evidence/summary.json`, and `runtime.json`;
+  - created event still uses sequence `1`, event name `codex_host_task.created`, workflow execution id, execution kind/version/status/stage, assistant run id, capability, template id, task memory policy, and task memory space id;
+  - raw prompt or unrelated workflow context fields are still not copied into the created-event payload.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_fixed_task_support --lib`: 3/3 passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_autofix_support --lib`: 11/11 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: 35/35 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Assistant Run Codex Workspace Seed Helper Local Verification
+
+- Scope:
+  - continue #732 P5 behavior-preserving engineering governance under `platform-api`;
+  - move generated-static-page edit workspace seed construction out of `lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`;
+  - keep current artifact public URL detection, current artifact brief shape, generated-static-page edit gating, workspace seed payload shape, Codex sidecar execution context, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_workspace_seed` to `assistant_run_customer_codex_artifact_support`;
+  - changed `assistant_run_current_artifact_brief` from private to `pub(crate)` so the extracted workspace seed helper can reuse the existing artifact brief logic;
+  - updated `assistant_run_customer_codex_sidecar_execution` to pass `request.current_artifact.as_ref()` into the extracted helper.
+- Behavior preserved:
+  - workspace seed is still produced only for `generated_static_page_edit`;
+  - missing current artifact or missing static-page public URL still produces no workspace seed;
+  - generated seed still uses the same `v3.codex_host_workspace_seed` schema, existing artifact URL, current artifact brief, output manifest hints, and no-V3-repo-write safety fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_workspace_seed --lib`: 2/2 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: 18/18 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_current_static_page_edit --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: 35/35 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Assistant Run Codex Customer Artifact Workspace Prompt Helper Local Verification
+
+- Scope:
+  - continue #731 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the customer artifact workspace prompt predicate out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_customer_artifact_workspace_prompt_support.rs`;
+  - keep artifact signal terms, execution signal terms, explicit Codex signal handling, customer context checks, Codex sidecar capability order, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_codex_customer_artifact_workspace_prompt_support` and moved `assistant_run_prompt_requests_customer_artifact_workspace` into it;
+  - reused the already extracted `assistant_run_customer_codex_context_present` helper for the original dataset/document/database/current-artifact/data-context checks;
+  - removed a now-unused `assistant_run_codex_artifact_context_support::*` import from `lib.rs`.
+- Behavior preserved:
+  - document, plan, script, package, HTML, dashboard, static page, and report artifact wording still matches the workspace artifact predicate;
+  - execution wording is still required in addition to artifact wording;
+  - current artifact, selected scope, data-context wording, explicit Codex wording, or artifact wording still satisfy the original customer-context guard;
+  - plain Codex analysis and general chat without artifact wording remain out of the artifact workspace path.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_customer_artifact_workspace_prompt_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: 34/34 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Assistant Run Codex Data-Analysis Report Sidecar Prompt Helper Local Verification
+
+- Scope:
+  - continue #730 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the data-analysis report sidecar prompt predicate out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_data_analysis_report_prompt_support.rs`;
+  - keep customer context checks, data-analysis intent terms, execution signal terms, explicit report output terms, report artifact context fallback, report-explanation read-only guard, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_codex_data_analysis_report_prompt_support` and moved `assistant_run_prompt_requests_data_analysis_report_sidecar` into it;
+  - existing `assistant_run_customer_codex_sidecar_capability` continues to call the same helper name through crate-local import.
+- Behavior preserved:
+  - data-analysis report sidecar routing still requires customer data/report context before it can match;
+  - explicit report output, existing report context, or large-output report/table/visualization signals still enable the sidecar after analysis and execution intent are present;
+  - report explanation questions without explicit output remain read-only and do not become artifact work;
+  - non-analysis artifact requests still stay out of this sidecar predicate.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_data_analysis_report_prompt_support --lib`: 6/6 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: 34/34 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
+## 2026-06-30 P5 Assistant Run Codex Report Artifact Package Prompt Helper Local Verification
+
+- Scope:
+  - continue #729 P5 behavior-preserving engineering governance under `platform-api`;
+  - move the customer-Codex report artifact package prompt predicate out of `lib.rs` into `crates/platform-api/src/assistant_run_codex_report_artifact_prompt_support.rs`;
+  - keep Codex trigger detection, explicit customer Codex signal handling, selected context checks, report-explanation read-only guard, static-page surface deferral, model invocation, provider selection, public API, third-party API, auth request fields, response fields, production schema, runtime model routing, source sync, object cleanup, P2 backfill, production prewarm, and 8-server configuration unchanged.
+- Code change:
+  - added `assistant_run_codex_report_artifact_prompt_support` and moved `assistant_run_prompt_requests_customer_codex_report_artifact_package` into it;
+  - changed `external_channel_prompt_is_report_explanation_question` from private to `pub(crate)` so the extracted helper can reuse the existing explanation-question guard;
+  - existing `assistant_run_customer_codex_sidecar_capability` continues to call the same helper name through crate-local import.
+- Behavior preserved:
+  - report artifact package routing still requires `cc` forwarding or an explicit Codex signal;
+  - selected customer context is still required before a report artifact package sidecar can be selected;
+  - data-analysis intent plus report/download/package deliverable signal still gate artifact-package routing;
+  - read-only report explanation questions without explicit deliverable wording still stay out of the artifact-package path;
+  - strong static-page surfaces still defer to the static-page publish/edit helpers rather than the report artifact package helper.
+- Local verification:
+  - `cargo fmt`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_report_artifact_prompt_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_keeps_cc_report_explanation_readonly --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: 17/17 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with only existing Windows LF-to-CRLF warnings.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, or 120-server change was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded.
+
 ## 2026-06-28 P5 Assistant Run Answer-Quality Weak-Confidence Marker Helper Local Verification
 
 - Scope:
@@ -28820,6 +33039,771 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Spreadsheet Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move spreadsheet row-analysis answer-quality helpers out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_spreadsheet_support.rs`.
+- Code change:
+  - added `assistant_run_answer_quality_spreadsheet_support`;
+  - moved spreadsheet controlled answer rendering, JSON/Markdown output, document-title de-duplication, work-hour extreme rows, answer satisfaction checks, and row-term matching into the new module;
+  - kept existing call sites and function names unchanged through module import;
+  - preserved attendance/absence/work-hour prompt triggers, max 20 absence rows, source title output, JSON answer shape, insufficient-evidence/internal-marker rejection, and satisfied-table judge skip behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_spreadsheet_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_gate_uses_spreadsheet --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_skips_satisfied_spreadsheet_table --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 65/65 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Case Scope Summary Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality low-quality case selected-scope summary helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_case_support.rs`.
+- Code change:
+  - added `assistant_run_answer_quality_case_support`;
+  - moved `assistant_run_answer_quality_case_selected_scope_summary` into the new module;
+  - kept low-quality case package generation working through the existing module import;
+  - preserved `mode` passthrough, dataset/document/database source array counting, and missing/non-array count fallback behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_case_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: passed, 22/22 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 74/74 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Report-Link Expected Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality report-link expected helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_case_support.rs`.
+- Code change:
+  - moved `assistant_run_answer_quality_report_link_expected` into `assistant_run_answer_quality_case_support`;
+  - changed `external_channel_prompt_requests_static_page_report_workflow` from private to `pub(crate)` so the helper can reuse the existing report/static-page workflow detector;
+  - kept missing-report-artifact low-quality case generation working through the existing case-support module import;
+  - preserved published Xinbai report link request detection, static-page/report workflow request detection, and ordinary-question guard behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_case_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: passed, 22/22 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 77/77 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Exhausted Controlled Answer Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality exhausted retry controlled-answer helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_controlled_answer_support.rs`.
+- Code change:
+  - added `assistant_run_answer_quality_controlled_answer_support`;
+  - moved `assistant_run_answer_quality_exhausted_controlled_answer` into the new module;
+  - kept retry-exhausted fallback call sites working through the existing module import;
+  - preserved spreadsheet row-analysis answer priority, point-list answer priority, JSON fallback shape, supplied item count status, dissatisfied-user wording, and no-verifiable-evidence wording;
+  - narrowed the crate-root `assistant_run_point_list_support` glob import to test builds so normal `cargo check` stays warning-free after the call-site move.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_controlled_answer_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_gate_uses_spreadsheet --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_gate_uses_point_rows --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_gate_exhausted_fallback --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_point_list_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 80/80 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Low-Quality Case Package Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality low-quality case package helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_case_support.rs`.
+- Code change:
+  - moved `assistant_run_answer_quality_low_quality_case_package` into `assistant_run_answer_quality_case_support`;
+  - kept answer-quality autofix case collection call sites working through the existing case-support module import;
+  - preserved strong/user complaint signals, retry-reason mapping, deterministic-supply ignored signal, missing report artifact link signal, retry exhausted signal, controlled fallback signal, parse degraded without upgrade signal, repeated fallback/timeout signal, sorted/deduped low-quality signal output, selected-scope summary, recovery followup, supply sources/status, trace summary, and `blocking_gate_enabled=false`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_case_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api answer_quality_autofix --lib`: passed, 22/22 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 82/82 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Judge Retry Reason Wrapper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality retry-reason-with-judge wrapper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`.
+- Code change:
+  - moved `assistant_run_answer_quality_retry_reason_with_judge` into `assistant_run_answer_quality_judge_support`;
+  - kept `complete_assistant_run_answer_quality_judge` in `lib.rs` as crate-visible because it still owns the provider call and model lane wiring;
+  - preserved deterministic retry-reason priority before judge invocation, judge trigger gating, provider judge fallback, and judge-decision reason mapping;
+  - added a placeholder-runtime fast-path test proving deterministic retry reasons return without needing provider execution.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: passed, 13/13 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_retry_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 83/83 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Judge Completion Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality judge provider-completion helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`.
+- Code change:
+  - moved `complete_assistant_run_answer_quality_judge` into `assistant_run_answer_quality_judge_support`;
+  - made the generic `complete_assistant_run_provider` crate-visible so judge support can reuse the existing provider lane wiring;
+  - preserved placeholder-runtime short circuit, `ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ENABLED` gating, `MODEL_LANE_ASSISTANT_CHAT`, runtime mode/provider/model forwarding, provider response parsing, and parse-failure `None` behavior;
+  - added a placeholder-runtime completion test proving the helper returns `None` without provider execution.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_retry_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 84/84 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run ReAct Natural Fallback Provider Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the ReAct natural-answer fallback provider helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_react_support.rs`.
+- Code change:
+  - moved `complete_assistant_run_react_natural_answer_fallback` into `assistant_run_react_support`;
+  - reused the crate-visible `complete_assistant_run_provider` and existing `MODEL_LANE_ASSISTANT_CHAT` lane;
+  - preserved placeholder-runtime short circuit, runtime mode/provider/model forwarding, empty-answer `None`, and returned runtime manifest behavior;
+  - added a placeholder-runtime test proving the fallback returns `None` without provider execution.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_react_support --lib`: passed, 36/36 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 84/84 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Summary Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar selected-scope and evidence summary helpers out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - moved `assistant_run_customer_codex_sidecar_scope_summary` and `assistant_run_customer_codex_sidecar_evidence_summary` into `assistant_run_customer_codex_artifact_support`;
+  - kept existing sidecar workflow context and task prompt call sites working through the existing artifact-support module import;
+  - preserved summary field names and values: `intent`, `dataset_count`, `document_count`, `has_database_sources`, `scope_type`, `status`, `supplied_item_count`, and `supply_quality`;
+  - added a module test covering selected dataset/document counts, database source detection, scope type fallback shape, supplied-item count, and supply quality passthrough.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 25/25 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Mapping Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar capability route, permission-scope, and instruction mapping helpers out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - moved `assistant_run_customer_codex_sidecar_route`, `assistant_run_customer_codex_sidecar_permission_scope`, and `assistant_run_customer_codex_sidecar_capability_instructions` into `assistant_run_customer_codex_artifact_support`;
+  - made `CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS` crate-visible so the support module can reuse the existing constant instead of duplicating a string literal;
+  - kept sidecar workflow-context `route`, task `Permission scope`, and `Capability instructions` rendering behavior unchanged;
+  - added a module test covering data-ingestion, static-page edit, static-page publish, customer artifact, customer complex fallback, and unknown fallback mappings.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Scope-Blocked Payload Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar product-change scope-blocked payload helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - moved `assistant_run_customer_codex_sidecar_scope_blocked_payload` into `assistant_run_customer_codex_artifact_support`;
+  - kept `assistant_run.codex_sidecar_scope_blocked` payload fields unchanged: `capability`, `route`, `status`, `reason`, `allowed_next_step`, `non_blocking`, `main_answer_path_preserved`, `v3_product_repo_write_allowed`, and `customer_writable`;
+  - left sidecar preflight in `lib.rs` for now because it depends on broader environment helper wiring and does not need to move for this slice;
+  - added a module test covering the full product-change operator-review payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 27/27 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Data-Ingestion Sidecar Dataset Scope Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex data-ingestion sidecar dataset-scope builder and source-presence guard out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - moved `assistant_run_data_ingestion_sidecar_dataset_scope` and `assistant_run_data_ingestion_sidecar_scope_has_source` into `assistant_run_customer_codex_artifact_support`;
+  - made `selected_string_ids_from_scope` and `external_channel_data_ingestion_scope_has_source` crate-visible so the support module can reuse the existing scope parsing/source guard logic without duplicating behavior;
+  - preserved dataset-scope fields: `tenant_id`, `dataset_ids`, `database_source_ids`, `selected_document_ids`, `uploaded_file_ids`, `table_ids`, and `scope_source=v3_main_assistant_selected_scope`;
+  - added a module test covering dataset/document IDs, database source aliases, uploaded file IDs, selected table IDs, source marker, positive source detection, and empty-scope negative guard.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 27/27 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Preflight Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar preflight gate helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - moved `assistant_run_customer_codex_sidecar_preflight` into `assistant_run_customer_codex_artifact_support`;
+  - reused the existing crate-visible `platform_env_flag` and `env_csv_contains` helpers instead of duplicating env parsing;
+  - preserved the three gate reasons: `codex_host_task_disabled`, `codex_host_task_not_allowlisted`, and `codex_host_agent_capability_not_allowlisted`;
+  - added a support-module test covering disabled task gate, missing task allowlist, missing agent capability allowlist, and successful preflight.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api customer_codex_preflight_preserves_env_gates --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 27/27 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Queued Payload Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - extract the customer Codex sidecar queued event payload shape from the enqueue path into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_queued_payload` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the inline `assistant_run.codex_sidecar_queued` JSON payload in `maybe_enqueue_assistant_run_customer_codex_sidecar` with the helper;
+  - preserved queued payload fields: `capability`, `workflow_execution_id`, `non_blocking`, and `main_answer_path_preserved`;
+  - added a support-module test covering the full customer-visible queued payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 28/28 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Static-Page Prompt Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move generated static-page edit/publish prompt routing helpers out of `crates/platform-api/src/lib.rs` into a focused customer Codex support module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_codex_static_page_prompt_support.rs`;
+  - moved `assistant_run_prompt_requests_generated_static_page_edit` and `assistant_run_prompt_requests_generated_static_page_publish` from `lib.rs` into the new module;
+  - preserved current-artifact public URL allowlist checks, static-page revision explicit-intent checks, static-page/report/dashboard surface terms, publish action terms, explicit Codex signal handling, and customer Codex context checks;
+  - added tests covering edit requirements, publish surface/action requirements, and ASCII token-boundary behavior for the existing compact prompt matcher.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_static_page_prompt_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_current_static_page_edit --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_v3_generated_static_page_edit_not_product_change --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Artifact Context Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move customer Codex artifact/report context detection helpers out of `crates/platform-api/src/lib.rs` into a focused support module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_codex_artifact_context_support.rs`;
+  - moved `assistant_run_customer_codex_context_present`, `assistant_run_prompt_or_context_has_report_artifact`, `assistant_run_current_artifact_is_reportish`, and `request_like_prompt_mentions_data_context` from `lib.rs` into the new module;
+  - kept the existing static-page public URL allowlist helper, selected dataset/document scope helpers, selected-scope report keys, prompt report terms, and current-artifact type/kind matching semantics unchanged;
+  - kept `request_like_prompt_mentions_data_context` crate-visible because the customer artifact workspace route also reuses that same data-context signal.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_artifact_context_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_current_static_page_edit --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_v3_generated_static_page_edit_not_product_change --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Explicit Signal Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the explicit customer Codex prompt signal helper out of `crates/platform-api/src/lib.rs` into the existing Codex forward prompt support module.
+- Code change:
+  - moved `assistant_run_prompt_explicit_customer_codex_signal` into `crates/platform-api/src/assistant_run_codex_forward_prompt_support.rs`;
+  - added module tests covering Chinese Codex execution signals, ASCII `codex` token detection, and ASCII token-boundary rejection;
+  - preserved all call sites through the existing support-module import and kept generated static-page publish, report artifact package, and customer artifact workspace routing behavior unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_forward_prompt_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_cc_general_chat_readonly --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_current_static_page_edit --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Data-Ingestion Sidecar Prompt Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the assistant-run customer Codex data-ingestion/integration sidecar prompt intent guard out of `crates/platform-api/src/lib.rs` into a focused support module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_codex_data_ingestion_sidecar_prompt_support.rs`;
+  - moved `assistant_run_prompt_requests_data_ingestion_or_integration_sidecar` from `lib.rs` into the new module;
+  - made `external_channel_message_requests_data_ingestion_analysis` crate-visible so the new module can reuse the existing external-channel detector without duplicating keyword logic;
+  - updated `assistant_run_codex_product_change_guard_support` to depend on the new data-ingestion support module directly;
+  - preserved `cc` prefix stripping, safe database/API/source integration intent detection, and unsafe DataMax/V3/public API/auth/deploy/production-write rejection semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_data_ingestion_sidecar_prompt_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_codex_product_change_guard_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_cc_data_ingestion_with_selected_source --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_keeps_data_ingestion_cc_readonly_without_source --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_blocks_datamax_public_api_change --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Product-Change Guard Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the assistant-run customer Codex sidecar V3 product-change guard out of `crates/platform-api/src/lib.rs` into a focused support module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_codex_product_change_guard_support.rs`;
+  - moved `assistant_run_prompt_requests_v3_product_change` plus the customer-artifact and V3-system surface helpers from `lib.rs` into the new module;
+  - kept `assistant_run_prompt_requests_data_ingestion_or_integration_sidecar` in `lib.rs` and preserved the existing safe data-ingestion exception used by the product-change guard;
+  - preserved the existing behavior: V3/login/API/deploy style system changes are blocked from customer sidecar execution, safe database-ingestion sidecar requests are not treated as V3 product changes, and generated static-page/report edits remain customer-artifact work.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_product_change_guard_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_blocks_v3_main_site_page_change --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_blocks_datamax_public_api_change --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_routes_v3_generated_static_page_edit_not_product_change --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Codex Forward Prompt Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the assistant-run `cc` Codex-forward trigger detection and prefix stripping helpers out of `crates/platform-api/src/lib.rs` into a focused support module.
+- Code change:
+  - added `crates/platform-api/src/assistant_run_codex_forward_prompt_support.rs`;
+  - moved `assistant_run_prompt_requests_codex_forward` and `assistant_run_prompt_without_codex_forward_prefix` from `lib.rs` into the new module;
+  - registered the module in `lib.rs` and imported it for the existing customer Codex sidecar capability, enqueue, and task-prompt paths;
+  - preserved the strict `cc` boundary requirement, supported separator variants, non-trigger passthrough behavior, and prefix stripping semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_codex_forward_prompt_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_forward_prefix_accepts_short_trigger_boundaries --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer Codex Sidecar Preflight-Rejected Payload Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - extract the customer Codex sidecar preflight-rejected event payload shape from the enqueue path into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_preflight_rejected_payload` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the inline `assistant_run.codex_sidecar_preflight_rejected` JSON payload in `maybe_enqueue_assistant_run_customer_codex_sidecar` with the helper;
+  - preserved preflight-rejected payload fields: `capability`, `reason`, and `non_blocking`;
+  - added a support-module test covering the full preflight-rejected payload shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 29/29 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer-Codex Fixed-Task Capability Wrapper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar fixed-task capability wrapper from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_fixed_task_context` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the local `assistant_run_customer_codex_sidecar_fixed_task` wrapper in `lib.rs` with the support helper and removed the local wrapper;
+  - preserved the rule that only `data_ingestion_analysis` produces a fixed-task context and all other customer Codex capabilities leave `fixed_task` absent;
+  - preserved the underlying data-ingestion fixed-task context builder and all task fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 17/17 tests;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer-Codex Sidecar Context Payload Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar workflow-context `codex_sidecar` payload assembly from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_context_payload` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the inline `context.insert("codex_sidecar", json!(...))` block in `assistant_run_customer_codex_sidecar_execution` with the helper;
+  - kept `lib.rs` responsible for current-artifact sanitization through `assistant_run_safe_model_completion_action`, then passed only the safe value into the support helper;
+  - preserved version, route mapping, non-blocking flags, main-answer preservation flag, permission scope, selected-scope summary, evidence summary, and current-artifact passthrough/null fallback.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 16/16 tests;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar_execution_embeds_customer_workspace_context --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer-Codex Workspace Seed Payload Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar workspace-seed JSON payload assembly from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_workspace_seed_payload` in `assistant_run_customer_codex_artifact_support`;
+  - kept `lib.rs` responsible for capability gating, current-artifact existence, static-page public URL extraction, and current-artifact brief generation;
+  - replaced inline workspace-seed JSON in `assistant_run_customer_codex_sidecar_workspace_seed` with the payload helper;
+  - preserved schema/version/kind/source, existing-artifact `public_url`/`index_url`, revision request flag, output manifest paths, current artifact brief passthrough, and workspace-only safety flags.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 15/15 tests;
+  - `cargo test -q -p platform-api assistant_run_generated_static_page_edit_embeds_workspace_seed --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Customer-Codex Sidecar Task Prompt Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex sidecar task prompt assembly from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_customer_codex_sidecar_task_prompt` in `assistant_run_customer_codex_artifact_support`;
+  - removed the local `assistant_run_customer_codex_sidecar_task` function from `lib.rs`;
+  - made `assistant_run_customer_codex_sidecar_execution` compute the forwarded prompt once and pass it to both the sidecar task prompt helper and the data-ingestion fixed-task wrapper;
+  - preserved the non-blocking main-answer instruction, V3 product-source safety boundary, capability permission scope, capability instructions, user request truncation, selected-scope summary, and evidence summary content.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Data-Ingestion Sidecar Fixed-Task Context Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the customer Codex data-ingestion sidecar fixed-task context builder from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_data_ingestion_sidecar_fixed_task_context` in `assistant_run_customer_codex_artifact_support`;
+  - removed the local `assistant_run_data_ingestion_sidecar_fixed_task` builder from `lib.rs`;
+  - kept `lib.rs` responsible for capability gating and prompt-prefix removal only;
+  - preserved template id, version, assistant run id, case id, dataset scope, requirements, policies, evidence summary, user question truncation, null image/trace fields, no write scope, and `AutoForReadOnlyAnalysisOrStagingSpec` review policy.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Data-Ingestion Sidecar Requirements/Policies Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - extract the customer Codex data-ingestion sidecar fixed-task `requirements` and `policies` JSON assembly from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_data_ingestion_sidecar_requirements` and `assistant_run_data_ingestion_sidecar_policies` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the inline fixed-task `requirements` and `policies` JSON in `assistant_run_data_ingestion_sidecar_fixed_task` with the helpers;
+  - preserved the fixed `data_ingestion_analysis` intent, requested output list, selected-or-proposed DataMax dataset resolution rule, read-only/staging-spec mode, credential policy, production-write confirmation boundary, and public API/schema-change denial flags;
+  - added support-module tests covering exact requirements shape, prompt truncation, and exact safety-policy shape.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test;
+  - `cargo check -q -p platform-api`: passed.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Data-Ingestion Sidecar Evidence Summary Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - extract the customer Codex data-ingestion sidecar fixed-task evidence summary from `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_customer_codex_artifact_support.rs`.
+- Code change:
+  - added `assistant_run_data_ingestion_sidecar_evidence_summary` in `assistant_run_customer_codex_artifact_support`;
+  - replaced the inline fixed-task `evidence_summary` JSON in `assistant_run_data_ingestion_sidecar_fixed_task` with the helper;
+  - preserved evidence summary fields: `source_visibility=v3_main_assistant_selected_scope_only`, `supplied_item_count`, `supply_quality`, and `raw_credentials_supplied=false`;
+  - added a support-module test covering supplied evidence, supply quality passthrough, zero supplied fallback, and null supply quality fallback.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_artifact_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test;
+  - `cargo test -q -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 29/29 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Judge Trigger Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality judge trigger helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`.
+- Code change:
+  - moved `assistant_run_answer_quality_judge_should_run` into `assistant_run_answer_quality_judge_support`;
+  - kept existing create/retry call sites working through the existing judge-support module import;
+  - preserved retry-allowed gating, user dissatisfaction, weak-confidence, spreadsheet/point-list satisfied-answer skips, high-risk quality task detection, supply-quality judge trigger, and short structured answer trigger semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: passed, 12/12 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_retry_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_spreadsheet_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api assistant_run_point_list_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 72/72 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Insufficient-Evidence Marker Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move the answer-quality insufficient-evidence marker helper out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_judge_support.rs`.
+- Code change:
+  - moved `assistant_run_answer_contains_insufficient_evidence_marker` into `assistant_run_answer_quality_judge_support`;
+  - updated retry, spreadsheet, and point-list support modules to import the helper directly from judge support instead of the crate root;
+  - kept existing call sites in `lib.rs` working through the existing judge-support module import;
+  - preserved Chinese and ASCII marker lists for insufficient evidence, current-visible-only answers, generic knowledge fallbacks, partial parse states, deferred retrieval/read-detail instructions, and missing-context answers.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_judge_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_retry_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_point_list_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_spreadsheet_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 71/71 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
+
+## 2026-06-30 P5 Assistant-Run Answer-Quality Retry Helper Local Verification
+
+- Purpose:
+  - continue P5 behavior-preserving extraction under `platform-api` without changing public or third-party API contracts;
+  - move answer-quality retry helper functions out of `crates/platform-api/src/lib.rs` into `crates/platform-api/src/assistant_run_answer_quality_retry_support.rs`.
+- Code change:
+  - added `assistant_run_answer_quality_retry_support`;
+  - moved retry reason classification, retry scope construction, retry request startup briefing construction, and retry evidence-state construction into the new module;
+  - kept existing call sites and function names unchanged through module import;
+  - preserved empty-answer, internal-marker, generic-orchestration-ack, insufficient-evidence, dissatisfied weak-confidence, detail-first scope, quality-first token-tolerant budget, recommended-action de-duplication, previous-answer excerpt, premium action budget, and VLM upgrade placeholder semantics.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_retry_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api assistant_run_answer_quality_spreadsheet_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api answer_quality --lib`: passed, 69/69 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check`: passed with the existing Windows LF/CRLF warning only.
+- Deployment:
+  - not submitted, not pushed, not deployed to 8 server in this local slice.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, production data mutation, service restart, or server action was performed;
+  - 8 server and 120 server were not touched.
 
 ## 2026-06-27 P5 Assistant-Run Deterministic Supply Signal Helper 8-Server Deployment
 

@@ -212,7 +212,8 @@ function selectCases(args, fixtures) {
 }
 
 function makeRunId() {
-  return new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
+  return `${timestamp}-${process.pid}`;
 }
 
 function normalizeBaseUrl(value) {
@@ -545,6 +546,54 @@ function renderMarkdown(report) {
   return `${lines.join('\n')}\n`;
 }
 
+function buildSummary(report) {
+  const cases = Array.isArray(report.cases) ? report.cases : [];
+  const evaluatorRun = report.evaluator?.run === true;
+  const evaluatorOk = !evaluatorRun || report.evaluator?.ok === true;
+  const failedCaseCount = cases.filter((item) => item.status === 'failed').length;
+  const capturedCaseCount = cases.filter((item) => item.status === 'captured').length;
+  const sampleCaseCount = cases.filter((item) => item.status === 'sample_result').length;
+  const plannedCaseCount = cases.filter((item) =>
+    item.status === 'planned' || item.status === 'template_guard_requires_explicit_live_approval',
+  ).length;
+  const mode = String(report.mode || '');
+  const checks = {
+    baseOkPreserved: report.ok === true,
+    selectedCasesPresent: Number(report.selected_case_count || 0) > 0
+      && cases.length === Number(report.selected_case_count || 0),
+    evaluatorPassedWhenRun: evaluatorOk,
+    noFailedLiveCases: mode !== 'live' || failedCaseCount === 0,
+    liveResultJsonlPresent: mode !== 'live' || Boolean(report.result_jsonl),
+    selfTestResultJsonlPresent: mode !== 'self-test' || Boolean(report.result_jsonl),
+    preflightDoesNotWriteResults: mode !== 'preflight' || report.result_jsonl === null,
+    noNetworkForDryModes: (mode !== 'self-test' && mode !== 'preflight')
+      || report.safety?.network_calls_run === false,
+    liveNetworkOnlyWhenAllowed: mode !== 'live'
+      || (
+        report.safety?.network_calls_run === true
+        && report.safety?.provider_live_allowed === true
+      ),
+    noStaticPagePublishRequested: report.safety?.static_page_publish_requested === false,
+    bearerNotIncludedInReport: report.safety?.bearer_included_in_report === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    mode,
+    run_id: report.run_id,
+    selected_case_count: Number(report.selected_case_count || 0),
+    total_fixture_case_count: Number(report.total_fixture_case_count || 0),
+    case_count: cases.length,
+    failed_case_count: failedCaseCount,
+    captured_case_count: capturedCaseCount,
+    sample_case_count: sampleCaseCount,
+    planned_case_count: plannedCaseCount,
+    evaluator_run: evaluatorRun,
+    evaluator_ok: evaluatorOk,
+    result_jsonl_present: Boolean(report.result_jsonl),
+  };
+}
+
 async function runSelfTest(args, fixtures, selectedCases, runId) {
   const outputDir = join(process.cwd(), args.outputDir);
   const resultJsonl = join(outputDir, `${runId}.results.jsonl`);
@@ -683,6 +732,9 @@ async function runLive(args, fixtures, selectedCases, runId) {
 }
 
 async function writeReport(args, report, runId) {
+  const summary = buildSummary(report);
+  report.summary = summary;
+  report.ok = summary.ok;
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
   const reportPath = join(outputDir, `${runId}.json`);

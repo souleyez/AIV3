@@ -334,6 +334,93 @@ function validateManifest(manifest, files) {
   assert.ok(manifest.asset_library_ids.length);
 }
 
+function hasOwnDeep(value, keyName) {
+  if (!value || typeof value !== 'object') return false;
+  if (Object.hasOwn(value, keyName)) return true;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasOwnDeep(item, keyName));
+  }
+  return Object.values(value).some((item) => hasOwnDeep(item, keyName));
+}
+
+function hasAuthMaterial(value) {
+  const text = JSON.stringify(value || {});
+  return /aidp_v3_session=|Bearer\s+[A-Za-z0-9._-]+|V3_CLIENT_ARTIFACT_SMOKE_(?:COOKIE|BEARER)|raw[_-]?(?:cookie|bearer)/i
+    .test(text);
+}
+
+function platformHealthOk(value, expectedStatus) {
+  return !value?.error &&
+    value?.service === 'platform-api' &&
+    value?.status === expectedStatus;
+}
+
+function buildReceiptSummary(receipt) {
+  const mode = receipt?.mode || null;
+  const checks = {
+    modeRecognized: ['self_test', 'preflight', 'execute'].includes(mode),
+    noAuthMaterialRecorded: !hasAuthMaterial(receipt),
+    noActivationTokenIncluded: !hasOwnDeep(receipt, 'activation_token'),
+  };
+
+  if (mode === 'self_test') {
+    checks.packageRequestHasDatasetAndAssetLibrary =
+      Number(receipt.package_request?.dataset_count || 0) > 0 &&
+      Number(receipt.package_request?.asset_library_count || 0) > 0;
+    checks.codexControlIsEnvOnly =
+      receipt.package_request?.codex_control?.activation_token_env === DEFAULT_CODEX_ACTIVATION_TOKEN_ENV &&
+      receipt.package_request?.codex_control?.has_activation_token === false;
+    checks.manifestContractPresent =
+      receipt.manifest?.schema === MANIFEST_SCHEMA &&
+      receipt.manifest?.source === MANIFEST_SOURCE &&
+      Number(receipt.manifest?.file_count || 0) >= 2;
+    checks.taskCardCanOpenHtml =
+      Boolean(receipt.task_card?.html_url) &&
+      Number(receipt.task_card?.file_count || 0) >= 1;
+  } else if (mode === 'preflight') {
+    checks.healthOk = platformHealthOk(receipt.health, 'ok');
+    checks.readyOk = platformHealthOk(receipt.ready, 'ready');
+    checks.executeStillRequiresExplicitLiveMode =
+      receipt.execute_required_for_mutating_joint_smoke === true;
+  } else if (mode === 'execute') {
+    checks.packageCreated = Boolean(receipt.package_id);
+    checks.artifactUploaded = Boolean(receipt.artifact_id);
+    checks.privatePublishCompleted = receipt.private_publish_status === 'published';
+    checks.taskCardCanOpenHtml =
+      Boolean(receipt.task_card?.html_url) &&
+      Number(receipt.task_card?.file_count || 0) >= 1;
+    checks.publicPublishStateConsistent =
+      receipt.skipped_public_publish === true
+        ? receipt.public_url === null
+        : Boolean(receipt.public_url);
+    checks.publicUrlCheckRespected =
+      receipt.public_url_check === null || receipt.public_url_check?.ok === true;
+  }
+
+  const ok = Object.values(checks).every(Boolean);
+  return {
+    ok,
+    checks,
+    mode,
+    ready: ok && mode === 'execute',
+    pending: ok && mode === 'preflight',
+    failed: !ok,
+    self_test: mode === 'self_test',
+  };
+}
+
+function assertReceiptSummaryFailure(name, receipt, expectedCheckName) {
+  const summary = buildReceiptSummary(receipt);
+  assert.equal(summary.ok, false, `${name} should fail receipt summary`);
+  if (expectedCheckName) {
+    assert.equal(
+      summary.checks[expectedCheckName],
+      false,
+      `${name} should fail ${expectedCheckName}`,
+    );
+  }
+}
+
 function buildMultipart(manifest, files) {
   const form = new FormData();
   form.append(
@@ -352,6 +439,8 @@ function buildMultipart(manifest, files) {
 }
 
 async function writeReceipt(args, receipt) {
+  receipt.summary = buildReceiptSummary(receipt);
+  receipt.ok = receipt.summary.ok;
   await mkdir(args.outputDir, { recursive: true });
   const receiptPath = join(args.outputDir, `receipt-${args.runId}.json`);
   await writeFile(receiptPath, JSON.stringify(receipt, null, args.pretty ? 2 : 0));
@@ -433,7 +522,7 @@ function selfTest(args) {
   };
   const card = validateClientArtifactTaskCard(simulatedArtifact);
   assert.equal(card.html_url, simulatedArtifact.files[0].public_url);
-  return {
+  const receipt = {
     mode: 'self_test',
     ok: true,
     run_id: args.runId,
@@ -459,6 +548,47 @@ function selfTest(args) {
     },
     task_card: card,
   };
+  const summary = buildReceiptSummary(receipt);
+  assert.equal(summary.ok, true, 'self-test fixture receipt summary should pass');
+
+  const leakedTokenReceipt = structuredClone(receipt);
+  leakedTokenReceipt.package_request.codex_control.activation_token = 'raw-activation-token';
+  assertReceiptSummaryFailure(
+    'activation token leak',
+    leakedTokenReceipt,
+    'noActivationTokenIncluded',
+  );
+
+  const brokenPreflightReceipt = {
+    mode: 'preflight',
+    ok: false,
+    health: { service: 'platform-api', status: 'ok' },
+    ready: { error: 'connection refused' },
+    execute_required_for_mutating_joint_smoke: true,
+  };
+  assertReceiptSummaryFailure('broken preflight ready check', brokenPreflightReceipt, 'readyOk');
+
+  const htmlPreflightReceipt = {
+    mode: 'preflight',
+    ok: true,
+    health: { raw_text: '<!DOCTYPE html><html></html>' },
+    ready: { raw_text: '<!DOCTYPE html><html></html>' },
+    execute_required_for_mutating_joint_smoke: true,
+  };
+  assertReceiptSummaryFailure('wrong public base HTML preflight', htmlPreflightReceipt, 'healthOk');
+
+  const missingTaskCardReceipt = structuredClone(receipt);
+  missingTaskCardReceipt.mode = 'execute';
+  missingTaskCardReceipt.package_id = 'v3cp_smoke';
+  missingTaskCardReceipt.artifact_id = 'v3ca_smoke';
+  missingTaskCardReceipt.private_publish_status = 'published';
+  missingTaskCardReceipt.public_url = 'https://v3.elepcloud.com/generated-artifacts/client-artifacts/smoke/index.html';
+  missingTaskCardReceipt.public_url_check = null;
+  missingTaskCardReceipt.skipped_public_publish = false;
+  missingTaskCardReceipt.task_card = null;
+  assertReceiptSummaryFailure('execute without task card', missingTaskCardReceipt, 'taskCardCanOpenHtml');
+
+  return receipt;
 }
 
 async function preflight(args) {
@@ -595,6 +725,9 @@ async function main() {
   }
   const receiptPath = await writeReceipt(args, receipt);
   console.log(JSON.stringify({ ...receipt, receipt_path: receiptPath }, null, args.pretty ? 2 : 0));
+  if (receipt.summary?.ok === false) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

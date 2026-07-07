@@ -253,16 +253,20 @@ function assertSelfTest(report, fixtures) {
   for (const label of REQUIRED_LABELS) {
     assert(report.labelCounts[label] > 0, `missing label ${label}`);
   }
+  assert.equal(report.expectedLabelMismatchCount, 0, 'all expected labels should match');
 }
 
 function buildReport(fixtures) {
   const cases = fixtures.map((fixture) => {
     const labels = classifyFixture(fixture);
+    const expectedLabels = [...fixture.expectedLabels].sort();
+    const expectedLabelsMatched = JSON.stringify(labels) === JSON.stringify(expectedLabels);
     return {
       caseId: fixture.caseId,
       coverageTags: fixture.coverageTags,
       labels,
       labelCount: labels.length,
+      expectedLabelsMatched,
     };
   });
   const labelCounts = {};
@@ -272,12 +276,14 @@ function buildReport(fixtures) {
     }
   }
   const coverageTags = [...new Set(cases.flatMap((item) => item.coverageTags))].sort();
+  const expectedLabelMismatchCount = cases.filter((item) => item.expectedLabelsMatched !== true).length;
   return {
     reportType: 'answer_quality_offline_corpus_self_test',
     generatedAt: new Date().toISOString(),
     result: 'passed',
     caseCount: cases.length,
     labeledCaseCount: cases.filter((item) => item.labels.length > 0).length,
+    expectedLabelMismatchCount,
     coverageTags,
     labelCounts,
     cases,
@@ -288,12 +294,56 @@ function buildReport(fixtures) {
     },
     redaction: {
       rawPromptIncluded: false,
+      rawQuestionIncluded: false,
       rawAnswerIncluded: false,
       rawEvidenceIncluded: false,
       rawCustomerPayloadIncluded: false,
       credentialIncluded: false,
     },
   };
+}
+
+function buildSummary(report) {
+  const coverageTags = Array.isArray(report.coverageTags) ? report.coverageTags : [];
+  const labelCounts = report.labelCounts || {};
+  const redaction = report.redaction || {};
+  const runtime = report.runtime || {};
+  const checks = {
+    resultPassed: report.result === 'passed',
+    caseCountPositive: Number(report.caseCount || 0) > 0,
+    allRequiredCoverageTagsPresent: REQUIRED_COVERAGE_TAGS.every((tag) => coverageTags.includes(tag)),
+    allRequiredLabelsPresent: REQUIRED_LABELS.every((label) => Number(labelCounts[label] || 0) > 0),
+    expectedLabelsMatch: Number(report.expectedLabelMismatchCount || 0) === 0,
+    noLiveHardGateEnabled: runtime.liveHardGateEnabled === false,
+    noLiveAutofixEnqueueAttempted: runtime.liveAutofixEnqueueAttempted === false,
+    noCustomerResponseBlocked: runtime.customerResponseBlocked === false,
+    noRawPromptIncluded: redaction.rawPromptIncluded === false,
+    noRawQuestionIncluded: redaction.rawQuestionIncluded === false,
+    noRawAnswerIncluded: redaction.rawAnswerIncluded === false,
+    noRawEvidenceIncluded: redaction.rawEvidenceIncluded === false,
+    noRawCustomerPayloadIncluded: redaction.rawCustomerPayloadIncluded === false,
+    noCredentialIncluded: redaction.credentialIncluded === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    ready: Object.values(checks).every(Boolean),
+    pending: false,
+    failed: !Object.values(checks).every(Boolean),
+    case_count: Number(report.caseCount || 0),
+    labeled_case_count: Number(report.labeledCaseCount || 0),
+    expected_label_mismatch_count: Number(report.expectedLabelMismatchCount || 0),
+    coverage_tag_count: coverageTags.length,
+    label_count: Object.keys(labelCounts).length,
+  };
+}
+
+function assertSummaryFailure(name, report, expectedCheckName) {
+  const summary = buildSummary(report);
+  assert.equal(summary.ok, false, `${name} should fail summary`);
+  if (expectedCheckName) {
+    assert.equal(summary.checks[expectedCheckName], false, `${name} should fail ${expectedCheckName}`);
+  }
 }
 
 async function writeReport(outputDir, report, pretty = false) {
@@ -313,10 +363,30 @@ async function main() {
   const fixtures = buildFixtures();
   const report = buildReport(fixtures);
   assertSelfTest(report, fixtures);
+  const summary = buildSummary(report);
+  assert.equal(summary.ok, true, 'offline corpus fixture summary should pass');
+
+  const missingCoverage = JSON.parse(JSON.stringify(report));
+  missingCoverage.coverageTags = missingCoverage.coverageTags.filter((tag) => tag !== REQUIRED_COVERAGE_TAGS[0]);
+  assertSummaryFailure('missing required coverage tag', missingCoverage, 'allRequiredCoverageTagsPresent');
+
+  const labelMismatch = JSON.parse(JSON.stringify(report));
+  labelMismatch.expectedLabelMismatchCount = 1;
+  assertSummaryFailure('expected label mismatch', labelMismatch, 'expectedLabelsMatch');
+
+  const rawAnswerLeak = JSON.parse(JSON.stringify(report));
+  rawAnswerLeak.redaction.rawAnswerIncluded = true;
+  assertSummaryFailure('raw answer leak', rawAnswerLeak, 'noRawAnswerIncluded');
+
+  report.summary = summary;
+  report.ok = summary.ok;
   const reportPath = await writeReport(args.outputDir, report, args.pretty);
   console.log(
     `OK answer quality offline corpus self-test: cases=${report.caseCount} labels=${Object.keys(report.labelCounts).length} report=${reportPath}`,
   );
+  if (report.summary.ok === false) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

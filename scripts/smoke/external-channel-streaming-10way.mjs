@@ -421,6 +421,7 @@ function summarizeStreamResult({ ok, disconnected, httpStatus, latencyMs, events
 async function runNormalTask(args, index, runId) {
   const payload = buildPayload(args, 'normal', index, runId);
   const result = await postStream(args, payload);
+  const noArtifactLink = !result.artifactUrl;
   return {
     taskType: 'normal',
     index,
@@ -432,7 +433,8 @@ async function runNormalTask(args, index, runId) {
       && result.completedCount === 1
       && !result.duplicateFinalMessages
       && !result.terminalFailure
-      && !result.errorFrame,
+      && !result.errorFrame
+      && noArtifactLink,
     checks: {
       transportOk: result.ok,
       started: result.started,
@@ -440,6 +442,7 @@ async function runNormalTask(args, index, runId) {
       noDuplicateFinalMessages: !result.duplicateFinalMessages,
       noTerminalFailure: !result.terminalFailure,
       noErrorFrame: !result.errorFrame,
+      noArtifactLink,
     },
     result,
   };
@@ -743,6 +746,30 @@ function summarizeRun(args, runId, results) {
     item.first?.latencyMs,
     item.second?.latencyMs,
   ].filter((value) => Number.isFinite(value)));
+  const hasArtifactLink = (item) =>
+    Boolean(item.result?.artifactUrl || item.first?.artifactUrl || item.second?.artifactUrl);
+  const okCount = results.filter((item) => item.ok).length;
+  const failedCount = results.filter((item) => !item.ok).length;
+  const duplicateFinalMessageCount = results.filter((item) =>
+    item.result?.duplicateFinalMessages
+    || item.first?.duplicateFinalMessages
+    || item.second?.duplicateFinalMessages,
+  ).length;
+  const artifactCount = results.filter(hasArtifactLink).length;
+  const normalArtifactLeakCount = results.filter((item) =>
+    item.taskType === 'normal' && hasArtifactLink(item),
+  ).length;
+  const staticPageArtifactCount = results.filter((item) =>
+    item.taskType === 'static_page' && hasArtifactLink(item),
+  ).length;
+  const reconnectArtifactCount = results.filter((item) =>
+    item.taskType === 'reconnect' && hasArtifactLink(item),
+  ).length;
+  const checks = {
+    allTasksPassed: failedCount === 0,
+    noNormalArtifactLeak: normalArtifactLeakCount === 0,
+    noDuplicateFinalMessages: duplicateFinalMessageCount === 0,
+  };
   return {
     runId,
     baseUrl: args.baseUrl,
@@ -751,21 +778,18 @@ function summarizeRun(args, runId, results) {
     staticPageCount: args.staticPageCount,
     reconnectCount: args.reconnectCount,
     totalTaskCount: results.length,
-    okCount: results.filter((item) => item.ok).length,
-    failedCount: results.filter((item) => !item.ok).length,
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    okCount,
+    failedCount,
     normalOkCount: results.filter((item) => item.taskType === 'normal' && item.ok).length,
     staticPageOkCount: results.filter((item) => item.taskType === 'static_page' && item.ok).length,
     reconnectOkCount: results.filter((item) => item.taskType === 'reconnect' && item.ok).length,
-    duplicateFinalMessageCount: results.filter((item) =>
-      item.result?.duplicateFinalMessages
-      || item.first?.duplicateFinalMessages
-      || item.second?.duplicateFinalMessages,
-    ).length,
-    artifactCount: results.filter((item) =>
-      item.result?.artifactUrl
-      || item.first?.artifactUrl
-      || item.second?.artifactUrl,
-    ).length,
+    duplicateFinalMessageCount,
+    artifactCount,
+    normalArtifactLeakCount,
+    staticPageArtifactCount,
+    reconnectArtifactCount,
     continuePollingCount: results.filter((item) =>
       item.result?.continuePolling
       || item.first?.continuePolling
@@ -870,6 +894,7 @@ function summarizeNormalFixtureTask(args, index, runId) {
       fixtureDoneFrame('normal', index, 4),
     ],
   });
+  const noArtifactLink = !result.artifactUrl;
   return {
     taskType: 'normal',
     index,
@@ -881,7 +906,8 @@ function summarizeNormalFixtureTask(args, index, runId) {
       && result.completedCount === 1
       && !result.duplicateFinalMessages
       && !result.terminalFailure
-      && !result.errorFrame,
+      && !result.errorFrame
+      && noArtifactLink,
     checks: {
       transportOk: result.ok,
       started: result.started,
@@ -889,6 +915,56 @@ function summarizeNormalFixtureTask(args, index, runId) {
       noDuplicateFinalMessages: !result.duplicateFinalMessages,
       noTerminalFailure: !result.terminalFailure,
       noErrorFrame: !result.errorFrame,
+      noArtifactLink,
+    },
+    result,
+  };
+}
+
+function summarizeNormalArtifactLeakFixtureTask(args, runId) {
+  const payload = buildPayload(args, 'normal', 99, runId);
+  const result = streamResultFromFixture({
+    latencyMs: 199,
+    frames: [
+      fixtureStartedFrame('normal-artifact-leak', 0, 1),
+      fixtureProgressFrame('normal-artifact-leak', 0, 2, '正在组织第三方普通问答流式回复'),
+      fixtureCompletedFrame('normal-artifact-leak', 0, 3, {
+        assistant_run_id: 'normal-artifact-leak-run',
+        reply: {
+          reply_type: 'answer',
+          task_status: 'answered',
+          text: '普通问答不应夹带页面链接。',
+          card: {
+            public_url: '/generated-artifacts/self-test/leaked/index.html',
+          },
+          artifact_links: ['/generated-artifacts/self-test/leaked/index.html'],
+        },
+      }),
+      fixtureDoneFrame('normal-artifact-leak', 0, 4),
+    ],
+  });
+  const noArtifactLink = !result.artifactUrl;
+  return {
+    taskType: 'normal',
+    index: 99,
+    conversationExternalId: payload.conversation_external_id,
+    messageExternalId: payload.message_external_id,
+    idempotencyKey: payload.idempotency_key,
+    ok: result.ok
+      && result.started
+      && result.completedCount === 1
+      && !result.duplicateFinalMessages
+      && !result.terminalFailure
+      && !result.errorFrame
+      && noArtifactLink,
+    checks: {
+      transportOk: result.ok,
+      started: result.started,
+      completedOnce: result.completedCount === 1,
+      noDuplicateFinalMessages: !result.duplicateFinalMessages,
+      noTerminalFailure: !result.terminalFailure,
+      noErrorFrame: !result.errorFrame,
+      noArtifactLink,
     },
     result,
   };
@@ -1041,6 +1117,12 @@ async function runSelfTest(args) {
       fixtureDoneFrame('duplicate', 0, 4),
     ],
   });
+  const normalArtifactGuard = summarizeNormalArtifactLeakFixtureTask(fixtureArgs, runId);
+  const normalArtifactLeakSummary = summarizeRun(
+    { ...fixtureArgs, normalCount: 1, staticPageCount: 0, reconnectCount: 0 },
+    runId,
+    [normalArtifactGuard],
+  );
   const summary = {
     ...summarizeRun(fixtureArgs, runId, results),
     selfTest: true,
@@ -1058,9 +1140,14 @@ async function runSelfTest(args) {
     payloadsHaveUniqueConversationIds: new Set(payloads.map((item) => item.conversationExternalId)).size === 15,
     payloadsHaveUniqueMessageIds: new Set(payloads.map((item) => item.messageExternalId)).size === 15,
     payloadsHaveUniqueIdempotencyKeys: new Set(payloads.map((item) => item.idempotencyKey)).size === 15,
+    summaryMachineOk: summary.ok === true
+      && summary.checks?.allTasksPassed === true
+      && summary.checks?.noNormalArtifactLeak === true
+      && summary.checks?.noDuplicateFinalMessages === true,
     normalStreamsAllPass: summary.normalOkCount === 10,
+    normalArtifactLeakCountZero: summary.normalArtifactLeakCount === 0,
     staticPageStreamsAllPass: summary.staticPageOkCount === 3
-      && summary.artifactCount > 0
+      && summary.staticPageArtifactCount > 0
       && summary.continuePollingCount > 0,
     reconnectStreamsAllPass: summary.reconnectOkCount === 2
       && results
@@ -1068,6 +1155,14 @@ async function runSelfTest(args) {
         .every((item) => item.checks.replayedOnlyAfterLastSequence),
     noDuplicateFinalMessagesInPassingTasks: summary.duplicateFinalMessageCount === 0,
     duplicateFinalMessageGuardWorks: duplicateResult.duplicateFinalMessages === true,
+    normalArtifactLinkGuardWorks: normalArtifactGuard.ok === false
+      && normalArtifactGuard.checks.noArtifactLink === false
+      && Boolean(normalArtifactGuard.result.artifactUrl),
+    normalArtifactLeakSummaryFails: normalArtifactLeakSummary.ok === false
+      && normalArtifactLeakSummary.failedCount === 1
+      && normalArtifactLeakSummary.normalArtifactLeakCount === 1
+      && normalArtifactLeakSummary.checks?.allTasksPassed === false
+      && normalArtifactLeakSummary.checks?.noNormalArtifactLeak === false,
     latencyPercentilesComputed: summary.p50LatencyMs === 206
       && summary.p95LatencyMs === 302
       && summary.maxLatencyMs === 302,
@@ -1082,6 +1177,8 @@ async function runSelfTest(args) {
     },
     results,
     duplicateGuard: duplicateResult,
+    normalArtifactGuard,
+    normalArtifactLeakSummary,
   };
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
@@ -1118,7 +1215,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }

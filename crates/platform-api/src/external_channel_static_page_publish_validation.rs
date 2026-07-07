@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::codex_host_fixed_task_safe_text;
+use crate::assistant_run_codex_fixed_task_support::codex_host_fixed_task_safe_text;
 
 pub(crate) fn external_channel_static_page_publish_validation_summary_from_fixed_task_output(
     fixed_task_output: &Value,

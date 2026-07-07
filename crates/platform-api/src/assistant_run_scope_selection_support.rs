@@ -56,6 +56,18 @@ pub(crate) fn selected_document_ids_from_scope(scope: &Value) -> Vec<DocumentId>
     document_ids
 }
 
+pub(crate) fn selected_scope_has_document_selection(scope: &Value) -> bool {
+    !selected_document_ids_from_scope(scope).is_empty()
+        || scope
+            .get("documents")
+            .and_then(Value::as_array)
+            .is_some_and(|documents| !documents.is_empty())
+        || scope
+            .get("available_document_external_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|document_ids| !document_ids.is_empty())
+}
+
 pub(crate) fn selected_scope_document_template_document_ids(scope: &Value) -> Vec<DocumentId> {
     scope
         .get("document_template_skills")
@@ -301,6 +313,21 @@ mod tests {
             vec![first_document, second_document]
         );
         assert_eq!(selected_dataset_id_from_scope(&scope), Some(first_dataset));
+    }
+
+    #[test]
+    fn document_selection_presence_preserves_id_and_external_range_signals() {
+        let document_id = DocumentId::new();
+        assert!(!selected_scope_has_document_selection(&json!({})));
+        assert!(selected_scope_has_document_selection(&json!({
+            "documents": [{"type": "document", "id": document_id.to_string()}]
+        })));
+        assert!(selected_scope_has_document_selection(&json!({
+            "documents": [{"title": "range placeholder"}]
+        })));
+        assert!(selected_scope_has_document_selection(&json!({
+            "available_document_external_ids": ["doc-ext-1"]
+        })));
     }
 
     #[test]

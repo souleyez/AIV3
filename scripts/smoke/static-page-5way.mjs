@@ -343,6 +343,44 @@ function sleep(ms) {
   });
 }
 
+function buildStaticPageSummary(args, runId, results) {
+  const okCount = results.filter((item) => item.ok).length;
+  const acceptedCount = results.filter((item) => item.accepted).length;
+  const artifactCount = results.filter((item) => item.artifactUrl).length;
+  const terminalFailureCount = results.filter((item) => item.terminalFailure).length;
+  const progressHandleCount = results.filter((item) =>
+    item.artifactUrl || item.statusUrl || item.assistantRunId,
+  ).length;
+  const latencies = results.map((item) => item.latencyMs);
+  const checks = {
+    allTasksPassed: results.length - okCount === 0,
+    allAccepted: acceptedCount === results.length,
+    noTerminalFailures: terminalFailureCount === 0,
+    progressHandlePresent: progressHandleCount === results.length,
+    artifactPresentWhenRequired: !args.requireArtifact || artifactCount === results.length,
+  };
+  return {
+    runId,
+    baseUrl: args.baseUrl,
+    connectionId: args.connectionId,
+    concurrency: args.concurrency,
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    okCount,
+    failedCount: results.length - okCount,
+    acceptedCount,
+    artifactCount,
+    terminalFailureCount,
+    progressHandleCount,
+    requireArtifact: args.requireArtifact,
+    pollTimeoutMs: args.pollTimeoutMs,
+    p50LatencyMs: percentile(latencies, 0.5),
+    p95LatencyMs: percentile(latencies, 0.95),
+    maxLatencyMs: latencies.length ? Math.max(...latencies) : null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function runSelfTest(args) {
   const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-self-test`;
   const fixtureArgs = {
@@ -404,7 +442,66 @@ async function runSelfTest(args) {
       === 'https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-static-page-queued/reply',
     terminalFailureDetected: isTerminalFailure(failed) === true,
   };
-  const ok = Object.values(checks).every(Boolean);
+  const publishedResult = {
+    index: 0,
+    ok: true,
+    accepted: true,
+    httpStatus: 200,
+    latencyMs: 200,
+    conversationExternalId: 'conv-static-page-published',
+    messageExternalId: 'msg-static-page-published',
+    idempotencyKey: 'static-page-5way:published',
+    assistantRunId: published.assistant_run_id,
+    initialTaskStatus: published.reply.task_status,
+    finalTaskStatus: published.reply.task_status,
+    finalReplyType: published.reply.reply_type,
+    statusUrl: null,
+    artifactUrl: firstArtifactUrl(published),
+    terminalFailure: false,
+    pollCount: 0,
+    polls: [],
+    bodyPrefix: '',
+    error: null,
+  };
+  const queuedResult = {
+    ...publishedResult,
+    index: 1,
+    ok: true,
+    assistantRunId: queued.assistant_run_id,
+    initialTaskStatus: queued.reply.task_status,
+    finalTaskStatus: queued.reply.task_status,
+    finalReplyType: queued.reply.reply_type,
+    statusUrl: statusUrlFromResponse(queued, fixtureArgs.baseUrl, fixtureArgs.connectionId),
+    artifactUrl: null,
+  };
+  const failedResult = {
+    ...publishedResult,
+    index: 2,
+    ok: false,
+    accepted: false,
+    assistantRunId: failed.assistant_run_id,
+    initialTaskStatus: failed.reply.task_status,
+    finalTaskStatus: failed.reply.task_status,
+    finalReplyType: failed.reply.reply_type,
+    artifactUrl: null,
+    terminalFailure: true,
+  };
+  const summaryFixtureArgs = { ...fixtureArgs, concurrency: 2 };
+  const successSummary = buildStaticPageSummary(summaryFixtureArgs, runId, [publishedResult, queuedResult]);
+  const requireArtifactSummary = buildStaticPageSummary(
+    { ...summaryFixtureArgs, requireArtifact: true },
+    runId,
+    [publishedResult, queuedResult],
+  );
+  const failureSummary = buildStaticPageSummary({ ...fixtureArgs, concurrency: 1 }, runId, [failedResult]);
+  const ok = Object.values(checks).every(Boolean)
+    && successSummary.ok === true
+    && successSummary.checks.progressHandlePresent === true
+    && requireArtifactSummary.ok === false
+    && requireArtifactSummary.checks.artifactPresentWhenRequired === false
+    && failureSummary.ok === false
+    && failureSummary.terminalFailureCount === 1
+    && failureSummary.checks.noTerminalFailures === false;
   const summary = {
     runId,
     selfTest: true,
@@ -413,6 +510,9 @@ async function runSelfTest(args) {
     connectionId: fixtureArgs.connectionId,
     concurrency: fixtureArgs.concurrency,
     checks,
+    successSummary,
+    requireArtifactSummary,
+    failureSummary,
     generatedAt: new Date().toISOString(),
   };
   const report = {
@@ -449,26 +549,7 @@ async function main() {
   const results = await Promise.all(
     Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),
   );
-  const okCount = results.filter((item) => item.ok).length;
-  const acceptedCount = results.filter((item) => item.accepted).length;
-  const artifactCount = results.filter((item) => item.artifactUrl).length;
-  const latencies = results.map((item) => item.latencyMs);
-  const summary = {
-    runId,
-    baseUrl: args.baseUrl,
-    connectionId: args.connectionId,
-    concurrency: args.concurrency,
-    okCount,
-    failedCount: results.length - okCount,
-    acceptedCount,
-    artifactCount,
-    requireArtifact: args.requireArtifact,
-    pollTimeoutMs: args.pollTimeoutMs,
-    p50LatencyMs: percentile(latencies, 0.5),
-    p95LatencyMs: percentile(latencies, 0.95),
-    maxLatencyMs: latencies.length ? Math.max(...latencies) : null,
-    generatedAt: new Date().toISOString(),
-  };
+  const summary = buildStaticPageSummary(args, runId, results);
 
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
@@ -479,7 +560,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }

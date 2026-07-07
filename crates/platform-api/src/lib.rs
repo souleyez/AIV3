@@ -121,22 +121,23 @@ use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
     AuthSessionMethod, ChatMessage, ChatMessageRole, ChatSession, ChatSessionId,
     ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
-    DatasetVisibility, Document, DocumentChunk, DocumentId, DocumentLifecycle,
-    EmailVerificationChallenge, MemoryDirectory, PublishedReport, PublishedReportId,
-    PublishedSurface, ReportPlan, ReportPlanId, ReportRenderOutput, RetrievalEvidence,
-    RetrievalEvidenceId, SecretBindingId, StaticPageDraft, StaticPageDraftId,
-    StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus,
-    StaticPageRenderOutput, StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession,
-    UserSessionId, WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind,
-    WorkflowStatus,
+    DatasetVisibility, Document, DocumentChunk, DocumentId, EmailVerificationChallenge,
+    MemoryDirectory, PublishedReport, PublishedReportId, PublishedSurface, ReportPlan,
+    ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId, SecretBindingId,
+    StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob,
+    StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
+    StaticPageRenderOutputStatus, TenantId, User, UserId, UserSession, UserSessionId,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
 };
 #[cfg(test)]
-use domain_model::{SecretScopeLevel, StaticPageRenderOutputId};
+use domain_model::{DocumentLifecycle, SecretScopeLevel, StaticPageRenderOutputId};
 use event_bus::EventBus;
+#[cfg(test)]
+use external_source_connectors::MySqlTableMapping;
 use external_source_connectors::{
     aggregate_mysql_table, inspect_mysql_schema, preview_mysql_table, profile_mysql_database,
     test_mysql_connection, DatabaseSemanticProfile, DatabaseSourceError, MySqlAggregateRequest,
-    MySqlSourceConfig, MySqlTableMapping,
+    MySqlSourceConfig,
 };
 use futures_util::{stream, Stream, StreamExt};
 use llm_gateway::{
@@ -196,23 +197,43 @@ mod asset_profile_supply_support;
 mod assistant_run_answer_policy_support;
 mod assistant_run_answer_quality_autofix_support;
 mod assistant_run_answer_quality_budget_support;
+mod assistant_run_answer_quality_case_support;
+mod assistant_run_answer_quality_controlled_answer_support;
 mod assistant_run_answer_quality_judge_support;
+mod assistant_run_answer_quality_retry_support;
+mod assistant_run_answer_quality_spreadsheet_support;
 mod assistant_run_codex_action_contract_support;
+mod assistant_run_codex_artifact_context_support;
 mod assistant_run_codex_context_budget_support;
 mod assistant_run_codex_context_package_support;
+mod assistant_run_codex_customer_artifact_workspace_prompt_support;
+mod assistant_run_codex_data_analysis_report_prompt_support;
+mod assistant_run_codex_data_ingestion_sidecar_prompt_support;
 mod assistant_run_codex_fixed_task_support;
+mod assistant_run_codex_forward_prompt_support;
 mod assistant_run_codex_host_validation_support;
 mod assistant_run_codex_model_gateway_gate_support;
 mod assistant_run_codex_model_gateway_support;
 mod assistant_run_codex_observability_support;
+mod assistant_run_codex_product_change_guard_support;
 mod assistant_run_codex_promotion_gate_support;
+mod assistant_run_codex_report_artifact_prompt_support;
 mod assistant_run_codex_shadow_gate_support;
 mod assistant_run_codex_shadow_support;
+mod assistant_run_codex_static_page_prompt_support;
 mod assistant_run_codex_tool_output_support;
 mod assistant_run_continue_request_support;
 mod assistant_run_conversation_memory_support;
 mod assistant_run_customer_codex_artifact_support;
+mod assistant_run_data_ingestion_output_validation_support;
+mod assistant_run_database_field_support;
+mod assistant_run_database_prompt_support;
+mod assistant_run_database_source_support;
+mod assistant_run_database_summary_support;
+mod assistant_run_dataset_fact_snapshot_support;
 mod assistant_run_detail_support;
+mod assistant_run_document_external_ref_support;
+mod assistant_run_document_parse_quality_support;
 mod assistant_run_evidence_limit_support;
 mod assistant_run_evidence_state_support;
 mod assistant_run_executor_transport_support;
@@ -233,6 +254,7 @@ mod assistant_run_resume_project_delivery_support;
 mod assistant_run_resume_prompt_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
+mod assistant_run_spreadsheet_attendance_support;
 mod assistant_run_sse_support;
 mod assistant_run_static_page_dataset_scope_support;
 mod assistant_run_static_page_model_route_support;
@@ -385,6 +407,7 @@ mod model_gateway_event_support;
 mod model_gateway_runtime;
 mod model_gateway_status;
 mod not_found_errors;
+mod platform_env_support;
 mod prompt_match_support;
 mod react_agent_catalog;
 mod react_agent_contract;
@@ -495,22 +518,40 @@ mod zip_ingest_support;
 use assistant_run_answer_policy_support::*;
 use assistant_run_answer_quality_autofix_support::*;
 use assistant_run_answer_quality_budget_support::*;
+use assistant_run_answer_quality_case_support::*;
+use assistant_run_answer_quality_controlled_answer_support::*;
 use assistant_run_answer_quality_judge_support::*;
+use assistant_run_answer_quality_retry_support::*;
+use assistant_run_answer_quality_spreadsheet_support::*;
 #[cfg(test)]
 use assistant_run_codex_action_contract_support::*;
 use assistant_run_codex_context_package_support::*;
+use assistant_run_codex_customer_artifact_workspace_prompt_support::*;
+use assistant_run_codex_data_analysis_report_prompt_support::*;
+use assistant_run_codex_data_ingestion_sidecar_prompt_support::*;
 use assistant_run_codex_fixed_task_support::*;
+use assistant_run_codex_forward_prompt_support::*;
 use assistant_run_codex_host_validation_support::*;
 use assistant_run_codex_model_gateway_gate_support::*;
 use assistant_run_codex_model_gateway_support::*;
 use assistant_run_codex_observability_support::*;
+use assistant_run_codex_product_change_guard_support::*;
 use assistant_run_codex_promotion_gate_support::*;
+use assistant_run_codex_report_artifact_prompt_support::*;
 use assistant_run_codex_shadow_gate_support::*;
 use assistant_run_codex_shadow_support::*;
+use assistant_run_codex_static_page_prompt_support::*;
 use assistant_run_continue_request_support::*;
 use assistant_run_conversation_memory_support::*;
 use assistant_run_customer_codex_artifact_support::*;
+use assistant_run_database_field_support::*;
+use assistant_run_database_prompt_support::*;
+use assistant_run_database_source_support::*;
+use assistant_run_database_summary_support::*;
+use assistant_run_dataset_fact_snapshot_support::*;
 use assistant_run_detail_support::*;
+use assistant_run_document_external_ref_support::*;
+use assistant_run_document_parse_quality_support::*;
 use assistant_run_evidence_limit_support::*;
 use assistant_run_evidence_state_support::*;
 use assistant_run_executor_transport_support::*;
@@ -519,6 +560,7 @@ use assistant_run_model_context_support::*;
 use assistant_run_model_supply_budget_support::*;
 use assistant_run_model_supply_item_support::*;
 use assistant_run_option_followup_support::*;
+#[cfg(test)]
 use assistant_run_point_list_support::*;
 pub(crate) use assistant_run_prompt_dimension_support::*;
 pub(crate) use assistant_run_prompt_request_support::*;
@@ -531,6 +573,7 @@ use assistant_run_resume_project_delivery_support::*;
 use assistant_run_resume_prompt_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
+use assistant_run_spreadsheet_attendance_support::*;
 use assistant_run_sse_support::*;
 use assistant_run_static_page_dataset_scope_support::*;
 use assistant_run_static_page_model_route_support::*;
@@ -599,11 +642,40 @@ use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
 use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
-#[cfg(test)]
-use external_channel_outbound_reply_dispatch_support::external_channel_outbound_reply_dispatch_summary;
 use external_channel_outbound_reply_dispatch_support::{
+    external_channel_outbound_reply_blocked_dispatch_result,
     external_channel_outbound_reply_dispatch_audit_payload,
+    external_channel_outbound_reply_dispatch_body, external_channel_outbound_reply_dispatch_client,
+    external_channel_outbound_reply_dispatch_event_name_for_http_status,
+    external_channel_outbound_reply_dispatch_event_names,
+    external_channel_outbound_reply_dispatch_http_status_success,
     external_channel_outbound_reply_dispatch_payload,
+    external_channel_outbound_reply_dispatch_status_from_event_name,
+    external_channel_outbound_reply_header_blocked_dispatch_result,
+    external_channel_outbound_reply_http_dispatch_result,
+    external_channel_outbound_reply_is_terminal_source_event,
+    external_channel_outbound_reply_request_failed_dispatch_result,
+    external_channel_outbound_reply_response_summary,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_EVENT_NAME_PREFIX,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_FAILED_EVENT_NAME,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_FIRST_TURN_FOLLOWUP_ACTION_SOURCE_EVENT_NAME,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_AUTH_MISSING,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_CONNECTION_DISABLED,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_CONNECTION_MISSING,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_INVALID,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_MISSING,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_FAILED_SOURCE_EVENT_NAME,
+};
+#[cfg(test)]
+use external_channel_outbound_reply_dispatch_support::{
+    external_channel_outbound_reply_dispatch_summary,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_DISPATCHED_EVENT_NAME,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_STATUS_BLOCKED,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_EVENT_TYPE_ASSISTANT_REPLY,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_SCHEMA_V1,
+    EXTERNAL_CHANNEL_OUTBOUND_REPLY_TRIGGER_ASYNC_RESULT_COMPLETED,
 };
 use external_channel_public_artifact::*;
 use external_channel_public_card::*;
@@ -694,6 +766,7 @@ use model_gateway_event_support::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
 use not_found_errors::*;
+pub(crate) use platform_env_support::*;
 use prompt_match_support::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::parse_assistant_run_next_action;
@@ -815,7 +888,7 @@ pub(crate) const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_ar
 pub(crate) const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
 pub(crate) const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str =
     "generated_static_page_publish";
-const CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
+pub(crate) const CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
 pub(crate) const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
 pub(crate) const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 pub(crate) const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
@@ -823,13 +896,6 @@ pub(crate) const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize =
     RETRIEVAL_SEARCH_MAX_LIMIT;
 const ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT: u32 = 8;
-const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT: u32 = 5_000;
-const ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX: u32 = 50_000;
-const ASSISTANT_RUN_DATABASE_SOURCE_LIMIT: usize = 2;
-const ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT: usize = 4;
-const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
-const ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT: usize = 4;
-const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
@@ -842,7 +908,6 @@ const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_DOCUMENTS: u64 = 6;
 const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_ROWS: usize = 8;
 const ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT: &str = "rapid_html_artifact";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
-const ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS: usize = 20;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_LIMIT: usize = 16;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_ID_LIMIT: usize = 128;
 const EXTERNAL_CHANNEL_REQUESTED_SKILL_VERSION_LIMIT: usize = 64;
@@ -4784,7 +4849,7 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
     let idempotency_key = response.idempotency_key.clone();
     let conversation_external_id = response.reply.target_conversation_external_id.clone();
     let mut encoded = if emit_text_deltas {
-        sse_text_delta_events("external_channel.delta", &text)
+        sse_text_delta_events(external_channel_sse_delta_event_name(), &text)
     } else {
         String::new()
     };
@@ -4819,17 +4884,20 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
             external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
             data,
         );
-        let dedupe_key = format!("external_channel.static_page_queued:{draft_id}:{status}");
+        let dedupe_key = format!(
+            "{}:{draft_id}:{status}",
+            external_channel_static_page_sse_queued_event_name()
+        );
         let payload = persist_external_channel_public_stream_payload_or_original(
             state,
             assistant_run_id,
-            "external_channel.static_page_queued",
+            external_channel_static_page_sse_queued_event_name(),
             &dedupe_key,
             payload,
         )
         .await;
         encoded.push_str(&sse_json_event(
-            "external_channel.static_page_queued",
+            external_channel_static_page_sse_queued_event_name(),
             payload,
         ));
     }
@@ -4855,18 +4923,22 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
             data.clone(),
         );
         let dedupe_key = format!(
-            "external_channel.needs_input:{}",
+            "{}:{}",
+            external_channel_sse_needs_input_event_name(),
             external_channel_public_stream_dedupe_hash(&data)
         );
         let payload = persist_external_channel_public_stream_payload_or_original(
             state,
             assistant_run_id,
-            "external_channel.needs_input",
+            external_channel_sse_needs_input_event_name(),
             &dedupe_key,
             payload,
         )
         .await;
-        encoded.push_str(&sse_json_event("external_channel.needs_input", payload));
+        encoded.push_str(&sse_json_event(
+            external_channel_sse_needs_input_event_name(),
+            payload,
+        ));
     }
     let completed_data = external_channel_completed_stream_data(
         &response,
@@ -4898,23 +4970,27 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
         completed_data.clone(),
     );
     let dedupe_key = format!(
-        "external_channel.completed:{}",
+        "{}:{}",
+        external_channel_sse_completed_event_name(),
         external_channel_public_stream_dedupe_hash(&completed_data)
     );
     let completed_payload = persist_external_channel_public_stream_payload_or_original(
         state,
         assistant_run_id,
-        "external_channel.completed",
+        external_channel_sse_completed_event_name(),
         &dedupe_key,
         completed_payload,
     )
     .await;
     encoded.push_str(&sse_json_event(
-        "external_channel.completed",
+        external_channel_sse_completed_event_name(),
         completed_payload,
     ));
     if include_done {
-        encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+        encoded.push_str(&sse_json_event(
+            external_channel_sse_done_event_name(),
+            json!({"ok": true}),
+        ));
     }
     encoded
 }
@@ -5287,7 +5363,10 @@ async fn external_channel_event_sse_next(
             );
             if !replay.is_empty() {
                 let mut encoded = replay;
-                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                encoded.push_str(&sse_json_event(
+                    external_channel_sse_done_event_name(),
+                    json!({"ok": true}),
+                ));
                 return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
             }
             if started_at.elapsed() >= StdDuration::from_secs(18) {
@@ -5310,16 +5389,19 @@ async fn external_channel_event_sse_next(
                     }),
                 );
                 let mut encoded = external_channel_sse_event_with_delta(
-                    "external_channel.followup_action_continue_polling",
+                    external_channel_followup_action_continue_polling_sse_event_name(),
                     payload,
                     text,
                 );
-                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                encoded.push_str(&sse_json_event(
+                    external_channel_sse_done_event_name(),
+                    json!({"ok": true}),
+                ));
                 return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
             }
             Some((
                 Ok(Bytes::from(sse_json_event(
-                    "external_channel.heartbeat",
+                    external_channel_sse_heartbeat_event_name(),
                     external_channel_sse_public_payload(
                         Some(run_id),
                         &idempotency_key,
@@ -5409,7 +5491,7 @@ async fn external_channel_event_sse_next(
                     "text": text,
                 });
                 encoded.push_str(&sse_json_event(
-                    "external_channel.heartbeat",
+                    external_channel_sse_heartbeat_event_name(),
                     external_channel_sse_public_payload(
                         Some(run_id),
                         &idempotency_key,
@@ -5429,7 +5511,10 @@ async fn external_channel_event_sse_next(
                 ));
             }
             if terminal {
-                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                encoded.push_str(&sse_json_event(
+                    external_channel_sse_done_event_name(),
+                    json!({"ok": true}),
+                ));
                 return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
             }
             if timed_out {
@@ -5439,7 +5524,10 @@ async fn external_channel_event_sse_next(
                     )
                     .await,
                 );
-                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                encoded.push_str(&sse_json_event(
+                    external_channel_sse_done_event_name(),
+                    json!({"ok": true}),
+                ));
                 return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
             }
             Some((
@@ -5499,7 +5587,7 @@ async fn external_channel_static_page_sse_preview_ready_events(
     } else {
         "页面可视化预览已生成。下一步会继续生成最终静态页。".to_string()
     };
-    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    let mut encoded = sse_text_delta_events(external_channel_sse_delta_event_name(), &text);
     let data = json!({
         "assistant_run_id": run_id,
         "idempotency_key": idempotency_key,
@@ -5531,22 +5619,20 @@ async fn external_channel_static_page_sse_preview_ready_events(
         .get("draft_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let preview_ready_event_name = external_channel_static_page_sse_preview_ready_event_name();
     let dedupe_key = format!(
-        "external_channel.static_page_preview_ready:{draft_id}:{}",
+        "{preview_ready_event_name}:{draft_id}:{}",
         preview_url.as_deref().unwrap_or_default()
     );
     let payload = persist_external_channel_public_stream_payload_or_original(
         state,
         Some(run_id),
-        "external_channel.static_page_preview_ready",
+        preview_ready_event_name,
         &dedupe_key,
         payload,
     )
     .await;
-    encoded.push_str(&sse_json_event(
-        "external_channel.static_page_preview_ready",
-        payload,
-    ));
+    encoded.push_str(&sse_json_event(preview_ready_event_name, payload));
     Some(encoded)
 }
 
@@ -5578,7 +5664,7 @@ async fn external_channel_public_stream_completed_sequence(
         .iter()
         .rev()
         .find(|event| {
-            event.event_name == "external_channel.completed"
+            event.event_name == external_channel_sse_completed_event_name()
                 && event.payload.get("schema").and_then(Value::as_str)
                     == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
         })
@@ -5633,7 +5719,7 @@ async fn external_channel_static_page_sse_prompt_events(
         external_channel_public_text(&truncate_assistant_supply_text(&prompt_text, 360));
     let conversation_external_id = response.reply.target_conversation_external_id.clone();
     let display_text = "DataMax 正在生成页面方案，并会自动继续发布最终页面。";
-    let mut encoded = sse_text_delta_events("external_channel.delta", display_text);
+    let mut encoded = sse_text_delta_events(external_channel_sse_delta_event_name(), display_text);
     let data = json!({
         "assistant_run_id": response.assistant_run_id,
         "idempotency_key": response.idempotency_key,
@@ -5656,17 +5742,21 @@ async fn external_channel_static_page_sse_prompt_events(
         external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
         data,
     );
-    let dedupe_key = format!("external_channel.static_page_planning:{}", job.draft_id);
+    let dedupe_key = format!(
+        "{}:{}",
+        external_channel_static_page_sse_planning_event_name(),
+        job.draft_id
+    );
     let payload = persist_external_channel_public_stream_payload_or_original(
         state,
         response.assistant_run_id,
-        "external_channel.static_page_planning",
+        external_channel_static_page_sse_planning_event_name(),
         &dedupe_key,
         payload,
     )
     .await;
     encoded.push_str(&sse_json_event(
-        "external_channel.static_page_planning",
+        external_channel_static_page_sse_planning_event_name(),
         payload,
     ));
     encoded
@@ -5681,13 +5771,13 @@ async fn external_channel_static_page_sse_continue_polling_event_persisted(
     let payload = persist_external_channel_public_stream_payload_or_original(
         state,
         run_id,
-        "external_channel.static_page_continue_polling",
+        external_channel_static_page_sse_continue_polling_event_name(),
         &dedupe_key,
         payload,
     )
     .await;
     external_channel_sse_event_with_delta(
-        "external_channel.static_page_continue_polling",
+        external_channel_static_page_sse_continue_polling_event_name(),
         payload,
         &text,
     )
@@ -6455,6 +6545,7 @@ async fn create_assistant_run_inner(
                         .map_err(ApiError::from_storage)?;
                     response
                 } else {
+                    let chat_attempts = assistant_run_chat_runtime_attempts(chat_runtime.clone());
                     let provider_input = if chat_runtime.mode == "placeholder" {
                         assistant_run_placeholder_user_message(false, &evidence_state)
                     } else {
@@ -6463,11 +6554,11 @@ async fn create_assistant_run_inner(
                             Some(&evidence_state),
                         )
                     };
-                    match complete_assistant_run_provider_for_create(
+                    match complete_assistant_run_provider_attempts_for_create(
+                        &state,
+                        run.id,
                         MODEL_LANE_ASSISTANT_CHAT,
-                        chat_runtime.mode.clone(),
-                        chat_runtime.provider.clone(),
-                        chat_runtime.model.clone(),
+                        chat_attempts.clone(),
                         provider_input,
                         live_delta_sink.clone(),
                     )
@@ -6501,11 +6592,11 @@ async fn create_assistant_run_inner(
                                 )
                                 .await
                                 .map_err(ApiError::from_storage)?;
-                                match complete_assistant_run_provider_for_create(
+                                match complete_assistant_run_provider_attempts_for_create(
+                                    &state,
+                                    run.id,
                                     MODEL_LANE_ASSISTANT_CHAT,
-                                    chat_runtime.mode.clone(),
-                                    chat_runtime.provider.clone(),
-                                    chat_runtime.model.clone(),
+                                    chat_attempts,
                                     compact_provider_input,
                                     live_delta_sink.clone(),
                                 )
@@ -8965,6 +9056,8 @@ async fn load_external_channel_audit_items(
         });
     }
 
+    let outbound_reply_event_names =
+        external_channel_outbound_reply_dispatch_event_names().map(str::to_string);
     let outbound_reply_rows = sqlx::query(
         r#"
         select run_id,
@@ -8973,18 +9066,15 @@ async fn load_external_channel_audit_items(
                created_at
         from assistant_run_events
         where tenant_id = $1
-          and event_name in (
-              'assistant_run.external_channel_outbound_reply_dispatch_blocked',
-              'assistant_run.external_channel_outbound_reply_dispatch_failed',
-              'assistant_run.external_channel_outbound_reply_dispatch_dispatched'
-          )
           and payload ->> 'channel_connection_id' = $2
+          and event_name = any($3)
         order by created_at desc
         limit 25
         "#,
     )
     .bind(state.tenant_id.0)
     .bind(integration_id)
+    .bind(&outbound_reply_event_names[..])
     .fetch_all(state.storage.pool())
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
@@ -8997,15 +9087,7 @@ async fn load_external_channel_audit_items(
             .get("status")
             .and_then(Value::as_str)
             .or_else(|| {
-                if event_name.ends_with("_dispatched") {
-                    Some("dispatched")
-                } else if event_name.ends_with("_failed") {
-                    Some("dispatch_failed")
-                } else if event_name.ends_with("_blocked") {
-                    Some("dispatch_blocked")
-                } else {
-                    None
-                }
+                external_channel_outbound_reply_dispatch_status_from_event_name(&event_name)
             })
             .map(str::to_string);
         let failure_kind = dispatch
@@ -11408,7 +11490,7 @@ async fn ingest_external_channel_event_stream(
         "status": "started",
     });
     let started = sse_json_event(
-        "external_channel.started",
+        external_channel_started_sse_event_name(),
         external_channel_sse_public_payload(
             None,
             &message.idempotency_key,
@@ -11434,7 +11516,7 @@ async fn ingest_external_channel_event_stream(
             let stream = stream::iter(vec![
                 Ok(Bytes::from(started)),
                 Ok(Bytes::from(sse_json_event(
-                    "external_channel.processing",
+                    external_channel_processing_sse_event_name(),
                     external_channel_sse_public_payload(
                         None,
                         &message.idempotency_key,
@@ -11448,7 +11530,10 @@ async fn ingest_external_channel_event_stream(
                         json!({"status": "processing"}),
                     ),
                 ))),
-                Ok(Bytes::from(sse_json_event("done", json!({"ok": true})))),
+                Ok(Bytes::from(sse_json_event(
+                    external_channel_sse_done_event_name(),
+                    json!({"ok": true}),
+                ))),
             ]);
             return Ok(sse_stream_response(stream));
         };
@@ -11469,8 +11554,10 @@ async fn ingest_external_channel_event_stream(
         let is_static_page = external_channel_response_is_static_page_pipeline(&response);
         let terminal_static_page =
             is_static_page && external_channel_static_page_sse_is_terminal(&response);
-        let public_completed_emitted =
-            external_channel_public_stream_has_event(&events, "external_channel.completed");
+        let public_completed_emitted = external_channel_public_stream_has_event(
+            &events,
+            external_channel_sse_completed_event_name(),
+        );
         let mut initial = started;
         initial.push_str(&replay);
         if replay_empty
@@ -11486,13 +11573,16 @@ async fn ingest_external_channel_event_stream(
                 .await,
             );
         } else if !is_static_page || terminal_static_page {
-            initial.push_str(&sse_json_event("done", json!({"ok": true})));
+            initial.push_str(&sse_json_event(
+                external_channel_sse_done_event_name(),
+                json!({"ok": true}),
+            ));
         }
 
         if is_static_page && !terminal_static_page {
             let preview_emitted = external_channel_public_stream_has_event(
                 &events,
-                "external_channel.static_page_preview_ready",
+                external_channel_static_page_sse_preview_ready_event_name(),
             );
             let next_state = ExternalChannelEventSseState::FollowStaticPage {
                 state,
@@ -12811,7 +12901,7 @@ async fn run_external_channel_first_turn_followup_actions(
         &state,
         run_id,
         &message,
-        "external_channel.followup_action_planning",
+        external_channel_followup_action_planning_sse_event_name(),
         "action_planning",
         "已完成首轮回复，DataMax 正在继续判断是否需要执行受控动作。",
         None,
@@ -12841,7 +12931,7 @@ async fn run_external_channel_first_turn_followup_actions(
                 &connection_id,
                 run_id,
                 &message,
-                "external_channel.followup_action_planned",
+                external_channel_followup_action_planned_sse_event_name(),
                 "action_planned",
                 reply,
             )
@@ -12854,7 +12944,7 @@ async fn run_external_channel_first_turn_followup_actions(
                 &connection_id,
                 run_id,
                 &message,
-                "external_channel.followup_search_evidence_required",
+                external_channel_followup_search_evidence_required_sse_event_name(),
                 "search_evidence_required",
                 reply,
             )
@@ -12865,7 +12955,7 @@ async fn run_external_channel_first_turn_followup_actions(
                 &state,
                 run_id,
                 &message,
-                "external_channel.followup_action_not_required",
+                external_channel_followup_action_not_required_sse_event_name(),
                 "action_not_required",
                 "首轮回复后已复核本轮需求，当前无需额外受控动作。",
                 None,
@@ -12881,7 +12971,7 @@ async fn run_external_channel_first_turn_followup_actions(
                 &state,
                 run_id,
                 &message,
-                "external_channel.followup_action_failed",
+                external_channel_followup_action_failed_sse_event_name(),
                 "action_planning_failed",
                 &text,
                 Some(json!({
@@ -12922,8 +13012,9 @@ async fn append_external_channel_first_turn_followup_reply(
             state.tenant_id,
             run_id,
             &NewAssistantRunEvent {
-                event_name: "assistant_run.external_channel_first_turn_followup_action_reply"
-                    .to_string(),
+                event_name:
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_FIRST_TURN_FOLLOWUP_ACTION_SOURCE_EVENT_NAME
+                        .to_string(),
                 payload: internal_payload.clone(),
                 created_at: now,
             },
@@ -12934,7 +13025,7 @@ async fn append_external_channel_first_turn_followup_reply(
         &state.storage,
         state.tenant_id,
         run_id,
-        "assistant_run.external_channel_first_turn_followup_action_reply",
+        EXTERNAL_CHANNEL_OUTBOUND_REPLY_FIRST_TURN_FOLLOWUP_ACTION_SOURCE_EVENT_NAME,
         &internal_payload,
         now,
     )
@@ -13376,7 +13467,7 @@ async fn dispatch_external_action_run_if_ready(
         .as_ref()
         .and_then(external_action_response_request_id)
         .unwrap_or_else(|| action_id.to_string());
-    let success = (200..300).contains(&http_status);
+    let success = external_channel_outbound_reply_dispatch_http_status_success(http_status);
     let outcome = ExternalActionDispatchOutcome {
         status: if success {
             "dispatched".to_string()
@@ -13534,29 +13625,33 @@ async fn maybe_dispatch_external_channel_outbound_reply(
         return Ok(());
     };
     let Some(reply) = (match source_event_name {
-        "assistant_run.external_channel_static_page_publish_completed" => {
+        EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME => {
             external_channel_static_page_publish_completed_reply_from_event_payload(source_payload)
         }
-        "assistant_run.external_channel_static_page_publish_failed" => source_payload
-            .get("conversation_external_id")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                source_payload
-                    .pointer("/source_refs/conversation_external_id")
-                    .and_then(Value::as_str)
-            })
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|conversation_external_id| {
-                external_channel_static_page_publish_failed_reply_from_event_payload(
-                    source_payload,
-                    conversation_external_id,
-                )
-            }),
-        "assistant_run.external_channel_first_turn_followup_action_reply" => source_payload
-            .get("reply")
-            .cloned()
-            .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok()),
+        EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_FAILED_SOURCE_EVENT_NAME => {
+            source_payload
+                .get("conversation_external_id")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    source_payload
+                        .pointer("/source_refs/conversation_external_id")
+                        .and_then(Value::as_str)
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|conversation_external_id| {
+                    external_channel_static_page_publish_failed_reply_from_event_payload(
+                        source_payload,
+                        conversation_external_id,
+                    )
+                })
+        }
+        EXTERNAL_CHANNEL_OUTBOUND_REPLY_FIRST_TURN_FOLLOWUP_ACTION_SOURCE_EVENT_NAME => {
+            source_payload
+                .get("reply")
+                .cloned()
+                .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
+        }
         _ => None,
     }) else {
         return Ok(());
@@ -13570,7 +13665,7 @@ async fn maybe_dispatch_external_channel_outbound_reply(
     if existing_events.iter().any(|event| {
         event
             .event_name
-            .starts_with("assistant_run.external_channel_outbound_reply_dispatch_")
+            .starts_with(EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_EVENT_NAME_PREFIX)
             && event
                 .payload
                 .get("source_event_hash")
@@ -13603,16 +13698,18 @@ async fn maybe_dispatch_external_channel_outbound_reply(
             storage,
             tenant_id,
             assistant_run_id,
-            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
             external_channel_outbound_reply_dispatch_audit_payload(
                 source_event_name,
                 &source_event_hash,
                 connection_id,
                 &public_response,
-                json!({
-                    "status": "dispatch_blocked",
-                    "reason": "connection_missing",
-                }),
+                external_channel_outbound_reply_blocked_dispatch_result(
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_CONNECTION_MISSING,
+                    None,
+                    None,
+                    None,
+                ),
             ),
             now,
         )
@@ -13626,16 +13723,18 @@ async fn maybe_dispatch_external_channel_outbound_reply(
             storage,
             tenant_id,
             assistant_run_id,
-            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
             external_channel_outbound_reply_dispatch_audit_payload(
                 source_event_name,
                 &source_event_hash,
                 connection_id,
                 &public_response,
-                json!({
-                    "status": "dispatch_blocked",
-                    "reason": "connection_disabled",
-                }),
+                external_channel_outbound_reply_blocked_dispatch_result(
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_CONNECTION_DISABLED,
+                    None,
+                    None,
+                    None,
+                ),
             ),
             now,
         )
@@ -13648,17 +13747,18 @@ async fn maybe_dispatch_external_channel_outbound_reply(
             storage,
             tenant_id,
             assistant_run_id,
-            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
             external_channel_outbound_reply_dispatch_audit_payload(
                 source_event_name,
                 &source_event_hash,
                 connection_id,
                 &public_response,
-                json!({
-                    "status": "dispatch_blocked",
-                    "endpoint_configured": false,
-                    "reason": "reply_dispatch_endpoint_missing",
-                }),
+                external_channel_outbound_reply_blocked_dispatch_result(
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_MISSING,
+                    Some(false),
+                    None,
+                    None,
+                ),
             ),
             now,
         )
@@ -13672,17 +13772,18 @@ async fn maybe_dispatch_external_channel_outbound_reply(
                 storage,
                 tenant_id,
                 assistant_run_id,
-                "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
                 external_channel_outbound_reply_dispatch_audit_payload(
                     source_event_name,
                     &source_event_hash,
                     connection_id,
                     &public_response,
-                    json!({
-                        "status": "dispatch_blocked",
-                        "endpoint_configured": true,
-                        "reason": "reply_dispatch_endpoint_invalid",
-                    }),
+                    external_channel_outbound_reply_blocked_dispatch_result(
+                        EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_INVALID,
+                        Some(true),
+                        None,
+                        None,
+                    ),
                 ),
                 now,
             )
@@ -13696,19 +13797,18 @@ async fn maybe_dispatch_external_channel_outbound_reply(
             storage,
             tenant_id,
             assistant_run_id,
-            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
             external_channel_outbound_reply_dispatch_audit_payload(
                 source_event_name,
                 &source_event_hash,
                 connection_id,
                 &public_response,
-                json!({
-                    "status": "dispatch_blocked",
-                    "endpoint_configured": true,
-                    "endpoint_host": parsed_url.host_str(),
-                    "auth_mode": "none",
-                    "reason": "reply_dispatch_auth_missing",
-                }),
+                external_channel_outbound_reply_blocked_dispatch_result(
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_AUTH_MISSING,
+                    Some(true),
+                    parsed_url.host_str(),
+                    Some("none"),
+                ),
             ),
             now,
         )
@@ -13718,12 +13818,13 @@ async fn maybe_dispatch_external_channel_outbound_reply(
 
     let outbound_payload =
         external_channel_outbound_reply_dispatch_payload(&public_response, source_event_name);
-    let body = serde_json::to_vec(&outbound_payload).map_err(|error| {
-        ApiError::internal(
-            "external_channel_outbound_reply_payload_failed",
-            format!("failed to serialize outbound reply payload: {error}"),
-        )
-    })?;
+    let body =
+        external_channel_outbound_reply_dispatch_body(&outbound_payload).map_err(|error| {
+            ApiError::internal(
+                "external_channel_outbound_reply_payload_failed",
+                format!("failed to serialize outbound reply payload: {error}"),
+            )
+        })?;
     let nonce = Uuid::new_v4().simple().to_string();
     let headers = match external_action_dispatch_headers(
         connection_id,
@@ -13739,19 +13840,17 @@ async fn maybe_dispatch_external_channel_outbound_reply(
                 storage,
                 tenant_id,
                 assistant_run_id,
-                "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
                 external_channel_outbound_reply_dispatch_audit_payload(
                     source_event_name,
                     &source_event_hash,
                     connection_id,
                     &public_response,
-                    json!({
-                        "status": "dispatch_blocked",
-                        "endpoint_configured": true,
-                        "endpoint_host": parsed_url.host_str(),
-                        "auth_mode": external_action_dispatch_auth_mode(&auth),
-                        "reason": reason,
-                    }),
+                    external_channel_outbound_reply_header_blocked_dispatch_result(
+                        &reason,
+                        parsed_url.host_str(),
+                        external_action_dispatch_auth_mode(&auth),
+                    ),
                 ),
                 now,
             )
@@ -13759,15 +13858,12 @@ async fn maybe_dispatch_external_channel_outbound_reply(
             return Ok(());
         }
     };
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
-        .build()
-        .map_err(|error| {
-            ApiError::internal(
-                "external_channel_outbound_reply_dispatch_client_failed",
-                format!("failed to create outbound reply dispatch client: {error}"),
-            )
-        })?;
+    let client = external_channel_outbound_reply_dispatch_client().map_err(|error| {
+        ApiError::internal(
+            "external_channel_outbound_reply_dispatch_client_failed",
+            format!("failed to create outbound reply dispatch client: {error}"),
+        )
+    })?;
     let response = match client
         .post(parsed_url.clone())
         .headers(headers)
@@ -13781,20 +13877,17 @@ async fn maybe_dispatch_external_channel_outbound_reply(
                 storage,
                 tenant_id,
                 assistant_run_id,
-                "assistant_run.external_channel_outbound_reply_dispatch_failed",
+                EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_FAILED_EVENT_NAME,
                 external_channel_outbound_reply_dispatch_audit_payload(
                     source_event_name,
                     &source_event_hash,
                     connection_id,
                     &public_response,
-                    json!({
-                        "status": "dispatch_failed",
-                        "endpoint_configured": true,
-                        "endpoint_host": parsed_url.host_str(),
-                        "auth_mode": external_action_dispatch_auth_mode(&auth),
-                        "reason": "request_failed",
-                        "request_error_kind": external_action_reqwest_error_kind(&error),
-                    }),
+                    external_channel_outbound_reply_request_failed_dispatch_result(
+                        parsed_url.host_str(),
+                        external_action_dispatch_auth_mode(&auth),
+                        external_action_reqwest_error_kind(&error),
+                    ),
                 ),
                 now,
             )
@@ -13804,34 +13897,25 @@ async fn maybe_dispatch_external_channel_outbound_reply(
     };
     let http_status = response.status().as_u16();
     let response_text = response.text().await.unwrap_or_default();
-    let response_json = serde_json::from_str::<Value>(&response_text).ok();
-    let response_summary = external_action_response_summary(response_json.as_ref(), &response_text);
-    let success = (200..300).contains(&http_status);
+    let (response_summary, external_request_id) =
+        external_channel_outbound_reply_response_summary(&response_text);
     append_external_channel_outbound_reply_dispatch_event(
         storage,
         tenant_id,
         assistant_run_id,
-        if success {
-            "assistant_run.external_channel_outbound_reply_dispatch_dispatched"
-        } else {
-            "assistant_run.external_channel_outbound_reply_dispatch_failed"
-        },
+        external_channel_outbound_reply_dispatch_event_name_for_http_status(http_status),
         external_channel_outbound_reply_dispatch_audit_payload(
             source_event_name,
             &source_event_hash,
             connection_id,
             &public_response,
-            json!({
-                "status": if success { "dispatched" } else { "dispatch_failed" },
-                "endpoint_configured": true,
-                "endpoint_host": parsed_url.host_str(),
-                "auth_mode": external_action_dispatch_auth_mode(&auth),
-                "http_status": http_status,
-                "response_summary": response_summary,
-                "external_request_id": response_json
-                    .as_ref()
-                    .and_then(external_action_response_request_id),
-            }),
+            external_channel_outbound_reply_http_dispatch_result(
+                parsed_url.host_str(),
+                external_action_dispatch_auth_mode(&auth),
+                http_status,
+                response_summary,
+                external_request_id,
+            ),
         ),
         now,
     )
@@ -13845,13 +13929,11 @@ async fn maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_even
     assistant_run_id: AssistantRunId,
     events: &[AssistantRunEvent],
 ) -> std::result::Result<(), ApiError> {
-    let Some(event) = events.iter().rev().find(|event| {
-        matches!(
-            event.event_name.as_str(),
-            "assistant_run.external_channel_static_page_publish_completed"
-                | "assistant_run.external_channel_static_page_publish_failed"
-        )
-    }) else {
+    let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| external_channel_outbound_reply_is_terminal_source_event(&event.event_name))
+    else {
         return Ok(());
     };
     maybe_dispatch_external_channel_outbound_reply(
@@ -21848,40 +21930,7 @@ fn external_channel_fixed_task_processing_reply(
 ) -> ExternalBotReplyView {
     let prefix = external_channel_fixed_task_status_prefix(template_id);
     let task_status = format!("{prefix}_{state}");
-    let text = match (template_id, state) {
-        ("data_ingestion_analysis", "retrying") => {
-            "DataMax 数据接入分析仍在执行，后台任务超时后已自动续轮询。"
-        }
-        ("data_ingestion_analysis", "cancelled") => {
-            "DataMax 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
-        }
-        ("data_ingestion_analysis", "failed") => {
-            "DataMax 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
-        }
-        ("data_ingestion_analysis", _) => "DataMax 数据接入分析正在执行，请稍后查询结果。",
-        ("static_page_image2_data_publish", "retrying") => {
-            "DataMax 静态页发布仍在执行，后台任务超时后已自动续轮询。"
-        }
-        ("static_page_image2_data_publish", "cancelled") => {
-            "DataMax 静态页发布任务已取消，未生成新的最终发布链接。"
-        }
-        ("static_page_image2_data_publish", "failed") => {
-            "DataMax 静态页发布未完成，需重试或人工处理。"
-        }
-        ("static_page_image2_data_publish", _) => "DataMax 已完成页面规划，正在生成最终静态页。",
-        ("answer_quality_autofix", "cancelled") => {
-            "DataMax 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
-        }
-        ("answer_quality_autofix", "retrying") => {
-            "DataMax 回答质量修复诊断仍在执行，已自动续轮询。"
-        }
-        ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
-        ("answer_quality_autofix", _) => "DataMax 回答质量修复诊断正在执行。",
-        (_, "cancelled") => "DataMax 后台任务已取消。",
-        (_, "retrying") => "DataMax 后台任务仍在执行，已自动续轮询。",
-        (_, "failed") => "DataMax 后台任务未完成，需重试或人工处理。",
-        _ => "DataMax 后台任务正在执行。",
-    };
+    let text = external_channel_fixed_task_processing_text(template_id, state);
     external_channel_task_status_reply_for_conversation(
         conversation_external_id,
         &task_status,
@@ -21912,11 +21961,7 @@ fn external_channel_fixed_task_processing_reply(
                 "elapsed_ms": event.payload.get("elapsed_ms").cloned().unwrap_or(Value::Null),
                 "heartbeat_count": event.payload.get("heartbeat_count").cloned().unwrap_or(Value::Null),
             })).unwrap_or(Value::Null),
-            "poll_after_seconds": match state {
-                "retrying" => Value::from(30),
-                "cancelled" | "failed" => Value::Null,
-                _ => Value::from(15),
-            },
+            "poll_after_seconds": external_channel_fixed_task_processing_poll_after_seconds(state),
         })),
         Vec::new(),
     )
@@ -21932,51 +21977,15 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("queued");
-    let prefix = external_channel_fixed_task_status_prefix(template_id);
-    let terminal_state = match event.event_name.as_str() {
-        "codex_host.fixed_task.completed" => "completed",
-        "codex_host.fixed_task.needs_human" => "needs_human",
-        "codex_host.fixed_task.rejected" => "failed",
-        _ => "queued",
-    };
-    let task_status = match (template_id, terminal_state) {
-        ("static_page_image2_data_publish", "completed") => "static_page_published".to_string(),
-        _ => format!("{prefix}_{terminal_state}"),
-    };
+    let terminal_state = external_channel_fixed_task_terminal_state(&event.event_name);
+    let task_status = external_channel_fixed_task_terminal_task_status(template_id, terminal_state);
     let artifact_url = event
         .payload
         .pointer("/output/artifact_public_url")
         .and_then(Value::as_str)
         .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
         .map(str::to_string);
-    let text = match (template_id, terminal_state) {
-        ("data_ingestion_analysis", "completed") => {
-            "DataMax 已完成数据接入分析，已生成只读质量报告、字段映射和后续动作建议。"
-        }
-        ("data_ingestion_analysis", "needs_human") => {
-            "DataMax 数据接入分析需要人工确认后继续，当前不会自动写库或修改 schema。"
-        }
-        ("data_ingestion_analysis", "failed") => {
-            "DataMax 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
-        }
-        ("data_ingestion_analysis", _) => "DataMax 已提交数据接入分析任务。",
-        ("static_page_image2_data_publish", "completed") => "DataMax 静态页已生成并发布。",
-        ("static_page_image2_data_publish", "needs_human") => {
-            "DataMax 静态页发布需要人工确认或处理。"
-        }
-        ("static_page_image2_data_publish", "failed") => {
-            "DataMax 静态页发布未完成，需重试或人工处理。"
-        }
-        ("static_page_image2_data_publish", _) => "DataMax 已提交静态页发布任务。",
-        ("answer_quality_autofix", "completed") => "DataMax 已完成回答质量修复诊断。",
-        ("answer_quality_autofix", "needs_human") => "DataMax 回答质量修复诊断需要人工审查后继续。",
-        ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
-        ("answer_quality_autofix", _) => "DataMax 已提交回答质量修复诊断任务。",
-        (_, "completed") => "DataMax 后台任务已完成。",
-        (_, "needs_human") => "DataMax 后台任务需要人工处理。",
-        (_, "failed") => "DataMax 后台任务未完成，需重试或人工处理。",
-        _ => "DataMax 后台任务已提交。",
-    };
+    let text = external_channel_fixed_task_terminal_text(template_id, terminal_state);
     let card = json!({
         "type": external_channel_fixed_task_card_type(template_id),
         "status": task_status,
@@ -22000,29 +22009,6 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         Some(card),
         artifact_url.into_iter().collect(),
     )
-}
-
-fn external_channel_static_page_latest_codex_heartbeat_after(
-    events: &[AssistantRunEvent],
-    sequence_no: i32,
-) -> Option<&AssistantRunEvent> {
-    events.iter().rev().find(|event| {
-        event.sequence_no > sequence_no
-            && matches!(
-                event.event_name.as_str(),
-                "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
-            )
-    })
-}
-
-fn external_channel_static_page_latest_named_event<'a>(
-    events: &'a [AssistantRunEvent],
-    event_name: &str,
-) -> Option<&'a AssistantRunEvent> {
-    events
-        .iter()
-        .rev()
-        .find(|event| event.event_name == event_name)
 }
 
 fn external_channel_task_status_reply(
@@ -22821,6 +22807,9 @@ fn external_channel_message_requests_static_page_artifact(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> bool {
+    if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
     if message.artifact_type.as_deref() == Some("static_page") {
         return true;
     }
@@ -22883,7 +22872,10 @@ fn external_channel_message_requests_static_page_artifact(
     )
 }
 
-fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) -> bool {
+pub(crate) fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) -> bool {
+    if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
     let compact = prompt
         .chars()
         .filter(|ch| !ch.is_whitespace())
@@ -22974,7 +22966,10 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
     external_channel_prompt_is_short_report_artifact_request(&compact, prompt)
 }
 
-fn external_channel_prompt_is_report_explanation_question(compact: &str, prompt: &str) -> bool {
+pub(crate) fn external_channel_prompt_is_report_explanation_question(
+    compact: &str,
+    prompt: &str,
+) -> bool {
     external_channel_text_has_any(
         compact,
         prompt,
@@ -24027,7 +24022,7 @@ fn external_channel_static_page_template_stability_key(
     static_page_template_stability_key_with_default_prompt("template:default", default_prompt)
 }
 
-fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
+pub(crate) fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
     let compact = prompt
         .chars()
         .filter(|ch| !ch.is_whitespace())
@@ -24066,7 +24061,7 @@ fn collect_external_data_ingestion_database_source_ids(
     collect_external_static_page_database_source_ids(connection, selected_scope, evidence_state)
 }
 
-fn selected_string_ids_from_scope(scope: &Value, keys: &[&str]) -> Vec<String> {
+pub(crate) fn selected_string_ids_from_scope(scope: &Value, keys: &[&str]) -> Vec<String> {
     let mut ids = BTreeSet::new();
     for key in keys {
         if let Some(value) = scope
@@ -24145,7 +24140,7 @@ fn external_channel_data_ingestion_dataset_scope(
     })
 }
 
-fn external_channel_data_ingestion_scope_has_source(dataset_scope: &Value) -> bool {
+pub(crate) fn external_channel_data_ingestion_scope_has_source(dataset_scope: &Value) -> bool {
     [
         "dataset_ids",
         "database_source_ids",
@@ -27710,7 +27705,7 @@ fn external_channel_assistant_run_reply_status_url(
     external_channel_assistant_run_reply_status_url_str(connection_id, &run_id.to_string())
 }
 
-fn external_channel_assistant_run_reply_status_url_str(
+pub(crate) fn external_channel_assistant_run_reply_status_url_str(
     connection_id: &str,
     run_id: &str,
 ) -> String {
@@ -30979,11 +30974,11 @@ async fn continue_assistant_run_loaded(
                         max_steps,
                     )
                 };
-                let response = complete_assistant_run_provider_for_create(
+                let response = complete_assistant_run_provider_attempts_for_create(
+                    state,
+                    run.id,
                     MODEL_LANE_ASSISTANT_CHAT,
-                    chat_runtime.mode.clone(),
-                    chat_runtime.provider.clone(),
-                    chat_runtime.model.clone(),
+                    assistant_run_chat_runtime_attempts(chat_runtime.clone()),
                     provider_input,
                     live_delta_sink.clone(),
                 )
@@ -33007,139 +33002,6 @@ fn build_assistant_run_provider_input(request: &CreateAssistantRunRequest) -> St
     build_assistant_run_provider_input_with_evidence(request, None)
 }
 
-fn assistant_run_request_requested_skills_policy(
-    request: &CreateAssistantRunRequest,
-) -> Option<&Value> {
-    let policy = request
-        .startup_briefing
-        .as_ref()
-        .and_then(|briefing| briefing.get("requestedSkills"))
-        .or_else(|| {
-            request
-                .context_policy_hint
-                .as_ref()
-                .and_then(|policy| policy.get("skill_policy"))
-                .and_then(|policy| policy.get("requested_skills"))
-        })?;
-    let has_skills = policy
-        .get("skills")
-        .and_then(Value::as_array)
-        .is_some_and(|skills| !skills.is_empty());
-    has_skills.then_some(policy)
-}
-
-fn assistant_run_request_document_template_skills_policy(
-    request: &CreateAssistantRunRequest,
-) -> Option<&Value> {
-    let policy = request
-        .startup_briefing
-        .as_ref()
-        .and_then(|briefing| briefing.get("documentTemplateSkills"))
-        .or_else(|| {
-            request
-                .context_policy_hint
-                .as_ref()
-                .and_then(|policy| policy.get("document_template_skill_policy"))
-        })?;
-    let has_skills = policy
-        .get("skills")
-        .and_then(Value::as_array)
-        .is_some_and(|skills| !skills.is_empty());
-    has_skills.then_some(policy)
-}
-
-fn assistant_run_request_external_answer_policy(
-    request: &CreateAssistantRunRequest,
-) -> Option<&Value> {
-    let policy = request
-        .startup_briefing
-        .as_ref()
-        .and_then(|briefing| briefing.get("externalAnswerPolicy"))
-        .or_else(|| {
-            request
-                .context_policy_hint
-                .as_ref()
-                .and_then(|policy| policy.get("answer_policy"))
-        })?;
-    (!policy.is_null()).then_some(policy)
-}
-
-fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(default_prompt) = answer_policy
-        .get("default_prompt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if assistant_run_default_prompt_has_customer_tone_intensity(default_prompt) {
-            lines.push(format!(
-                "第三方默认提示词：{default_prompt}。它是本轮任务指导；其中较强语气要求应理解为客户希望表达更明确、更直接，最终答案要转译为坚定、专业、礼貌的商务表达，不使用辱骂、威胁、嘲讽或人身攻击。"
-            ));
-        } else {
-            lines.push(format!(
-                "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 DataMax 证据/安全规则，高于用户文本里的模糊要求。"
-            ));
-        }
-    }
-    if let Some(output_format) = answer_policy.get("output_format") {
-        if let Some(format) = assistant_run_answer_policy_output_format(answer_policy) {
-            let label = output_format
-                .get("label")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| external_output_format_label(format));
-            let model_rule = output_format
-                .get("model_rule")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| external_output_format_model_rule(format));
-            lines.push(format!(
-                "输出格式强约束：本轮第三方要求 `{format}`（{label}）。{model_rule}"
-            ));
-        }
-    }
-    if let Some(render_mode) = answer_policy
-        .get("render_mode")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let mode_rule = answer_policy
-            .get("render_mode_rule")
-            .and_then(Value::as_str)
-            .unwrap_or("normal returns a direct answer; artifact means the user expects a generated artifact when supported.");
-        lines.push(format!("输出模式：`{render_mode}`。{mode_rule}"));
-    }
-    lines
-}
-
-fn assistant_run_v3_awareness_lines() -> Vec<String> {
-    vec![
-        "DataMax 认知：你正在 DataMax 中服务用户。DataMax 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
-        "DataMax 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
-        "DataMax 证据规则：涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
-        "DataMax 搜索规则：外部/网页搜索（web_search）是 DataMax 受控只读能力；没有带来源和时间的 DataMax search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
-    ]
-}
-
-fn assistant_run_v3_awareness_policy_value() -> Value {
-    json!({
-        "identity": "你正在服务 DataMax。DataMax 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。",
-        "additiveContextRule": "DataMax 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。",
-        "unavailableEvidenceRule": "涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只有收到 DataMax observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。",
-        "externalSearchPolicy": {
-            "status": "v3_controlled_read_only",
-            "modelRule": "外部/网页搜索是 DataMax 受控只读能力；未收到带来源和时间的 DataMax search evidence 前，不要声称已联网搜索或引用实时网页结果。"
-        }
-    })
-}
-
-fn assistant_run_request_is_first_visible_turn(request: &CreateAssistantRunRequest) -> bool {
-    request
-        .messages
-        .iter()
-        .all(|message| message.content.trim().is_empty())
-}
-
 fn build_assistant_run_provider_input_with_evidence(
     request: &CreateAssistantRunRequest,
     evidence_state: Option<&Value>,
@@ -33298,20 +33160,6 @@ fn build_assistant_run_provider_input_with_evidence(
 
     sections.push(format!("用户问题：{}", request.prompt.trim()));
     sections.join("\n\n")
-}
-
-fn assistant_run_scope_is_external_channel(scope: Option<&Value>) -> bool {
-    let Some(scope) = scope else {
-        return false;
-    };
-    scope
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value == "external_channel")
-        || scope
-            .get("mode")
-            .and_then(Value::as_str)
-            .is_some_and(|value| value == "external_channel")
 }
 
 fn build_assistant_run_continue_provider_input(
@@ -33574,89 +33422,6 @@ pub(crate) fn assistant_run_model_evidence_state(evidence_state: &Value) -> Valu
     assistant_run_model_context_value(&model_state)
 }
 
-fn assistant_run_model_compact_json_value(
-    value: &Value,
-    text_limit: usize,
-    array_limit: usize,
-) -> Value {
-    match value {
-        Value::String(text) => Value::String(truncate_assistant_supply_text(text, text_limit)),
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .take(array_limit)
-                .map(|item| assistant_run_model_compact_json_value(item, text_limit, array_limit))
-                .collect(),
-        ),
-        Value::Object(object) => {
-            let mut compact = Map::new();
-            for (key, child) in object {
-                compact.insert(
-                    key.clone(),
-                    assistant_run_model_compact_json_value(child, text_limit, array_limit),
-                );
-            }
-            Value::Object(compact)
-        }
-        _ => value.clone(),
-    }
-}
-
-fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
-    json!({
-        "type": "dataset_entity_scan",
-        "source": item.get("source").cloned().unwrap_or(Value::Null),
-        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
-        "score": item.get("score").cloned().unwrap_or(Value::Null),
-        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
-        "entity_count": item.get("entity_count").cloned().unwrap_or(Value::Null),
-        "organization_count": item.get("organization_count").cloned().unwrap_or(Value::Null),
-        "company_count": item.get("company_count").cloned().unwrap_or(Value::Null),
-        "candidate_term_count": item.get("candidate_term_count").cloned().unwrap_or(Value::Null),
-        "company_rows": item.get("company_rows").cloned().unwrap_or(Value::Null),
-        "skill_rows": item.get("skill_rows").cloned().unwrap_or(Value::Null),
-        "project_rows": item.get("project_rows").cloned().unwrap_or(Value::Null),
-        "position_rows": item.get("position_rows").cloned().unwrap_or(Value::Null),
-        "location_rows": item.get("location_rows").cloned().unwrap_or(Value::Null),
-        "person_rows": item.get("person_rows").cloned().unwrap_or(Value::Null),
-        "school_rows": item.get("school_rows").cloned().unwrap_or(Value::Null),
-        "degree_rows": item.get("degree_rows").cloned().unwrap_or(Value::Null),
-        "certificate_rows": item.get("certificate_rows").cloned().unwrap_or(Value::Null),
-        "keyword_rows": item.get("keyword_rows").cloned().unwrap_or(Value::Null),
-        "year_rows": item.get("year_rows").cloned().unwrap_or(Value::Null),
-        "section_rows": item.get("section_rows").cloned().unwrap_or(Value::Null),
-        "paragraph_rows": item.get("paragraph_rows").cloned().unwrap_or(Value::Null),
-        "table_rows": item.get("table_rows").cloned().unwrap_or(Value::Null),
-        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
-        "resume_profile_rows": item.get("resume_profile_rows").cloned().unwrap_or(Value::Null),
-        "resume_project_delivery_rows": item.get("resume_project_delivery_rows").cloned().unwrap_or(Value::Null),
-        "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
-        "entities": item.get("entities").cloned().unwrap_or(Value::Null),
-        "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
-        "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows as authoritative structured scan tables when answering entity/document dimension questions. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows over top-k retrieval chunks. Cite scanned_document_count and row counts when giving totals. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
-    })
-}
-
-fn assistant_run_model_dataset_fact_snapshot_item(item: &Value) -> Value {
-    json!({
-        "type": "dataset_fact_snapshot",
-        "source": item.get("source").cloned().unwrap_or(Value::Null),
-        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
-        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
-        "snapshot_kind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
-        "snapshot_key": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
-        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
-        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
-        "source_document_count": item.get("source_document_count").cloned().unwrap_or(Value::Null),
-        "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
-        "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
-        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
-        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks.")),
-    })
-}
-
 fn assistant_run_compact_provider_retry_input(
     request: &CreateAssistantRunRequest,
     evidence_state: &Value,
@@ -33884,27 +33649,6 @@ fn assistant_run_dataset_entity_scan_direct_answer_payloads(
                 .unwrap_or(false)
         })
         .collect()
-}
-
-fn assistant_run_preferred_dataset_id_strings_from_scope(scope: &Value) -> Vec<String> {
-    scope
-        .get("preferred_dataset_ids")
-        .or_else(|| scope.get("preferredDatasetIds"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            let mut ids = Vec::new();
-            for item in items {
-                let Some(raw) = item.as_str().map(str::trim) else {
-                    continue;
-                };
-                if raw.is_empty() || ids.iter().any(|id| id == raw) {
-                    continue;
-                }
-                ids.push(raw.to_string());
-            }
-            ids
-        })
-        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34545,185 +34289,6 @@ fn prompt_requests_company_entity_statistics(prompt: &str) -> bool {
     has_company_signal && has_stat_signal
 }
 
-fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> Option<String> {
-    assistant_run_request_external_answer_policy(request)
-        .and_then(|policy| policy.get("output_format"))
-        .and_then(|format| {
-            format
-                .get("format")
-                .and_then(Value::as_str)
-                .or_else(|| format.as_str())
-        })
-        .map(str::to_string)
-}
-
-pub(crate) fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) -> bool {
-    assistant_run_request_output_format(request).as_deref() == Some("json")
-}
-
-fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
-    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("item");
-    let source = item
-        .get("source")
-        .and_then(Value::as_str)
-        .unwrap_or("retrieval_evidence");
-    let summary = assistant_run_model_text_field(item, &["summary", "content_excerpt"])?;
-    let locator = item
-        .get("source_locator")
-        .or_else(|| item.get("sourceLocator"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let document_id = item
-        .get("document_id")
-        .or_else(|| item.get("documentId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let mut parts = vec![
-        format!("{item_type}/{source}"),
-        format!(
-            "摘要={}",
-            truncate_assistant_supply_text(
-                &summary,
-                if matches!(item_type, "dataset_entity_scan" | "dataset_fact_snapshot") {
-                    ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT
-                } else {
-                    ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT
-                }
-            )
-        ),
-    ];
-    if let Some(locator) = locator {
-        parts.push(format!("来源={locator}"));
-    }
-    if let Some(document_id) = document_id {
-        parts.push(format!("document_id={document_id}"));
-    }
-    if item_type == "asset_profile_hint" {
-        if let Some(title) = item
-            .get("title")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            parts.push(format!(
-                "标题={}",
-                truncate_assistant_supply_text(title, ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT)
-            ));
-        }
-        if let Some(asset_kind) = item
-            .get("asset_kind")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            parts.push(format!("资产={asset_kind}"));
-        }
-        let noun_terms = item
-            .get("noun_terms")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .take(6)
-            .collect::<Vec<_>>();
-        if !noun_terms.is_empty() {
-            parts.push(format!("名词={}", noun_terms.join("、")));
-        }
-    }
-    if let Some(media) = assistant_run_model_media_brief(item) {
-        parts.push(media);
-    }
-    Some(parts.join("；"))
-}
-
-fn assistant_run_model_memory_item_brief(item: &Value) -> Option<String> {
-    let summary = assistant_run_model_text_field(item, &["summary"])?;
-    Some(truncate_assistant_supply_text(
-        &summary,
-        ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT,
-    ))
-}
-
-fn assistant_run_model_detail_target_brief(target: &Value) -> Option<String> {
-    let document_id = target
-        .get("document_id")
-        .or_else(|| target.get("documentId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let reason = target
-        .get("reason")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("detail_first_scope");
-    let source_locator = target
-        .get("source_locator")
-        .or_else(|| target.get("sourceLocator"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("");
-    if source_locator.is_empty() {
-        Some(format!("document_id={document_id}, reason={reason}"))
-    } else {
-        Some(format!(
-            "document_id={document_id}, reason={reason}, source={source_locator}"
-        ))
-    }
-}
-
-fn assistant_run_model_media_brief(item: &Value) -> Option<String> {
-    let media = item
-        .get("media_context")
-        .or_else(|| item.get("mediaContext"))?;
-    let kind = media
-        .get("media_kind")
-        .or_else(|| media.get("mediaKind"))
-        .and_then(Value::as_str)
-        .unwrap_or("media");
-    let parse_status = media
-        .get("parse_status")
-        .or_else(|| media.get("parseStatus"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let transcript_count = media
-        .get("transcript_windows")
-        .or_else(|| media.get("transcriptWindows"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let scene_count = media
-        .get("scene_windows")
-        .or_else(|| media.get("sceneWindows"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let ocr_count = media
-        .get("keyframe_ocr_snippets")
-        .or_else(|| media.get("keyframeOcrSnippets"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    Some(format!(
-        "媒体={kind}/{parse_status}/transcript:{transcript_count}/scene:{scene_count}/ocr:{ocr_count}"
-    ))
-}
-
-fn assistant_run_model_text_field(item: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        item.get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
 fn build_assistant_run_context_policy(selected_scope: &Value) -> Value {
     let supply_policy = selected_scope
         .get("supply_policy")
@@ -34763,7 +34328,7 @@ fn build_assistant_run_context_policy(selected_scope: &Value) -> Value {
     })
 }
 
-async fn complete_assistant_run_provider(
+pub(crate) async fn complete_assistant_run_provider(
     model_lane: &'static str,
     runtime_mode: String,
     runtime_provider: String,
@@ -34782,6 +34347,7 @@ async fn complete_assistant_run_provider(
 }
 
 async fn complete_assistant_run_provider_for_create(
+    env_prefix: impl Into<String>,
     model_lane: &'static str,
     runtime_mode: String,
     runtime_provider: String,
@@ -34789,8 +34355,10 @@ async fn complete_assistant_run_provider_for_create(
     provider_input: String,
     live_delta_sink: Option<AssistantRunLiveDeltaSink>,
 ) -> std::result::Result<LlmResponse, ApiError> {
+    let env_prefix = env_prefix.into();
     if let Some(live_delta_sink) = live_delta_sink {
         complete_assistant_run_provider_live_streaming(
+            env_prefix,
             model_lane,
             runtime_mode,
             runtime_provider,
@@ -34800,7 +34368,8 @@ async fn complete_assistant_run_provider_for_create(
         )
         .await
     } else {
-        complete_assistant_run_provider(
+        complete_assistant_run_provider_with_env_prefix(
+            env_prefix,
             model_lane,
             runtime_mode,
             runtime_provider,
@@ -34862,7 +34431,126 @@ async fn complete_assistant_run_provider_with_env_prefix(
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
 }
 
+async fn complete_assistant_run_provider_attempts_for_create(
+    state: &AppState,
+    run_id: AssistantRunId,
+    model_lane: &'static str,
+    attempts: Vec<ExternalChannelChatRuntimeAttempt>,
+    provider_input: String,
+    live_delta_sink: Option<AssistantRunLiveDeltaSink>,
+) -> std::result::Result<LlmResponse, ApiError> {
+    let mut last_error = None;
+    let attempt_count = attempts.len();
+    for (attempt_index, attempt) in attempts.into_iter().enumerate() {
+        if attempt_index > 0 {
+            append_assistant_run_provider_attempt_event(
+                state,
+                run_id,
+                "assistant_run.provider_fallback_started",
+                &attempt,
+                attempt_index,
+                attempt_count,
+                json!({"reason": "previous_provider_attempt_failed"}),
+            )
+            .await?;
+        }
+
+        match complete_assistant_run_provider_for_create(
+            attempt.env_prefix.clone(),
+            model_lane,
+            attempt.runtime.mode.clone(),
+            attempt.runtime.provider.clone(),
+            attempt.runtime.model.clone(),
+            provider_input.clone(),
+            live_delta_sink.clone(),
+        )
+        .await
+        {
+            Ok(response) => {
+                if attempt_index > 0 {
+                    append_assistant_run_provider_attempt_event(
+                        state,
+                        run_id,
+                        "assistant_run.provider_fallback_completed",
+                        &attempt,
+                        attempt_index,
+                        attempt_count,
+                        json!({
+                            "runtime": render_runtime_manifest(&response.runtime),
+                        }),
+                    )
+                    .await?;
+                }
+                return Ok(response);
+            }
+            Err(error) => {
+                append_assistant_run_provider_attempt_event(
+                    state,
+                    run_id,
+                    "assistant_run.provider_attempt_failed",
+                    &attempt,
+                    attempt_index,
+                    attempt_count,
+                    json!({
+                        "error_code": error.payload.code,
+                        "error_status": error.status.as_u16(),
+                        "fallback_available": attempt_index + 1 < attempt_count,
+                    }),
+                )
+                .await?;
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        ApiError::internal(
+            "assistant_run_provider_attempts_empty",
+            "assistant run provider attempts were empty".to_string(),
+        )
+    }))
+}
+
+async fn append_assistant_run_provider_attempt_event(
+    state: &AppState,
+    run_id: AssistantRunId,
+    event_name: &str,
+    attempt: &ExternalChannelChatRuntimeAttempt,
+    attempt_index: usize,
+    attempt_count: usize,
+    extra: Value,
+) -> std::result::Result<(), ApiError> {
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: event_name.to_string(),
+                payload: json!({
+                    "attempt": attempt.label.as_str(),
+                    "attempt_index": attempt_index,
+                    "attempt_count": attempt_count,
+                    "env_prefix": attempt.env_prefix.as_str(),
+                    "runtime": {
+                        "mode": attempt.runtime.mode.as_str(),
+                        "provider": attempt.runtime.provider.as_str(),
+                        "model": attempt.runtime.model.as_str(),
+                        "lane": attempt.runtime.lane.as_str(),
+                    },
+                    "extra": extra,
+                }),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(ApiError::from_storage)
+}
+
 async fn complete_assistant_run_provider_live_streaming(
+    env_prefix: String,
     model_lane: &'static str,
     runtime_mode: String,
     runtime_provider: String,
@@ -34870,7 +34558,6 @@ async fn complete_assistant_run_provider_live_streaming(
     provider_input: String,
     live_delta_sink: AssistantRunLiveDeltaSink,
 ) -> std::result::Result<LlmResponse, ApiError> {
-    let env_prefix = "ASSISTANT_RUN".to_string();
     let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
     let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
     tokio::task::spawn_blocking(move || {
@@ -35216,29 +34903,6 @@ fn build_assistant_run_react_compact_natural_fallback_input(
     sections.join("\n\n")
 }
 
-async fn complete_assistant_run_react_natural_answer_fallback(
-    chat_runtime: &LlmRuntimeSelection,
-    provider_input: String,
-) -> Option<(String, Value)> {
-    if chat_runtime.mode == "placeholder" {
-        return None;
-    }
-    let response = complete_assistant_run_provider(
-        MODEL_LANE_ASSISTANT_CHAT,
-        chat_runtime.mode.clone(),
-        chat_runtime.provider.clone(),
-        chat_runtime.model.clone(),
-        provider_input,
-    )
-    .await
-    .ok()?;
-    let answer = response.output_text.trim().to_string();
-    if answer.is_empty() {
-        return None;
-    }
-    Some((answer, render_runtime_manifest(&response.runtime)))
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn maybe_run_assistant_run_answer_quality_retry_for_artifacts(
     state: &AppState,
@@ -35486,104 +35150,6 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     Ok(last_outcome)
 }
 
-fn assistant_run_answer_quality_low_quality_case_package(
-    assistant_run_id: AssistantRunId,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-    evidence_state: &Value,
-    output_artifacts: &[Value],
-    event_names: &[String],
-) -> Option<Value> {
-    let answer = assistant_run_assistant_message_content_from_artifacts(output_artifacts)
-        .unwrap_or_default();
-    let mut signals = Vec::<String>::new();
-    if assistant_run_request_expresses_strong_complaint(request) {
-        signals.push("strong_user_complaint".to_string());
-    } else if assistant_run_request_expresses_dissatisfaction(request) {
-        signals.push("user_complaint".to_string());
-    }
-    if let Some(reason) =
-        assistant_run_answer_quality_retry_reason(&answer, evidence_state, request)
-    {
-        signals.push(match reason {
-            "internal_marker_answer" => "unsafe_internal_marker_answer".to_string(),
-            "insufficient_or_uncertain_answer" => "weak_insufficient_evidence_answer".to_string(),
-            other => format!("answer_quality_{other}"),
-        });
-    }
-    if assistant_run_answer_contains_insufficient_evidence_marker(&answer)
-        && assistant_run_answer_quality_has_deterministic_supply(evidence_state)
-    {
-        signals.push("deterministic_supply_ignored".to_string());
-    }
-    if assistant_run_answer_quality_report_link_expected(request)
-        && !assistant_run_output_artifacts_include_report_link(output_artifacts)
-    {
-        signals.push("missing_report_artifact_link".to_string());
-    }
-    if event_names
-        .iter()
-        .any(|event| event.contains("answer_quality_gate.retry_exhausted"))
-    {
-        signals.push("retry_exhausted".to_string());
-    }
-    if event_names
-        .iter()
-        .any(|event| event.contains("answer_quality_gate.exhausted_controlled_fallback"))
-    {
-        signals.push("controlled_fallback_used".to_string());
-    }
-    let upgrade_parse_attempted = event_names
-        .iter()
-        .any(|event| event.contains("upgrade_parse_vlm"));
-    if assistant_run_supply_quality_suggests_parse_recovery(evidence_state)
-        && !upgrade_parse_attempted
-    {
-        signals.push("parse_quality_degraded_without_upgrade".to_string());
-    }
-    if assistant_run_answer_quality_repeated_fallback_or_timeout(event_names) {
-        signals.push("repeated_fallback_or_timeout".to_string());
-    }
-    signals.sort();
-    signals.dedup();
-    if signals.is_empty() {
-        return None;
-    }
-    let supply_quality = evidence_state
-        .get("supply_quality")
-        .cloned()
-        .unwrap_or(Value::Null);
-    Some(json!({
-        "template_id": "answer_quality_autofix",
-        "status": "collected",
-        "assistant_run_id": assistant_run_id.to_string(),
-        "low_quality_signals": signals,
-        "user_question": truncate_assistant_supply_text(&request.prompt, 800),
-        "customer_answer_excerpt": truncate_assistant_supply_text(&answer, 1000),
-        "selected_scope_summary": assistant_run_answer_quality_case_selected_scope_summary(selected_scope),
-        "evidence_summary": {
-            "supply_quality": supply_quality,
-            "recovery_followup": evidence_state
-                .get("recovery_followup")
-                .filter(|value| !value.is_null())
-                .cloned()
-                .unwrap_or(Value::Null),
-            "answer_supply_sources": assistant_run_answer_quality_case_supply_sources(evidence_state),
-            "retrieval_or_fact_snapshot_status": assistant_run_answer_quality_case_supply_status(evidence_state),
-        },
-        "trace_summary": {
-            "events": event_names.iter().take(24).cloned().collect::<Vec<_>>(),
-            "quality_gate_events": event_names.iter().filter(|event| event.contains("answer_quality_gate")).take(12).cloned().collect::<Vec<_>>(),
-        },
-        "blocking_gate_enabled": false,
-    }))
-}
-
-fn assistant_run_answer_quality_report_link_expected(request: &CreateAssistantRunRequest) -> bool {
-    assistant_run_xinbai_published_report_link_answer(&request.prompt).is_some()
-        || external_channel_prompt_requests_static_page_report_workflow(&request.prompt)
-}
-
 async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
     state: &AppState,
     run: &AssistantRun,
@@ -35632,11 +35198,9 @@ async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
                 run.id,
                 &NewAssistantRunEvent {
                     event_name: "assistant_run.codex_sidecar_preflight_rejected".to_string(),
-                    payload: json!({
-                        "capability": capability,
-                        "reason": reason,
-                        "non_blocking": true,
-                    }),
+                    payload: assistant_run_customer_codex_sidecar_preflight_rejected_payload(
+                        capability, reason,
+                    ),
                     created_at: now,
                 },
             )
@@ -35670,12 +35234,10 @@ async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
             run.id,
             &NewAssistantRunEvent {
                 event_name: "assistant_run.codex_sidecar_queued".to_string(),
-                payload: json!({
-                    "capability": capability,
-                    "workflow_execution_id": execution_id.to_string(),
-                    "non_blocking": true,
-                    "main_answer_path_preserved": true,
-                }),
+                payload: assistant_run_customer_codex_sidecar_queued_payload(
+                    capability,
+                    execution_id,
+                ),
                 created_at: now,
             },
         )
@@ -35683,38 +35245,6 @@ async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
         .map_err(ApiError::from_storage)?;
     apply_workflow_signal(state, execution_id, WorkflowSignal::Start).await?;
     Ok(Some(execution_id))
-}
-
-fn assistant_run_customer_codex_sidecar_scope_blocked_payload(
-    capability: &str,
-    reason: &str,
-) -> Value {
-    json!({
-        "capability": capability,
-        "route": capability,
-        "status": "needs_operator_review",
-        "reason": reason,
-        "allowed_next_step": "operator can review this as a product change request",
-        "non_blocking": true,
-        "main_answer_path_preserved": true,
-        "v3_product_repo_write_allowed": false,
-        "customer_writable": false,
-    })
-}
-
-fn assistant_run_customer_codex_sidecar_preflight(
-    capability: &str,
-) -> std::result::Result<(), &'static str> {
-    if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
-        return Err("codex_host_task_disabled");
-    }
-    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
-        return Err("codex_host_task_not_allowlisted");
-    }
-    if !env_csv_contains("CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES", capability) {
-        return Err("codex_host_agent_capability_not_allowlisted");
-    }
-    Ok(())
 }
 
 fn assistant_run_customer_codex_sidecar_capability(
@@ -35759,960 +35289,6 @@ fn assistant_run_customer_codex_sidecar_capability(
     Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
 }
 
-fn assistant_run_prompt_requests_codex_forward(prompt: &str) -> bool {
-    let trimmed = prompt.trim_start();
-    if trimmed.eq_ignore_ascii_case("cc") {
-        return true;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    lower.starts_with("cc ")
-        || lower.starts_with("cc:")
-        || lower.starts_with("cc：")
-        || lower.starts_with("cc,")
-        || lower.starts_with("cc，")
-        || lower.starts_with("cc.")
-        || lower.starts_with("cc。")
-        || lower.starts_with("cc;")
-        || lower.starts_with("cc；")
-        || lower.starts_with("cc-")
-        || lower.starts_with("cc\n")
-        || lower.starts_with("cc\t")
-}
-
-fn assistant_run_prompt_without_codex_forward_prefix(prompt: &str) -> &str {
-    let trimmed = prompt.trim_start();
-    if !assistant_run_prompt_requests_codex_forward(trimmed) {
-        return prompt;
-    }
-    if trimmed.eq_ignore_ascii_case("cc") {
-        return "";
-    }
-    trimmed[2..].trim_start_matches(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ':' | '：' | ',' | '，' | '.' | '。' | ';' | '；' | '-')
-    })
-}
-
-fn assistant_run_prompt_requests_v3_product_change(prompt: &str) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    let lower = prompt.to_ascii_lowercase();
-    let has_v3_signal =
-        prompt_contains_any(
-            prompt,
-            &[
-                "V3",
-                "主站",
-                "原功能",
-                "产品功能",
-                "登录",
-                "鉴权",
-                "接口",
-                "部署",
-                "发版",
-            ],
-        ) || ascii_prompt_contains_any(&lower, &["v3", "api", "auth", "deploy", "login"]);
-    let has_change_signal =
-        prompt_contains_any(
-            prompt,
-            &[
-                "修改", "改造", "调整", "删除", "新增", "重构", "发版", "部署", "重启",
-            ],
-        ) || ascii_prompt_contains_any(&lower, &["modify", "change", "patch", "deploy", "restart"]);
-    if !(has_v3_signal && has_change_signal) {
-        return false;
-    }
-    if assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(prompt) {
-        return false;
-    }
-    if assistant_run_prompt_mentions_customer_codex_artifact_surface(&compact, &lower)
-        && !assistant_run_prompt_mentions_v3_product_system_surface(&compact, &lower)
-    {
-        return false;
-    }
-    true
-}
-
-fn assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(prompt: &str) -> bool {
-    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(prompt);
-    let compact = forwarded_prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if compact.is_empty() {
-        return false;
-    }
-    let lower = compact.to_ascii_lowercase();
-    let has_data_ingestion_intent =
-        external_channel_message_requests_data_ingestion_analysis(forwarded_prompt)
-            || prompt_contains_any(
-                &compact,
-                &[
-                    "数据库接入",
-                    "数据库对接",
-                    "数据库API",
-                    "数据库接口",
-                    "业务库接入",
-                    "业务库对接",
-                    "建库",
-                    "建数据表",
-                    "数据表设计",
-                    "表结构设计",
-                    "字段清洗",
-                    "字段规范",
-                    "字段口径",
-                    "数据同步",
-                    "同步入库",
-                    "数据入库",
-                    "接口接入",
-                    "接口对接",
-                    "API接入",
-                    "API对接",
-                    "第三方系统对接",
-                    "业务系统对接",
-                    "OA对接",
-                    "ERP对接",
-                    "CRM对接",
-                    "MCP对接",
-                    "连接器",
-                    "connector",
-                ],
-            )
-            || ascii_prompt_contains_any(
-                &lower,
-                &[
-                    "databaseintegration",
-                    "databaseapi",
-                    "apiintegration",
-                    "apiconnector",
-                    "connector",
-                    "webhook",
-                    "etl",
-                    "schema",
-                ],
-            );
-    if !has_data_ingestion_intent {
-        return false;
-    }
-    let unsafe_product_change = prompt_contains_any(
-        &compact,
-        &[
-            "修改DataMax",
-            "改DataMax",
-            "修改V3",
-            "改V3",
-            "主站接口",
-            "公开接口",
-            "公开API",
-            "鉴权",
-            "认证",
-            "登录",
-            "部署",
-            "重启",
-            "发版",
-            "提交代码",
-            "数据库迁移",
-            "生产表写入",
-            "生产库写入",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "datamaxapi",
-            "v3api",
-            "publicapi",
-            "auth",
-            "login",
-            "deploy",
-            "restart",
-            "migration",
-            "productionwrite",
-        ],
-    );
-    !unsafe_product_change
-}
-
-fn assistant_run_prompt_mentions_customer_codex_artifact_surface(
-    compact_prompt: &str,
-    lower_prompt: &str,
-) -> bool {
-    prompt_contains_any(
-        compact_prompt,
-        &[
-            "V3生成的静态页",
-            "V3生成静态页",
-            "V3生成的页面",
-            "V3生成页面",
-            "生成的静态页",
-            "生成静态页",
-            "生成的页面",
-            "当前生成静态页",
-            "当前静态页",
-            "当前报表页面",
-            "当前报表页",
-            "当前看板",
-            "客户产物",
-            "客户制品",
-            "生成产物",
-            "报表页面",
-            "报表页",
-            "静态页",
-            "generated-artifact",
-            "generatedartifact",
-        ],
-    ) || ascii_prompt_contains_any(
-        lower_prompt,
-        &[
-            "artifact",
-            "generatedartifact",
-            "generated_artifact",
-            "staticpage",
-            "static_page",
-        ],
-    )
-}
-
-fn assistant_run_prompt_mentions_v3_product_system_surface(
-    compact_prompt: &str,
-    lower_prompt: &str,
-) -> bool {
-    prompt_contains_any(
-        compact_prompt,
-        &[
-            "源码",
-            "源代码",
-            "产品源码",
-            "代码库",
-            "仓库",
-            "主站",
-            "原功能",
-            "产品功能",
-            "功能",
-            "服务",
-            "登录",
-            "鉴权",
-            "认证",
-            "权限",
-            "接口",
-            "公开接口",
-            "公开API",
-            "数据库迁移",
-            "迁移",
-            "表结构",
-            "模型配置",
-            "provider配置",
-            "环境变量",
-            "部署",
-            "发版",
-            "重启",
-            "提交",
-            "合并代码",
-            "systemd",
-            "nginx",
-        ],
-    ) || ascii_prompt_contains_any(
-        lower_prompt,
-        &[
-            "source",
-            "repo",
-            "service",
-            "api",
-            "auth",
-            "login",
-            "migration",
-            "schema",
-            "provider",
-            "env",
-            "deploy",
-            "restart",
-            "commit",
-            "systemd",
-            "nginx",
-        ],
-    )
-}
-
-fn assistant_run_prompt_explicit_customer_codex_signal(compact: &str, lower: &str) -> bool {
-    prompt_contains_any(
-        compact,
-        &[
-            "用Codex",
-            "让Codex",
-            "走Codex",
-            "Codex执行",
-            "codex执行器",
-            "复杂需求",
-            "复杂任务",
-            "客户复杂需求",
-            "执行器处理",
-            "执行计划",
-        ],
-    ) || ascii_prompt_contains_any(lower, &["codex"])
-}
-
-fn assistant_run_prompt_requests_generated_static_page_edit(
-    prompt: &str,
-    current_artifact: Option<&Value>,
-) -> bool {
-    let Some(current_artifact) = current_artifact else {
-        return false;
-    };
-    if static_page_public_url_from_current_artifact(current_artifact).is_none() {
-        return false;
-    }
-    static_page_revision_explicit_intent_present(prompt)
-}
-
-fn assistant_run_prompt_requests_generated_static_page_publish(
-    prompt: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if compact.is_empty() {
-        return false;
-    }
-    let lower = compact.to_ascii_lowercase();
-    let has_static_page_surface = prompt_contains_any(
-        &compact,
-        &[
-            "静态页",
-            "报表页面",
-            "报表页",
-            "交互页面",
-            "动态页面",
-            "页面",
-            "网页",
-            "网站",
-            "看板",
-            "仪表盘",
-            "大屏",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &["dashboard", "webpage", "htmlpage", "landingpage", "website"],
-    );
-    if !has_static_page_surface {
-        return false;
-    }
-    let has_publish_action = prompt_contains_any(
-        &compact,
-        &[
-            "生成",
-            "输出",
-            "创建",
-            "制作",
-            "做成",
-            "做个",
-            "做一个",
-            "出页面",
-            "发布",
-            "渲染",
-            "重新生成",
-            "重新做",
-            "重新设计",
-            "全新页面",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &["create", "generate", "build", "make", "publish", "render"],
-    );
-    if !has_publish_action {
-        return false;
-    }
-    let explicit_codex_signal =
-        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
-    assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower)
-        || explicit_codex_signal
-        || has_static_page_surface
-}
-
-fn assistant_run_prompt_requests_customer_codex_report_artifact_package(
-    prompt: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if compact.is_empty() {
-        return false;
-    }
-    let lower = compact.to_ascii_lowercase();
-    if !assistant_run_prompt_requests_codex_forward(prompt)
-        && !assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower)
-    {
-        return false;
-    }
-    if !assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower) {
-        return false;
-    }
-    let has_data_analysis_intent = prompt_contains_any(
-        &compact,
-        &[
-            "经营分析",
-            "数据分析",
-            "经营工作分析",
-            "经营复盘",
-            "管理层复盘",
-            "业务分析",
-            "综合分析",
-            "多维分析",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "analysis",
-            "analytics",
-            "businessanalysis",
-            "operatinganalysis",
-        ],
-    );
-    if !has_data_analysis_intent {
-        return false;
-    }
-    let has_explicit_deliverable_signal = prompt_contains_any(
-        &compact,
-        &[
-            "可下载",
-            "说明文件",
-            "文件产物",
-            "页面产物",
-            "报告产物",
-            "报表产物",
-            "产物包",
-            "交付包",
-            "下载包",
-            "文档包",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &["downloadable", "artifact", "package", "deliverable"],
-    );
-    if external_channel_prompt_is_report_explanation_question(&lower, prompt)
-        && !has_explicit_deliverable_signal
-    {
-        return false;
-    }
-    let has_artifact_package_signal = prompt_contains_any(
-        &compact,
-        &[
-            "可下载",
-            "报告",
-            "报表",
-            "说明文件",
-            "文件产物",
-            "页面产物",
-            "报告产物",
-            "报表产物",
-            "产物包",
-            "交付包",
-            "下载包",
-            "文档包",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "downloadable",
-            "artifact",
-            "package",
-            "report",
-            "deliverable",
-        ],
-    );
-    if !has_artifact_package_signal {
-        return false;
-    }
-    let strong_static_page_surface = prompt_contains_any(
-        &compact,
-        &[
-            "静态页",
-            "静态页面",
-            "看板",
-            "仪表盘",
-            "大屏",
-            "网页",
-            "网站",
-            "交互页面",
-            "动态页面",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "dashboard",
-            "webpage",
-            "website",
-            "htmlpage",
-            "staticpage",
-            "static_page",
-        ],
-    );
-    !strong_static_page_surface
-}
-
-fn assistant_run_prompt_requests_data_analysis_report_sidecar(
-    prompt: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if compact.is_empty() {
-        return false;
-    }
-    let lower = compact.to_ascii_lowercase();
-    let has_customer_context =
-        assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower);
-    if !has_customer_context {
-        return false;
-    }
-    let has_data_analysis_intent = prompt_contains_any(
-        &compact,
-        &[
-            "经营分析",
-            "数据分析",
-            "经营工作分析",
-            "经营复盘",
-            "管理层复盘",
-            "业务分析",
-            "趋势分析",
-            "统计分析",
-            "综合分析",
-            "整体分析",
-            "全面分析",
-            "多维分析",
-            "分析数据",
-            "分析一下数据",
-            "新百经营",
-            "新世界经营",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "analysis",
-            "analytics",
-            "business",
-            "operating",
-            "operation",
-            "dataanalysis",
-            "businessanalysis",
-        ],
-    );
-    if !has_data_analysis_intent {
-        return false;
-    }
-    let has_execution_signal = prompt_contains_any(
-        &compact,
-        &[
-            "做一下",
-            "做个",
-            "做一个",
-            "生成",
-            "输出",
-            "创建",
-            "制作",
-            "整理",
-            "给出",
-            "出一版",
-            "复盘",
-            "分析",
-            "梳理",
-            "帮我",
-            "处理",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "create",
-            "generate",
-            "build",
-            "make",
-            "produce",
-            "analyze",
-            "analyse",
-            "review",
-            "summarize",
-            "summarise",
-        ],
-    );
-    if !has_execution_signal {
-        return false;
-    }
-
-    let explicit_report_output = prompt_contains_any(
-        &compact,
-        &[
-            "输出报告",
-            "输出报表",
-            "生成报告",
-            "生成报表",
-            "生成看板",
-            "生成图表",
-            "生成可视化",
-            "做成报告",
-            "做成报表",
-            "做成看板",
-            "整理成报告",
-            "整理成报表",
-            "给一份报告",
-            "给一份报表",
-            "出一份报告",
-            "出一份报表",
-        ],
-    ) || lower.contains("analysisreport")
-        || lower.contains("analyticsreport")
-        || lower.contains("generatereport")
-        || lower.contains("createreport")
-        || lower.contains("buildreport");
-    let report_context =
-        assistant_run_prompt_or_context_has_report_artifact(prompt, request, selected_scope);
-    let strong_large_output_signal = prompt_contains_any(
-        &compact,
-        &[
-            "全面",
-            "完整",
-            "详细",
-            "系统",
-            "整体",
-            "多维",
-            "多角度",
-            "大篇幅",
-            "长篇",
-            "大体量",
-            "大量",
-            "内容量大",
-            "内容比较多",
-            "长输出",
-            "全部",
-            "所有",
-            "各",
-            "逐",
-            "分维度",
-            "分门店",
-            "分品牌",
-            "明细",
-            "清单",
-            "汇总",
-            "表格",
-            "图表",
-            "可视化",
-            "报告",
-            "报表",
-            "看板",
-            "页面",
-            "输出",
-            "整理",
-            "生成",
-            "做成",
-            "给一份",
-            "出一份",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "detailed",
-            "complete",
-            "comprehensive",
-            "long",
-            "large",
-            "full",
-            "report",
-            "dashboard",
-            "visualization",
-            "visualisation",
-            "table",
-            "chart",
-        ],
-    );
-
-    if external_channel_prompt_is_report_explanation_question(&lower, prompt)
-        && !explicit_report_output
-    {
-        return false;
-    }
-
-    explicit_report_output || report_context || strong_large_output_signal
-}
-
-fn assistant_run_customer_codex_context_present(
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-    compact_prompt: &str,
-    lower_prompt: &str,
-) -> bool {
-    request.current_artifact.is_some()
-        || !selected_dataset_ids_from_scope(selected_scope).is_empty()
-        || !selected_document_ids_from_scope(selected_scope).is_empty()
-        || selected_scope.get("database_sources").is_some()
-        || selected_scope.get("databaseSources").is_some()
-        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
-        || request_like_prompt_mentions_data_context(compact_prompt, lower_prompt)
-}
-
-fn assistant_run_prompt_or_context_has_report_artifact(
-    prompt: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    let lower = compact.to_ascii_lowercase();
-    let prompt_has_report_context = prompt_contains_any(
-        &compact,
-        &[
-            "报表",
-            "报告",
-            "看板",
-            "仪表盘",
-            "可视化",
-            "图表",
-            "页面",
-            "静态页",
-            "月报",
-            "周报",
-            "日报",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "report",
-            "dashboard",
-            "visualization",
-            "visualisation",
-            "chart",
-        ],
-    );
-    if prompt_has_report_context {
-        return true;
-    }
-    if request
-        .current_artifact
-        .as_ref()
-        .is_some_and(assistant_run_current_artifact_is_reportish)
-    {
-        return true;
-    }
-    [
-        "report_plan_id",
-        "reportPlanId",
-        "report_entry",
-        "reportEntry",
-        "static_page_draft_id",
-        "staticPageDraftId",
-        "static_page",
-        "staticPage",
-        "current_report",
-        "currentReport",
-    ]
-    .iter()
-    .any(|key| selected_scope.get(*key).is_some())
-}
-
-fn assistant_run_current_artifact_is_reportish(current_artifact: &Value) -> bool {
-    if static_page_public_url_from_current_artifact(current_artifact).is_some() {
-        return true;
-    }
-    [
-        "type",
-        "artifact_type",
-        "artifactType",
-        "artifact_kind",
-        "artifactKind",
-        "kind",
-    ]
-    .iter()
-    .filter_map(|key| current_artifact.get(*key).and_then(Value::as_str))
-    .any(|value| {
-        let lower = value.to_ascii_lowercase();
-        value.contains("报表")
-            || value.contains("报告")
-            || value.contains("看板")
-            || lower.contains("report")
-            || lower.contains("static_page")
-            || lower.contains("dashboard")
-    })
-}
-
-fn assistant_run_prompt_requests_customer_artifact_workspace(
-    prompt: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if compact.is_empty() {
-        return false;
-    }
-    let lower = compact.to_ascii_lowercase();
-    let explicit_codex_signal =
-        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
-    let artifact_signal = prompt_contains_any(
-        &compact,
-        &[
-            "生成页面",
-            "生成网页",
-            "生成网站",
-            "生成报表",
-            "生成报告",
-            "生成看板",
-            "生成图表",
-            "生成文档",
-            "生成方案",
-            "生成脚本",
-            "生成产物",
-            "生成计划",
-            "输出页面",
-            "输出网页",
-            "输出报表",
-            "输出报告",
-            "输出看板",
-            "输出文档",
-            "输出方案",
-            "输出脚本",
-            "输出产物",
-            "输出计划",
-            "创建文档",
-            "创建方案",
-            "创建计划",
-            "制作页面",
-            "制作报表",
-            "制作报告",
-            "制作方案",
-            "制作脚本",
-            "制作计划",
-            "做成页面",
-            "做成报表",
-            "做成报告",
-            "做一份文档",
-            "做一份方案",
-            "做一份计划",
-            "做个方案",
-            "做个计划",
-            "说明文件",
-            "方案文档",
-            "执行方案",
-            "分析方案",
-            "运营方案",
-            "客户沟通方案",
-            "客户产物",
-            "客户制品",
-            "产物包",
-            "文档包",
-            "脚本包",
-            "文档",
-            "文件",
-            "制品包",
-            "写一个页面",
-            "写个页面",
-            "写一份文档",
-            "写一份方案",
-            "写一份计划",
-            "写个文档",
-            "写个方案",
-            "写个计划",
-            "写一个脚本",
-            "写个脚本",
-            "出一份报告",
-            "出一份报表",
-            "出一份文档",
-            "出一份方案",
-            "出一份计划",
-            "出一个文档包",
-            "出一个脚本包",
-            "脚本",
-            "改这个页面",
-            "改当前页面",
-            "修改这个页面",
-            "修改当前页面",
-            "调整这个页面",
-            "调整当前页面",
-            "静态页",
-            "可视化报表",
-            "dashboard",
-            "html",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "buildpage",
-            "buildreport",
-            "createpage",
-            "createreport",
-            "dashboard",
-            "artifact",
-            "package",
-            "webpage",
-            "html",
-            "script",
-        ],
-    );
-    let execution_signal = prompt_contains_any(
-        &compact,
-        &[
-            "做一下",
-            "做个",
-            "做一个",
-            "生成",
-            "输出",
-            "创建",
-            "制作",
-            "整理",
-            "写",
-            "改",
-            "修改",
-            "调整",
-            "优化",
-            "执行",
-            "跑一下",
-            "帮我",
-            "处理",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "create", "generate", "build", "make", "write", "revise", "edit", "run", "handle",
-        ],
-    );
-    let has_customer_context = request.current_artifact.is_some()
-        || !selected_dataset_ids_from_scope(selected_scope).is_empty()
-        || !selected_document_ids_from_scope(selected_scope).is_empty()
-        || selected_scope.get("database_sources").is_some()
-        || selected_scope.get("databaseSources").is_some()
-        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
-        || request_like_prompt_mentions_data_context(&compact, &lower)
-        || artifact_signal
-        || explicit_codex_signal;
-
-    has_customer_context && execution_signal && artifact_signal
-}
-
-fn request_like_prompt_mentions_data_context(compact_prompt: &str, lower_prompt: &str) -> bool {
-    prompt_contains_any(
-        compact_prompt,
-        &[
-            "数据",
-            "数据集",
-            "数据库",
-            "文档",
-            "报表",
-            "新百",
-            "门店",
-            "经营",
-        ],
-    ) || ascii_prompt_contains_any(lower_prompt, &["data", "dataset", "database", "document"])
-}
-
 fn assistant_run_customer_codex_sidecar_execution(
     tenant_id: TenantId,
     workflow_catalog: &WorkflowCatalog,
@@ -36734,22 +35310,23 @@ fn assistant_run_customer_codex_sidecar_execution(
     let now = Utc::now();
     let execution_id = WorkflowExecutionId::new();
     let runtime_state = definition.initial_state(execution_id, now);
+    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(&request.prompt);
     let request_view = CodexHostTaskRequestView {
         assistant_run_id,
         capability: capability.to_string(),
-        task: Some(assistant_run_customer_codex_sidecar_task(
+        task: Some(assistant_run_customer_codex_sidecar_task_prompt(
             capability,
-            request,
+            forwarded_prompt,
             selected_scope,
             evidence_state,
         )),
         local_thread_id,
-        fixed_task: assistant_run_customer_codex_sidecar_fixed_task(
+        fixed_task: assistant_run_customer_codex_sidecar_fixed_task_context(
             tenant_id,
             assistant_run_id,
             execution_id,
             capability,
-            request,
+            forwarded_prompt,
             selected_scope,
             evidence_state,
         ),
@@ -36763,23 +35340,24 @@ fn assistant_run_customer_codex_sidecar_execution(
         Value::Object(map) => map,
         _ => Map::new(),
     };
-    if let Some(workspace_seed) =
-        assistant_run_customer_codex_sidecar_workspace_seed(capability, request)
-    {
+    if let Some(workspace_seed) = assistant_run_customer_codex_sidecar_workspace_seed(
+        capability,
+        request.current_artifact.as_ref(),
+    ) {
         context.insert("workspace_seed".to_string(), workspace_seed);
     }
     context.insert(
         "codex_sidecar".to_string(),
-        json!({
-            "version": 1,
-            "route": assistant_run_customer_codex_sidecar_route(capability),
-            "non_blocking": true,
-            "main_answer_path_preserved": true,
-            "permission_scope": assistant_run_customer_codex_sidecar_permission_scope(capability),
-            "selected_scope_summary": assistant_run_customer_codex_sidecar_scope_summary(selected_scope),
-            "evidence_summary": assistant_run_customer_codex_sidecar_evidence_summary(evidence_state),
-            "current_artifact": request.current_artifact.as_ref().and_then(assistant_run_safe_model_completion_action).unwrap_or(Value::Null),
-        }),
+        assistant_run_customer_codex_sidecar_context_payload(
+            capability,
+            selected_scope,
+            evidence_state,
+            request
+                .current_artifact
+                .as_ref()
+                .and_then(assistant_run_safe_model_completion_action)
+                .unwrap_or(Value::Null),
+        ),
     );
     context.insert(
         "retries_remaining".to_string(),
@@ -36801,258 +35379,6 @@ fn assistant_run_customer_codex_sidecar_execution(
     };
     let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
     Ok((execution, initial_event))
-}
-
-fn assistant_run_customer_codex_sidecar_fixed_task(
-    tenant_id: TenantId,
-    assistant_run_id: AssistantRunId,
-    execution_id: WorkflowExecutionId,
-    capability: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-    evidence_state: &Value,
-) -> Option<CodexHostFixedTaskTemplateContextView> {
-    if capability != CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS {
-        return None;
-    }
-    Some(assistant_run_data_ingestion_sidecar_fixed_task(
-        tenant_id,
-        assistant_run_id,
-        execution_id,
-        request,
-        selected_scope,
-        evidence_state,
-    ))
-}
-
-fn assistant_run_data_ingestion_sidecar_fixed_task(
-    tenant_id: TenantId,
-    assistant_run_id: AssistantRunId,
-    execution_id: WorkflowExecutionId,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-    evidence_state: &Value,
-) -> CodexHostFixedTaskTemplateContextView {
-    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(&request.prompt);
-    CodexHostFixedTaskTemplateContextView {
-        template_id: CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis,
-        version: 1,
-        assistant_run_id: Some(assistant_run_id.to_string()),
-        draft_id: None,
-        case_id: Some(format!("assistant-run-data-ingestion-{execution_id}")),
-        dataset_scope: assistant_run_data_ingestion_sidecar_dataset_scope(
-            tenant_id,
-            selected_scope,
-        ),
-        requirements: json!({
-            "user_goal": truncate_assistant_supply_text(forwarded_prompt, 1200),
-            "intent": "data_ingestion_analysis",
-            "source": "v3_main_assistant_cc_sidecar",
-            "target_dataset_required": true,
-            "target_dataset_resolution": "use_selected_dataset_when_available_or_propose_one_datamax_dataset_to_create_or_attach",
-            "requested_outputs": [
-                "data_quality_report",
-                "field_mapping_plan",
-                "staging_spec",
-                "validation_checks",
-                "recommended_next_actions"
-            ],
-        }),
-        image2: Value::Null,
-        policies: json!({
-            "mode": "read_only_analysis_or_staging_spec",
-            "credential_policy": "do_not_request_or_emit_credentials",
-            "production_write_policy": "needs_human_confirmation",
-            "public_api_change_allowed": false,
-            "schema_change_allowed_without_confirmation": false
-        }),
-        low_quality_signals: Vec::new(),
-        user_question: Some(truncate_assistant_supply_text(forwarded_prompt, 1000)),
-        customer_answer: None,
-        evidence_summary: json!({
-            "source_visibility": "v3_main_assistant_selected_scope_only",
-            "supplied_item_count": assistant_run_evidence_supplied_count(evidence_state),
-            "supply_quality": evidence_state.get("supply_quality").cloned().unwrap_or(Value::Null),
-            "raw_credentials_supplied": false
-        }),
-        trace_summary: Value::Null,
-        allowed_write_scope: None,
-        human_review_policy:
-            CodexHostFixedTaskHumanReviewPolicyView::AutoForReadOnlyAnalysisOrStagingSpec,
-    }
-}
-
-fn assistant_run_data_ingestion_sidecar_dataset_scope(
-    tenant_id: TenantId,
-    selected_scope: &Value,
-) -> Value {
-    json!({
-        "tenant_id": tenant_id.to_string(),
-        "dataset_ids": selected_dataset_ids_from_scope(selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "database_source_ids": selected_string_ids_from_scope(
-            selected_scope,
-            &[
-                "database_source_ids",
-                "databaseSourceIds",
-                "database_sources",
-                "databaseSources",
-                "business_datasource_ids",
-                "businessDatasourceIds",
-                "businessDataSourceIds",
-                "source_ids",
-                "sourceIds"
-            ]
-        ),
-        "selected_document_ids": selected_document_ids_from_scope(selected_scope)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "uploaded_file_ids": selected_string_ids_from_scope(
-            selected_scope,
-            &["uploaded_file_ids", "uploadedFiles", "files", "file_ids"]
-        ),
-        "table_ids": selected_string_ids_from_scope(
-            selected_scope,
-            &["table_ids", "tables", "selected_tables", "selectedTables"]
-        ),
-        "scope_source": "v3_main_assistant_selected_scope",
-    })
-}
-
-fn assistant_run_data_ingestion_sidecar_scope_has_source(selected_scope: &Value) -> bool {
-    let dataset_scope =
-        assistant_run_data_ingestion_sidecar_dataset_scope(TenantId::new(), selected_scope);
-    external_channel_data_ingestion_scope_has_source(&dataset_scope)
-}
-
-fn assistant_run_customer_codex_sidecar_workspace_seed(
-    capability: &str,
-    request: &CreateAssistantRunRequest,
-) -> Option<Value> {
-    if capability != CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT {
-        return None;
-    }
-    let current_artifact = request.current_artifact.as_ref()?;
-    let public_url = static_page_public_url_from_current_artifact(current_artifact)?;
-    Some(json!({
-        "schema": "v3.codex_host_workspace_seed",
-        "version": 1,
-        "kind": "generated_static_page_edit",
-        "source": "assistant_run.current_artifact",
-        "existing_artifact": {
-            "public_url": public_url,
-            "index_url": public_url,
-            "revision_requested": true,
-            "source": "assistant_run_current_artifact"
-        },
-        "current_artifact": assistant_run_current_artifact_brief(current_artifact),
-        "output_manifest": {
-            "preferred_path": "customer-artifact-manifest.json",
-            "compatible_paths": ["artifacts/manifest.json", "generated-artifacts/manifest.json"]
-        },
-        "safety": {
-            "workspace_write_only": true,
-            "v3_product_repo_write_allowed": false,
-            "stable_url_overwrite_allowed": false
-        }
-    }))
-}
-
-fn assistant_run_customer_codex_sidecar_task(
-    capability: &str,
-    request: &CreateAssistantRunRequest,
-    selected_scope: &Value,
-    evidence_state: &Value,
-) -> String {
-    let permission_scope = assistant_run_customer_codex_sidecar_permission_scope(capability);
-    let capability_instructions =
-        assistant_run_customer_codex_sidecar_capability_instructions(capability);
-    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(&request.prompt);
-    format!(
-        "Run DataMax Codex Host capability `{capability}` for a customer request from the web UI.\n\
-         Return a concise structured result, action intent, or customer artifact package. Preserve the main AssistantRun answer path; this sidecar must not block customer-visible text.\n\
-         Safety boundary: do not modify V3 product source code, services, migrations, auth, public APIs, provider configuration, deployment, commits, or system files. \
-         If the customer asks for V3 product changes, return needs_operator_review. V3-generated static pages and customer artifacts are customer-owned outputs, not V3 product code.\n\
-         Permission scope: {permission_scope}.\n\
-         Capability instructions: {capability_instructions}\n\n\
-         User request:\n{prompt}\n\n\
-         Selected scope summary:\n{scope}\n\n\
-         Evidence summary:\n{evidence}",
-        prompt = truncate_assistant_supply_text(forwarded_prompt, 1600),
-        scope = assistant_run_customer_codex_sidecar_scope_summary(selected_scope),
-        evidence = assistant_run_customer_codex_sidecar_evidence_summary(evidence_state),
-    )
-}
-
-fn assistant_run_customer_codex_sidecar_route(capability: &str) -> &'static str {
-    match capability {
-        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => "assistant_run_data_ingestion_analysis",
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => "assistant_run_generated_static_page_edit",
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
-            "assistant_run_generated_static_page_publish"
-        }
-        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => "assistant_run_customer_artifact_request",
-        _ => "assistant_run_customer_complex_request",
-    }
-}
-
-fn assistant_run_customer_codex_sidecar_permission_scope(capability: &str) -> &'static str {
-    match capability {
-        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => {
-            "data-ingestion analysis and staging-spec planning with one target DataMax dataset identified or proposed; no V3 public API changes"
-        }
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
-            "workspace-write only inside the isolated task workspace seeded from the current generated static page artifact; no V3 repo writes"
-        }
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
-            "workspace-write only inside the isolated task workspace for a new generated static page package; DataMax validates and publishes generated artifacts; no V3 repo writes"
-        }
-        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => {
-            "workspace-write only inside the isolated customer task workspace for generated customer artifacts; no V3 repo writes"
-        }
-        _ => "read-only analysis and planning; no filesystem writes",
-    }
-}
-
-fn assistant_run_customer_codex_sidecar_capability_instructions(capability: &str) -> &'static str {
-    match capability {
-        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => {
-            "Use the fixed data_ingestion_analysis template. Let Codex take over the customer's database/API integration request, but make sure the result identifies one target DataMax dataset or proposes one dataset to create/attach before continuing. Keep the existing safety boundary: do not request or emit credentials, do not change public APIs, and do not write production data without confirmation."
-        }
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
-            "Revise only the supplied V3-generated static page/customer artifact context. Read workspace-seed.json and, when present, existing-artifact/ as the current page copy. Produce a new package under the task workspace for DataMax validation; do not overwrite stable URLs or bypass DataMax publish checks. If you create files, write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type."
-        }
-        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
-            "Create a new generated static page/customer page package inside the isolated task workspace. Use the supplied selected scope and evidence summary as context, write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type, and rely on DataMax validation/publish checks before any public generated-artifact URL is exposed."
-        }
-        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => {
-            "Use the isolated task workspace as the customer's Codex scratchpad. Create or modify customer-facing artifacts there when useful. Write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type; also return a concise next action intent and keep normal answer generation unblocked."
-        }
-        _ => {
-            "Analyze the customer request, supplied scope, and evidence. Return a structured plan, findings, or recommended DataMax actions without assuming write access."
-        }
-    }
-}
-
-fn assistant_run_customer_codex_sidecar_scope_summary(selected_scope: &Value) -> Value {
-    json!({
-        "intent": assistant_run_scope_intent(selected_scope),
-        "dataset_count": selected_dataset_ids_from_scope(selected_scope).len(),
-        "document_count": selected_document_ids_from_scope(selected_scope).len(),
-        "has_database_sources": selected_scope.get("database_sources").is_some() || selected_scope.get("databaseSources").is_some(),
-        "scope_type": selected_scope.get("type").and_then(Value::as_str).unwrap_or("unknown"),
-    })
-}
-
-fn assistant_run_customer_codex_sidecar_evidence_summary(evidence_state: &Value) -> Value {
-    json!({
-        "status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
-        "supplied_item_count": assistant_run_evidence_supplied_count(evidence_state),
-        "supply_quality": evidence_state.get("supply_quality").cloned().unwrap_or(Value::Null),
-    })
 }
 
 async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
@@ -37094,672 +35420,6 @@ async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
         .map_err(ApiError::from_storage)?;
     apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
     Ok(())
-}
-
-pub(crate) fn codex_host_fixed_task_bundle_manifest(template_id: &str) -> Value {
-    json!({
-        "version": 1,
-        "template_id": template_id,
-        "files": [
-            {
-                "path": "task.json",
-                "kind": "fixed_task_context",
-                "required": true,
-            },
-            {
-                "path": "README.md",
-                "kind": "instructions",
-                "required": true,
-            },
-            {
-                "path": "schemas/output.schema.json",
-                "kind": "output_schema",
-                "required": true,
-            },
-            {
-                "path": "evidence/summary.json",
-                "kind": "evidence_summary",
-                "required": false,
-            },
-            {
-                "path": "runtime.json",
-                "kind": "runtime_summary",
-                "required": true,
-            }
-        ],
-    })
-}
-
-pub(crate) fn codex_host_fixed_task_created_event(
-    execution: &WorkflowExecution,
-    assistant_run_id: AssistantRunId,
-) -> WorkflowEventRecord {
-    WorkflowEventRecord {
-        id: domain_model::WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "codex_host_task.created".to_string(),
-        payload: json!({
-            "kind": execution.kind.as_str(),
-            "version": execution.version,
-            "status": execution.status.as_str(),
-            "stage": execution.stage,
-            "assistant_run_id": assistant_run_id.to_string(),
-            "capability": execution.context.get("capability").cloned().unwrap_or(Value::Null),
-            "template_id": execution.context.get("template_id").cloned().unwrap_or(Value::Null),
-            "task_memory_policy": execution.context.get("task_memory_policy").cloned().unwrap_or(Value::Null),
-            "task_memory_space_id": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
-        }),
-        created_at: execution.created_at,
-    }
-}
-
-pub(crate) fn platform_env_flag(key: &str, default_value: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(default_value)
-}
-
-fn assistant_run_data_ingestion_analysis_output_validation(output: &Value) -> Value {
-    if output.get("template_id").and_then(Value::as_str) != Some("data_ingestion_analysis") {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "template_id_mismatch"
-        });
-    }
-    let status = output
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("failed");
-    if !matches!(
-        status,
-        "analysis_ready" | "staging_spec_ready" | "needs_human" | "failed"
-    ) {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "unknown_status"
-        });
-    }
-    if codex_host_fixed_task_value_contains_sensitive_text(output) {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "sensitive_connection_or_credential_text_detected"
-        });
-    }
-    let unsafe_change_requested = [
-        "production_write_requested",
-        "credential_request_detected",
-        "public_api_change_requested",
-        "schema_change_requested",
-    ]
-    .iter()
-    .any(|key| output.get(key).and_then(Value::as_bool) == Some(true));
-    if unsafe_change_requested {
-        return json!({
-            "accepted": true,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": output
-                .get("human_review_reason")
-                .and_then(Value::as_str)
-                .unwrap_or("unsafe_data_ingestion_change_requires_human_review")
-        });
-    }
-    if status == "needs_human" || status == "failed" {
-        return json!({
-            "accepted": true,
-            "status": status,
-            "auto_apply_allowed": false,
-            "reason": output
-                .get("human_review_reason")
-                .and_then(Value::as_str)
-                .unwrap_or(status)
-        });
-    }
-    let source_summary = value_array(output.get("source_summary").cloned().unwrap_or(Value::Null));
-    let validation_checks = value_array(
-        output
-            .get("validation_checks")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    if source_summary.is_empty()
-        || validation_checks.is_empty()
-        || !output
-            .get("data_quality_report")
-            .is_some_and(Value::is_object)
-    {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "data_quality_report_source_summary_and_validation_checks_required"
-        });
-    }
-    if status == "staging_spec_ready"
-        && !output
-            .get("staging_spec")
-            .is_some_and(|value| value.is_object() || value.is_array())
-    {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "staging_spec_required"
-        });
-    }
-    json!({
-        "accepted": true,
-        "status": status,
-        "auto_apply_allowed": true,
-        "reason": "read_only_data_ingestion_analysis_validated"
-    })
-}
-
-#[derive(Debug, Clone)]
-struct CodexHostFixedTaskAuditEvent {
-    event_name: String,
-    payload: Value,
-    notify_human: bool,
-}
-
-fn codex_host_fixed_task_transition_audit_event(
-    execution: &WorkflowExecution,
-    workflow_event: &WorkflowEventRecord,
-    enqueued_task_count: usize,
-) -> Option<CodexHostFixedTaskAuditEvent> {
-    if execution.kind != WorkflowKind::CodexHostTask {
-        return None;
-    }
-    let fixed_task = execution
-        .context
-        .get("fixed_task")
-        .filter(|value| value.is_object())?;
-    let template_id = codex_host_fixed_task_template_id_from_context(&execution.context)?;
-    let assistant_run_id = execution
-        .context
-        .get("assistant_run_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let capability = execution
-        .context
-        .get("capability")
-        .and_then(Value::as_str)
-        .unwrap_or(template_id.as_str());
-
-    if workflow_event.event_name == "workflow.started" {
-        let payload = codex_host_fixed_task_base_payload(
-            execution,
-            assistant_run_id.as_deref(),
-            capability,
-            fixed_task,
-            &template_id,
-            "queued",
-        )
-        .with_extra(json!({
-            "workflow_event_name": workflow_event.event_name,
-            "enqueued_task_count": enqueued_task_count,
-        }));
-        return Some(CodexHostFixedTaskAuditEvent {
-            event_name: "codex_host.fixed_task.queued".to_string(),
-            payload,
-            notify_human: false,
-        });
-    }
-
-    if workflow_event.event_name != "workflow.step_completed" {
-        if workflow_event.event_name == "workflow.step_failed" {
-            let error = workflow_event
-                .payload
-                .get("error")
-                .and_then(Value::as_str)
-                .map(codex_host_fixed_task_safe_text)
-                .unwrap_or_else(|| "workflow_step_failed".to_string());
-            let payload = codex_host_fixed_task_base_payload(
-                execution,
-                assistant_run_id.as_deref(),
-                capability,
-                fixed_task,
-                &template_id,
-                "failed",
-            )
-            .with_extra(json!({
-                "workflow_event_name": workflow_event.event_name,
-                "output": codex_host_fixed_task_output_summary(None),
-                "validation": {
-                    "accepted": false,
-                    "status": "failed",
-                    "auto_apply_allowed": false,
-                    "reason": "workflow_step_failed",
-                    "error": error,
-                },
-            }));
-            return Some(CodexHostFixedTaskAuditEvent {
-                event_name: "codex_host.fixed_task.rejected".to_string(),
-                payload,
-                notify_human: true,
-            });
-        }
-        return None;
-    }
-
-    let output = execution.context.get("last_output");
-    let extracted =
-        output.and_then(|value| codex_host_fixed_task_extract_output(&template_id, value));
-    let validation = codex_host_fixed_task_sanitize_validation(
-        codex_host_fixed_task_output_validation_summary(&template_id, extracted),
-    );
-    let output_summary = codex_host_fixed_task_output_summary(extracted);
-    let accepted = validation
-        .get("accepted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let output_status = output_summary
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("failed");
-    let event_name = if !accepted || output_status == "failed" {
-        "codex_host.fixed_task.rejected"
-    } else if output_status == "needs_human" {
-        "codex_host.fixed_task.needs_human"
-    } else {
-        "codex_host.fixed_task.completed"
-    };
-    let status = match event_name {
-        "codex_host.fixed_task.completed" => output_status,
-        "codex_host.fixed_task.needs_human" => "needs_human",
-        _ => "rejected",
-    };
-    let payload = codex_host_fixed_task_base_payload(
-        execution,
-        assistant_run_id.as_deref(),
-        capability,
-        fixed_task,
-        &template_id,
-        status,
-    )
-    .with_extra(json!({
-        "workflow_event_name": workflow_event.event_name,
-        "output": output_summary,
-        "validation": validation,
-    }));
-
-    Some(CodexHostFixedTaskAuditEvent {
-        event_name: event_name.to_string(),
-        payload,
-        notify_human: event_name != "codex_host.fixed_task.completed",
-    })
-}
-
-trait JsonObjectExtra {
-    fn with_extra(self, extra: Value) -> Value;
-}
-
-impl JsonObjectExtra for Value {
-    fn with_extra(mut self, extra: Value) -> Value {
-        if let (Some(target), Some(extra)) = (self.as_object_mut(), extra.as_object()) {
-            for (key, value) in extra {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self
-    }
-}
-
-fn codex_host_fixed_task_template_id_from_context(context: &Value) -> Option<String> {
-    context
-        .get("template_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            context
-                .pointer("/fixed_task/template_id")
-                .and_then(Value::as_str)
-        })
-        .map(str::to_string)
-}
-
-fn codex_host_fixed_task_base_payload(
-    execution: &WorkflowExecution,
-    assistant_run_id: Option<&str>,
-    capability: &str,
-    fixed_task: &Value,
-    template_id: &str,
-    status: &str,
-) -> Value {
-    let allowed_write_file_count = fixed_task
-        .pointer("/allowed_write_scope/files")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let external_status_url = assistant_run_id
-        .zip(
-            fixed_task
-                .pointer("/requirements/channel_connection_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty()),
-        )
-        .map(|(run_id, connection_id)| {
-            external_channel_assistant_run_reply_status_url_str(connection_id, run_id)
-        });
-    let recipient_delivery = fixed_task
-        .pointer("/requirements/recipient_delivery")
-        .cloned()
-        .unwrap_or(Value::Null);
-    json!({
-        "template_id": template_id,
-        "assistant_run_id": assistant_run_id,
-        "workflow_execution_id": execution.id.to_string(),
-        "capability": capability,
-        "status": status,
-        "status_url": external_status_url.clone(),
-        "status_method": if external_status_url.is_some() { Value::String("GET".to_string()) } else { Value::Null },
-        "recipient_delivery": recipient_delivery.clone(),
-        "permission_review_status": recipient_delivery
-            .get("permission_review_status")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "editable_after_publish": recipient_delivery
-            .get("editable_after_publish")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "human_review_policy": fixed_task
-            .get("human_review_policy")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "publish_mode": fixed_task
-            .pointer("/policies/publish_mode")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "allowed_write_file_count": allowed_write_file_count,
-        "raw_prompt_exposed": false,
-        "raw_diff_exposed": false,
-        "provider_logs_exposed": false,
-        "secrets_exposed": false,
-    })
-}
-
-fn codex_host_fixed_task_extract_output<'a>(
-    template_id: &str,
-    output: &'a Value,
-) -> Option<&'a Value> {
-    if output.get("template_id").and_then(Value::as_str) == Some(template_id) {
-        return Some(output);
-    }
-    for field in [
-        "fixed_task_output",
-        "fixedTaskOutput",
-        "template_output",
-        "templateOutput",
-        "result",
-        "output",
-    ] {
-        if let Some(value) = output.get(field) {
-            if let Some(extracted) = codex_host_fixed_task_extract_output(template_id, value) {
-                return Some(extracted);
-            }
-        }
-    }
-    None
-}
-
-fn codex_host_fixed_task_output_validation_summary(
-    template_id: &str,
-    output: Option<&Value>,
-) -> Value {
-    let Some(output) = output else {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "fixed_task_output_missing"
-        });
-    };
-    if output.get("template_id").and_then(Value::as_str) != Some(template_id) {
-        return json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "template_id_mismatch"
-        });
-    }
-    match template_id {
-        "answer_quality_autofix" => assistant_run_answer_quality_autofix_output_validation(output),
-        "data_ingestion_analysis" => {
-            assistant_run_data_ingestion_analysis_output_validation(output)
-        }
-        "static_page_image2_data_publish" => {
-            let status = output
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("failed");
-            if !matches!(status, "success" | "needs_human" | "failed") {
-                return json!({
-                    "accepted": false,
-                    "status": "needs_human",
-                    "auto_apply_allowed": false,
-                    "reason": "unknown_status"
-                });
-            }
-            if status == "needs_human" {
-                return json!({
-                    "accepted": true,
-                    "status": "needs_human",
-                    "auto_apply_allowed": false,
-                    "reason": output
-                        .get("human_review_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("human_review_requested")
-                });
-            }
-            if status == "failed" {
-                return json!({
-                    "accepted": true,
-                    "status": "failed",
-                    "auto_apply_allowed": false,
-                    "reason": output
-                        .get("human_review_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("host_failed")
-                });
-            }
-            let public_url = output
-                .pointer("/artifact/public_url")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !codex_host_fixed_task_public_artifact_url_allowed(public_url) {
-                return json!({
-                    "accepted": false,
-                    "status": "needs_human",
-                    "auto_apply_allowed": false,
-                    "reason": "artifact_public_url_not_generated_artifact"
-                });
-            }
-            if output.get("validation_report").is_none() {
-                return json!({
-                    "accepted": false,
-                    "status": "needs_human",
-                    "auto_apply_allowed": false,
-                    "reason": "validation_report_required"
-                });
-            }
-            json!({
-                "accepted": true,
-                "status": "success",
-                "auto_apply_allowed": true,
-                "reason": "new_generated_artifact_validated"
-            })
-        }
-        _ => json!({
-            "accepted": false,
-            "status": "needs_human",
-            "auto_apply_allowed": false,
-            "reason": "unknown_template_id"
-        }),
-    }
-}
-
-fn codex_host_fixed_task_sanitize_validation(mut validation: Value) -> Value {
-    if let Some(reason) = validation.get("reason").and_then(Value::as_str) {
-        validation["reason"] = Value::String(codex_host_fixed_task_safe_text(reason));
-    }
-    validation
-}
-
-pub(crate) fn codex_host_fixed_task_public_artifact_url_allowed(public_url: &str) -> bool {
-    let normalized = public_url.trim();
-    if normalized.contains("/generated-artifacts/pending-")
-        || normalized.contains("/generated-artifacts/pending/")
-        || normalized.ends_with("/generated-artifacts/pending")
-    {
-        return false;
-    }
-    normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
-        || normalized.starts_with("/generated-artifacts/")
-}
-
-fn codex_host_fixed_task_value_contains_sensitive_text(value: &Value) -> bool {
-    match value {
-        Value::String(text) => codex_host_fixed_task_text_is_sensitive(text),
-        Value::Array(values) => values
-            .iter()
-            .any(codex_host_fixed_task_value_contains_sensitive_text),
-        Value::Object(map) => map.iter().any(|(key, value)| {
-            codex_host_fixed_task_text_is_sensitive(key)
-                || codex_host_fixed_task_value_contains_sensitive_text(value)
-        }),
-        _ => false,
-    }
-}
-
-fn codex_host_fixed_task_text_is_sensitive(value: &str) -> bool {
-    let lowered = value.to_ascii_lowercase();
-    lowered.contains("database_url")
-        || lowered.contains("postgres://")
-        || lowered.contains("mysql://")
-        || lowered.contains("api_key")
-        || lowered.contains("api_token")
-        || lowered.contains("authorization:")
-        || lowered.contains("bearer ")
-        || lowered.contains("password=")
-        || lowered.contains("sk-")
-}
-
-fn codex_host_fixed_task_output_summary(output: Option<&Value>) -> Value {
-    let Some(output) = output else {
-        return json!({
-            "status": "missing",
-            "artifact_public_url": Value::Null,
-            "changed_file_count": 0,
-            "test_commands": [],
-            "human_review_reason": "fixed_task_output_missing",
-        });
-    };
-    let changed_files = value_array(output.get("changed_files").cloned().unwrap_or(Value::Null));
-    let source_summary = value_array(output.get("source_summary").cloned().unwrap_or(Value::Null));
-    let validation_checks = value_array(
-        output
-            .get("validation_checks")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    let recommended_next_actions = value_array(
-        output
-            .get("recommended_next_actions")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    let test_commands = value_array(output.get("test_commands").cloned().unwrap_or(Value::Null))
-        .into_iter()
-        .filter_map(|value| value.as_str().map(codex_host_fixed_task_safe_text))
-        .collect::<Vec<_>>();
-    let warnings = value_array(
-        output
-            .pointer("/validation_report/warnings")
-            .cloned()
-            .unwrap_or(Value::Null),
-    )
-    .into_iter()
-    .filter_map(|value| value.as_str().map(codex_host_fixed_task_safe_text))
-    .collect::<Vec<_>>();
-    json!({
-        "status": output.get("status").and_then(Value::as_str).unwrap_or("unknown"),
-        "artifact_public_url": output
-            .pointer("/artifact/public_url")
-            .and_then(Value::as_str)
-            .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-        "latest_snapshot": output
-            .pointer("/validation_report/latest_snapshot")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "source_row_count": output
-            .pointer("/validation_report/source_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "current_state_row_count": output
-            .pointer("/validation_report/current_state_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "detail_row_count": output
-            .pointer("/validation_report/detail_row_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "source_summary_count": source_summary.len(),
-        "data_quality_report_present": output.get("data_quality_report").is_some_and(Value::is_object),
-        "mapping_plan_present": output.get("mapping_plan").is_some_and(Value::is_object),
-        "staging_spec_present": output.get("staging_spec").is_some(),
-        "validation_checks_count": validation_checks.len(),
-        "recommended_next_actions_count": recommended_next_actions.len(),
-        "unit_policy": output
-            .pointer("/validation_report/unit_policy")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "changed_file_count": changed_files.len(),
-        "tests_added_count": value_array(output.get("tests_added").cloned().unwrap_or(Value::Null)).len(),
-        "test_commands": test_commands,
-        "risk_level": output.get("risk_level").cloned().unwrap_or(Value::Null),
-        "failure_type": output.get("failure_type").cloned().unwrap_or(Value::Null),
-        "rollback_notes_present": output
-            .get("rollback_notes")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|notes| !notes.is_empty()),
-        "human_review_reason": output
-            .get("human_review_reason")
-            .and_then(Value::as_str)
-            .map(codex_host_fixed_task_safe_text)
-            .unwrap_or_else(|| "".to_string()),
-        "warnings": warnings,
-    })
-}
-
-pub(crate) fn codex_host_fixed_task_safe_text(value: &str) -> String {
-    let compact = truncate_assistant_supply_text(value, 500);
-    let lowered = compact.to_ascii_lowercase();
-    if lowered.contains("database_url")
-        || lowered.contains("postgres://")
-        || lowered.contains("mysql://")
-        || lowered.contains("sk-")
-        || lowered.contains("api_token")
-        || lowered.contains("authorization:")
-        || lowered.contains("bearer ")
-    {
-        "[redacted]".to_string()
-    } else {
-        compact
-    }
 }
 
 async fn record_codex_host_fixed_task_audit_event(
@@ -37914,11 +35574,8 @@ async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| external_channel_conversation_external_id_from_run(run));
-    let dynamic_page_contract = external_channel_static_page_artifact_payload_value(
-        fixed_task_output,
-        "dynamic_page_contract",
-    );
-    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
+    let dynamic_page_contract =
+        external_channel_static_page_dynamic_page_contract_from_payload(fixed_task_output);
     let completed_payload = json!({
         "channel_connection_id": source_refs
             .get("channel_connection_id")
@@ -37971,85 +35628,6 @@ async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
     Ok(true)
 }
 
-fn external_channel_static_page_run_has_published_artifact(run: &AssistantRun) -> bool {
-    run.output_artifacts
-        .as_array()
-        .map(|artifacts| {
-            artifacts.iter().any(|artifact| {
-                artifact.get("type").and_then(Value::as_str)
-                    == Some("external_channel_static_page_artifact")
-                    && artifact
-                        .get("public_url")
-                        .and_then(Value::as_str)
-                        .map(codex_host_fixed_task_public_artifact_url_allowed)
-                        .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
-}
-
-fn external_channel_static_page_recovery_workflow_execution_id(
-    events: &[AssistantRunEvent],
-    exec_event: &AssistantRunEvent,
-) -> Option<String> {
-    for pointer in [
-        "/codex_host_workflow_execution_id",
-        "/workflow_execution_id",
-        "/execution_id",
-    ] {
-        if let Some(value) = exec_event
-            .payload
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value.to_string());
-        }
-    }
-    external_channel_static_page_recovery_publish_queued_payload(events, exec_event)
-        .and_then(|payload| {
-            payload
-                .get("codex_host_workflow_execution_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .map(str::to_string)
-}
-
-fn external_channel_static_page_recovery_publish_queued_payload<'a>(
-    events: &'a [AssistantRunEvent],
-    exec_event: &AssistantRunEvent,
-) -> Option<&'a Value> {
-    let exec_workflow_id = exec_event
-        .payload
-        .get("codex_host_workflow_execution_id")
-        .or_else(|| exec_event.payload.get("workflow_execution_id"))
-        .or_else(|| exec_event.payload.get("execution_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    events
-        .iter()
-        .rev()
-        .filter(|event| event.sequence_no <= exec_event.sequence_no)
-        .find(|event| {
-            if event.event_name != "assistant_run.external_channel_static_page_publish_queued" {
-                return false;
-            }
-            if let Some(exec_workflow_id) = exec_workflow_id {
-                return event
-                    .payload
-                    .get("codex_host_workflow_execution_id")
-                    .and_then(Value::as_str)
-                    == Some(exec_workflow_id);
-            }
-            true
-        })
-        .map(|event| &event.payload)
-}
-
 async fn external_channel_static_page_recovery_source_refs(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -38066,51 +35644,16 @@ async fn external_channel_static_page_recovery_source_refs(
             .await
             .map_err(ApiError::from_storage)?
         {
-            return Ok(external_channel_static_page_status_source_refs(
-                &draft.source_refs,
+            return Ok(external_channel_static_page_recovery_status_source_refs(
+                Some(&draft.source_refs),
+                &run.selected_scope,
             ));
         }
     }
-    Ok(external_channel_static_page_status_source_refs(
+    Ok(external_channel_static_page_recovery_status_source_refs(
+        None,
         &run.selected_scope,
     ))
-}
-
-fn external_channel_static_page_html_from_fixed_task_output(output: &Value) -> Option<String> {
-    for pointer in [
-        "/artifact/html",
-        "/artifact/html_text",
-        "/artifact/index_html",
-        "/html",
-        "/html_text",
-    ] {
-        if let Some(html) = output
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(external_channel_standalone_html_document(html));
-        }
-    }
-    None
-}
-
-fn external_channel_standalone_html_document(html: &str) -> String {
-    let trimmed = html.trim();
-    let lower = trimmed
-        .chars()
-        .take(256)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if lower.contains("<!doctype html") || lower.contains("<html") {
-        trimmed.to_string()
-    } else {
-        format!(
-            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>DataMax Generated Artifact</title></head><body>{}</body></html>",
-            trimmed
-        )
-    }
 }
 
 struct ExternalStaticPageRecoveredArtifact {
@@ -40305,11 +37848,8 @@ async fn maybe_record_external_static_page_publish_completed(
         .get("message_external_id")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let dynamic_page_contract = external_channel_static_page_artifact_payload_value(
-        &event.payload,
-        "dynamic_page_contract",
-    );
-    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
+    let dynamic_page_contract =
+        external_channel_static_page_dynamic_page_contract_from_payload(&event.payload);
     let dataset_artifact_key = static_page_dataset_artifact_key_from_source_refs(&source_refs)
         .or_else(|| {
             draft
@@ -41138,8 +38678,7 @@ pub(crate) fn external_channel_static_page_published_reply(
     let focused_public_url =
         external_channel_static_page_public_url_with_payload_focus(raw_public_url, payload);
     let dynamic_page_contract =
-        external_channel_static_page_artifact_payload_value(payload, "dynamic_page_contract");
-    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
+        external_channel_static_page_dynamic_page_contract_from_payload(payload);
     let provisional_direct_html = payload
         .get("provisional_direct_html")
         .and_then(Value::as_bool)
@@ -41305,18 +38844,14 @@ pub(crate) fn external_channel_static_page_published_reply(
             "style_reuse_policy": style_reuse_policy,
             "data_refresh_policy": data_refresh_policy,
             "default_template_scope": default_template_scope,
-            "dataset_artifact_key": payload
-                .get("dataset_artifact_key")
-                .cloned()
-                .or_else(|| payload.pointer("/artifact_stability/dataset_artifact_key").cloned())
-                .or_else(|| payload.pointer("/source_refs/artifact_stability/dataset_artifact_key").cloned())
-                .unwrap_or(Value::Null),
-            "baseline_status": payload
-                .get("baseline_status")
-                .cloned()
-                .or_else(|| payload.pointer("/artifact_stability/baseline_status").cloned())
-                .or_else(|| payload.pointer("/source_refs/artifact_stability/baseline_status").cloned())
-                .unwrap_or(Value::Null),
+            "dataset_artifact_key": external_channel_static_page_artifact_stability_payload_value(
+                payload,
+                "dataset_artifact_key",
+            ),
+            "baseline_status": external_channel_static_page_artifact_stability_payload_value(
+                payload,
+                "baseline_status",
+            ),
         })),
         artifact_links: vec![focused_public_url],
         task_status: Some("static_page_published".to_string()),
@@ -41590,637 +39125,6 @@ fn send_codex_host_fixed_task_exception_email(event_name: &str, payload: &Value)
     if let Err(error) = send_operational_email(&message) {
         tracing::warn!(%error, event_name, template_id, "Codex Host fixed task exception email failed");
     }
-}
-
-fn assistant_run_answer_quality_case_selected_scope_summary(selected_scope: &Value) -> Value {
-    json!({
-        "mode": selected_scope.get("mode").cloned().unwrap_or(Value::Null),
-        "dataset_count": value_array(selected_scope.get("datasets").cloned().unwrap_or(Value::Null)).len(),
-        "document_count": value_array(selected_scope.get("documents").cloned().unwrap_or(Value::Null)).len(),
-        "database_source_count": value_array(selected_scope.get("database_sources").cloned().unwrap_or(Value::Null)).len(),
-    })
-}
-
-fn assistant_run_answer_quality_exhausted_controlled_answer(
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-    _remaining_reason: &str,
-) -> String {
-    if let Some(answer) =
-        assistant_run_answer_quality_spreadsheet_controlled_answer(evidence_state, request)
-    {
-        return answer;
-    }
-    if let Some(answer) =
-        assistant_run_answer_quality_point_list_controlled_answer(evidence_state, request)
-    {
-        return answer;
-    }
-
-    let supplied_count = evidence_state
-        .get("supply_quality")
-        .and_then(|quality| quality.get("suppliedItemCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    if assistant_run_request_wants_json_output(request) {
-        let status = if supplied_count > 0 {
-            "needs_more_input_after_retry"
-        } else {
-            "no_verifiable_evidence"
-        };
-        let message = if supplied_count > 0 {
-            "我已重新核对当前可见材料，但这轮仍未形成可核验结论。"
-        } else {
-            "我已尝试重新获取可见材料，但这轮没有形成可核验结论。"
-        };
-        return serde_json::to_string_pretty(&json!({
-            "status": status,
-            "message": message,
-            "question": request.prompt.trim(),
-            "supplied_item_count": supplied_count,
-            "next_action": "continue_same_conversation_with_more_scope_or_clarification",
-            "suggested_user_inputs": ["文档ID", "数据集分组", "页码或章节", "关键词", "统计口径或对象"],
-        }))
-        .unwrap_or_else(|_| {
-            "{\"status\":\"needs_more_input_after_retry\",\"message\":\"需要补充信息后继续。\"}"
-                .to_string()
-        });
-    }
-    let is_dissatisfied = assistant_run_request_expresses_dissatisfaction(request);
-    if supplied_count > 0 {
-        if is_dissatisfied {
-            return "我已重新核对可见材料并扩大读取范围，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；请补充具体文档 ID、页码/章节、对象或统计口径。收到补充后，我会沿用本会话已授权的资料范围继续检索并完成回答。".to_string();
-        }
-        return "我已重新核对当前可见材料，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；请补充具体文档 ID、页码/章节、对象或统计口径。收到补充后，我会沿用本会话已授权的资料范围继续检索并完成回答。".to_string();
-    }
-    "我已尝试重新获取可见材料，但这轮没有形成可核验结论。为避免误判，我先不编造结论；请补充可用文档 ID、数据集分组或更明确的问题对象。收到补充后，我会沿用本会话继续执行。".to_string()
-}
-
-fn assistant_run_answer_quality_spreadsheet_controlled_answer(
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-) -> Option<String> {
-    if !prompt_requests_spreadsheet_row_level_analysis(&request.prompt) {
-        return None;
-    }
-    let rows = assistant_run_spreadsheet_row_analysis_rows(evidence_state)?;
-    let requests_absence = prompt_contains_any(&request.prompt, &["缺勤", "未打卡", "没打卡"]);
-    let requests_work_hours =
-        prompt_contains_any(&request.prompt, &["最长", "最短", "长短", "工时"]);
-    let mut absence_rows = rows
-        .iter()
-        .copied()
-        .filter(|row| row.get("category").is_none())
-        .collect::<Vec<_>>();
-    absence_rows.sort_by(|left, right| {
-        assistant_run_spreadsheet_row_text(right, "date")
-            .cmp(assistant_run_spreadsheet_row_text(left, "date"))
-            .then_with(|| {
-                assistant_run_spreadsheet_row_text(left, "employee")
-                    .cmp(assistant_run_spreadsheet_row_text(right, "employee"))
-            })
-    });
-    let longest = rows
-        .iter()
-        .copied()
-        .find(|row| row.get("category").and_then(Value::as_str) == Some("longest"));
-    let shortest = rows
-        .iter()
-        .copied()
-        .find(|row| row.get("category").and_then(Value::as_str) == Some("shortest"));
-    if (!requests_absence || absence_rows.is_empty())
-        && (!requests_work_hours || (longest.is_none() && shortest.is_none()))
-    {
-        return None;
-    }
-    if assistant_run_request_wants_json_output(request) {
-        let absence_json = if requests_absence {
-            absence_rows
-                .iter()
-                .take(20)
-                .map(|row| {
-                    let category = if row
-                        .get("counts_as_absence")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true)
-                    {
-                        "缺勤/未打卡"
-                    } else {
-                        "未打卡/不考勤"
-                    };
-                    json!({
-                        "category": category,
-                        "date": assistant_run_spreadsheet_row_text(row, "date"),
-                        "employee": assistant_run_spreadsheet_row_text(row, "employee"),
-                        "shift": assistant_run_spreadsheet_row_text(row, "shift"),
-                        "status": assistant_run_spreadsheet_row_text(row, "status"),
-                    })
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let mut work_hour_extremes = Vec::new();
-        if requests_work_hours {
-            if let Some(row) = longest {
-                work_hour_extremes.push(assistant_run_spreadsheet_work_hour_result_json(
-                    "longest",
-                    "最长工时",
-                    row,
-                ));
-            }
-            if let Some(row) = shortest {
-                work_hour_extremes.push(assistant_run_spreadsheet_work_hour_result_json(
-                    "shortest",
-                    "最短工时",
-                    row,
-                ));
-            }
-        }
-        return serde_json::to_string_pretty(&json!({
-            "status": "answered",
-            "source": "spreadsheet_row_analysis",
-            "question": request.prompt.trim(),
-            "documents": assistant_run_spreadsheet_row_analysis_document_titles(evidence_state),
-            "absence_rows": absence_json,
-            "work_hour_extremes": work_hour_extremes,
-        }))
-        .ok();
-    }
-
-    let mut lines = vec!["根据已解析的考勤明细，结果如下：".to_string()];
-    if requests_absence && !absence_rows.is_empty() {
-        lines.push(String::new());
-        lines.push("| 类别 | 日期 | 员工 | 班次 | 状态 |".to_string());
-        lines.push("|---|---|---|---|---|".to_string());
-        for row in absence_rows.into_iter().take(20) {
-            let category = if row
-                .get("counts_as_absence")
-                .and_then(Value::as_bool)
-                .unwrap_or(true)
-            {
-                "缺勤/未打卡"
-            } else {
-                "未打卡/不考勤"
-            };
-            lines.push(format!(
-                "| {category} | {} | {} | {} | {} |",
-                assistant_run_spreadsheet_row_text(row, "date"),
-                assistant_run_spreadsheet_row_text(row, "employee"),
-                assistant_run_spreadsheet_row_text(row, "shift"),
-                assistant_run_spreadsheet_row_text(row, "status"),
-            ));
-        }
-    }
-    if requests_work_hours && (longest.is_some() || shortest.is_some()) {
-        lines.push(String::new());
-        lines.push("| 类型 | 日期 | 员工 | 班次 | 工时 | 状态 |".to_string());
-        lines.push("|---|---|---|---|---|---|".to_string());
-        if let Some(row) = longest {
-            lines.push(assistant_run_spreadsheet_work_hour_result_row(
-                "最长工时",
-                row,
-            ));
-        }
-        if let Some(row) = shortest {
-            lines.push(assistant_run_spreadsheet_work_hour_result_row(
-                "最短工时",
-                row,
-            ));
-        }
-    }
-    let titles = assistant_run_spreadsheet_row_analysis_document_titles(evidence_state);
-    if !titles.is_empty() {
-        lines.push(String::new());
-        lines.push(format!("来源：{}", titles.join("、")));
-    }
-    Some(lines.join("\n"))
-}
-
-fn assistant_run_spreadsheet_work_hour_result_row(label: &str, row: &Value) -> String {
-    format!(
-        "| {label} | {} | {} | {} | {} | {} |",
-        assistant_run_spreadsheet_row_text(row, "date"),
-        assistant_run_spreadsheet_row_text(row, "employee"),
-        assistant_run_spreadsheet_row_text(row, "shift"),
-        assistant_run_spreadsheet_row_text(row, "work_hours_text"),
-        assistant_run_spreadsheet_row_text(row, "status"),
-    )
-}
-
-fn assistant_run_spreadsheet_work_hour_result_json(kind: &str, label: &str, row: &Value) -> Value {
-    json!({
-        "kind": kind,
-        "label": label,
-        "date": assistant_run_spreadsheet_row_text(row, "date"),
-        "employee": assistant_run_spreadsheet_row_text(row, "employee"),
-        "shift": assistant_run_spreadsheet_row_text(row, "shift"),
-        "work_hours_text": assistant_run_spreadsheet_row_text(row, "work_hours_text"),
-        "status": assistant_run_spreadsheet_row_text(row, "status"),
-    })
-}
-
-fn assistant_run_spreadsheet_row_text<'a>(row: &'a Value, key: &str) -> &'a str {
-    row.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value) -> Vec<String> {
-    evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
-        .flat_map(|item| {
-            item.get("documents")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(|document| document.get("title").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-async fn assistant_run_answer_quality_retry_reason_with_judge(
-    output_text: &str,
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-    chat_runtime: &LlmRuntimeSelection,
-) -> Option<&'static str> {
-    if let Some(reason) =
-        assistant_run_answer_quality_retry_reason(output_text, evidence_state, request)
-    {
-        return Some(reason);
-    }
-    if !assistant_run_answer_quality_judge_should_run(output_text, evidence_state, request) {
-        return None;
-    }
-    let decision = complete_assistant_run_answer_quality_judge(
-        chat_runtime,
-        request,
-        evidence_state,
-        output_text,
-    )
-    .await?;
-    assistant_run_answer_quality_retry_reason_from_judge_decision(&decision)
-}
-
-fn assistant_run_answer_quality_judge_should_run(
-    output_text: &str,
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-) -> bool {
-    if !assistant_run_answer_quality_retry_allowed(output_text, evidence_state) {
-        return false;
-    }
-    if assistant_run_request_expresses_dissatisfaction(request) {
-        return true;
-    }
-    if assistant_run_answer_contains_weak_confidence_marker(output_text) {
-        return true;
-    }
-    if assistant_run_answer_satisfies_spreadsheet_row_analysis(output_text, request, evidence_state)
-    {
-        return false;
-    }
-    if assistant_run_answer_satisfies_retrieval_point_list(output_text, request, evidence_state) {
-        return false;
-    }
-    if assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
-        return true;
-    }
-    if assistant_run_supply_quality_needs_judge(evidence_state) {
-        return true;
-    }
-    assistant_run_answer_is_short_for_structured_request(output_text, request, evidence_state)
-}
-
-fn assistant_run_answer_satisfies_spreadsheet_row_analysis(
-    output_text: &str,
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-) -> bool {
-    if !prompt_requests_spreadsheet_row_level_analysis(&request.prompt) {
-        return false;
-    }
-    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
-        || assistant_run_react_output_contains_internal_marker(output_text)
-    {
-        return false;
-    }
-    let Some(rows) = assistant_run_spreadsheet_row_analysis_rows(evidence_state) else {
-        return false;
-    };
-    if !output_text.contains('|') {
-        return false;
-    }
-
-    let requests_absence = prompt_contains_any(&request.prompt, &["缺勤", "未打卡", "没打卡"]);
-    let requests_work_hours =
-        prompt_contains_any(&request.prompt, &["最长", "最短", "长短", "工时"]);
-    let mut saw_absence_answer = !requests_absence;
-    let mut saw_longest_answer = !requests_work_hours;
-    let mut saw_shortest_answer = !requests_work_hours;
-
-    for row in rows {
-        match row.get("category").and_then(Value::as_str) {
-            Some("longest") => {
-                saw_longest_answer = assistant_run_answer_contains_row_terms(
-                    output_text,
-                    row,
-                    &["最长", "最长工时"],
-                );
-            }
-            Some("shortest") => {
-                saw_shortest_answer = assistant_run_answer_contains_row_terms(
-                    output_text,
-                    row,
-                    &["最短", "最短工时"],
-                );
-            }
-            _ if requests_absence && !saw_absence_answer => {
-                saw_absence_answer =
-                    assistant_run_answer_contains_row_terms(output_text, row, &["缺勤", "未打卡"]);
-            }
-            _ => {}
-        }
-    }
-
-    saw_absence_answer && saw_longest_answer && saw_shortest_answer
-}
-
-fn assistant_run_spreadsheet_row_analysis_rows(evidence_state: &Value) -> Option<Vec<&Value>> {
-    let rows = evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
-        .filter_map(|item| item.get("rows").and_then(Value::as_array))
-        .flatten()
-        .collect::<Vec<_>>();
-    (!rows.is_empty()).then_some(rows)
-}
-
-fn assistant_run_answer_contains_row_terms(
-    output_text: &str,
-    row: &Value,
-    category_terms: &[&str],
-) -> bool {
-    let has_category = category_terms.iter().any(|term| output_text.contains(term));
-    if !has_category {
-        return false;
-    }
-    ["date", "employee", "work_hours_text"]
-        .iter()
-        .filter_map(|key| row.get(*key).and_then(Value::as_str))
-        .filter(|term| !term.trim().is_empty())
-        .all(|term| output_text.contains(term))
-}
-
-async fn complete_assistant_run_answer_quality_judge(
-    chat_runtime: &LlmRuntimeSelection,
-    request: &CreateAssistantRunRequest,
-    evidence_state: &Value,
-    output_text: &str,
-) -> Option<AssistantRunAnswerQualityJudgeDecision> {
-    if chat_runtime.mode == "placeholder" || !assistant_run_answer_quality_judge_enabled() {
-        return None;
-    }
-    let provider_input =
-        build_assistant_run_answer_quality_judge_input(request, evidence_state, output_text);
-    let response = complete_assistant_run_provider(
-        MODEL_LANE_ASSISTANT_CHAT,
-        chat_runtime.mode.clone(),
-        chat_runtime.provider.clone(),
-        chat_runtime.model.clone(),
-        provider_input,
-    )
-    .await
-    .ok()?;
-    parse_assistant_run_answer_quality_judge_decision(&response.output_text)
-}
-
-fn assistant_run_answer_quality_retry_reason(
-    output_text: &str,
-    evidence_state: &Value,
-    request: &CreateAssistantRunRequest,
-) -> Option<&'static str> {
-    let output_text = output_text.trim();
-    if output_text.is_empty() {
-        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
-            .then_some("empty_answer");
-    }
-    if assistant_run_react_output_contains_internal_marker(output_text) {
-        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
-            .then_some("internal_marker_answer");
-    }
-    if external_channel_output_is_generic_orchestration_ack(output_text) {
-        return assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
-            .then_some("generic_orchestration_ack");
-    }
-    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
-        && assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
-    {
-        return Some("insufficient_or_uncertain_answer");
-    }
-    if assistant_run_request_expresses_dissatisfaction(request)
-        && assistant_run_answer_contains_weak_confidence_marker(output_text)
-        && assistant_run_answer_quality_retry_allowed(output_text, evidence_state)
-    {
-        return Some("dissatisfied_user_weak_confidence_answer");
-    }
-    None
-}
-
-pub(crate) fn assistant_run_answer_contains_insufficient_evidence_marker(
-    output_text: &str,
-) -> bool {
-    let lower = output_text.to_ascii_lowercase();
-    prompt_contains_any(
-        output_text,
-        &[
-            "资料不足",
-            "材料不足",
-            "信息不足",
-            "证据不足",
-            "数据不足",
-            "上下文不足",
-            "供料不足",
-            "没有足够",
-            "未提供足够",
-            "不够回答",
-            "不足以回答",
-            "无法回答",
-            "无法确认",
-            "无法判断",
-            "无法确定",
-            "不能确认",
-            "不能确定",
-            "暂无法",
-            "暂时无法",
-            "未找到相关",
-            "没有找到相关",
-            "未直接检索到",
-            "没有直接检索到",
-            "未检索到",
-            "文档未提及",
-            "文档中未提及",
-            "当前可见信息不足",
-            "当前资料不足",
-            "当前资料无法",
-            "当前信息无法",
-            "基于当前可见",
-            "基于通用知识",
-            "通用知识的建议",
-            "当前可见",
-            "部分解析状态",
-            "部分解析",
-            "解析不完整",
-            "仅返回了标题字段",
-            "只返回了标题字段",
-            "原文内容尚未被平台解析",
-            "仅基于当前可见",
-            "只基于当前可见",
-            "只能基于当前可见",
-            "需要执行一次",
-            "需要先检索",
-            "需要先读取",
-            "需要先获取",
-            "请允许我先",
-            "请回复\"继续\"",
-            "请回复“继续”",
-            "建议发起检索",
-            "建议重新检索",
-            "没有全量",
-            "未全量",
-            "完整、无遗漏",
-            "需要补充资料",
-            "建议补充资料",
-            "建议上传",
-        ],
-    ) || [
-        "insufficient information",
-        "not enough information",
-        "insufficient evidence",
-        "cannot determine",
-        "can't determine",
-        "unable to determine",
-        "unable to answer",
-        "cannot answer",
-        "not enough context",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
-
-fn assistant_run_answer_quality_retry_scope(
-    selected_scope: &Value,
-    prompt: &str,
-    attempt_index: usize,
-) -> Value {
-    let mut retry_scope = selected_scope.clone();
-    ensure_json_object(&mut retry_scope);
-    let mut supply_policy = assistant_run_scope_supply_policy(&retry_scope);
-    set_payload_value(&mut supply_policy, "retrievalPolicy", json!("detail_first"));
-    set_payload_value(&mut supply_policy, "preferDetail", json!(true));
-    set_payload_value(
-        &mut supply_policy,
-        "contextBudgetPolicy",
-        json!("quality_first_token_tolerant"),
-    );
-
-    let mut actions = assistant_run_scope_recommended_tool_actions(selected_scope);
-    actions.push("retrieval.search".to_string());
-    actions.push("retrieval.read_detail".to_string());
-    if prompt_requests_document_entity_scan(prompt) {
-        actions.push("retrieval.scan_documents".to_string());
-    }
-    set_payload_value(
-        &mut supply_policy,
-        "recommendedActions",
-        Value::Array(
-            dedupe_strings(actions)
-                .into_iter()
-                .map(Value::String)
-                .collect(),
-        ),
-    );
-    set_payload_value(&mut retry_scope, "supply_policy", supply_policy);
-    set_payload_value(
-        &mut retry_scope,
-        "answer_quality_gate",
-        json!({
-            "status": "retrying",
-            "attempt": attempt_index,
-            "strategy": "detail_first_react_expand_supply",
-        }),
-    );
-    retry_scope
-}
-
-fn assistant_run_answer_quality_retry_request(
-    request: &CreateAssistantRunRequest,
-    retry_scope: &Value,
-    attempt_index: usize,
-    budget: usize,
-    quality_budget: &AssistantRunQualityBudget,
-    reason: &str,
-    previous_answer: &str,
-) -> CreateAssistantRunRequest {
-    let mut retry_request = request.clone();
-    retry_request.selected_scope = Some(retry_scope.clone());
-    let mut startup_briefing = retry_request
-        .startup_briefing
-        .clone()
-        .unwrap_or_else(|| json!({}));
-    ensure_json_object(&mut startup_briefing);
-    set_payload_value(
-        &mut startup_briefing,
-        "answerQualityGate",
-        json!({
-            "status": "retrying",
-            "attempt": attempt_index,
-            "budget": budget,
-            "reactStepBudget": quality_budget.react_step_budget,
-            "premiumActionBudget": quality_budget.premium_action_budget,
-            "premiumActionUsed": 0,
-            "reason": reason,
-            "strategy": "Run ReAct to expand supply/read detail before producing customer-visible text.",
-            "previousAnswerExcerpt": truncate_assistant_supply_text(previous_answer, 600),
-            "instruction": "Do not repeat an insufficient/uncertain answer if supplied evidence can answer the question. Retrieve or read detail first, then answer directly from observations.",
-        }),
-    );
-    retry_request.startup_briefing = Some(startup_briefing);
-    retry_request
-}
-
-fn assistant_run_answer_quality_retry_evidence_state(
-    mut evidence_state: Value,
-    attempt_index: usize,
-    quality_budget: &AssistantRunQualityBudget,
-    reason: &str,
-) -> Value {
-    set_payload_value(
-        &mut evidence_state,
-        "answer_quality_gate",
-        json!({
-            "status": "retrying",
-            "attempt": attempt_index,
-            "budget": quality_budget.answer_retry_budget,
-            "react_step_budget": quality_budget.react_step_budget,
-            "premium_action_budget": quality_budget.premium_action_budget,
-            "premium_action_used": 0,
-            "vlm_upgrade_document_ids": [],
-            "reason": reason,
-            "strategy": "detail_first_react_expand_supply",
-        }),
-    );
-    evidence_state
 }
 
 async fn run_assistant_run_react_for_create(
@@ -43177,16 +40081,6 @@ pub(crate) fn env_flag(key: &str, default_value: bool) -> bool {
             )
         })
         .unwrap_or(default_value)
-}
-
-fn push_unique_string(items: &mut Vec<String>, item: &str) {
-    let item = item.trim();
-    if item.is_empty() {
-        return;
-    }
-    if !items.iter().any(|existing| existing == item) {
-        items.push(item.to_string());
-    }
 }
 
 fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
@@ -44213,114 +41107,6 @@ async fn assistant_run_dataset_fact_snapshot_scope_is_visible(
         .all(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id)))
 }
 
-fn assistant_run_fact_index_enabled() -> bool {
-    std::env::var("ASSISTANT_RUN_FACT_INDEX_ENABLED")
-        .ok()
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            !matches!(normalized.as_str(), "" | "0" | "false" | "off" | "no")
-        })
-        .unwrap_or(true)
-}
-
-fn assistant_run_dataset_fact_snapshot_item(
-    dataset: &Dataset,
-    snapshot: &storage::DatasetFactSnapshot,
-) -> Value {
-    assistant_run_dataset_fact_snapshot_item_from_manifest(
-        dataset,
-        "dataset_fact_snapshots",
-        &snapshot.snapshot_kind,
-        &snapshot.snapshot_key,
-        snapshot.snapshot_manifest.clone(),
-        snapshot.source_fact_count,
-        snapshot.source_document_count,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn assistant_run_dataset_fact_snapshot_item_from_manifest(
-    dataset: &Dataset,
-    source: &str,
-    snapshot_kind: &str,
-    snapshot_key: &str,
-    manifest: Value,
-    source_fact_count: i64,
-    source_document_count: i64,
-    scope_filter: Option<Value>,
-) -> Value {
-    let mut manifest = manifest;
-    if let Some(scope_filter) = scope_filter.as_ref() {
-        if let Some(object) = manifest.as_object_mut() {
-            object.insert("scope_filter".to_string(), scope_filter.clone());
-        }
-    }
-    let entity_rows_by_type = manifest
-        .get("entity_rows_by_type")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let row_count_by_type = manifest
-        .get("row_count_by_type")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let scanned_document_count = manifest
-        .get("scanned_document_count")
-        .and_then(Value::as_i64)
-        .unwrap_or(source_document_count);
-    let row_summary = assistant_run_dataset_fact_snapshot_row_summary(&row_count_by_type);
-    let summary = if row_summary.is_empty() {
-        format!(
-            "dataset fact snapshot: {scanned_document_count} documents, {} facts",
-            source_fact_count
-        )
-    } else {
-        format!(
-            "dataset fact snapshot: {scanned_document_count} documents, {} facts, rows {row_summary}",
-            source_fact_count
-        )
-    };
-    let model_note = if scope_filter.is_some() {
-        "Use this as the authoritative aggregate for the selected or authorized document scope. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks."
-    } else {
-        "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks."
-    };
-
-    json!({
-        "type": "dataset_fact_snapshot",
-        "source": source,
-        "dataset_id": dataset.id,
-        "dataset_key": dataset.key.clone(),
-        "dataset_title": dataset.title.clone(),
-        "snapshot_kind": snapshot_kind,
-        "snapshot_key": snapshot_key,
-        "scanned_document_count": scanned_document_count,
-        "source_document_count": source_document_count,
-        "source_fact_count": source_fact_count,
-        "row_count_by_type": row_count_by_type,
-        "entity_rows_by_type": entity_rows_by_type,
-        "snapshot_manifest": manifest,
-        "summary": summary,
-        "model_note": model_note,
-    })
-}
-
-fn assistant_run_dataset_fact_snapshot_row_summary(row_count_by_type: &Value) -> String {
-    row_count_by_type
-        .as_object()
-        .map(|object| {
-            object
-                .iter()
-                .filter_map(|(fact_type, count)| {
-                    let count = count.as_u64()?;
-                    (count > 0).then(|| format!("{fact_type}={count}"))
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default()
-}
-
 async fn build_assistant_run_database_aggregate_supply(
     state: &AppState,
     dataset: &Dataset,
@@ -44492,483 +41278,6 @@ async fn build_assistant_run_database_aggregate_supply(
     Ok(supplied_items)
 }
 
-fn assistant_run_database_schema_context_item(
-    dataset: &Dataset,
-    source: &ExternalSourceConnectionSummary,
-    mapping: &MySqlTableMapping,
-    aggregate_plans: &[AssistantRunDatabaseAggregatePlan],
-    metrics: &[String],
-    scan_limit: u32,
-) -> Value {
-    let field_roles = assistant_run_database_mapping_field_roles(mapping);
-    let metrics = if metrics.is_empty() {
-        assistant_run_database_metric_columns(mapping)
-    } else {
-        metrics.to_vec()
-    };
-    let analysis_views = aggregate_plans
-        .iter()
-        .map(|plan| {
-            json!({
-                "role": plan.role,
-                "intent": plan.intent,
-                "dimensions": plan.dimensions,
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "type": "database_schema_context",
-        "source": "database_source",
-        "dataset_id": dataset.id,
-        "dataset_key": dataset.key,
-        "dataset_title": dataset.title,
-        "source_id": source.source_id,
-        "connector_kind": source.connector_kind,
-        "table": mapping.table,
-        "summary": assistant_run_database_schema_summary(mapping, &metrics, aggregate_plans, scan_limit),
-        "field_roles": field_roles,
-        "entity_dimensions": assistant_run_database_entity_dimensions(mapping),
-        "time_dimensions": assistant_run_database_time_dimensions(mapping),
-        "category_dimensions": assistant_run_database_category_dimensions(mapping),
-        "metrics": metrics,
-        "analysis_views": analysis_views,
-        "answer_guidance": {
-            "scope": "database_source_dataset_mapping",
-            "metric_rule": "指标字段用于聚合，回答时说明 aggregation 和 scan_limit；若字段含义来自字段名启发式，应提示按业务口径确认。",
-            "report_rule": "报表优先拆成实体排行、时间趋势、分类对比；不要把不同维度的聚合样本混成同一张图。",
-            "scan_limit": scan_limit,
-        },
-    })
-}
-
-fn assistant_run_database_schema_summary(
-    mapping: &MySqlTableMapping,
-    metrics: &[String],
-    aggregate_plans: &[AssistantRunDatabaseAggregatePlan],
-    scan_limit: u32,
-) -> String {
-    let entity_dimensions = assistant_run_database_entity_dimensions(mapping);
-    let time_dimensions = assistant_run_database_time_dimensions(mapping);
-    let category_dimensions = assistant_run_database_category_dimensions(mapping);
-    let view_labels = aggregate_plans
-        .iter()
-        .map(|plan| match plan.role {
-            "ranking" => "实体排行",
-            "trend" => "时间趋势",
-            "comparison" => "分类对比",
-            _ => "聚合分析",
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    format!(
-        "数据库表 {}：实体维度 {}；时间维度 {}；分类维度 {}；指标 {}。本轮适合做 {}；聚合扫描上限 {} 行，回答或报表需说明聚合口径和采样范围。",
-        mapping.table,
-        assistant_run_database_join_or_dash(&entity_dimensions),
-        assistant_run_database_join_or_dash(&time_dimensions),
-        assistant_run_database_join_or_dash(&category_dimensions),
-        assistant_run_database_join_or_dash(metrics),
-        assistant_run_database_join_or_dash(&view_labels),
-        scan_limit,
-    )
-}
-
-fn assistant_run_database_join_or_dash<T: AsRef<str>>(items: &[T]) -> String {
-    if items.is_empty() {
-        "-".to_string()
-    } else {
-        items
-            .iter()
-            .map(|item| item.as_ref())
-            .collect::<Vec<_>>()
-            .join("/")
-    }
-}
-
-fn assistant_run_database_mapping_field_roles(mapping: &MySqlTableMapping) -> Vec<Value> {
-    assistant_run_database_mapping_columns(mapping)
-        .into_iter()
-        .map(|column| assistant_run_database_field_role(mapping, &column))
-        .collect()
-}
-
-fn assistant_run_database_field_semantics_for_columns(
-    mapping: &MySqlTableMapping,
-    columns: &[String],
-) -> Vec<Value> {
-    columns
-        .iter()
-        .map(|column| {
-            if column == "value" {
-                json!({
-                    "name": column,
-                    "role": "aggregate_value",
-                    "meaning": "聚合后的指标值",
-                    "confidence": 95,
-                    "source": "aggregate_result",
-                })
-            } else {
-                assistant_run_database_field_role(mapping, column)
-            }
-        })
-        .collect()
-}
-
-fn assistant_run_database_field_role(mapping: &MySqlTableMapping, column: &str) -> Value {
-    let (role, confidence) = assistant_run_database_column_role(mapping, column);
-    json!({
-        "name": column,
-        "role": role,
-        "meaning": assistant_run_database_field_meaning(column, role),
-        "confidence": confidence,
-        "source": "mapping_and_name_heuristic",
-    })
-}
-
-type AssistantRunDatabaseColumnRole = (&'static str, u8);
-
-fn assistant_run_database_column_role(
-    mapping: &MySqlTableMapping,
-    column: &str,
-) -> AssistantRunDatabaseColumnRole {
-    if mapping.id_column == column {
-        return ("primary_key", 96);
-    }
-    if mapping.title_column.as_deref() == Some(column) {
-        return ("entity", 92);
-    }
-    if assistant_run_database_time_dimensions(mapping)
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        return ("time", 90);
-    }
-    if assistant_run_database_metric_column_name(column) {
-        return ("metric", 88);
-    }
-    if assistant_run_database_entity_column_name(column) {
-        return ("entity", 84);
-    }
-    if mapping
-        .id_columns
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        return ("primary_key", 86);
-    }
-    if assistant_run_database_category_dimensions(mapping)
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        return ("dimension", 84);
-    }
-    if mapping
-        .metadata_columns
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        return ("dimension", 74);
-    }
-    if mapping
-        .content_columns
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        return ("attribute", 64);
-    }
-    ("unknown", 42)
-}
-
-fn assistant_run_database_field_meaning(column: &str, role: &str) -> String {
-    let lower = column.to_ascii_lowercase();
-    if lower == "up" {
-        return "上行/进入/进场方向的流量指标，具体业务口径需以客户定义为准。".to_string();
-    }
-    if lower == "down" {
-        return "下行/离开/出场方向的流量指标，具体业务口径需以客户定义为准。".to_string();
-    }
-    if lower == "areaname" || lower.ends_with("area_name") || lower.contains("area_name") {
-        return "区域或位置名称，适合作为排行、对比和筛选维度。".to_string();
-    }
-    if lower == "areatype" || lower.contains("area_type") {
-        return "区域类型或分类，适合作为分类对比维度。".to_string();
-    }
-    if lower == "txdate" || lower.contains("date") || lower.contains("time") {
-        return "业务发生时间或统计时间，适合作为趋势维度。".to_string();
-    }
-    if lower.ends_with("code") || lower.ends_with("_code") {
-        return "业务编码字段，通常用于唯一识别或关联，不宜直接作为展示名称。".to_string();
-    }
-    if lower.ends_with("id") || lower.ends_with("_id") {
-        return "业务 ID 字段，通常用于唯一识别或关联。".to_string();
-    }
-    match role {
-        "metric" => "可聚合的数值指标，可用于汇总、排序、趋势和对比。".to_string(),
-        "time" => "时间维度，可用于趋势、周期和时间范围分析。".to_string(),
-        "entity" => "实体名称或对象名称，适合展示、排行和分组。".to_string(),
-        "dimension" => "分类或属性维度，适合分组、筛选和对比。".to_string(),
-        "primary_key" => "主键或近似主键，主要用于定位记录。".to_string(),
-        "attribute" => "同步到数据集文档的属性字段，可用于补充上下文。".to_string(),
-        _ => "字段语义暂不明确，使用时应结合样本值或业务说明确认。".to_string(),
-    }
-}
-
-fn assistant_run_database_entity_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
-    let mut dimensions = Vec::new();
-    if let Some(title_column) = mapping.title_column.as_deref() {
-        push_unique_string(&mut dimensions, title_column);
-    }
-    for column in assistant_run_database_mapping_columns(mapping) {
-        let lower = column.to_ascii_lowercase();
-        if lower.contains("name")
-            || lower.ends_with("title")
-            || assistant_run_database_entity_column_name(&column)
-        {
-            push_unique_string(&mut dimensions, &column);
-        }
-        if dimensions.len() >= 4 {
-            break;
-        }
-    }
-    if dimensions.is_empty() {
-        push_unique_string(&mut dimensions, &mapping.id_column);
-    }
-    dimensions
-}
-
-fn assistant_run_database_time_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
-    let mut dimensions = Vec::new();
-    if let Some(time_column) = assistant_run_database_time_column(mapping) {
-        push_unique_string(&mut dimensions, &time_column);
-    }
-    if let Some(updated_at_column) = mapping.updated_at_column.as_deref() {
-        push_unique_string(&mut dimensions, updated_at_column);
-    }
-    dimensions
-}
-
-fn assistant_run_database_category_dimensions(mapping: &MySqlTableMapping) -> Vec<String> {
-    let mut dimensions = Vec::new();
-    if let Some(category_column) = assistant_run_database_category_dimension(mapping) {
-        push_unique_string(&mut dimensions, &category_column);
-    }
-    let time_dimensions = assistant_run_database_time_dimensions(mapping);
-    for column in assistant_run_database_mapping_columns(mapping) {
-        if mapping.id_column == column
-            || mapping
-                .id_columns
-                .iter()
-                .any(|candidate| candidate == &column)
-            || mapping.title_column.as_deref() == Some(column.as_str())
-            || time_dimensions.iter().any(|candidate| candidate == &column)
-            || assistant_run_database_metric_column_name(&column)
-        {
-            continue;
-        }
-        if assistant_run_database_dimension_column_name(&column) {
-            push_unique_string(&mut dimensions, &column);
-        }
-        if dimensions.len() >= 6 {
-            break;
-        }
-    }
-    dimensions
-}
-
-fn assistant_run_database_metric_columns(mapping: &MySqlTableMapping) -> Vec<String> {
-    let mut metrics = Vec::new();
-    for column in assistant_run_database_mapping_columns(mapping) {
-        if assistant_run_database_metric_column_name(&column) {
-            push_unique_string(&mut metrics, &column);
-        }
-        if metrics.len() >= 8 {
-            break;
-        }
-    }
-    metrics
-}
-
-fn assistant_run_database_metric_column_name(column: &str) -> bool {
-    let lower = column.to_ascii_lowercase();
-    matches!(lower.as_str(), "up" | "down")
-        || prompt_has_any(
-            &lower,
-            &[
-                "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value",
-                "price", "cost", "traffic", "flow", "volume", "qty", "avg", "duration", "amt",
-                "sale", "sales", "sold", "rent", "fee", "zujin", "xiaoshou", "quekou", "jine",
-                "ticheng", "dayamt", "yuezu", "fdxshje", "yze", "rdj",
-            ],
-        )
-}
-
-fn assistant_run_database_entity_column_name(column: &str) -> bool {
-    let lower = column.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "shopdesc"
-            | "shopname"
-            | "shop_name"
-            | "storedesc"
-            | "store_desc"
-            | "storename"
-            | "store_name"
-            | "branddesc"
-            | "brand_name"
-            | "brandname"
-            | "leasename"
-            | "lease_name"
-    )
-}
-
-fn assistant_run_database_dimension_column_name(column: &str) -> bool {
-    let lower = column.to_ascii_lowercase();
-    prompt_has_any(
-        &lower,
-        &[
-            "type", "status", "category", "class", "level", "gender", "city", "province",
-            "district", "region", "area", "source", "channel", "tag",
-        ],
-    )
-}
-
-fn assistant_run_database_aggregate_summary(
-    mapping: &MySqlTableMapping,
-    role: &str,
-    dimensions: &[String],
-    metric: Option<&str>,
-    aggregation: &str,
-    order_direction: &str,
-    latest_time_column: Option<&str>,
-    row_count: usize,
-    scan_limit: Option<u32>,
-) -> String {
-    let role_label = match role {
-        "ranking" => "实体排行",
-        "trend" => "时间趋势",
-        "comparison" => "分类对比",
-        _ => "聚合分析",
-    };
-    let order_label = if order_direction.eq_ignore_ascii_case("asc") {
-        "升序"
-    } else {
-        "降序"
-    };
-    let time_filter = latest_time_column
-        .map(|column| format!("；时间口径为最新 {column}"))
-        .unwrap_or_default();
-    let sort_semantics = assistant_run_database_aggregate_sort_semantics(metric, order_direction)
-        .map(|note| format!("；{note}"))
-        .unwrap_or_default();
-    format!(
-        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}{}{}，返回 {} 行样本，扫描上限 {}。",
-        role_label,
-        mapping.table,
-        assistant_run_database_join_or_dash(dimensions),
-        metric.unwrap_or("record_count"),
-        aggregation,
-        order_label,
-        time_filter,
-        sort_semantics,
-        row_count,
-        scan_limit
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string())
-    )
-}
-
-fn assistant_run_database_aggregate_sort_semantics(
-    metric: Option<&str>,
-    order_direction: &str,
-) -> Option<&'static str> {
-    if !order_direction.eq_ignore_ascii_case("asc") {
-        return None;
-    }
-    let metric = metric.unwrap_or_default().to_ascii_lowercase();
-    if metric.contains("xuzeng")
-        || metric.contains("quekou")
-        || metric.contains("gap")
-        || metric.contains("shortfall")
-    {
-        Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
-    } else {
-        None
-    }
-}
-
-async fn load_dataset_external_source_ids(
-    state: &AppState,
-    dataset_id: DatasetId,
-) -> std::result::Result<Vec<String>, ApiError> {
-    let rows = sqlx::query(
-        r#"
-        with document_sources as (
-            select metadata #>> '{external_source,source_id}' as source_id,
-                   count(*)::bigint as document_count,
-                   0 as source_priority
-            from documents
-            where tenant_id = $1
-              and dataset_id = $2
-              and metadata #>> '{external_source,source_id}' is not null
-            group by source_id
-        ),
-        configured_database_sources as (
-            select id as source_id,
-                   0::bigint as document_count,
-                   1 as source_priority
-            from external_source_connections
-            where tenant_id = $1
-              and disabled_at is null
-              and lower(trim(connector_kind)) in ('mysql', 'mysql_source', 'database_source')
-              and coalesce(
-                    config_redacted #>> '{database_source,default_dataset_id}',
-                    config_redacted #>> '{databaseSource,defaultDatasetId}',
-                    config_redacted #>> '{mysql_source,default_dataset_id}',
-                    config_redacted #>> '{mysqlSource,defaultDatasetId}'
-                  ) = $2::text
-        ),
-        combined_sources as (
-            select source_id, document_count, source_priority
-            from document_sources
-            union all
-            select source_id, document_count, source_priority
-            from configured_database_sources
-        )
-        select source_id
-        from combined_sources
-        where source_id is not null and btrim(source_id) <> ''
-        group by source_id
-        order by min(source_priority) asc, max(document_count) desc, source_id asc
-        limit $3
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(dataset_id.0)
-    .bind(ASSISTANT_RUN_DATABASE_SOURCE_LIMIT as i64)
-    .fetch_all(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| row.try_get::<Option<String>, _>("source_id").ok().flatten())
-        .map(|source_id| source_id.trim().to_string())
-        .filter(|source_id| !source_id.is_empty())
-        .collect())
-}
-
-#[derive(Clone, Debug)]
-struct AssistantRunAttendanceRow {
-    employee: String,
-    date: String,
-    shift: String,
-    first_punch: Option<String>,
-    last_punch: Option<String>,
-    work_hours: Option<f64>,
-    status: String,
-    source_locator: String,
-}
-
 async fn build_assistant_run_spreadsheet_row_analysis_supply(
     state: &AppState,
     dataset: &Dataset,
@@ -45064,924 +41373,6 @@ async fn build_assistant_run_spreadsheet_row_analysis_supply(
             "Keep dates in YYYY-MM-DD and times in HH:MM."
         ]
     })])
-}
-
-fn parse_assistant_run_attendance_row(
-    line: &str,
-    source_locator: String,
-) -> Option<AssistantRunAttendanceRow> {
-    let tokens = line
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    let date_index = tokens
-        .iter()
-        .position(|token| assistant_run_token_is_iso_date(token))?;
-    if date_index == 0 || date_index + 1 >= tokens.len() {
-        return None;
-    }
-    let employee = tokens[date_index - 1].trim_matches('|').to_string();
-    let date = tokens[date_index].to_string();
-    let shift = tokens[date_index + 1].to_string();
-    if employee.is_empty() || employee == "员工" || shift == "班次" {
-        return None;
-    }
-
-    let mut first_punch = None;
-    let mut last_punch = None;
-    let mut work_hours = None;
-    let mut status_parts = Vec::new();
-    for token in tokens.into_iter().skip(date_index + 2) {
-        if let Some(time) = assistant_run_normalize_hhmm_token(token) {
-            if first_punch.is_none() {
-                first_punch = Some(time);
-            } else if last_punch.is_none() {
-                last_punch = Some(time);
-            }
-            continue;
-        }
-        if work_hours.is_none() {
-            if let Some(hours) = assistant_run_parse_work_hours_token(token) {
-                work_hours = Some(hours);
-                continue;
-            }
-        }
-        if token != "|" {
-            status_parts.push(token.trim_matches('|').to_string());
-        }
-    }
-
-    Some(AssistantRunAttendanceRow {
-        employee,
-        date,
-        shift,
-        first_punch,
-        last_punch,
-        work_hours,
-        status: status_parts.join(" "),
-        source_locator,
-    })
-}
-
-fn assistant_run_token_is_iso_date(token: &str) -> bool {
-    let bytes = token.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
-}
-
-fn assistant_run_normalize_hhmm_token(token: &str) -> Option<String> {
-    let token = token.trim_matches(|ch: char| ch == '|' || ch == ',' || ch == ';');
-    let (hour, minute) = token.split_once(':')?;
-    if hour.len() > 2 || minute.len() != 2 {
-        return None;
-    }
-    let hour = hour.parse::<u32>().ok()?;
-    let minute = minute.parse::<u32>().ok()?;
-    if hour > 23 || minute > 59 {
-        return None;
-    }
-    Some(format!("{hour:02}:{minute:02}"))
-}
-
-fn assistant_run_parse_work_hours_token(token: &str) -> Option<f64> {
-    let token = token.trim_matches('|').trim_end_matches("小时");
-    if token.is_empty() || token == "未打卡" {
-        return None;
-    }
-    token.parse::<f64>().ok()
-}
-
-fn assistant_run_hhmm_minutes(value: &str) -> Option<u32> {
-    let (hour, minute) = value.split_once(':')?;
-    let hour = hour.parse::<u32>().ok()?;
-    let minute = minute.parse::<u32>().ok()?;
-    Some(hour * 60 + minute)
-}
-
-fn assistant_run_attendance_analysis_rows(
-    prompt: &str,
-    rows: &[AssistantRunAttendanceRow],
-) -> Option<(&'static str, Vec<Value>, String)> {
-    let requests_absence = prompt_contains_any(prompt, &["缺勤", "未打卡", "没打卡"]);
-    let requests_work_hours = prompt_contains_any(prompt, &["最长", "最短", "长短", "工时"]);
-    if requests_absence && requests_work_hours {
-        let mut analysis_rows = assistant_run_absence_attendance_rows(rows);
-        analysis_rows.extend(assistant_run_work_hour_extreme_rows(rows));
-        let content_excerpt = assistant_run_combined_attendance_rows_markdown(&analysis_rows);
-        return Some((
-            "absence_and_work_hour_extremes",
-            analysis_rows,
-            content_excerpt,
-        ));
-    }
-    if prompt_contains_any(prompt, &["最早", "上班"]) {
-        let analysis_rows = assistant_run_daily_earliest_attendance_rows(rows);
-        let content_excerpt = assistant_run_attendance_rows_markdown(
-            "日期 | 最早上班员工 | 首打卡时间",
-            &analysis_rows,
-        );
-        return Some(("daily_earliest_first_punch", analysis_rows, content_excerpt));
-    }
-    if prompt_contains_any(prompt, &["最长", "最短", "长短", "工时"]) {
-        let analysis_rows = assistant_run_work_hour_extreme_rows(rows);
-        let content_excerpt =
-            assistant_run_attendance_rows_markdown("类别 | 日期 | 员工 | 工时", &analysis_rows);
-        return Some(("work_hour_extremes", analysis_rows, content_excerpt));
-    }
-    if requests_absence {
-        let analysis_rows = assistant_run_absence_attendance_rows(rows);
-        let content_excerpt =
-            assistant_run_attendance_rows_markdown("日期 | 员工 | 班次 | 状态", &analysis_rows);
-        return Some(("absence_candidates", analysis_rows, content_excerpt));
-    }
-    None
-}
-
-fn assistant_run_daily_earliest_attendance_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
-    let mut by_date = BTreeMap::<String, (&AssistantRunAttendanceRow, u32)>::new();
-    for row in rows {
-        let Some(first_punch) = row.first_punch.as_deref() else {
-            continue;
-        };
-        let Some(minutes) = assistant_run_hhmm_minutes(first_punch) else {
-            continue;
-        };
-        match by_date.get(&row.date) {
-            Some((_, current_minutes)) if *current_minutes <= minutes => {}
-            _ => {
-                by_date.insert(row.date.clone(), (row, minutes));
-            }
-        }
-    }
-    by_date
-        .into_iter()
-        .rev()
-        .map(|(date, (row, _))| {
-            json!({
-                "date": date,
-                "employee": row.employee.clone(),
-                "first_punch": row.first_punch.clone(),
-                "shift": row.shift.clone(),
-                "source_locator": row.source_locator.clone(),
-            })
-        })
-        .collect()
-}
-
-fn assistant_run_work_hour_extreme_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
-    let hour_rows = rows
-        .iter()
-        .filter_map(|row| {
-            row.work_hours
-                .filter(|hours| assistant_run_attendance_row_has_countable_work_hours(row, *hours))
-                .map(|hours| (row, hours))
-        })
-        .collect::<Vec<_>>();
-    let Some((shortest_row, shortest_hours)) = hour_rows
-        .iter()
-        .min_by(|left, right| left.1.total_cmp(&right.1))
-        .copied()
-    else {
-        return Vec::new();
-    };
-    let Some((longest_row, longest_hours)) = hour_rows
-        .iter()
-        .max_by(|left, right| left.1.total_cmp(&right.1))
-        .copied()
-    else {
-        return Vec::new();
-    };
-    vec![
-        assistant_run_work_hour_extreme_value("longest", longest_row, longest_hours),
-        assistant_run_work_hour_extreme_value("shortest", shortest_row, shortest_hours),
-    ]
-}
-
-fn assistant_run_attendance_row_has_countable_work_hours(
-    row: &AssistantRunAttendanceRow,
-    hours: f64,
-) -> bool {
-    hours > 0.0
-        && row.first_punch.is_some()
-        && row.last_punch.is_some()
-        && !row.status.contains("未打卡")
-        && !row.status.contains("不考勤")
-}
-
-fn assistant_run_work_hour_extreme_value(
-    category: &str,
-    row: &AssistantRunAttendanceRow,
-    hours: f64,
-) -> Value {
-    json!({
-        "category": category,
-        "date": row.date.clone(),
-        "employee": row.employee.clone(),
-        "work_hours": hours,
-        "work_hours_text": format!("{hours:.2}小时"),
-        "shift": row.shift.clone(),
-        "first_punch": row.first_punch.clone(),
-        "last_punch": row.last_punch.clone(),
-        "status": row.status.clone(),
-        "source_locator": row.source_locator.clone(),
-    })
-}
-
-fn assistant_run_absence_attendance_rows(rows: &[AssistantRunAttendanceRow]) -> Vec<Value> {
-    rows.iter()
-        .filter(|row| row.first_punch.is_none() && row.status.contains("未打卡"))
-        .filter(|row| row.shift.contains("坐班"))
-        .map(|row| {
-            json!({
-                "date": row.date.clone(),
-                "employee": row.employee.clone(),
-                "shift": row.shift.clone(),
-                "status": row.status.clone(),
-                "counts_as_absence": !row.status.contains("不考勤"),
-                "source_locator": row.source_locator.clone(),
-            })
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .take(80)
-        .collect()
-}
-
-fn assistant_run_attendance_rows_markdown(header: &str, rows: &[Value]) -> String {
-    let mut lines = vec![header.to_string()];
-    for row in rows.iter().take(80) {
-        if let Some(category) = row.get("category").and_then(Value::as_str) {
-            lines.push(format!(
-                "{} | {} | {} | {}",
-                category,
-                row.get("date").and_then(Value::as_str).unwrap_or(""),
-                row.get("employee").and_then(Value::as_str).unwrap_or(""),
-                row.get("work_hours_text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-            ));
-        } else if let Some(first_punch) = row.get("first_punch").and_then(Value::as_str) {
-            lines.push(format!(
-                "{} | {} | {}",
-                row.get("date").and_then(Value::as_str).unwrap_or(""),
-                row.get("employee").and_then(Value::as_str).unwrap_or(""),
-                first_punch
-            ));
-        } else {
-            lines.push(format!(
-                "{} | {} | {} | {}",
-                row.get("date").and_then(Value::as_str).unwrap_or(""),
-                row.get("employee").and_then(Value::as_str).unwrap_or(""),
-                row.get("shift").and_then(Value::as_str).unwrap_or(""),
-                row.get("status").and_then(Value::as_str).unwrap_or("")
-            ));
-        }
-    }
-    lines.join("\n")
-}
-
-fn assistant_run_combined_attendance_rows_markdown(rows: &[Value]) -> String {
-    let mut lines = vec!["类型 | 日期 | 员工 | 明细 | 状态".to_string()];
-    for row in rows.iter().take(82) {
-        if let Some(category) = row.get("category").and_then(Value::as_str) {
-            lines.push(format!(
-                "{} | {} | {} | {} | {}",
-                category,
-                row.get("date").and_then(Value::as_str).unwrap_or(""),
-                row.get("employee").and_then(Value::as_str).unwrap_or(""),
-                row.get("work_hours_text")
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
-                row.get("status").and_then(Value::as_str).unwrap_or("")
-            ));
-        } else {
-            lines.push(format!(
-                "absence_candidate | {} | {} | {} | {}",
-                row.get("date").and_then(Value::as_str).unwrap_or(""),
-                row.get("employee").and_then(Value::as_str).unwrap_or(""),
-                row.get("shift").and_then(Value::as_str).unwrap_or(""),
-                row.get("status").and_then(Value::as_str).unwrap_or("")
-            ));
-        }
-    }
-    lines.join("\n")
-}
-
-fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
-    prompt_has_any(
-        prompt,
-        &[
-            "统计",
-            "汇总",
-            "合计",
-            "排序",
-            "排名",
-            "排行",
-            "前",
-            "最高",
-            "最大",
-            "最低",
-            "最小",
-            "平均",
-            "趋势",
-            "维度",
-            "占比",
-            "比例",
-            "分布",
-            "报表",
-            "表格",
-            "top",
-            "rank",
-            "sum",
-            "avg",
-            "max",
-            "min",
-            "up",
-            "down",
-            "上行",
-            "下行",
-            "流量",
-            "区域",
-            "楼层",
-            "哪些",
-            "哪个",
-            "多少",
-            "店铺",
-            "门店",
-            "分店",
-            "品牌",
-            "品类",
-            "业态",
-            "取高",
-            "高分成",
-            "缺口",
-            "机会",
-            "助推",
-            "低活跃",
-            "风险",
-            "预警",
-            "销售额",
-            "租金",
-            "客流",
-            "坪效",
-            "租售比",
-            "经营",
-            "健康度",
-            "总览",
-            "数据",
-        ],
-    )
-}
-
-fn assistant_run_database_schema_context_requested(prompt: &str) -> bool {
-    assistant_run_database_aggregate_requested(prompt)
-        || prompt_has_any(
-            prompt,
-            &[
-                "数据库",
-                "数据表",
-                "表结构",
-                "字段",
-                "指标",
-                "维度",
-                "口径",
-                "数据源",
-                "数据集",
-                "内容",
-                "是什么",
-                "有什么",
-                "分析",
-                "schema",
-                "field",
-                "metric",
-                "dimension",
-                "source",
-                "dataset",
-            ],
-        )
-}
-
-fn assistant_run_database_mapping_for_prompt<'a>(
-    config: &'a MySqlSourceConfig,
-    prompt: &str,
-) -> Option<&'a MySqlTableMapping> {
-    let normalized = prompt.to_ascii_lowercase();
-    config
-        .tables
-        .iter()
-        .find(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
-        .or_else(|| config.tables.first())
-}
-
-fn assistant_run_database_schema_mappings_for_prompt<'a>(
-    config: &'a MySqlSourceConfig,
-    prompt: &str,
-) -> Vec<&'a MySqlTableMapping> {
-    let normalized = prompt.to_ascii_lowercase();
-    let mut mappings = config
-        .tables
-        .iter()
-        .filter(|mapping| normalized.contains(&mapping.table.to_ascii_lowercase()))
-        .take(ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT)
-        .collect::<Vec<_>>();
-    if mappings.is_empty() {
-        mappings = config
-            .tables
-            .iter()
-            .take(ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT)
-            .collect();
-    }
-    mappings
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AssistantRunDatabaseAggregatePlan {
-    role: &'static str,
-    intent: &'static str,
-    dimensions: Vec<String>,
-}
-
-fn assistant_run_database_aggregate_dimension_plans(
-    mapping: &MySqlTableMapping,
-    prompt: &str,
-) -> Vec<AssistantRunDatabaseAggregatePlan> {
-    let wants_report = assistant_run_database_prompt_wants_report(prompt);
-    let wants_rank = wants_report
-        || prompt_has_any(
-            prompt,
-            &[
-                "区域", "位置", "楼层", "门", "梯", "点位", "areaname", "area", "top", "排名",
-                "排行", "排序", "前", "最高", "最大", "哪些", "哪个", "店铺", "门店", "分店",
-                "品牌",
-            ],
-        );
-    let wants_trend = wants_report
-        || prompt_has_any(
-            prompt,
-            &[
-                "时间", "日期", "小时", "日", "趋势", "变化", "txdate", "date", "time", "by time",
-            ],
-        );
-    let wants_comparison = wants_report
-        || prompt_has_any(
-            prompt,
-            &[
-                "对比", "分类", "类型", "类别", "维度", "areatype", "category", "type",
-            ],
-        );
-
-    let mut plans = Vec::new();
-    if wants_rank {
-        if let Some(dimension) = assistant_run_database_prompt_entity_dimension(mapping, prompt)
-            .or_else(|| assistant_run_database_entity_dimension(mapping))
-        {
-            push_assistant_run_database_aggregate_plan(
-                &mut plans,
-                "ranking",
-                "entity_topn",
-                vec![dimension],
-            );
-        }
-    }
-    if wants_trend {
-        if let Some(dimension) = assistant_run_database_time_column(mapping) {
-            push_assistant_run_database_aggregate_plan(
-                &mut plans,
-                "trend",
-                "time_series",
-                vec![dimension],
-            );
-        }
-    }
-    if wants_comparison {
-        if let Some(dimension) = assistant_run_database_category_dimension(mapping) {
-            push_assistant_run_database_aggregate_plan(
-                &mut plans,
-                "comparison",
-                "category_comparison",
-                vec![dimension],
-            );
-        }
-    }
-    if plans.is_empty() {
-        push_assistant_run_database_aggregate_plan(
-            &mut plans,
-            "primary",
-            "prompt_requested",
-            assistant_run_database_aggregate_dimensions(mapping, prompt),
-        );
-    }
-    plans.truncate(ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT);
-    plans
-}
-
-fn assistant_run_database_prompt_wants_report(prompt: &str) -> bool {
-    prompt_has_any(
-        prompt,
-        &[
-            "报表",
-            "报告",
-            "看板",
-            "仪表盘",
-            "图文",
-            "静态页",
-            "html",
-            "dashboard",
-            "report",
-            "visual",
-        ],
-    )
-}
-
-fn push_assistant_run_database_aggregate_plan(
-    plans: &mut Vec<AssistantRunDatabaseAggregatePlan>,
-    role: &'static str,
-    intent: &'static str,
-    dimensions: Vec<String>,
-) {
-    if dimensions.is_empty()
-        || plans
-            .iter()
-            .any(|existing| existing.dimensions == dimensions)
-    {
-        return;
-    }
-    plans.push(AssistantRunDatabaseAggregatePlan {
-        role,
-        intent,
-        dimensions,
-    });
-}
-
-fn assistant_run_database_entity_dimension(mapping: &MySqlTableMapping) -> Option<String> {
-    mapping
-        .title_column
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .or_else(|| Some(mapping.id_column.clone()))
-}
-
-fn assistant_run_database_prompt_entity_dimension(
-    mapping: &MySqlTableMapping,
-    prompt: &str,
-) -> Option<String> {
-    let columns = assistant_run_database_mapping_columns(mapping);
-    let find_column = |patterns: &[&str]| {
-        patterns.iter().find_map(|pattern| {
-            columns
-                .iter()
-                .find(|column| column.to_ascii_lowercase().contains(pattern))
-                .cloned()
-        })
-    };
-    if prompt_has_any(
-        prompt,
-        &["店铺", "门店", "分店", "店名", "柜组", "专柜", "shop"],
-    ) {
-        return find_column(&[
-            "shopdesc",
-            "shop_name",
-            "shopname",
-            "storedesc",
-            "store_name",
-            "storename",
-            "store_init",
-        ]);
-    }
-    if prompt_has_any(prompt, &["品牌", "租户", "商户", "brand", "lease"]) {
-        return find_column(&[
-            "branddesc",
-            "brand_name",
-            "brandname",
-            "leasename",
-            "lease_name",
-        ]);
-    }
-    if prompt_has_any(prompt, &["品类", "业态", "类目", "category"]) {
-        return find_column(&["catgldesc", "catgmdesc", "catgsdesc", "category"]);
-    }
-    if prompt_has_any(prompt, &["大区", "区域", "小区", "片区", "region", "area"]) {
-        return find_column(&[
-            "dist_name",
-            "areaname",
-            "area_name",
-            "region",
-            "omdname",
-            "parentname",
-            "area",
-        ]);
-    }
-    if prompt_has_any(prompt, &["合同", "contract"]) {
-        return find_column(&["contract_no", "htbh"]);
-    }
-    None
-}
-
-fn assistant_run_database_category_dimension(mapping: &MySqlTableMapping) -> Option<String> {
-    let columns = assistant_run_database_mapping_columns(mapping);
-    columns
-        .iter()
-        .find(|column| column.eq_ignore_ascii_case("areatype"))
-        .cloned()
-        .or_else(|| {
-            columns
-                .iter()
-                .find(|column| {
-                    let lower = column.to_ascii_lowercase();
-                    lower.contains("category")
-                        || lower.contains("type")
-                        || lower.contains("class")
-                        || lower.contains("kind")
-                        || lower.contains("status")
-                        || lower.contains("level")
-                })
-                .cloned()
-        })
-}
-
-fn assistant_run_database_aggregate_metrics(
-    mapping: &MySqlTableMapping,
-    prompt: &str,
-) -> Vec<String> {
-    let mut metrics = Vec::new();
-    if prompt_has_metric_terms(
-        prompt,
-        &[
-            "取高",
-            "高分成",
-            "分成线",
-            "缺口",
-            "差多少",
-            "还差",
-            "需增",
-            "机会",
-            "接近",
-            "就快",
-        ],
-    ) {
-        push_database_metric_if_present(mapping, &mut metrics, "xuzengxiaoshou");
-        push_database_metric_if_present(mapping, &mut metrics, "quekou");
-    }
-    if prompt_has_metric_terms(prompt, &["销售", "销售额", "成交", "sale", "sales", "sold"])
-    {
-        push_database_metric_if_present(mapping, &mut metrics, "amttotal");
-        push_database_metric_if_present(mapping, &mut metrics, "amtsold");
-        push_database_metric_if_present(mapping, &mut metrics, "sale_num");
-        push_database_metric_if_present(mapping, &mut metrics, "salenum");
-    }
-    if prompt_has_metric_terms(prompt, &["租金", "提成", "固定", "rent", "fee"]) {
-        push_database_metric_if_present(mapping, &mut metrics, "tichengzujin");
-        push_database_metric_if_present(mapping, &mut metrics, "yuezujin");
-        push_database_metric_if_present(mapping, &mut metrics, "htzj");
-    }
-    if prompt_has_metric_terms(prompt, &["down", "下行", "离开", "离场", "出场", "出口"])
-    {
-        push_database_metric_if_present(mapping, &mut metrics, "down");
-    }
-    if prompt_has_metric_terms(prompt, &["up", "上行", "进入", "进场", "入口"]) {
-        push_database_metric_if_present(mapping, &mut metrics, "up");
-    }
-    if metrics.is_empty() && prompt_has_metric_terms(prompt, &["流量", "客流", "traffic"]) {
-        push_database_metric_if_present(mapping, &mut metrics, "up");
-        push_database_metric_if_present(mapping, &mut metrics, "down");
-    }
-    if metrics.is_empty() {
-        for column in assistant_run_database_metric_columns(mapping) {
-            push_unique_string(&mut metrics, &column);
-            if metrics.len() >= ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT {
-                break;
-            }
-        }
-    }
-    metrics.truncate(ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT);
-    metrics
-}
-
-fn push_database_metric_if_present(
-    mapping: &MySqlTableMapping,
-    metrics: &mut Vec<String>,
-    column: &str,
-) {
-    if metrics.iter().any(|metric| metric == column) {
-        return;
-    }
-    if assistant_run_database_mapping_columns(mapping)
-        .iter()
-        .any(|candidate| candidate == column)
-    {
-        metrics.push(column.to_string());
-    }
-}
-
-fn assistant_run_database_aggregate_dimensions(
-    mapping: &MySqlTableMapping,
-    prompt: &str,
-) -> Vec<String> {
-    let mut dimensions = Vec::new();
-    let wants_time = prompt_has_any(
-        prompt,
-        &[
-            "时间", "日期", "小时", "日", "趋势", "txdate", "date", "time", "by time",
-        ],
-    );
-    let wants_entity = prompt_has_any(
-        prompt,
-        &[
-            "区域", "位置", "楼层", "门", "梯", "点位", "areaname", "area", "top", "排名", "排行",
-            "排序", "前",
-        ],
-    );
-    if wants_entity {
-        if let Some(dimension) = assistant_run_database_prompt_entity_dimension(mapping, prompt)
-            .or_else(|| assistant_run_database_entity_dimension(mapping))
-        {
-            push_unique_string(&mut dimensions, &dimension);
-        }
-    }
-    if wants_time {
-        if let Some(time_column) = assistant_run_database_time_column(mapping) {
-            push_unique_string(&mut dimensions, &time_column);
-        }
-    }
-    if dimensions.is_empty() {
-        if let Some(title_column) = mapping.title_column.as_deref() {
-            push_unique_string(&mut dimensions, title_column);
-        }
-    }
-    dimensions.truncate(3);
-    dimensions
-}
-
-fn assistant_run_database_time_column(mapping: &MySqlTableMapping) -> Option<String> {
-    let columns = assistant_run_database_mapping_columns(mapping);
-    columns
-        .iter()
-        .find(|column| column.eq_ignore_ascii_case("txdate"))
-        .cloned()
-        .or_else(|| {
-            columns
-                .iter()
-                .find(|column| {
-                    let lower = column.to_ascii_lowercase();
-                    lower.contains("date") || lower.contains("time")
-                })
-                .cloned()
-        })
-}
-
-fn assistant_run_database_aggregation(prompt: &str, has_metric: bool) -> String {
-    if !has_metric {
-        return "count".to_string();
-    }
-    if prompt_has_any(prompt, &["平均", "avg", "average"]) {
-        "avg".to_string()
-    } else if prompt_has_any(prompt, &["最低", "最小", "min"]) {
-        "min".to_string()
-    } else if prompt_has_any(prompt, &["单点最大", "最大值", "max"]) {
-        "max".to_string()
-    } else {
-        "sum".to_string()
-    }
-}
-
-fn assistant_run_database_aggregate_order_direction(prompt: &str, metric: Option<&str>) -> String {
-    if prompt_has_any(prompt, &["最低", "最小", "min", "升序"]) {
-        return "asc".to_string();
-    }
-    let metric = metric.unwrap_or("").to_ascii_lowercase();
-    let gap_metric = metric.contains("xuzeng")
-        || metric.contains("quekou")
-        || metric.contains("gap")
-        || metric.contains("shortfall");
-    if gap_metric
-        && prompt_has_any(
-            prompt,
-            &[
-                "取高机会",
-                "机会最大",
-                "最接近",
-                "接近",
-                "就快",
-                "差多少",
-                "还差",
-                "高分成线",
-            ],
-        )
-        && !prompt_has_any(prompt, &["缺口最大", "最大缺口", "差距最大"])
-    {
-        return "asc".to_string();
-    }
-    "desc".to_string()
-}
-
-fn assistant_run_database_aggregate_latest_time_column(
-    mapping: &MySqlTableMapping,
-    prompt: &str,
-    metric: Option<&str>,
-    aggregate_plan: &AssistantRunDatabaseAggregatePlan,
-) -> Option<String> {
-    if aggregate_plan.intent == "time_series" {
-        return None;
-    }
-    let time_column = assistant_run_database_time_column(mapping)?;
-    if aggregate_plan
-        .dimensions
-        .iter()
-        .any(|dimension| dimension == &time_column)
-    {
-        return None;
-    }
-    if prompt_has_any(
-        prompt,
-        &[
-            "趋势",
-            "变化",
-            "按日",
-            "按天",
-            "按时间",
-            "历史",
-            "区间",
-            "同比",
-            "环比",
-            "trend",
-        ],
-    ) {
-        return None;
-    }
-    let metric = metric.unwrap_or("").to_ascii_lowercase();
-    let current_metric = metric.contains("yuezujin")
-        || metric.contains("zujin")
-        || metric.contains("rent")
-        || metric.contains("amttotal")
-        || metric.contains("ticheng")
-        || metric.contains("xuzeng")
-        || metric.contains("quekou")
-        || metric.contains("dayamt")
-        || metric.contains("salenum")
-        || metric.contains("sale");
-    let current_prompt = prompt_has_any(
-        prompt,
-        &[
-            "当前",
-            "现在",
-            "目前",
-            "本月",
-            "最新",
-            "经营健康度",
-            "总览",
-            "月租金",
-            "租金",
-            "取高",
-            "高分成",
-            "缺口",
-            "销售额",
-            "还差",
-            "最接近",
-        ],
-    );
-    if current_metric || current_prompt {
-        return Some(time_column);
-    }
-    None
-}
-
-fn assistant_run_database_mapping_columns(mapping: &MySqlTableMapping) -> Vec<String> {
-    let mut columns = Vec::new();
-    push_unique_string(&mut columns, &mapping.id_column);
-    for column in &mapping.id_columns {
-        push_unique_string(&mut columns, column);
-    }
-    if let Some(column) = mapping.title_column.as_deref() {
-        push_unique_string(&mut columns, column);
-    }
-    for column in &mapping.content_columns {
-        push_unique_string(&mut columns, column);
-    }
-    if let Some(column) = mapping.updated_at_column.as_deref() {
-        push_unique_string(&mut columns, column);
-    }
-    if let Some(column) = mapping.version_column.as_deref() {
-        push_unique_string(&mut columns, column);
-    }
-    for column in &mapping.metadata_columns {
-        push_unique_string(&mut columns, column);
-    }
-    columns
-}
-
-fn assistant_run_database_aggregate_scan_limit() -> u32 {
-    std::env::var("ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_DEFAULT)
-        .clamp(1, ASSISTANT_RUN_DATABASE_AGGREGATE_SCAN_LIMIT_MAX)
 }
 
 async fn build_assistant_run_document_parse_status_supply(
@@ -46254,365 +41645,6 @@ pub(crate) async fn load_latest_upload_ingest_workflow_snapshots(
         );
     }
     Ok(snapshots)
-}
-
-fn assistant_run_document_parse_model_status(
-    document: &Document,
-    parse_status: &str,
-    chunk_count: usize,
-    parse_quality_status: Option<&str>,
-    workflow: Option<&Value>,
-) -> String {
-    let workflow_status = workflow
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let workflow_stage = workflow
-        .and_then(|value| value.get("stage"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let workflow_active = matches!(workflow_status, "pending" | "running");
-
-    if workflow_active && document.lifecycle == DocumentLifecycle::Failed {
-        return if workflow_status == "pending" {
-            "reparse_queued".to_string()
-        } else {
-            "reparsing".to_string()
-        };
-    }
-    if workflow_active && workflow_stage == "index_retrieval_artifacts" {
-        return "indexing".to_string();
-    }
-    if workflow_active {
-        return if workflow_status == "pending" {
-            "queued".to_string()
-        } else {
-            "parsing".to_string()
-        };
-    }
-    if document.lifecycle == DocumentLifecycle::Failed || parse_status == "failed" {
-        return "failed".to_string();
-    }
-    if matches!(parse_status, "parse_degraded" | "placeholder")
-        || parse_quality_status
-            .map(|status| status.contains("low_text_coverage"))
-            .unwrap_or(false)
-    {
-        return "parse_degraded".to_string();
-    }
-    if document.lifecycle == DocumentLifecycle::Received {
-        return "received".to_string();
-    }
-    if document.lifecycle == DocumentLifecycle::Indexed {
-        return "ready".to_string();
-    }
-    if document.lifecycle == DocumentLifecycle::Extracted && chunk_count > 0 {
-        return "extracted_pending_index".to_string();
-    }
-    document.lifecycle.as_str().to_string()
-}
-
-fn assistant_run_document_parse_status_is_active(status: &str) -> bool {
-    matches!(
-        status,
-        "queued" | "parsing" | "indexing" | "reparsing" | "reparse_queued"
-    )
-}
-
-fn assistant_run_document_parse_status_needs_attention(status: &str) -> bool {
-    !matches!(status, "ready" | "extracted_pending_index" | "archived")
-}
-
-fn assistant_run_document_parse_quality_status(document: &Document) -> Option<String> {
-    assistant_run_document_parse_quality_metadata(document)
-        .and_then(|parse_quality| value_at_any_key(parse_quality, &["status"]))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn assistant_run_document_parse_quality_metadata(document: &Document) -> Option<&Value> {
-    let ingest = document
-        .metadata
-        .get("ingest")
-        .filter(|value| value.is_object())?;
-    value_at_any_key(ingest, &["parse_metadata", "parseMetadata"])
-        .and_then(|parse_metadata| {
-            value_at_any_key(parse_metadata, &["parse_quality", "parseQuality"])
-        })
-        .filter(|value| value.is_object())
-}
-
-fn assistant_run_document_parse_quality_summary(document: &Document) -> Option<Value> {
-    let ingest = document
-        .metadata
-        .get("ingest")
-        .filter(|value| value.is_object())?;
-    let parse_quality = assistant_run_document_parse_quality_metadata(document)?;
-    let mut summary = Map::new();
-
-    copy_json_fields(
-        ingest,
-        &mut summary,
-        &[
-            "parse_method",
-            "parse_status",
-            "parse_quality_status",
-            "cloud_structured_provider",
-        ],
-    );
-    copy_json_fields(
-        parse_quality,
-        &mut summary,
-        &[
-            "kind",
-            "status",
-            "text_chars",
-            "min_usable_text_chars",
-            "fallback_status",
-            "recommended_fallback",
-        ],
-    );
-    if let Some(fallback_from) = value_at_any_key(parse_quality, &["fallback_from", "fallbackFrom"])
-        .and_then(compact_parse_quality_candidate_report)
-    {
-        summary.insert("fallback_from".to_string(), fallback_from);
-    }
-    if let Some(candidate_selection) =
-        assistant_run_parse_quality_candidate_selection_summary(parse_quality)
-    {
-        summary.insert("candidate_selection".to_string(), candidate_selection);
-    }
-    if let Some(vlm_rescue) = assistant_run_parse_quality_vlm_rescue_summary(parse_quality) {
-        summary.insert("vlm_rescue".to_string(), vlm_rescue);
-    }
-    if let Some(auto_reparse) = value_at_any_key(ingest, &["auto_reparse", "autoReparse"])
-        .and_then(assistant_run_auto_reparse_summary)
-    {
-        summary.insert("auto_reparse".to_string(), auto_reparse);
-    }
-
-    if summary.is_empty() {
-        None
-    } else {
-        Some(Value::Object(summary))
-    }
-}
-
-fn assistant_run_inferred_low_text_parse_quality_summary(
-    document: &Document,
-    chunks: &[DocumentChunk],
-) -> Option<Value> {
-    if !assistant_run_document_is_pdf_like(document) || chunks.is_empty() {
-        return None;
-    }
-    let text_chars = chunks
-        .iter()
-        .map(|chunk| assistant_run_low_text_parse_signal_chars(&chunk.content))
-        .sum::<usize>();
-    if text_chars >= ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS {
-        return None;
-    }
-    Some(json!({
-        "kind": "pdf_text_extraction",
-        "status": "low_text_coverage",
-        "text_chars": text_chars,
-        "min_usable_text_chars": ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS,
-        "inferred_from": "stored_document_chunks",
-        "fallback_status": "recommended",
-        "recommended_fallback": "ocr_reparse"
-    }))
-}
-
-fn assistant_run_document_is_pdf_like(document: &Document) -> bool {
-    document
-        .content_type
-        .eq_ignore_ascii_case("application/pdf")
-        || document.title.to_ascii_lowercase().ends_with(".pdf")
-        || document.object_key.to_ascii_lowercase().ends_with(".pdf")
-}
-
-fn assistant_run_low_text_parse_signal_chars(text: &str) -> usize {
-    text.chars()
-        .filter(|ch| {
-            !ch.is_whitespace()
-                && !ch.is_ascii_punctuation()
-                && !matches!(
-                    *ch,
-                    '。' | '，'
-                        | '、'
-                        | '；'
-                        | '：'
-                        | '！'
-                        | '？'
-                        | '（'
-                        | '）'
-                        | '【'
-                        | '】'
-                        | '《'
-                        | '》'
-                        | '“'
-                        | '”'
-                        | '‘'
-                        | '’'
-                        | '-'
-                        | '—'
-                        | '_'
-                        | '|'
-                )
-        })
-        .count()
-}
-
-fn assistant_run_parse_quality_candidate_selection_summary(parse_quality: &Value) -> Option<Value> {
-    let candidate_selection = value_at_any_key(
-        parse_quality,
-        &["candidate_selection", "candidateSelection"],
-    )?;
-    let mut summary = Map::new();
-    copy_json_fields(
-        candidate_selection,
-        &mut summary,
-        &["policy", "selected_method"],
-    );
-    if let Some(selected) = value_at_any_key(candidate_selection, &["selected"])
-        .and_then(compact_parse_quality_candidate_report)
-    {
-        summary.insert("selected".to_string(), selected);
-    }
-    if let Some(candidate_count) = value_at_any_key(candidate_selection, &["candidates"])
-        .and_then(Value::as_array)
-        .map(Vec::len)
-    {
-        summary.insert("candidate_count".to_string(), json!(candidate_count));
-    }
-    if summary.is_empty() {
-        None
-    } else {
-        Some(Value::Object(summary))
-    }
-}
-
-fn assistant_run_parse_quality_vlm_rescue_summary(parse_quality: &Value) -> Option<Value> {
-    let vlm_rescue = value_at_any_key(parse_quality, &["vlm_rescue", "vlmRescue"])?;
-    let mut summary = Map::new();
-    copy_json_fields(vlm_rescue, &mut summary, &["policy", "selected"]);
-    for key in ["existing", "vlm"] {
-        if let Some(report) =
-            value_at_any_key(vlm_rescue, &[key]).and_then(compact_parse_quality_candidate_report)
-        {
-            summary.insert(key.to_string(), report);
-        }
-    }
-    if summary.is_empty() {
-        None
-    } else {
-        Some(Value::Object(summary))
-    }
-}
-
-fn assistant_run_auto_reparse_summary(auto_reparse: &Value) -> Option<Value> {
-    let mut summary = Map::new();
-    copy_json_fields(
-        auto_reparse,
-        &mut summary,
-        &[
-            "status",
-            "reason",
-            "attempt_count",
-            "max_attempts",
-            "updated_at",
-        ],
-    );
-    if summary.is_empty() {
-        None
-    } else {
-        Some(Value::Object(summary))
-    }
-}
-
-fn compact_parse_quality_candidate_report(value: &Value) -> Option<Value> {
-    let mut summary = Map::new();
-    copy_json_fields(
-        value,
-        &mut summary,
-        &[
-            "method",
-            "text_chars",
-            "structure_block_count",
-            "heading_count",
-            "table_signal_count",
-            "quality_score",
-        ],
-    );
-    if summary.is_empty() {
-        None
-    } else {
-        Some(Value::Object(summary))
-    }
-}
-
-fn assistant_run_document_ingest_summary(document: &Document) -> Value {
-    let Some(ingest) = document
-        .metadata
-        .get("ingest")
-        .filter(|value| value.is_object())
-    else {
-        return Value::Null;
-    };
-    let mut summary = Map::new();
-    for key in [
-        "processor",
-        "parse_method",
-        "cloud_structured_provider",
-        "chunk_count",
-        "extracted_chars",
-        "failed_at",
-        "last_error",
-    ] {
-        if let Some(value) = ingest.get(key).cloned() {
-            summary.insert(key.to_string(), value);
-        }
-    }
-    if let Some(parse_quality_status) = assistant_run_document_parse_quality_status(document) {
-        summary.insert(
-            "parse_quality_status".to_string(),
-            json!(parse_quality_status),
-        );
-    }
-    if let Some(parse_quality_summary) = assistant_run_document_parse_quality_summary(document) {
-        summary.insert("parse_quality_summary".to_string(), parse_quality_summary);
-    }
-    Value::Object(summary)
-}
-
-fn assistant_run_document_external_ref(document: &Document) -> Option<Value> {
-    let external_source = document
-        .metadata
-        .get("external_source")
-        .or_else(|| document.metadata.get("externalSource"))?
-        .as_object()?;
-    let source_id = external_source
-        .get("source_id")
-        .or_else(|| external_source.get("sourceId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let document_external_id = external_source
-        .get("document_external_id")
-        .or_else(|| external_source.get("documentExternalId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(json!({
-        "source_id": source_id,
-        "document_external_id": document_external_id,
-        "revision_external_id": external_source
-            .get("revision_external_id")
-            .or_else(|| external_source.get("revisionExternalId"))
-            .and_then(Value::as_str),
-    }))
 }
 
 async fn build_assistant_run_dataset_entity_scan_supply(
@@ -50489,17 +45521,6 @@ async fn assistant_run_retrieval_supply_excerpt(
     }
 }
 
-fn assistant_run_detail_targets_for_scope(
-    selected_scope: &Value,
-    supplied_items: &[Value],
-) -> Vec<Value> {
-    assistant_run_detail_targets_for_supply(
-        assistant_run_scope_prefers_detail(selected_scope),
-        supplied_items,
-        ASSISTANT_RUN_DETAIL_TARGET_LIMIT,
-    )
-}
-
 async fn assistant_run_media_context_for_document(
     state: &AppState,
     document_id: DocumentId,
@@ -51084,119 +46105,7 @@ fn is_cjk_char(ch: char) -> bool {
         || ('\u{f900}'..='\u{faff}').contains(&ch)
 }
 
-fn assistant_run_requested_dataset_supply_policy(intent: &str) -> Value {
-    json!({
-        "intent": if intent.trim().is_empty() { "data_question" } else { intent.trim() },
-        "retrievalPolicy": "standard",
-        "preferDetail": false,
-        "noFakeData": true,
-        "answerPolicy": "model_authored_host_supplied",
-        "candidatePolicy": "selected_or_inferred_visible_datasets_only",
-        "recommendedActions": ["retrieval.search"],
-    })
-}
-
-fn selected_scope_has_document_selection(scope: &Value) -> bool {
-    !selected_document_ids_from_scope(scope).is_empty()
-        || scope
-            .get("documents")
-            .and_then(Value::as_array)
-            .is_some_and(|documents| !documents.is_empty())
-        || scope
-            .get("available_document_external_ids")
-            .and_then(Value::as_array)
-            .is_some_and(|document_ids| !document_ids.is_empty())
-}
-
-fn assistant_run_active_static_page_supply_policy(has_dataset: bool, has_memory: bool) -> Value {
-    let mut recommended_actions = Vec::new();
-    if has_dataset {
-        recommended_actions.push("retrieval.search");
-        recommended_actions.push("retrieval.read_detail");
-    }
-    recommended_actions.push("static_page.update_draft");
-
-    json!({
-        "intent": "static_page",
-        "answerPolicy": "model_authored_host_supplied",
-        "currentArtifactPolicy": "active_static_page_draft",
-        "actionPolicy": "model_may_request_controlled_actions_host_validates",
-        "contextBudgetPolicy": if has_dataset || has_memory {
-            "quality_first_token_tolerant"
-        } else {
-            "compact_until_retrieval_needed"
-        },
-        "candidatePolicy": if has_dataset {
-            "selected_or_inferred_visible_datasets_only"
-        } else {
-            "ordinary_chat_without_forced_dataset"
-        },
-        "historyPolicy": if has_memory {
-            "intent_gated_selected"
-        } else {
-            "intent_gated"
-        },
-        "retrievalPolicy": if has_dataset {
-            "detail_first"
-        } else {
-            "not_requested"
-        },
-        "preferDetail": has_dataset,
-        "recommendedActions": recommended_actions,
-        "noFakeData": true,
-    })
-}
-
-fn prompt_touches_current_static_page_artifact(prompt: &str) -> bool {
-    let prompt = prompt.trim();
-    if prompt.is_empty() {
-        return false;
-    }
-    let lower_prompt = prompt.to_ascii_lowercase();
-    [
-        "静态页",
-        "静态页面",
-        "页面规划",
-        "一页",
-        "生成页面",
-        "落地页",
-        "模块",
-        "效果图",
-        "出图",
-        "标题",
-        "文案",
-        "内容",
-        "数据",
-        "图表",
-        "布局",
-        "调整",
-        "修改",
-        "改",
-        "换",
-        "确认",
-        "导出",
-        "继续",
-        "接着",
-        "下一步",
-        "刚才",
-        "上面",
-        "之前",
-        "这个",
-        "那版",
-        "草稿",
-        "柱状图",
-        "折线图",
-        "环图",
-        "看板",
-    ]
-    .iter()
-    .any(|hint| prompt.contains(hint))
-        || ["dashboard", "chart", "kpi", "export"]
-            .iter()
-            .any(|hint| lower_prompt.contains(hint))
-}
-
-fn assistant_run_current_artifact_brief(current_artifact: &Value) -> Value {
+pub(crate) fn assistant_run_current_artifact_brief(current_artifact: &Value) -> Value {
     if assistant_run_is_static_page_artifact(current_artifact) {
         return assistant_run_static_page_artifact_brief(current_artifact);
     }
@@ -60500,12 +55409,21 @@ mod tests {
             reply,
         });
 
-        assert!(body.contains("event: external_channel.needs_input"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_needs_input_event_name()
+        )));
         assert!(body.contains("\"phase\":\"needs_input\""));
         assert!(body.contains("\"status\":\"needs_input\""));
         assert!(body.contains("继续检索"));
-        assert!(body.contains("event: external_channel.completed"));
-        assert!(body.contains("event: done"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_done_event_name()
+        )));
     }
 
     #[test]
@@ -60547,7 +55465,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(payload["schema"], json!("v3.external_channel.sse.v1"));
+        assert_eq!(payload["schema"], json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1));
         assert_eq!(payload["event_id"], json!(format!("{run_id}:000042")));
         assert_eq!(payload["sequence"], json!(42));
         assert_eq!(payload["assistant_run_id"], json!(run_id));
@@ -60876,7 +55794,7 @@ mod tests {
         let first = append_external_channel_public_stream_event(
             &state,
             run.id,
-            "external_channel.static_page_queued",
+            external_channel_static_page_sse_queued_event_name(),
             "queued:demo",
             queued_payload.clone(),
         )
@@ -60885,7 +55803,7 @@ mod tests {
         let duplicate = append_external_channel_public_stream_event(
             &state,
             run.id,
-            "external_channel.static_page_queued",
+            external_channel_static_page_sse_queued_event_name(),
             "queued:demo",
             queued_payload,
         )
@@ -60915,7 +55833,7 @@ mod tests {
         let second = append_external_channel_public_stream_event(
             &state,
             run.id,
-            "external_channel.static_page_published",
+            external_channel_static_page_sse_published_event_name(),
             "published:demo",
             published_payload,
         )
@@ -60942,14 +55860,20 @@ mod tests {
         assert_eq!(events.len(), 3);
         let public_events = external_channel_public_stream_events(&events);
         assert_eq!(public_events.len(), 2);
-        assert_eq!(public_events[0].0, "external_channel.static_page_queued");
-        assert_eq!(public_events[1].0, "external_channel.static_page_published");
+        assert_eq!(
+            public_events[0].0,
+            external_channel_static_page_sse_queued_event_name()
+        );
+        assert_eq!(
+            public_events[1].0,
+            external_channel_static_page_sse_published_event_name()
+        );
         assert!(public_events.iter().all(|(_, payload)| payload
             .get(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY)
             .is_none()));
         assert!(public_events
             .iter()
-            .all(|(_, payload)| payload["schema"] == json!("v3.external_channel.sse.v1")));
+            .all(|(_, payload)| payload["schema"] == json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)));
     }
 
     #[test]
@@ -61034,7 +55958,10 @@ mod tests {
             .await
             .expect("first SSE body should load");
         let first_body = String::from_utf8(first_body.to_vec()).expect("SSE should be utf8");
-        assert!(first_body.contains("event: external_channel.completed"));
+        assert!(first_body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(first_body.contains("续传模型直答。"));
         let run_id = load_external_message_event_run_id(&state, &message.idempotency_key)
             .await
@@ -61080,9 +56007,18 @@ mod tests {
             .await
             .expect("replay SSE body should load");
         let replay_body = String::from_utf8(replay_body.to_vec()).expect("SSE should be utf8");
-        assert!(replay_body.contains("event: external_channel.started"));
-        assert!(replay_body.contains("event: external_channel.completed"));
-        assert!(replay_body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(replay_body.contains(&format!(
+            "event: {}",
+            external_channel_started_sse_event_name()
+        )));
+        assert!(replay_body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
+        assert!(replay_body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(replay_body.contains("续传模型直答。"));
         assert!(replay_body.contains("event: done"));
 
@@ -61130,8 +56066,14 @@ mod tests {
 
         let body = external_channel_sse_completion(response);
 
-        assert!(body.contains("event: external_channel.static_page_queued"));
-        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_queued_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(body.contains("\"sequence\":20"));
         assert!(body.contains("\"phase\":\"static_page\""));
         assert!(body.contains("\"display_text\":\"静态页/报表页面已进入生成队列。\""));
@@ -61142,7 +56084,10 @@ mod tests {
         assert!(!body.contains("Codex"));
         assert!(!body.contains("auto_publish_after_preview"));
         assert!(!body.contains("effect_image_confirmation_required"));
-        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(body.contains("event: done"));
     }
 
@@ -61258,8 +56203,14 @@ mod tests {
 
         let preview_body = external_channel_static_page_sse_progress_events(preview_response);
 
-        assert!(preview_body.contains("event: external_channel.static_page_preview_ready"));
-        assert!(preview_body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(preview_body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_preview_ready_event_name()
+        )));
+        assert!(preview_body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(preview_body.contains("\"sequence\":30"));
         assert!(preview_body.contains("\"phase\":\"static_page\""));
         assert!(preview_body.contains("\"status\":\"static_page_preview_ready\""));
@@ -61292,7 +56243,10 @@ mod tests {
 
         let published_body = external_channel_static_page_sse_progress_events(published_response);
 
-        assert!(published_body.contains("event: external_channel.static_page_published"));
+        assert!(published_body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_published_event_name()
+        )));
         assert!(published_body.contains("\"sequence\":90"));
         assert!(published_body.contains("\"data\":{"));
         assert!(published_body.contains("\"assistant_run_id\""));
@@ -61334,7 +56288,10 @@ mod tests {
         assert!(external_channel_static_page_sse_is_terminal(&response));
         let body = external_channel_static_page_sse_progress_events(response);
 
-        assert!(body.contains("event: external_channel.static_page_published"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_published_event_name()
+        )));
         assert!(body.contains("\"sequence\":90"));
         assert!(body.contains("\"status\":\"static_page_published\""));
         assert!(body.contains(published_url));
@@ -61364,8 +56321,14 @@ mod tests {
         assert!(external_channel_static_page_sse_is_terminal(&response));
         let body = external_channel_sse_completion(response);
 
-        assert!(body.contains("event: external_channel.delta"));
-        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(body.contains("static_page_published"));
         assert!(body.contains("已依据客户需求生成可访问的报表页面"));
         assert!(body.contains("页面链接"));
@@ -61406,7 +56369,10 @@ mod tests {
 
         let body = external_channel_sse_completion(response);
 
-        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(body.contains(XINBAI_PUBLISHED_REPORT_TITLE));
         assert!(body.contains("focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A"));
         assert!(body.contains("\"download_exports\""));
@@ -61446,8 +56412,14 @@ mod tests {
 
         let body = external_channel_static_page_sse_progress_events(response);
 
-        assert!(body.contains("event: external_channel.static_page_issue"));
-        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_issue_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(body.contains("\"sequence\":80"));
         assert!(!body.contains("provider_timeout"));
         assert!(body.contains("最终静态页暂未完成"));
@@ -61480,8 +56452,14 @@ mod tests {
 
         let body = external_channel_static_page_sse_continue_polling_event(response);
 
-        assert!(body.contains("event: external_channel.static_page_continue_polling"));
-        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_continue_polling_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(body.contains("\"sequence\":95"));
         assert!(body.contains("\"poll_after_seconds\":15"));
         assert!(body.contains("\"status_url\":\"https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply\""));
@@ -61532,7 +56510,10 @@ mod tests {
         assert!(!external_channel_static_page_sse_is_terminal(&response));
         let body = external_channel_static_page_sse_progress_events(response.clone());
 
-        assert!(body.contains("event: external_channel.static_page_continue_polling"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_continue_polling_event_name()
+        )));
         assert!(body.contains("\"sequence\":95"));
         assert!(body.contains("\"status\":\"static_page_continue_polling\""));
         assert!(body.contains("继续轮询"));
@@ -61573,7 +56554,10 @@ mod tests {
         assert!(external_channel_static_page_sse_is_terminal(&response));
         let body = external_channel_static_page_sse_progress_events(response.clone());
 
-        assert!(body.contains("event: external_channel.static_page_issue"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_issue_event_name()
+        )));
         assert!(body.contains("\"sequence\":81"));
         assert!(body.contains("\"status\":\"static_page_publish_cancelled\""));
 
@@ -64011,6 +58995,149 @@ mod tests {
                 || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
                 || event.event_name.starts_with("codex_host.fixed_task.")
         }));
+
+        let mut negated_message = message.clone();
+        negated_message.conversation_external_id = "conv-static-template-negated".to_string();
+        negated_message.message_external_id = "msg-static-template-negated-001".to_string();
+        negated_message.text = Some(
+            "请用两句话回答：V3 第三方普通问答测速，请直接回答不要生成报表，不要生成页面。"
+                .to_string(),
+        );
+        negated_message.render_mode = Some("artifact".to_string());
+        negated_message.artifact_type = Some("static_page".to_string());
+        let mut negated_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &negated_message);
+        negated_request.selected_scope = Some(selected_scope.clone());
+        let negated_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: negated_request.local_thread_id.clone(),
+                    user_prompt: negated_request.prompt.clone(),
+                    startup_briefing: negated_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(negated_request.scope_candidates.clone()),
+                    context_policy: negated_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("negated assistant run should be created");
+
+        let negated_reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &negated_run,
+            &negated_request,
+            &negated_message,
+            now,
+        )
+        .await
+        .expect("negated static-page pipeline check should not fail");
+        assert!(
+            negated_reply.is_none(),
+            "negated ordinary answer should not reuse static-page artifact even when artifact_type is static_page"
+        );
+        assert!(
+            state
+                .storage
+                .static_page_drafts()
+                .list_by_assistant_run(state.tenant_id, negated_run.id)
+                .await
+                .expect("negated run drafts should list")
+                .is_empty(),
+            "negated ordinary answer should not create a draft"
+        );
+        let negated_events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, negated_run.id)
+            .await
+            .expect("negated events should list");
+        assert!(!negated_events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+                || event.event_name.starts_with("codex_host.fixed_task.")
+        }));
+
+        let mut ordinary_negated_message = message.clone();
+        ordinary_negated_message.conversation_external_id =
+            "conv-static-template-normal-negated".to_string();
+        ordinary_negated_message.message_external_id =
+            "msg-static-template-normal-negated-001".to_string();
+        ordinary_negated_message.text = Some(
+            "请用两句话回答：这是第三方普通问答速度 smoke，不要返回历史页面链接。".to_string(),
+        );
+        ordinary_negated_message.render_mode = Some("normal".to_string());
+        ordinary_negated_message.artifact_type = None;
+        let mut ordinary_negated_request = external_bot_message_to_assistant_run_request(
+            "generic-chat-main",
+            &ordinary_negated_message,
+        );
+        ordinary_negated_request.selected_scope = Some(selected_scope.clone());
+        let ordinary_negated_run = create_test_external_assistant_run(
+            &state,
+            &ordinary_negated_request,
+            json!({"status": "supplied"}),
+            now,
+        )
+        .await;
+
+        let ordinary_negated_reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &ordinary_negated_run,
+            &ordinary_negated_request,
+            &ordinary_negated_message,
+            now,
+        )
+        .await
+        .expect("ordinary negated static-page pipeline check should not fail");
+        assert!(
+            ordinary_negated_reply.is_none(),
+            "normal-mode ordinary answer should not reuse static-page artifact for negated historical link prompt"
+        );
+        assert!(
+            state
+                .storage
+                .static_page_drafts()
+                .list_by_assistant_run(state.tenant_id, ordinary_negated_run.id)
+                .await
+                .expect("ordinary negated run drafts should list")
+                .is_empty(),
+            "normal-mode ordinary answer should not create a static-page draft"
+        );
+        let ordinary_negated_events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, ordinary_negated_run.id)
+            .await
+            .expect("ordinary negated events should list");
+        assert!(!ordinary_negated_events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name
+                    == "assistant_run.external_channel_static_page_relaxed_template_matched"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+                || event.event_name.starts_with("codex_host.fixed_task.")
+        }));
     }
 
     #[tokio::test]
@@ -65799,6 +60926,38 @@ mod tests {
         assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "帮我分析这份报表口径有哪些问题"
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_negated_generation_request() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "请用两句话回答：V3 第三方普通问答测速，请直接回答不要生成报表。",
+            "请用两句话回答：这是第三方普通问答速度 smoke，不要生成报表，不要返回历史页面链接。",
+            "请用两句话回答：这是第三方普通问答速度 smoke，不要返回历史页面链接。",
+        ] {
+            assert!(
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "prompt should not enter static-page workflow: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_normal_mode_history_link_negation() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.artifact_type = None;
+        message.output_format = Some("rich_text".to_string());
+
+        assert!(!external_channel_message_requests_static_page_artifact(
+            &message,
+            "请用两句话回答：这是第三方普通问答速度 smoke，不要返回历史页面链接。"
         ));
     }
 
@@ -68912,13 +64071,13 @@ mod tests {
             created_at: Utc::now(),
             assistant_run_id: Some(AssistantRunId::new()),
             action_id: None,
-            status: Some("dispatch_blocked".to_string()),
-            failure_kind: Some("reply_dispatch_endpoint_missing".to_string()),
+            status: Some(EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_STATUS_BLOCKED.to_string()),
+            failure_kind: Some(EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_MISSING.to_string()),
             summary: json!({
-                "source": "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                "source": EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME,
                 "dispatch": {
-                    "status": "dispatch_blocked",
-                    "reason": "reply_dispatch_endpoint_missing"
+                    "status": EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_STATUS_BLOCKED,
+                    "reason": EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_MISSING
                 }
             }),
         };
@@ -70546,17 +65705,32 @@ mod tests {
             .await
             .expect("SSE body should load");
         let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
-        assert!(body.contains("event: external_channel.started"));
-        assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_started_sse_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "\"schema\":\"{}\"",
+            EXTERNAL_CHANNEL_SSE_SCHEMA_V1
+        )));
         assert!(body.contains("\"event_id\":\"pending:000000\""));
         assert!(body.contains("\"phase\":\"started\""));
         assert!(body.contains("\"display_text\":\"DataMax 已开始处理本轮消息。\""));
-        assert!(body.contains("event: external_channel.retrieval_started"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_retrieval_started_sse_event_name()
+        )));
         assert!(body.contains("\"event_id\":\"pending:000005\""));
         assert!(body.contains("\"phase\":\"retrieval\""));
         assert!(body.contains("DataMax 正在检索可见文档"));
-        assert!(body.contains("event: external_channel.delta"));
-        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(body.contains("流式模型直答。"));
         assert!(!body.contains("event: external_channel.accepted"));
         assert!(!body.contains("\"status\":\"accepted\""));
@@ -70624,18 +65798,31 @@ mod tests {
             .expect("SSE body should load");
         let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
 
-        assert!(body.contains("event: external_channel.started"));
-        assert!(body.contains("event: external_channel.retrieval_started"));
-        assert_eq!(body.matches("event: external_channel.delta").count(), 1);
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_started_sse_event_name()
+        )));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_retrieval_started_sse_event_name()
+        )));
+        let delta_event = format!("event: {}", external_channel_sse_delta_event_name());
+        assert_eq!(body.matches(&delta_event).count(), 1);
         let delta_index = body
-            .find("event: external_channel.delta")
+            .find(&delta_event)
             .expect("live delta should be emitted");
         let completed_index = body
-            .find("event: external_channel.completed")
+            .find(&format!(
+                "event: {}",
+                external_channel_sse_completed_event_name()
+            ))
             .expect("completed should be emitted");
         assert!(delta_index < completed_index);
         assert!(body.contains("这是一个用于验证实时流式通道的模型完整回复"));
-        assert!(body.contains("event: done"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_done_event_name()
+        )));
         clear_assistant_openclaw_env();
     }
 
@@ -70722,16 +65909,20 @@ mod tests {
             .await
             .expect("SSE body should load");
         let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
+        let answer_retrying_event = external_channel_answer_retrying_sse_event_name();
 
-        assert!(body.contains("event: external_channel.answer_retrying"));
+        assert!(body.contains(&format!("event: {answer_retrying_event}")));
         assert!(body.contains("\"phase\":\"answering\""));
         assert!(body.contains("\"status\":\"retrying\""));
         assert!(body.contains("模型回复未达到可展示要求"));
-        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
         assert!(body.contains("这是 live 备用 profile 的可展示直答"));
         assert!(!body.contains("已收到指令。系统将结合知识库与数据源进行分析"));
         let retry_index = body
-            .find("event: external_channel.answer_retrying")
+            .find(&format!("event: {answer_retrying_event}"))
             .expect("retry event should be emitted");
         let answer_index = body
             .find("这是 live 备用 profile 的可展示直答")
@@ -70748,7 +65939,7 @@ mod tests {
             .await
             .expect("events should load");
         assert!(events.iter().any(|event| {
-            event.event_name == "external_channel.answer_retrying"
+            event.event_name == answer_retrying_event
                 && event.payload["schema"] == json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
                 && event.payload["status"] == json!("retrying")
         }));
@@ -75544,71 +70735,6 @@ mod tests {
     }
 
     #[test]
-    fn data_ingestion_analysis_output_accepts_analysis_ready() {
-        let decision = assistant_run_data_ingestion_analysis_output_validation(&json!({
-            "template_id": "data_ingestion_analysis",
-            "status": "analysis_ready",
-            "source_summary": ["考勤表 sample rows available"],
-            "data_quality_report": {
-                "row_count": 128,
-                "warnings": ["日期列需规范化"]
-            },
-            "mapping_plan": {
-                "fields": [
-                    {"source": "员工姓名", "target": "employee_name", "confidence": "high"}
-                ]
-            },
-            "validation_checks": ["date_parse_check", "work_hour_range_check"],
-            "recommended_next_actions": ["生成 staging import spec 后由 DataMax 审核执行"],
-            "human_review_reason": null
-        }));
-
-        assert_eq!(decision["accepted"], json!(true));
-        assert_eq!(decision["status"], json!("analysis_ready"));
-        assert_eq!(decision["auto_apply_allowed"], json!(true));
-    }
-
-    #[test]
-    fn data_ingestion_analysis_output_requires_human_for_unsafe_changes() {
-        let decision = assistant_run_data_ingestion_analysis_output_validation(&json!({
-            "template_id": "data_ingestion_analysis",
-            "status": "analysis_ready",
-            "source_summary": ["用户要求直接覆盖生产表"],
-            "data_quality_report": {"row_count": 128, "warnings": []},
-            "validation_checks": ["production_write_guard"],
-            "production_write_requested": true,
-            "schema_change_requested": true,
-            "human_review_reason": "production_write_or_schema_change_requires_confirmation"
-        }));
-
-        assert_eq!(decision["accepted"], json!(true));
-        assert_eq!(decision["status"], json!("needs_human"));
-        assert_eq!(decision["auto_apply_allowed"], json!(false));
-        assert_eq!(
-            decision["reason"],
-            json!("production_write_or_schema_change_requires_confirmation")
-        );
-    }
-
-    #[test]
-    fn data_ingestion_analysis_output_rejects_sensitive_connection_text() {
-        let decision = assistant_run_data_ingestion_analysis_output_validation(&json!({
-            "template_id": "data_ingestion_analysis",
-            "status": "analysis_ready",
-            "source_summary": ["postgres://user:pass@example.invalid/db"],
-            "data_quality_report": {"row_count": 128, "warnings": []},
-            "validation_checks": ["date_parse_check"]
-        }));
-
-        assert_eq!(decision["accepted"], json!(false));
-        assert_eq!(decision["status"], json!("needs_human"));
-        assert_eq!(
-            decision["reason"],
-            json!("sensitive_connection_or_credential_text_detected")
-        );
-    }
-
-    #[test]
     fn data_ingestion_analysis_result_summary_exposes_only_safe_staging_metadata() {
         let output = json!({
             "template_id": "data_ingestion_analysis",
@@ -77178,13 +72304,21 @@ retrieve_evidence:
                 serde_json::from_str(body).expect("outbound reply body should be JSON");
             assert_eq!(
                 payload["schema"],
-                json!("v3.external_channel.outbound_reply.v1")
+                json!(EXTERNAL_CHANNEL_OUTBOUND_REPLY_SCHEMA_V1)
             );
-            assert_eq!(payload["event_type"], json!("assistant_reply"));
-            assert_eq!(payload["trigger"], json!("async_result_completed"));
+            assert_eq!(
+                payload["event_type"],
+                json!(EXTERNAL_CHANNEL_OUTBOUND_REPLY_EVENT_TYPE_ASSISTANT_REPLY)
+            );
+            assert_eq!(
+                payload["trigger"],
+                json!(EXTERNAL_CHANNEL_OUTBOUND_REPLY_TRIGGER_ASYNC_RESULT_COMPLETED)
+            );
             assert_eq!(
                 payload["source_event_name"],
-                json!("assistant_run.external_channel_static_page_publish_completed")
+                json!(
+                    EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME
+                )
             );
             assert_eq!(
                 payload["conversation_external_id"],
@@ -77298,7 +72432,7 @@ retrieve_evidence:
             &state.storage,
             state.tenant_id,
             run.id,
-            "assistant_run.external_channel_static_page_publish_completed",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME,
             &source_payload,
             now,
         )
@@ -77311,7 +72445,7 @@ retrieve_evidence:
             &state.storage,
             state.tenant_id,
             run.id,
-            "assistant_run.external_channel_static_page_publish_completed",
+            EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME,
             &source_payload,
             now,
         )
@@ -77327,8 +72461,7 @@ retrieve_evidence:
         let dispatch_events = events
             .iter()
             .filter(|event| {
-                event.event_name
-                    == "assistant_run.external_channel_outbound_reply_dispatch_dispatched"
+                event.event_name == EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_DISPATCHED_EVENT_NAME
             })
             .collect::<Vec<_>>();
         assert_eq!(dispatch_events.len(), 1);
@@ -77434,8 +72567,9 @@ retrieve_evidence:
                 state.tenant_id,
                 run.id,
                 &NewAssistantRunEvent {
-                    event_name: "assistant_run.external_channel_static_page_publish_completed"
-                        .to_string(),
+                    event_name:
+                        EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME
+                            .to_string(),
                     payload: source_payload,
                     created_at: now,
                 },
@@ -77475,18 +72609,18 @@ retrieve_evidence:
         let blocked_events = events
             .iter()
             .filter(|event| {
-                event.event_name == "assistant_run.external_channel_outbound_reply_dispatch_blocked"
+                event.event_name == EXTERNAL_CHANNEL_OUTBOUND_REPLY_DISPATCH_BLOCKED_EVENT_NAME
             })
             .collect::<Vec<_>>();
         assert_eq!(blocked_events.len(), 1);
         let audit = &blocked_events[0].payload;
         assert_eq!(
             audit["source_event_name"],
-            json!("assistant_run.external_channel_static_page_publish_completed")
+            json!(EXTERNAL_CHANNEL_OUTBOUND_REPLY_STATIC_PAGE_PUBLISH_COMPLETED_SOURCE_EVENT_NAME)
         );
         assert_eq!(
             audit["dispatch"]["reason"],
-            json!("reply_dispatch_endpoint_missing")
+            json!(EXTERNAL_CHANNEL_OUTBOUND_REPLY_REASON_ENDPOINT_MISSING)
         );
         assert_eq!(
             audit["artifact_links"][0],
@@ -82107,19 +77241,6 @@ retrieve_evidence:
             json!("validation_report_required")
         );
         assert!(event.notify_human);
-    }
-
-    #[test]
-    fn codex_host_fixed_task_public_artifact_url_rejects_pending_placeholder() {
-        assert!(!codex_host_fixed_task_public_artifact_url_allowed(
-            "https://v3.elepcloud.com/generated-artifacts/pending/draft-1/"
-        ));
-        assert!(!codex_host_fixed_task_public_artifact_url_allowed(
-            "https://v3.elepcloud.com/generated-artifacts/pending-draft-1/index.html"
-        ));
-        assert!(codex_host_fixed_task_public_artifact_url_allowed(
-            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
-        ));
     }
 
     #[test]

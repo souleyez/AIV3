@@ -362,6 +362,46 @@ function validateReport(report) {
   return true;
 }
 
+function buildMachineChecks(report) {
+  const serialized = JSON.stringify(report);
+  return {
+    redactionContract: report.redaction.hash_values_included === false
+      && report.redaction.document_titles_included === false
+      && report.redaction.object_locators_included === false
+      && report.redaction.raw_document_text_included === false
+      && report.redaction.credential_values_included === false,
+    aggregateOnlyImpact: report.execution_policy.impact_is_aggregate_only === true
+      && Array.isArray(report.impact_by_dataset),
+    cleanupDisabled: report.execution_policy.filesystem_checked === false
+      && report.execution_policy.remote_fetch_enabled === false
+      && report.execution_policy.database_writes_enabled === false
+      && report.execution_policy.object_deletes_enabled === false
+      && report.rollback_plan.real_cleanup_allowed_by_this_report === false,
+    rollbackPlanPresent: Array.isArray(report.rollback_plan.required_before_real_cleanup)
+      && report.rollback_plan.required_before_real_cleanup.length >= 5
+      && Array.isArray(report.rollback_plan.restore_strategy)
+      && report.rollback_plan.restore_strategy.length >= 4,
+    noHashValues: !/[a-f0-9]{64}/i.test(serialized),
+    noCredentialValues: !/(Bearer\s+[A-Za-z0-9]|sk-[A-Za-z0-9_-]{8,}|postgres(?:ql)?:\/\/)/i.test(serialized),
+    noRawUrls: !/https?:\/\//i.test(serialized),
+    readOnlyReportMode: report.mode === 'dry_run_read_only'
+      && report.execution_policy.manual_approval_required === true,
+  };
+}
+
+function buildMachineSummary(report, { selfTest = false } = {}) {
+  const checks = buildMachineChecks(report);
+  const ok = Object.values(checks).every(Boolean);
+  return {
+    ok,
+    ready: ok,
+    pending: false,
+    failed: !ok,
+    selfTest,
+    checks,
+  };
+}
+
 function fixtureReport() {
   return {
     schema: 'datamax.document_object_cleanup_plan.v1',
@@ -451,22 +491,21 @@ async function writeReport(outputDir, runId, report, pretty) {
 async function runSelfTest(args) {
   const report = fixtureReport();
   validateReport(report);
+  const summary = buildMachineSummary(report, { selfTest: true });
   const runId = `${makeRunId()}-self-test`;
   const reportPath = await writeReport(args.outputDir, runId, {
     selfTest: true,
-    ok: true,
+    ok: summary.ok,
+    summary,
+    checks: summary.checks,
     report,
   }, args.pretty);
   return {
     runId,
     selfTest: true,
-    ok: true,
-    checks: {
-      redactionContract: true,
-      aggregateOnlyImpact: true,
-      cleanupDisabled: true,
-      rollbackPlanPresent: true,
-    },
+    ok: summary.ok,
+    summary,
+    checks: summary.checks,
     reportPath,
   };
 }
@@ -503,9 +542,12 @@ async function runLive(args) {
   }
   const report = parsePsqlJson(result.stdout);
   validateReport(report);
+  const summary = buildMachineSummary(report);
   const receipt = {
     runId,
-    ok: true,
+    ok: summary.ok,
+    summary,
+    checks: summary.checks,
     datasetLimit: args.datasetLimit,
     report,
     safety: {
@@ -526,7 +568,9 @@ async function runLive(args) {
   await writeFile(reportPath, JSON.stringify(receipt, null, args.pretty ? 2 : 0), 'utf8');
   return {
     runId,
-    ok: true,
+    ok: summary.ok,
+    summary,
+    checks: summary.checks,
     reportPath,
     overall: report.overall,
     cleanupClassCounts: report.cleanup_class_counts,
@@ -539,6 +583,9 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const result = args.selfTest ? await runSelfTest(args) : await runLive(args);
   console.log(JSON.stringify(result, null, args.pretty || args.jsonStdout ? 2 : 0));
+  if (!result.ok) {
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {

@@ -256,6 +256,26 @@ function buildSelfTestReportSurface(args) {
   };
 }
 
+function buildReportExportSummaryChecks(results) {
+  const failedCount = results.filter((item) => !item.ok).length;
+  const modeOk = (mode) => !results.some((item) => item.mode === mode)
+    || results.some((item) => item.mode === mode && item.ok);
+  return {
+    allModesPassed: failedCount === 0,
+    jsonModePassed: modeOk('json'),
+    streamModePassed: modeOk('stream'),
+    publicUrlPresent: results.every((item) => Boolean(item.publicUrl)),
+    exportUrlsPresent: results.every((item) =>
+      Boolean(item.exportUrls?.table)
+      && Boolean(item.exportUrls?.ppt)
+      && Boolean(item.exportUrls?.markdown)),
+    downloadExportsPresent: results.every((item) => Number(item.downloadExportsCount || 0) >= 3),
+    noDuplicateTextReportLinks: results.every((item) =>
+      Number(item.textMetrics?.rawUrlMentionCount || 0) <= 1
+      && Number(item.textMetrics?.markdownLinkCount || 0) <= 1),
+  };
+}
+
 async function runSelfTest(args) {
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const surface = buildSelfTestReportSurface(args);
@@ -284,6 +304,8 @@ async function runSelfTest(args) {
     runId,
     selfTest: true,
     modeCount: results.length,
+    ok: false,
+    checks: buildReportExportSummaryChecks(results),
     okCount: results.filter((item) => item.ok).length,
     failedCount: results.filter((item) => !item.ok).length,
     expectedTitle: args.expectedTitle || null,
@@ -295,16 +317,54 @@ async function runSelfTest(args) {
     bearerConfigured: false,
     generatedAt: new Date().toISOString(),
   };
+  summary.ok = Object.values(summary.checks).every(Boolean);
+  const brokenChecks = buildReportExportSummaryChecks([
+    {
+      ...results[0],
+      ok: false,
+      publicUrl: null,
+      exportUrls: {},
+      downloadExportsCount: 0,
+      textMetrics: { rawUrlMentionCount: 2, markdownLinkCount: 2 },
+    },
+  ]);
+  const brokenSummary = {
+    ...summary,
+    ok: Object.values(brokenChecks).every(Boolean),
+    checks: brokenChecks,
+  };
+  const selfTestChecks = {
+    summaryMachineOk: summary.ok === true
+      && summary.checks.allModesPassed === true
+      && summary.checks.jsonModePassed === true
+      && summary.checks.streamModePassed === true
+      && summary.checks.publicUrlPresent === true
+      && summary.checks.exportUrlsPresent === true
+      && summary.checks.downloadExportsPresent === true
+      && summary.checks.noDuplicateTextReportLinks === true,
+    primaryTemplateUsed: results.every((item) => item.primaryTemplateUsed === true),
+    fallbackTemplateNotUsed: results.every((item) => item.fallbackTemplateUsed === false),
+    normalAnswerPreserved: results.every((item) => item.normalAnswerPreserved === true),
+    brokenSummaryFails: brokenSummary.ok === false
+      && brokenSummary.checks.allModesPassed === false
+      && brokenSummary.checks.publicUrlPresent === false
+      && brokenSummary.checks.exportUrlsPresent === false
+      && brokenSummary.checks.downloadExportsPresent === false
+      && brokenSummary.checks.noDuplicateTextReportLinks === false,
+  };
+  const selfTestOk = Object.values(selfTestChecks).every(Boolean);
+  summary.selfTestOk = selfTestOk;
+  summary.selfTestChecks = selfTestChecks;
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
-  const report = { summary, results };
+  const report = { summary, results, brokenSummary };
   const reportPath = join(outputDir, `${runId}-self-test.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok || !selfTestOk) {
     process.exitCode = 1;
   }
 }
@@ -966,11 +1026,14 @@ async function main() {
   }
 
   const latencies = results.map((item) => item.latencyMs).filter((value) => Number.isFinite(value));
+  const checks = buildReportExportSummaryChecks(results);
   const summary = {
     runId,
     baseUrl: args.baseUrl,
     connectionId: args.connectionId,
     modeCount: results.length,
+    ok: Object.values(checks).every(Boolean),
+    checks,
     okCount: results.filter((item) => item.ok).length,
     failedCount: results.filter((item) => !item.ok).length,
     datasetExternalIdCount: args.datasetExternalIds.length,
@@ -993,7 +1056,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }

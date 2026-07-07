@@ -160,6 +160,66 @@ function parseSse(text) {
   return events;
 }
 
+function firstExplicitUrl(value, keys, depth = 0, keyMatched = false) {
+  if (!value || depth > 8) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return keyMatched && isUrlLike(value) ? value : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const link = firstExplicitUrl(item, keys, depth + 1, keyMatched);
+      if (link) {
+        return link;
+      }
+    }
+    return null;
+  }
+  if (typeof value !== 'object') {
+    return null;
+  }
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const link = firstExplicitUrl(value[key], keys, depth + 1, true);
+      if (link) {
+        return link;
+      }
+    }
+  }
+  for (const child of Object.values(value)) {
+    const link = firstExplicitUrl(child, keys, depth + 1, false);
+    if (link) {
+      return link;
+    }
+  }
+  return null;
+}
+
+function isUrlLike(value) {
+  const text = String(value || '').trim();
+  return text.startsWith('http://') || text.startsWith('https://') || text.startsWith('/');
+}
+
+function firstArtifactUrl(value) {
+  return firstExplicitUrl(value, [
+    'artifact_links',
+    'artifactLinks',
+    'public_url',
+    'publicUrl',
+    'generated_artifact_url',
+    'generatedArtifactUrl',
+    'artifact_public_url',
+    'artifactPublicUrl',
+    'html_preview_url',
+    'htmlPreviewUrl',
+    'html_download_url',
+    'htmlDownloadUrl',
+    'download_url',
+    'downloadUrl',
+  ]);
+}
+
 async function postOne(args, index, runId) {
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -191,9 +251,11 @@ async function postOne(args, index, runId) {
     const error = events.find((item) => item.event === 'external_channel.error');
     const reply = completed?.data?.response?.reply || completed?.data?.reply || null;
     const status = reply?.task_status || completed?.data?.status || null;
+    const artifactUrl = firstArtifactUrl(completed?.data);
+    const noArtifactLink = !artifactUrl;
     return {
       index,
-      ok: response.ok && Boolean(completed) && !error,
+      ok: response.ok && Boolean(completed) && !error && noArtifactLink,
       httpStatus: response.status,
       latencyMs: Date.now() - startedAt,
       conversationExternalId: payload.conversation_external_id,
@@ -203,6 +265,8 @@ async function postOne(args, index, runId) {
       completed: Boolean(completed),
       replyType: reply?.reply_type || null,
       taskStatus: status,
+      artifactUrl,
+      noArtifactLink,
       error: error?.data || null,
       eventNames: events.map((item) => item.event),
       bodyPrefix: body.slice(0, 300),
@@ -219,6 +283,8 @@ async function postOne(args, index, runId) {
       completed: false,
       replyType: null,
       taskStatus: null,
+      artifactUrl: null,
+      noArtifactLink: true,
       error: error instanceof Error ? error.message : String(error),
       eventNames: [],
       bodyPrefix: '',
@@ -244,13 +310,21 @@ function percentile(values, ratio) {
 function summarizeRun(args, runId, results) {
   const okCount = results.filter((item) => item.ok).length;
   const latencies = results.map((item) => item.latencyMs);
+  const normalArtifactLeakCount = results.filter((item) => item.artifactUrl).length;
+  const checks = {
+    allTasksPassed: results.length - okCount === 0,
+    noNormalArtifactLeak: normalArtifactLeakCount === 0,
+  };
   return {
     runId,
     baseUrl: args.baseUrl,
     connectionId: args.connectionId,
     concurrency: args.concurrency,
+    ok: Object.values(checks).every(Boolean),
+    checks,
     okCount,
     failedCount: results.length - okCount,
+    normalArtifactLeakCount,
     p50LatencyMs: percentile(latencies, 0.5),
     p95LatencyMs: percentile(latencies, 0.95),
     maxLatencyMs: latencies.length ? Math.max(...latencies) : null,
@@ -284,12 +358,18 @@ async function runSelfTest(args) {
     'data: {"assistant_run_id":"run-self-test","response":{"reply":{"reply_type":"answer","task_status":"answered"}}}',
     '',
   ].join('\n');
+  const artifactLeakSseText = [
+    'event: external_channel.completed',
+    'data: {"assistant_run_id":"run-artifact-leak","response":{"reply":{"reply_type":"answer","task_status":"answered","text":"普通问答不应返回产物链接","card":{"public_url":"/generated-artifacts/self-test/leaked/index.html"},"artifact_links":["/generated-artifacts/self-test/leaked/index.html"]}}}',
+    '',
+  ].join('\n');
   const errorSseText = [
     'event: external_channel.error',
     'data: {"code":"self_test_error","message":"fixture"}',
     '',
   ].join('\n');
   const events = parseSse(sseText);
+  const artifactLeakEvents = parseSse(artifactLeakSseText);
   const errorEvents = parseSse(errorSseText);
   const results = payloads.map((payload, index) => ({
     index,
@@ -303,10 +383,36 @@ async function runSelfTest(args) {
     completed: true,
     replyType: 'answer',
     taskStatus: index % 2 === 0 ? 'answered' : 'accepted',
+    artifactUrl: null,
+    noArtifactLink: true,
     error: null,
     eventNames: events.map((item) => item.event),
     bodyPrefix: 'event: external_channel.completed',
   }));
+  const artifactLeakUrl = firstArtifactUrl(artifactLeakEvents[0]?.data);
+  const artifactLeakResult = {
+    index: 99,
+    ok: false,
+    httpStatus: 200,
+    latencyMs: 199,
+    conversationExternalId: 'conv-20way-artifact-leak',
+    messageExternalId: 'msg-20way-artifact-leak',
+    idempotencyKey: 'external-channel-20way:artifact-leak',
+    assistantRunId: 'run-artifact-leak',
+    completed: true,
+    replyType: 'answer',
+    taskStatus: 'answered',
+    artifactUrl: artifactLeakUrl,
+    noArtifactLink: !artifactLeakUrl,
+    error: null,
+    eventNames: artifactLeakEvents.map((item) => item.event),
+    bodyPrefix: 'event: external_channel.completed',
+  };
+  const artifactLeakSummary = summarizeRun(
+    { ...fixtureArgs, concurrency: 1 },
+    runId,
+    [artifactLeakResult],
+  );
   const summary = {
     ...summarizeRun(fixtureArgs, runId, results),
     selfTest: true,
@@ -325,7 +431,18 @@ async function runSelfTest(args) {
       && summary.completedCount === 20
       && summary.answeredCount === 10
       && summary.acceptedOrAnsweredCount === 20
-      && summary.failedCount === 0,
+      && summary.failedCount === 0
+      && summary.normalArtifactLeakCount === 0
+      && summary.ok === true
+      && summary.checks?.allTasksPassed === true
+      && summary.checks?.noNormalArtifactLeak === true,
+    normalArtifactLeakGuardWorks: artifactLeakResult.ok === false
+      && artifactLeakResult.noArtifactLink === false
+      && Boolean(artifactLeakResult.artifactUrl)
+      && artifactLeakSummary.ok === false
+      && artifactLeakSummary.failedCount === 1
+      && artifactLeakSummary.normalArtifactLeakCount === 1
+      && artifactLeakSummary.checks?.noNormalArtifactLeak === false,
     latencyPercentilesComputed: summary.p50LatencyMs === 209 && summary.p95LatencyMs === 218 && summary.maxLatencyMs === 219,
   };
   const ok = Object.values(checks).every(Boolean);
@@ -348,8 +465,11 @@ async function runSelfTest(args) {
     },
     parserShape: {
       eventNames: events.map((item) => item.event),
+      artifactLeakEventNames: artifactLeakEvents.map((item) => item.event),
       errorEventNames: errorEvents.map((item) => item.event),
     },
+    artifactLeakGuard: artifactLeakResult,
+    artifactLeakSummary,
   };
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
@@ -383,7 +503,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }

@@ -187,6 +187,9 @@ pub(crate) fn static_page_prompt_hides_template_baseline_link_for_revision(promp
 }
 
 pub(crate) fn static_page_prompt_requests_existing_artifact_delivery(prompt: &str) -> bool {
+    if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
     if static_page_prompt_requests_explicit_redesign(prompt)
         || static_page_prompt_requests_existing_artifact_revision(prompt)
     {
@@ -317,9 +320,103 @@ pub(crate) fn static_page_prompt_requests_existing_artifact_change(prompt: &str)
     )
 }
 
+pub(crate) fn static_page_prompt_negates_artifact_generation(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    prompt_contains_any(
+        &compact,
+        &[
+            "不要生成报表",
+            "不要生成报告",
+            "不要生成页面",
+            "不要生成静态页",
+            "不要生成看板",
+            "不要生成图表",
+            "不生成报表",
+            "不生成报告",
+            "不生成页面",
+            "不用生成报表",
+            "不用生成页面",
+            "无需生成报表",
+            "无需生成页面",
+            "别生成报表",
+            "别生成页面",
+            "不要创建报表",
+            "不要创建页面",
+            "不要制作报表",
+            "不要制作页面",
+            "不要输出报表",
+            "不要输出页面",
+            "不要出报表",
+            "不要出页面",
+            "不要做报表",
+            "不要做页面",
+            "不要返回历史页面链接",
+            "不要返回页面链接",
+            "不要返回报表链接",
+            "不要返回产物链接",
+            "不要返回旧链接",
+            "不要返回历史链接",
+            "不要返回之前生成过的页面链接",
+            "不要返回之前生成过的报表链接",
+            "不要返回之前的页面链接",
+            "不要返回之前的报表链接",
+            "不要发历史页面链接",
+            "不要发页面链接",
+            "不要发报表链接",
+            "不要发旧链接",
+            "不要发之前生成过的页面链接",
+            "不要发之前生成过的报表链接",
+            "不要发之前的页面链接",
+            "不要发之前的报表链接",
+            "不要给历史页面链接",
+            "不要给页面链接",
+            "不要给报表链接",
+            "不要提供历史页面链接",
+            "不要提供页面链接",
+            "不要提供报表链接",
+            "不返回历史页面链接",
+            "不返回页面链接",
+            "不返回报表链接",
+            "别返回历史页面链接",
+            "别返回页面链接",
+            "别发历史页面链接",
+            "别发页面链接",
+            "不是要生成报表",
+            "不是要生成页面",
+            "不是让你生成报表",
+            "不是让你生成页面",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "donotgeneratereport",
+            "donotgeneratepage",
+            "don'tgeneratereport",
+            "don'tgeneratepage",
+            "noreportgeneration",
+            "nopagegeneration",
+            "donotreturnreportlink",
+            "donotreturnpagelink",
+            "donotreturnpreviouslink",
+            "don'treturnreportlink",
+            "don'treturnpagelink",
+            "noreportlink",
+            "nopagelink",
+        ],
+    )
+}
+
 pub(crate) fn static_page_prompt_allows_default_template_reuse(prompt: &str) -> bool {
     if static_page_prompt_requests_explicit_redesign(prompt)
         || static_page_prompt_requests_existing_artifact_change(prompt)
+        || static_page_prompt_negates_artifact_generation(prompt)
     {
         return false;
     }
@@ -393,6 +490,55 @@ pub(crate) fn static_page_stable_artifact_reuse_reason(prompt: &str) -> &'static
     }
 }
 
+pub(crate) fn prompt_touches_current_static_page_artifact(prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    [
+        "静态页",
+        "静态页面",
+        "页面规划",
+        "一页",
+        "生成页面",
+        "落地页",
+        "模块",
+        "效果图",
+        "出图",
+        "标题",
+        "文案",
+        "内容",
+        "数据",
+        "图表",
+        "布局",
+        "调整",
+        "修改",
+        "改",
+        "换",
+        "确认",
+        "导出",
+        "继续",
+        "接着",
+        "下一步",
+        "刚才",
+        "上面",
+        "之前",
+        "这个",
+        "那版",
+        "草稿",
+        "柱状图",
+        "折线图",
+        "环图",
+        "看板",
+    ]
+    .iter()
+    .any(|hint| prompt.contains(hint))
+        || ["dashboard", "chart", "kpi", "export"]
+            .iter()
+            .any(|hint| lower_prompt.contains(hint))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +602,15 @@ mod tests {
         assert!(!static_page_prompt_requests_existing_artifact_delivery(
             "修复近7日销售，切换区域和门店后需要跟着变化"
         ));
+        assert!(!static_page_prompt_requests_existing_artifact_delivery(
+            "请直接回答，不要返回历史页面链接"
+        ));
+        assert!(!static_page_prompt_requests_existing_artifact_delivery(
+            "普通问答测速，不要发之前生成过的报表链接"
+        ));
+        assert!(static_page_prompt_requests_existing_artifact_delivery(
+            "不要重新生成，直接把之前生成过的报表链接再发我一下"
+        ));
     }
 
     #[test]
@@ -468,6 +623,15 @@ mod tests {
         ));
         assert!(!static_page_prompt_allows_stable_artifact_reuse(
             "重新设计一版暗黑移动端报表"
+        ));
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "请用两句话回答：V3 第三方普通问答测速，请直接回答不要生成报表。"
+        ));
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "请用两句话回答：这是第三方普通问答速度 smoke，不要返回历史页面链接。"
+        ));
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "先普通回答这个报表问题，不要生成页面"
         ));
         assert!(static_page_prompt_allows_stable_artifact_reuse(
             "看看最新的门店取高报表"
@@ -486,5 +650,20 @@ mod tests {
             static_page_stable_artifact_reuse_reason("把之前生成过的报表链接再发我一下"),
             "existing_artifact_delivery_request"
         );
+    }
+
+    #[test]
+    fn current_static_page_artifact_touch_intent_keeps_existing_hints() {
+        assert!(!prompt_touches_current_static_page_artifact(""));
+        assert!(!prompt_touches_current_static_page_artifact("普通问答测速"));
+        assert!(prompt_touches_current_static_page_artifact(
+            "把标题和图表布局调整一下"
+        ));
+        assert!(prompt_touches_current_static_page_artifact(
+            "继续用刚才那版草稿导出"
+        ));
+        assert!(prompt_touches_current_static_page_artifact(
+            "refresh the dashboard KPI chart export"
+        ));
     }
 }

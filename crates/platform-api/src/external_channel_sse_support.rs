@@ -20,7 +20,7 @@ use crate::{
         external_channel_public_status_allows_preview_link,
         prune_external_channel_public_card_links,
     },
-    external_channel_public_response,
+    external_channel_public_response_with_result,
     external_channel_public_text::{
         external_channel_public_status, external_channel_public_stream_text,
         external_channel_public_text,
@@ -40,6 +40,11 @@ pub(crate) type ExternalChannelStaticPageSseProgressPayload =
     (&'static str, Value, String, String, Option<AssistantRunId>);
 pub(crate) type ExternalChannelStaticPageSseContinuePollingPayload =
     (Value, String, String, Option<AssistantRunId>);
+pub(crate) type ExternalChannelSsePollingFields = (Option<String>, Option<u64>);
+pub(crate) type ExternalChannelSseRunIdentity = (Option<AssistantRunId>, String);
+pub(crate) type ExternalChannelStaticPageSseProgressAssetFields = (String, String);
+pub(crate) type ExternalChannelStaticPageSseProgressRuntimeField = String;
+pub(crate) type ExternalChannelStaticPageSseProgressKeyFields = (String, String, String, String);
 
 pub(crate) fn external_channel_sse_envelope(
     run_id: Option<AssistantRunId>,
@@ -104,6 +109,50 @@ pub(crate) fn external_channel_sse_public_payload(
     payload
 }
 
+pub(crate) fn external_channel_sse_public_response(
+    response: ExternalChannelEventResponse,
+) -> ExternalChannelEventResponse {
+    external_channel_public_response_with_result(response).0
+}
+
+pub(crate) fn external_channel_sse_public_json_event(event_name: &str, payload: Value) -> String {
+    sse_json_event(event_name, external_channel_public_stream_payload(payload))
+}
+
+pub(crate) fn external_channel_sse_polling_fields(
+    response: &ExternalChannelEventResponse,
+) -> ExternalChannelSsePollingFields {
+    (
+        external_channel_card_status_url(response.reply.card.as_ref()),
+        external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
+    )
+}
+
+pub(crate) fn external_channel_sse_conversation_external_id(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    response.reply.target_conversation_external_id.clone()
+}
+
+pub(crate) fn external_channel_sse_run_identity(
+    response: &ExternalChannelEventResponse,
+) -> ExternalChannelSseRunIdentity {
+    (response.assistant_run_id, response.idempotency_key.clone())
+}
+
+#[cfg(test)]
+pub(crate) fn external_channel_sse_completion_should_emit_static_page_queued_event(
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("type"))
+        .and_then(Value::as_str)
+        == Some("v3_static_page_image2_pipeline")
+}
+
 pub(crate) fn external_channel_retrieval_started_sse_event(
     message: &ExternalBotMessageView,
 ) -> String {
@@ -116,7 +165,7 @@ pub(crate) fn external_channel_retrieval_started_sse_event(
         "text": text,
     });
     sse_json_event(
-        "external_channel.retrieval_started",
+        external_channel_retrieval_started_sse_event_name(),
         external_channel_sse_public_payload(
             None,
             &message.idempotency_key,
@@ -142,19 +191,14 @@ pub(crate) fn external_channel_sse_completion_with_done(
     response: ExternalChannelEventResponse,
     include_done: bool,
 ) -> String {
-    let emit_static_page_queued_event = response
-        .reply
-        .card
-        .as_ref()
-        .and_then(|card| card.get("type"))
-        .and_then(Value::as_str)
-        == Some("v3_static_page_image2_pipeline");
-    let response = external_channel_public_response(response);
+    let emit_static_page_queued_event =
+        external_channel_sse_completion_should_emit_static_page_queued_event(&response);
+    let response = external_channel_sse_public_response(response);
     let text = response.reply.text.clone().unwrap_or_default();
-    let assistant_run_id = response.assistant_run_id;
-    let idempotency_key = response.idempotency_key.clone();
-    let conversation_external_id = response.reply.target_conversation_external_id.clone();
-    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    let (assistant_run_id, idempotency_key) = external_channel_sse_run_identity(&response);
+    let conversation_external_id = external_channel_sse_conversation_external_id(&response);
+    let (status_url, poll_after_seconds) = external_channel_sse_polling_fields(&response);
+    let mut encoded = sse_text_delta_events(external_channel_sse_delta_event_name(), &text);
     if emit_static_page_queued_event {
         let card = response.reply.card.clone();
         let data = json!({
@@ -162,9 +206,9 @@ pub(crate) fn external_channel_sse_completion_with_done(
             "idempotency_key": idempotency_key,
             "card": card,
         });
-        encoded.push_str(&sse_json_event(
-            "external_channel.static_page_queued",
-            external_channel_public_stream_payload(external_channel_sse_public_payload(
+        encoded.push_str(&external_channel_sse_public_json_event(
+            external_channel_static_page_sse_queued_event_name(),
+            external_channel_sse_public_payload(
                 assistant_run_id,
                 &idempotency_key,
                 &conversation_external_id,
@@ -172,10 +216,10 @@ pub(crate) fn external_channel_sse_completion_with_done(
                 "static_page",
                 "static_page_generation_queued",
                 "静态页/报表页面已进入生成队列。",
-                external_channel_card_status_url(response.reply.card.as_ref()),
-                external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
+                status_url.clone(),
+                poll_after_seconds,
                 data,
-            )),
+            ),
         ));
     }
     if external_channel_response_needs_input(&response) {
@@ -187,9 +231,9 @@ pub(crate) fn external_channel_sse_completion_with_done(
             "card": response.reply.card.clone(),
             "text": needs_input_text,
         });
-        encoded.push_str(&sse_json_event(
-            "external_channel.needs_input",
-            external_channel_public_stream_payload(external_channel_sse_public_payload(
+        encoded.push_str(&external_channel_sse_public_json_event(
+            external_channel_sse_needs_input_event_name(),
+            external_channel_sse_public_payload(
                 assistant_run_id,
                 &idempotency_key,
                 &conversation_external_id,
@@ -197,10 +241,10 @@ pub(crate) fn external_channel_sse_completion_with_done(
                 "needs_input",
                 "needs_input",
                 &needs_input_text,
-                external_channel_card_status_url(response.reply.card.as_ref()),
-                external_channel_card_poll_after_seconds(response.reply.card.as_ref()),
+                status_url.clone(),
+                poll_after_seconds,
                 data,
-            )),
+            ),
         ));
     }
     let completed_data = external_channel_completed_stream_data(
@@ -220,9 +264,9 @@ pub(crate) fn external_channel_sse_completion_with_done(
                 text.clone()
             }
         });
-    encoded.push_str(&sse_json_event(
-        "external_channel.completed",
-        external_channel_public_stream_payload(external_channel_sse_public_payload(
+    encoded.push_str(&external_channel_sse_public_json_event(
+        external_channel_sse_completed_event_name(),
+        external_channel_sse_public_payload(
             assistant_run_id,
             &idempotency_key,
             &conversation_external_id,
@@ -233,10 +277,13 @@ pub(crate) fn external_channel_sse_completion_with_done(
             None,
             None,
             completed_data,
-        )),
+        ),
     ));
     if include_done {
-        encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+        encoded.push_str(&sse_json_event(
+            external_channel_sse_done_event_name(),
+            json!({"ok": true}),
+        ));
     }
     encoded
 }
@@ -834,25 +881,10 @@ pub(crate) fn external_channel_static_page_sse_progress_text(
 ) -> String {
     let status = external_channel_static_page_sse_status(response);
     if let Some(public_url) = external_channel_public_artifact_url_from_reply(&response.reply) {
-        if status == "static_page_published" {
-            return external_channel_text_with_public_artifact_link(
-                external_channel_static_page_customer_ready_text_for_payload(
-                    external_channel_static_page_customer_ready_text(),
-                    response.reply.card.as_ref(),
-                    &public_url,
-                ),
-                &public_url,
-            );
-        }
-        if status == "static_page_stable_artifact_reused" {
-            return external_channel_text_with_public_artifact_link(
-                external_channel_static_page_customer_ready_text_for_payload(
-                    external_channel_static_page_customer_ready_text(),
-                    response.reply.card.as_ref(),
-                    &public_url,
-                ),
-                &public_url,
-            );
+        if let Some(text) =
+            external_channel_static_page_sse_public_artifact_text(response, &status, &public_url)
+        {
+            return text;
         }
     }
     if let Some(text) = response
@@ -891,11 +923,62 @@ pub(crate) fn external_channel_static_page_sse_progress_text(
     }
 }
 
+pub(crate) fn external_channel_static_page_sse_public_artifact_text(
+    response: &ExternalChannelEventResponse,
+    status: &str,
+    public_url: &str,
+) -> Option<String> {
+    if !matches!(
+        status,
+        "static_page_published" | "static_page_stable_artifact_reused"
+    ) {
+        return None;
+    }
+    Some(external_channel_text_with_public_artifact_link(
+        external_channel_static_page_customer_ready_text_for_payload(
+            external_channel_static_page_customer_ready_text(),
+            response.reply.card.as_ref(),
+            public_url,
+        ),
+        public_url,
+    ))
+}
+
 pub(crate) fn external_channel_static_page_sse_progress_key(
     response: &ExternalChannelEventResponse,
 ) -> String {
+    let (status, public_url, preview, runtime) =
+        external_channel_static_page_sse_progress_key_fields(response);
+    format!("{status}|{public_url}|{preview}|{runtime}")
+}
+
+pub(crate) fn external_channel_static_page_sse_progress_key_fields(
+    response: &ExternalChannelEventResponse,
+) -> ExternalChannelStaticPageSseProgressKeyFields {
     let status = external_channel_static_page_sse_status(response);
     let card = response.reply.card.as_ref();
+    let (public_url, preview) = external_channel_static_page_sse_progress_asset_fields(card);
+    let runtime = external_channel_static_page_sse_progress_runtime_field(card);
+    (status.to_string(), public_url, preview, runtime)
+}
+
+pub(crate) fn external_channel_static_page_sse_progress_runtime_field(
+    card: Option<&Value>,
+) -> ExternalChannelStaticPageSseProgressRuntimeField {
+    card.and_then(|card| card.get("runtime_event"))
+        .and_then(|event| {
+            event
+                .get("heartbeat_count")
+                .or_else(|| event.get("elapsed_ms"))
+                .or_else(|| event.get("reason"))
+        })
+        .map(Value::to_string)
+        .unwrap_or_default()
+}
+
+pub(crate) fn external_channel_static_page_sse_progress_asset_fields(
+    card: Option<&Value>,
+) -> ExternalChannelStaticPageSseProgressAssetFields {
     let public_url = card
         .and_then(|card| {
             card.get("public_url")
@@ -912,17 +995,7 @@ pub(crate) fn external_channel_static_page_sse_progress_key(
         })
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let runtime = card
-        .and_then(|card| card.get("runtime_event"))
-        .and_then(|event| {
-            event
-                .get("heartbeat_count")
-                .or_else(|| event.get("elapsed_ms"))
-                .or_else(|| event.get("reason"))
-        })
-        .map(Value::to_string)
-        .unwrap_or_default();
-    format!("{status}|{public_url}|{preview}|{runtime}")
+    (public_url.to_string(), preview.to_string())
 }
 
 pub(crate) fn external_channel_static_page_preview_public_url(asset_ref: &str) -> Option<String> {
@@ -969,12 +1042,9 @@ pub(crate) fn external_channel_static_page_sse_progress_payload(
     let progress_key = external_channel_static_page_sse_progress_key(&response);
     let text = external_channel_static_page_sse_progress_text(&response);
     let event_name = external_channel_static_page_sse_event_name(&status);
-    let mut public_response = external_channel_public_response(response);
+    let mut public_response = external_channel_sse_public_response(response);
     let public_status = external_channel_public_status(&status);
-    let conversation_external_id = public_response
-        .reply
-        .target_conversation_external_id
-        .clone();
+    let conversation_external_id = external_channel_sse_conversation_external_id(&public_response);
     if public_status == "static_page_published" {
         if let Some(public_url) =
             external_channel_public_artifact_url_from_reply(&public_response.reply)
@@ -994,20 +1064,19 @@ pub(crate) fn external_channel_static_page_sse_progress_payload(
             public_response.reply.artifact_links = published_reply.artifact_links;
         }
     }
-    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
-    let poll_after_seconds =
-        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
+    let (status_url, poll_after_seconds) = external_channel_sse_polling_fields(&public_response);
+    let (assistant_run_id, idempotency_key) = external_channel_sse_run_identity(&public_response);
     let data = json!({
-        "assistant_run_id": public_response.assistant_run_id,
-        "idempotency_key": public_response.idempotency_key.clone(),
+        "assistant_run_id": assistant_run_id,
+        "idempotency_key": idempotency_key.clone(),
         "status": public_status.clone(),
         "card": public_response.reply.card.clone(),
         "artifact_links": public_response.reply.artifact_links.clone(),
         "text": text.clone(),
     });
     let payload = external_channel_sse_public_payload(
-        public_response.assistant_run_id,
-        &public_response.idempotency_key,
+        assistant_run_id,
+        &idempotency_key,
         &conversation_external_id,
         external_channel_static_page_sse_sequence(&status),
         "static_page",
@@ -1017,14 +1086,9 @@ pub(crate) fn external_channel_static_page_sse_progress_payload(
         poll_after_seconds,
         data,
     );
-    let dedupe_key = format!("{event_name}:{public_status}:{progress_key}");
-    (
-        event_name,
-        payload,
-        text,
-        dedupe_key,
-        public_response.assistant_run_id,
-    )
+    let dedupe_key =
+        external_channel_static_page_sse_dedupe_key(event_name, &public_status, &progress_key);
+    (event_name, payload, text, dedupe_key, assistant_run_id)
 }
 
 #[cfg(test)]
@@ -1041,26 +1105,22 @@ pub(crate) fn external_channel_static_page_sse_continue_polling_payload(
 ) -> ExternalChannelStaticPageSseContinuePollingPayload {
     let status = external_channel_static_page_sse_status(&response);
     let progress_key = external_channel_static_page_sse_progress_key(&response);
-    let public_response = external_channel_public_response(response);
+    let public_response = external_channel_sse_public_response(response);
     let public_status = external_channel_public_status(&status);
-    let conversation_external_id = public_response
-        .reply
-        .target_conversation_external_id
-        .clone();
-    let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
-    let poll_after_seconds =
-        external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
+    let conversation_external_id = external_channel_sse_conversation_external_id(&public_response);
+    let (status_url, poll_after_seconds) = external_channel_sse_polling_fields(&public_response);
+    let (assistant_run_id, idempotency_key) = external_channel_sse_run_identity(&public_response);
     let text = "本次流式连接已达到等待上限，DataMax 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
     let data = json!({
-        "assistant_run_id": public_response.assistant_run_id,
-        "idempotency_key": public_response.idempotency_key.clone(),
+        "assistant_run_id": assistant_run_id,
+        "idempotency_key": idempotency_key.clone(),
         "status": public_status.clone(),
         "card": public_response.reply.card.clone(),
         "text": text,
     });
     let payload = external_channel_sse_public_payload(
-        public_response.assistant_run_id,
-        &public_response.idempotency_key,
+        assistant_run_id,
+        &idempotency_key,
         &conversation_external_id,
         external_channel_static_page_sse_sequence("static_page_continue_polling"),
         "static_page",
@@ -1070,14 +1130,12 @@ pub(crate) fn external_channel_static_page_sse_continue_polling_payload(
         poll_after_seconds.or(Some(30)),
         data,
     );
-    let dedupe_key =
-        format!("external_channel.static_page_continue_polling:{public_status}:{progress_key}");
-    (
-        payload,
-        text.to_string(),
-        dedupe_key,
-        public_response.assistant_run_id,
-    )
+    let dedupe_key = external_channel_static_page_sse_dedupe_key(
+        external_channel_static_page_sse_continue_polling_event_name(),
+        &public_status,
+        &progress_key,
+    );
+    (payload, text.to_string(), dedupe_key, assistant_run_id)
 }
 
 #[cfg(test)]
@@ -1086,7 +1144,7 @@ pub(crate) fn external_channel_static_page_sse_continue_polling_event(
 ) -> String {
     let (payload, text, _, _) = external_channel_static_page_sse_continue_polling_payload(response);
     external_channel_sse_event_with_delta(
-        "external_channel.static_page_continue_polling",
+        external_channel_static_page_sse_continue_polling_event_name(),
         payload,
         &text,
     )
@@ -1096,8 +1154,12 @@ pub(crate) fn external_channel_static_page_sse_is_terminal(
     response: &ExternalChannelEventResponse,
 ) -> bool {
     let status = external_channel_static_page_sse_status(response);
+    external_channel_static_page_sse_terminal_status(&status)
+}
+
+pub(crate) fn external_channel_static_page_sse_terminal_status(status: &str) -> bool {
     matches!(
-        status.as_str(),
+        status,
         "static_page_published"
             | "static_page_stable_artifact_reused"
             | "static_page_publish_cancelled"
@@ -1107,20 +1169,152 @@ pub(crate) fn external_channel_static_page_sse_is_terminal(
 }
 
 pub(crate) fn external_channel_static_page_sse_event_name(status: &str) -> &'static str {
-    match status {
-        "static_page_effect_image_ready" => "external_channel.static_page_preview_ready",
-        "static_page_published" | "static_page_stable_artifact_reused" => {
-            "external_channel.static_page_published"
-        }
-        "static_page_publish_failed"
-        | "static_page_publish_cancelled"
-        | "static_page_publish_needs_human" => "external_channel.static_page_issue",
-        "static_page_continue_polling" => "external_channel.static_page_continue_polling",
-        "static_page_publish_queued"
-        | "static_page_publish_running"
-        | "static_page_publish_retrying" => "external_channel.static_page_publish_progress",
-        _ => "external_channel.static_page_progress",
+    if external_channel_static_page_sse_preview_ready_status(status) {
+        external_channel_static_page_sse_preview_ready_event_name()
+    } else if external_channel_static_page_sse_published_or_reused_status(status) {
+        external_channel_static_page_sse_published_event_name()
+    } else if external_channel_static_page_sse_issue_status(status) {
+        external_channel_static_page_sse_issue_event_name()
+    } else if external_channel_static_page_sse_continue_polling_status(status) {
+        external_channel_static_page_sse_continue_polling_event_name()
+    } else if external_channel_static_page_sse_publish_progress_status(status) {
+        external_channel_static_page_sse_publish_progress_event_name()
+    } else {
+        external_channel_static_page_sse_generic_progress_event_name()
     }
+}
+
+pub(crate) fn external_channel_static_page_sse_preview_ready_status(status: &str) -> bool {
+    status == "static_page_effect_image_ready"
+}
+
+pub(crate) fn external_channel_static_page_sse_continue_polling_status(status: &str) -> bool {
+    status == "static_page_continue_polling"
+}
+
+pub(crate) fn external_channel_static_page_sse_published_or_reused_status(status: &str) -> bool {
+    matches!(
+        status,
+        "static_page_published" | "static_page_stable_artifact_reused"
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_issue_status(status: &str) -> bool {
+    matches!(
+        status,
+        "static_page_publish_failed"
+            | "static_page_publish_cancelled"
+            | "static_page_publish_needs_human"
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_publish_progress_status(status: &str) -> bool {
+    matches!(
+        status,
+        "static_page_publish_queued"
+            | "static_page_publish_running"
+            | "static_page_publish_retrying"
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_generic_progress_event_name() -> &'static str {
+    "external_channel.static_page_progress"
+}
+
+pub(crate) fn external_channel_static_page_sse_continue_polling_event_name() -> &'static str {
+    "external_channel.static_page_continue_polling"
+}
+
+pub(crate) fn external_channel_static_page_sse_publish_progress_event_name() -> &'static str {
+    "external_channel.static_page_publish_progress"
+}
+
+pub(crate) fn external_channel_static_page_sse_issue_event_name() -> &'static str {
+    "external_channel.static_page_issue"
+}
+
+pub(crate) fn external_channel_static_page_sse_preview_ready_event_name() -> &'static str {
+    "external_channel.static_page_preview_ready"
+}
+
+pub(crate) fn external_channel_static_page_sse_published_event_name() -> &'static str {
+    "external_channel.static_page_published"
+}
+
+pub(crate) fn external_channel_sse_delta_event_name() -> &'static str {
+    "external_channel.delta"
+}
+
+pub(crate) fn external_channel_started_sse_event_name() -> &'static str {
+    "external_channel.started"
+}
+
+pub(crate) fn external_channel_processing_sse_event_name() -> &'static str {
+    "external_channel.processing"
+}
+
+pub(crate) fn external_channel_retrieval_started_sse_event_name() -> &'static str {
+    "external_channel.retrieval_started"
+}
+
+pub(crate) fn external_channel_static_page_sse_queued_event_name() -> &'static str {
+    "external_channel.static_page_queued"
+}
+
+pub(crate) fn external_channel_static_page_sse_planning_event_name() -> &'static str {
+    "external_channel.static_page_planning"
+}
+
+pub(crate) fn external_channel_sse_needs_input_event_name() -> &'static str {
+    "external_channel.needs_input"
+}
+
+pub(crate) fn external_channel_sse_completed_event_name() -> &'static str {
+    "external_channel.completed"
+}
+
+pub(crate) fn external_channel_sse_done_event_name() -> &'static str {
+    "done"
+}
+
+pub(crate) fn external_channel_sse_heartbeat_event_name() -> &'static str {
+    "external_channel.heartbeat"
+}
+
+pub(crate) fn external_channel_answer_retrying_sse_event_name() -> &'static str {
+    "external_channel.answer_retrying"
+}
+
+pub(crate) fn external_channel_followup_action_continue_polling_sse_event_name() -> &'static str {
+    "external_channel.followup_action_continue_polling"
+}
+
+pub(crate) fn external_channel_followup_action_planning_sse_event_name() -> &'static str {
+    "external_channel.followup_action_planning"
+}
+
+pub(crate) fn external_channel_followup_action_planned_sse_event_name() -> &'static str {
+    "external_channel.followup_action_planned"
+}
+
+pub(crate) fn external_channel_followup_search_evidence_required_sse_event_name() -> &'static str {
+    "external_channel.followup_search_evidence_required"
+}
+
+pub(crate) fn external_channel_followup_action_not_required_sse_event_name() -> &'static str {
+    "external_channel.followup_action_not_required"
+}
+
+pub(crate) fn external_channel_followup_action_failed_sse_event_name() -> &'static str {
+    "external_channel.followup_action_failed"
+}
+
+pub(crate) fn external_channel_static_page_sse_dedupe_key(
+    event_name: &str,
+    public_status: &str,
+    progress_key: &str,
+) -> String {
+    format!("{event_name}:{public_status}:{progress_key}")
 }
 
 pub(crate) fn external_channel_sse_event_with_delta(
@@ -1128,9 +1322,8 @@ pub(crate) fn external_channel_sse_event_with_delta(
     payload: Value,
     text: &str,
 ) -> String {
-    let payload = external_channel_public_stream_payload(payload);
-    let mut encoded = sse_text_delta_events("external_channel.delta", text);
-    encoded.push_str(&sse_json_event(event_name, payload));
+    let mut encoded = sse_text_delta_events(external_channel_sse_delta_event_name(), text);
+    encoded.push_str(&external_channel_sse_public_json_event(event_name, payload));
     encoded
 }
 
@@ -1295,12 +1488,127 @@ mod tests {
     }
 
     #[test]
+    fn sse_public_response_reuses_public_cleanup_path() {
+        let response = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_pipeline",
+                "status": "static_page_publish_cancelled",
+                "runtime_event": {
+                    "background_continuation": "retryable"
+                },
+                "runtime_manifest": {"internal": true}
+            })),
+            Some("static_page_publish_cancelled"),
+            Vec::new(),
+        );
+
+        let public_response = external_channel_sse_public_response(response);
+
+        assert_eq!(
+            public_response.reply.task_status.as_deref(),
+            Some("processing")
+        );
+        let card = public_response.reply.card.as_ref().expect("card");
+        assert_eq!(
+            card.get("status"),
+            Some(&json!("static_page_continue_polling"))
+        );
+        assert_eq!(card.get("poll_after_seconds"), Some(&json!(30)));
+        assert!(card.get("runtime_manifest").is_none());
+    }
+
+    #[test]
+    fn sse_polling_fields_read_status_url_and_poll_interval_from_public_response_card() {
+        let response = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_running",
+                "status_url": " https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply ",
+                "poll_after_seconds": " 15 "
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+        let public_response = external_channel_sse_public_response(response);
+
+        let (status_url, poll_after_seconds) =
+            external_channel_sse_polling_fields(&public_response);
+
+        assert_eq!(
+            status_url.as_deref(),
+            Some(
+                "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply"
+            )
+        );
+        assert_eq!(poll_after_seconds, Some(15));
+    }
+
+    #[test]
+    fn sse_conversation_external_id_reads_public_reply_target_conversation() {
+        let mut response = external_channel_response(None, None, Vec::new());
+        response.reply.target_conversation_external_id = "conv-target-42".to_string();
+
+        assert_eq!(
+            external_channel_sse_conversation_external_id(&response),
+            "conv-target-42"
+        );
+    }
+
+    #[test]
+    fn sse_run_identity_reads_assistant_run_id_and_idempotency_key() {
+        let run_id = AssistantRunId::new();
+        let mut response = external_channel_response(None, None, Vec::new());
+        response.assistant_run_id = Some(run_id);
+        response.idempotency_key = "idem-run-42".to_string();
+
+        let (actual_run_id, actual_idempotency_key) = external_channel_sse_run_identity(&response);
+
+        assert_eq!(actual_run_id, Some(run_id));
+        assert_eq!(actual_idempotency_key, "idem-run-42");
+    }
+
+    #[test]
+    fn completion_queued_event_detection_keeps_exact_pipeline_card_contract() {
+        let pipeline = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_pipeline",
+                "status": "static_page_generation_queued"
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+        let image2_step = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_running"
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+        let normal = external_channel_response(
+            Some(json!({
+                "type": "normal_card",
+                "status": "processing"
+            })),
+            Some("processing"),
+            Vec::new(),
+        );
+
+        assert!(external_channel_sse_completion_should_emit_static_page_queued_event(&pipeline));
+        assert!(
+            !external_channel_sse_completion_should_emit_static_page_queued_event(&image2_step)
+        );
+        assert!(!external_channel_sse_completion_should_emit_static_page_queued_event(&normal));
+    }
+
+    #[test]
     fn sse_completion_with_done_emits_queued_and_completed_events() {
         let mut response = external_channel_response(
             Some(json!({
                 "type": "v3_static_page_image2_pipeline",
                 "status": "static_page_generation_queued",
                 "draft_id": "draft-1",
+                "status_url": " https://v3.elepcloud.com/status/draft-1 ",
                 "poll_after_seconds": 5,
             })),
             Some("processing"),
@@ -1312,20 +1620,95 @@ mod tests {
 
         let body = external_channel_sse_completion_with_done(response, false);
 
-        assert!(body.contains("event: external_channel.delta"));
-        assert!(body.contains("event: external_channel.static_page_queued"));
+        assert_eq!(
+            external_channel_sse_delta_event_name(),
+            "external_channel.delta"
+        );
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
+        assert_eq!(
+            external_channel_static_page_sse_queued_event_name(),
+            "external_channel.static_page_queued"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_planning_event_name(),
+            "external_channel.static_page_planning"
+        );
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_static_page_sse_queued_event_name()
+        )));
         assert!(body.contains("\"sequence\":20"));
-        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains("\"idempotency_key\":\"generic:tenant:completion\""));
+        assert!(body.contains("\"status_url\":\"https://v3.elepcloud.com/status/draft-1\""));
+        assert!(body.contains("\"poll_after_seconds\":5"));
+        assert_eq!(
+            external_channel_sse_completed_event_name(),
+            "external_channel.completed"
+        );
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_completed_event_name()
+        )));
         assert!(body.contains("\"sequence\":100"));
         assert!(body.contains("页面任务已接收。"));
-        assert!(!body.contains("event: done"));
+        assert_eq!(external_channel_sse_done_event_name(), "done");
+        assert!(!body.contains(&format!(
+            "event: {}",
+            external_channel_sse_done_event_name()
+        )));
     }
 
     #[test]
     fn retrieval_started_sse_event_keeps_public_wire_contract() {
         let body = external_channel_retrieval_started_sse_event(&external_bot_message());
 
-        assert!(body.contains("event: external_channel.retrieval_started"));
+        assert_eq!(
+            external_channel_started_sse_event_name(),
+            "external_channel.started"
+        );
+        assert_eq!(
+            external_channel_processing_sse_event_name(),
+            "external_channel.processing"
+        );
+        assert_eq!(
+            external_channel_retrieval_started_sse_event_name(),
+            "external_channel.retrieval_started"
+        );
+        assert_eq!(
+            external_channel_answer_retrying_sse_event_name(),
+            "external_channel.answer_retrying"
+        );
+        assert_eq!(
+            external_channel_followup_action_continue_polling_sse_event_name(),
+            "external_channel.followup_action_continue_polling"
+        );
+        assert_eq!(
+            external_channel_followup_action_planning_sse_event_name(),
+            "external_channel.followup_action_planning"
+        );
+        assert_eq!(
+            external_channel_followup_action_planned_sse_event_name(),
+            "external_channel.followup_action_planned"
+        );
+        assert_eq!(
+            external_channel_followup_search_evidence_required_sse_event_name(),
+            "external_channel.followup_search_evidence_required"
+        );
+        assert_eq!(
+            external_channel_followup_action_not_required_sse_event_name(),
+            "external_channel.followup_action_not_required"
+        );
+        assert_eq!(
+            external_channel_followup_action_failed_sse_event_name(),
+            "external_channel.followup_action_failed"
+        );
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_retrieval_started_sse_event_name()
+        )));
         assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
         assert!(body.contains("\"sequence\":5"));
         assert!(body.contains("\"phase\":\"retrieval\""));
@@ -1529,6 +1912,37 @@ mod tests {
     }
 
     #[test]
+    fn sse_public_json_event_reuses_public_stream_payload_cleanup() {
+        let payload = external_channel_sse_public_payload(
+            None,
+            "idem-event",
+            "conv-event",
+            90,
+            "static_page",
+            "static_page_published",
+            "报表已生成。",
+            None,
+            None,
+            json!({
+                EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY: "internal-dedupe",
+                "card": {
+                    "public_url": "https://v3.elepcloud.com/generated-artifacts/demo/index.html",
+                    "runtime_event": {"debug": true}
+                },
+                "response": {"reply": {"text": "internal full response"}}
+            }),
+        );
+
+        let encoded = external_channel_sse_public_json_event("external_channel.test", payload);
+
+        assert!(encoded.contains("event: external_channel.test"));
+        assert!(encoded.contains("https://v3.elepcloud.com/generated-artifacts/demo/index.html"));
+        assert!(!encoded.contains("internal-dedupe"));
+        assert!(!encoded.contains("internal full response"));
+        assert!(!encoded.contains("\"runtime_event\""));
+    }
+
+    #[test]
     fn public_stream_replay_body_filters_since_sequence_and_public_schema() {
         let run_id = AssistantRunId::new();
         let old_payload = external_channel_sse_public_payload(
@@ -1694,6 +2108,10 @@ mod tests {
         assert!(external_channel_response_needs_input(&from_task_status));
         assert!(external_channel_response_needs_input(&from_card_status));
         assert!(!external_channel_response_needs_input(&processing));
+        assert_eq!(
+            external_channel_sse_needs_input_event_name(),
+            "external_channel.needs_input"
+        );
     }
 
     #[test]
@@ -1803,6 +2221,18 @@ mod tests {
             external_channel_static_page_sse_status(&published),
             "static_page_published"
         );
+        assert!(external_channel_static_page_sse_terminal_status(
+            "static_page_published"
+        ));
+        assert!(external_channel_static_page_sse_terminal_status(
+            "static_page_publish_needs_human"
+        ));
+        assert!(!external_channel_static_page_sse_terminal_status(
+            "static_page_publish_running"
+        ));
+        assert!(!external_channel_static_page_sse_terminal_status(
+            "static_page_continue_polling"
+        ));
         assert!(external_channel_static_page_sse_is_terminal(&published));
         assert_eq!(
             external_channel_static_page_sse_status(&provisional),
@@ -1829,7 +2259,24 @@ mod tests {
         );
 
         let text = external_channel_static_page_sse_progress_text(&response);
+        let public_status = external_channel_static_page_sse_status(&response);
 
+        assert_eq!(public_status, "static_page_published");
+        assert_eq!(
+            external_channel_static_page_sse_public_artifact_text(
+                &response,
+                &public_status,
+                public_url
+            )
+            .as_deref(),
+            Some(text.as_str())
+        );
+        assert!(external_channel_static_page_sse_public_artifact_text(
+            &response,
+            "static_page_publish_running",
+            public_url
+        )
+        .is_none());
         assert!(text.contains("已依据客户需求生成可访问的报表页面"));
         assert!(text.contains("系统识别到本轮关注焦点：取高机会"));
         assert!(text.contains("页面链接：[点击查看报表]"));
@@ -1883,6 +2330,44 @@ mod tests {
     }
 
     #[test]
+    fn static_page_progress_payload_keeps_retryable_cancelled_pollable_after_public_cleanup() {
+        let mut response = external_channel_response(
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_cancelled",
+                "runtime_event": {
+                    "background_continuation": "retryable"
+                },
+                "runtime_manifest": {"internal": true}
+            })),
+            Some("static_page_publish_cancelled"),
+            Vec::new(),
+        );
+        response.assistant_run_id = Some(AssistantRunId::new());
+        response.idempotency_key = "generic:tenant:static-page-retryable-cancelled".to_string();
+
+        let fields: ExternalChannelStaticPageSseProgressPayload =
+            external_channel_static_page_sse_progress_payload(response);
+        let (event_name, payload, text, dedupe_key, run_id) = fields;
+
+        assert_eq!(event_name, "external_channel.static_page_continue_polling");
+        assert_eq!(payload["status"], json!("static_page_continue_polling"));
+        assert_eq!(
+            payload["data"]["status"],
+            json!("static_page_continue_polling")
+        );
+        assert_eq!(
+            payload["data"]["card"]["status"],
+            json!("static_page_continue_polling")
+        );
+        assert_eq!(payload["poll_after_seconds"], json!(30));
+        assert!(payload.pointer("/data/card/runtime_manifest").is_none());
+        assert!(text.contains("第三方可按 status_url 继续轮询"));
+        assert!(dedupe_key.starts_with("external_channel.static_page_continue_polling:"));
+        assert!(run_id.is_some());
+    }
+
+    #[test]
     fn static_page_sse_progress_key_and_event_name_keep_wire_values() {
         let response = external_channel_response(
             Some(json!({
@@ -1896,20 +2381,116 @@ mod tests {
         );
 
         assert_eq!(
+            external_channel_static_page_sse_progress_asset_fields(response.reply.card.as_ref()),
+            (
+                "https://v3.elepcloud.com/generated-artifacts/demo/index.html".to_string(),
+                "preview/demo.png".to_string()
+            )
+        );
+        assert_eq!(
+            external_channel_static_page_sse_progress_runtime_field(response.reply.card.as_ref()),
+            "3"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_progress_key_fields(&response),
+            (
+                "static_page_published".to_string(),
+                "https://v3.elepcloud.com/generated-artifacts/demo/index.html".to_string(),
+                "preview/demo.png".to_string(),
+                "3".to_string()
+            )
+        );
+        assert_eq!(
             external_channel_static_page_sse_progress_key(&response),
             "static_page_published|https://v3.elepcloud.com/generated-artifacts/demo/index.html|preview/demo.png|3"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_dedupe_key(
+                "external_channel.static_page_published",
+                "static_page_published",
+                "static_page_published|https://v3.elepcloud.com/generated-artifacts/demo/index.html|preview/demo.png|3"
+            ),
+            "external_channel.static_page_published:static_page_published:static_page_published|https://v3.elepcloud.com/generated-artifacts/demo/index.html|preview/demo.png|3"
+        );
+        assert!(external_channel_static_page_sse_preview_ready_status(
+            "static_page_effect_image_ready"
+        ));
+        assert!(!external_channel_static_page_sse_preview_ready_status(
+            "static_page_publish_running"
+        ));
+        assert_eq!(
+            external_channel_static_page_sse_preview_ready_event_name(),
+            "external_channel.static_page_preview_ready"
         );
         assert_eq!(
             external_channel_static_page_sse_event_name("static_page_effect_image_ready"),
             "external_channel.static_page_preview_ready"
         );
+        assert!(external_channel_static_page_sse_continue_polling_status(
+            "static_page_continue_polling"
+        ));
+        assert!(!external_channel_static_page_sse_continue_polling_status(
+            "static_page_publish_retrying"
+        ));
+        assert_eq!(
+            external_channel_static_page_sse_continue_polling_event_name(),
+            "external_channel.static_page_continue_polling"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_continue_polling"),
+            "external_channel.static_page_continue_polling"
+        );
+        assert!(external_channel_static_page_sse_published_or_reused_status(
+            "static_page_stable_artifact_reused"
+        ));
+        assert!(
+            !external_channel_static_page_sse_published_or_reused_status(
+                "static_page_publish_running"
+            )
+        );
+        assert_eq!(
+            external_channel_static_page_sse_published_event_name(),
+            "external_channel.static_page_published"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_stable_artifact_reused"),
+            "external_channel.static_page_published"
+        );
+        assert!(external_channel_static_page_sse_publish_progress_status(
+            "static_page_publish_running"
+        ));
+        assert!(!external_channel_static_page_sse_publish_progress_status(
+            "static_page_published"
+        ));
+        assert_eq!(
+            external_channel_static_page_sse_publish_progress_event_name(),
+            "external_channel.static_page_publish_progress"
+        );
         assert_eq!(
             external_channel_static_page_sse_event_name("static_page_publish_running"),
             "external_channel.static_page_publish_progress"
         );
+        assert!(external_channel_static_page_sse_issue_status(
+            "static_page_publish_failed"
+        ));
+        assert!(!external_channel_static_page_sse_issue_status(
+            "static_page_publish_running"
+        ));
+        assert_eq!(
+            external_channel_static_page_sse_issue_event_name(),
+            "external_channel.static_page_issue"
+        );
         assert_eq!(
             external_channel_static_page_sse_event_name("static_page_publish_failed"),
             "external_channel.static_page_issue"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_generic_progress_event_name(),
+            "external_channel.static_page_progress"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_unknown_progress"),
+            "external_channel.static_page_progress"
         );
     }
 
@@ -1997,7 +2578,10 @@ mod tests {
             "处理中",
         );
 
-        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
         assert!(body.contains("event: external_channel.static_page_progress"));
         assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
         assert!(!body.contains("_stream_dedupe_key"));

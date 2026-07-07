@@ -1,11 +1,19 @@
 use contracts::CreateAssistantRunRequest;
+use llm_gateway::{LlmRuntimeSelection, MODEL_LANE_ASSISTANT_CHAT};
 use serde_json::{json, Value};
 
 use crate::{
-    assistant_run_answer_quality_budget_support::assistant_run_prompt_is_high_risk_quality_task,
+    assistant_run_answer_quality_budget_support::{
+        assistant_run_prompt_is_high_risk_quality_task,
+        assistant_run_request_expresses_dissatisfaction,
+    },
+    assistant_run_answer_quality_retry_support::assistant_run_answer_quality_retry_reason,
+    assistant_run_answer_quality_spreadsheet_support::assistant_run_answer_satisfies_spreadsheet_row_analysis,
     assistant_run_model_evidence_state,
+    assistant_run_point_list_support::assistant_run_answer_satisfies_retrieval_point_list,
     assistant_run_react_support::assistant_run_react_json_payload_candidate,
-    build_assistant_run_model_supply_brief, prompt_match_support::prompt_contains_any,
+    build_assistant_run_model_supply_brief, complete_assistant_run_provider,
+    prompt_match_support::prompt_contains_any,
 };
 
 const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
@@ -126,6 +134,36 @@ pub(crate) fn assistant_run_answer_is_short_for_structured_request(
     supplied_count > 0 && output_text.chars().count() < 80
 }
 
+pub(crate) fn assistant_run_answer_quality_judge_should_run(
+    output_text: &str,
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> bool {
+    if !assistant_run_answer_quality_retry_allowed(output_text, evidence_state) {
+        return false;
+    }
+    if assistant_run_request_expresses_dissatisfaction(request) {
+        return true;
+    }
+    if assistant_run_answer_contains_weak_confidence_marker(output_text) {
+        return true;
+    }
+    if assistant_run_answer_satisfies_spreadsheet_row_analysis(output_text, request, evidence_state)
+    {
+        return false;
+    }
+    if assistant_run_answer_satisfies_retrieval_point_list(output_text, request, evidence_state) {
+        return false;
+    }
+    if assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
+        return true;
+    }
+    if assistant_run_supply_quality_needs_judge(evidence_state) {
+        return true;
+    }
+    assistant_run_answer_is_short_for_structured_request(output_text, request, evidence_state)
+}
+
 pub(crate) fn assistant_run_answer_quality_retry_allowed(
     output_text: &str,
     evidence_state: &Value,
@@ -175,6 +213,87 @@ pub(crate) fn assistant_run_answer_contains_weak_confidence_marker(output_text: 
     ) || ["maybe", "probably", "likely", "uncertain", "partial"]
         .iter()
         .any(|marker| lower.contains(marker))
+}
+
+pub(crate) fn assistant_run_answer_contains_insufficient_evidence_marker(
+    output_text: &str,
+) -> bool {
+    let lower = output_text.to_ascii_lowercase();
+    prompt_contains_any(
+        output_text,
+        &[
+            "资料不足",
+            "材料不足",
+            "信息不足",
+            "证据不足",
+            "数据不足",
+            "上下文不足",
+            "供料不足",
+            "没有足够",
+            "未提供足够",
+            "不够回答",
+            "不足以回答",
+            "无法回答",
+            "无法确认",
+            "无法判断",
+            "无法确定",
+            "不能确认",
+            "不能确定",
+            "暂无法",
+            "暂时无法",
+            "未找到相关",
+            "没有找到相关",
+            "未直接检索到",
+            "没有直接检索到",
+            "未检索到",
+            "文档未提及",
+            "文档中未提及",
+            "当前可见信息不足",
+            "当前资料不足",
+            "当前资料无法",
+            "当前信息无法",
+            "基于当前可见",
+            "基于通用知识",
+            "通用知识的建议",
+            "当前可见",
+            "部分解析状态",
+            "部分解析",
+            "解析不完整",
+            "仅返回了标题字段",
+            "只返回了标题字段",
+            "原文内容尚未被平台解析",
+            "仅基于当前可见",
+            "只基于当前可见",
+            "只能基于当前可见",
+            "需要执行一次",
+            "需要先检索",
+            "需要先读取",
+            "需要先获取",
+            "请允许我先",
+            "请回复\"继续\"",
+            "请回复“继续”",
+            "建议发起检索",
+            "建议重新检索",
+            "没有全量",
+            "未全量",
+            "完整、无遗漏",
+            "需要补充资料",
+            "建议补充资料",
+            "建议上传",
+        ],
+    ) || [
+        "insufficient information",
+        "not enough information",
+        "insufficient evidence",
+        "cannot determine",
+        "can't determine",
+        "unable to determine",
+        "unable to answer",
+        "cannot answer",
+        "not enough context",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn assistant_run_answer_reports_actual_parse_unavailable(
@@ -265,6 +384,53 @@ pub(crate) fn assistant_run_answer_quality_retry_reason_from_judge_decision(
     }
 }
 
+pub(crate) async fn assistant_run_answer_quality_retry_reason_with_judge(
+    output_text: &str,
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+    chat_runtime: &LlmRuntimeSelection,
+) -> Option<&'static str> {
+    if let Some(reason) =
+        assistant_run_answer_quality_retry_reason(output_text, evidence_state, request)
+    {
+        return Some(reason);
+    }
+    if !assistant_run_answer_quality_judge_should_run(output_text, evidence_state, request) {
+        return None;
+    }
+    let decision = complete_assistant_run_answer_quality_judge(
+        chat_runtime,
+        request,
+        evidence_state,
+        output_text,
+    )
+    .await?;
+    assistant_run_answer_quality_retry_reason_from_judge_decision(&decision)
+}
+
+pub(crate) async fn complete_assistant_run_answer_quality_judge(
+    chat_runtime: &LlmRuntimeSelection,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    output_text: &str,
+) -> Option<AssistantRunAnswerQualityJudgeDecision> {
+    if chat_runtime.mode == "placeholder" || !assistant_run_answer_quality_judge_enabled() {
+        return None;
+    }
+    let provider_input =
+        build_assistant_run_answer_quality_judge_input(request, evidence_state, output_text);
+    let response = complete_assistant_run_provider(
+        MODEL_LANE_ASSISTANT_CHAT,
+        chat_runtime.mode.clone(),
+        chat_runtime.provider.clone(),
+        chat_runtime.model.clone(),
+        provider_input,
+    )
+    .await
+    .ok()?;
+    parse_assistant_run_answer_quality_judge_decision(&response.output_text)
+}
+
 pub(crate) fn parse_assistant_run_answer_quality_judge_decision(
     raw: &str,
 ) -> Option<AssistantRunAnswerQualityJudgeDecision> {
@@ -338,6 +504,15 @@ mod tests {
             context_policy_hint: None,
             current_artifact: None,
             messages: Vec::new(),
+        }
+    }
+
+    fn placeholder_runtime() -> LlmRuntimeSelection {
+        LlmRuntimeSelection {
+            mode: "placeholder".to_string(),
+            provider: "none".to_string(),
+            model: "none".to_string(),
+            lane: "assistant_chat".to_string(),
         }
     }
 
@@ -533,6 +708,55 @@ mod tests {
     }
 
     #[test]
+    fn judge_should_run_respects_retry_gate_and_quality_signals() {
+        let no_supply = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 0,
+                "suppliedItemCount": 0,
+                "conversationMemoryItemCount": 0
+            }
+        });
+        let supplied = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "conversationMemoryItemCount": 0,
+                "indexedEvidenceCount": 1
+            }
+        });
+        let casual = judge_request("帮我润色一句问候。");
+
+        assert!(!assistant_run_answer_quality_judge_should_run(
+            "问候语可以更自然。",
+            &no_supply,
+            &casual
+        ));
+        assert!(!assistant_run_answer_quality_judge_should_run(
+            "问候语可以更自然。",
+            &supplied,
+            &casual
+        ));
+
+        assert!(assistant_run_answer_quality_judge_should_run(
+            "根据当前资料，可能是门店店总负责。",
+            &supplied,
+            &casual
+        ));
+        assert!(assistant_run_answer_quality_judge_should_run(
+            "已重新整理。",
+            &supplied,
+            &judge_request("客户不满意，重新查一次。")
+        ));
+        assert!(assistant_run_answer_quality_judge_should_run(
+            "邓工是项目负责人。",
+            &supplied,
+            &judge_request("这份文档里邓工是谁？")
+        ));
+    }
+
+    #[test]
     fn weak_confidence_marker_matches_chinese_and_ascii_terms() {
         assert!(assistant_run_answer_contains_weak_confidence_marker(
             "根据当前资料，可能是门店店总负责。"
@@ -542,6 +766,26 @@ mod tests {
         ));
         assert!(!assistant_run_answer_contains_weak_confidence_marker(
             "总部视角应先展示区域、门店和品牌指标。"
+        ));
+    }
+
+    #[test]
+    fn insufficient_evidence_marker_matches_chinese_and_ascii_terms() {
+        assert!(assistant_run_answer_contains_insufficient_evidence_marker(
+            "供料中未直接检索到老年人摔倒后的处理流程。"
+        ));
+        assert!(assistant_run_answer_contains_insufficient_evidence_marker(
+            "There is insufficient evidence to determine the answer."
+        ));
+        assert!(assistant_run_answer_contains_insufficient_evidence_marker(
+            "当前文档为部分解析状态，需要先读取详情。"
+        ));
+    }
+
+    #[test]
+    fn insufficient_evidence_marker_ignores_grounded_answers() {
+        assert!(!assistant_run_answer_contains_insufficient_evidence_marker(
+            "长者摔倒后应先评估意识和疼痛，必要时联系医护并通知家属。"
         ));
     }
 
@@ -577,6 +821,52 @@ mod tests {
             assistant_run_answer_quality_retry_reason_from_judge_decision(&decision),
             Some("model_judge_customer_unsafe_answer")
         );
+    }
+
+    #[tokio::test]
+    async fn retry_reason_with_judge_prefers_deterministic_reason() {
+        let request = judge_request("老年人摔倒后怎么办？");
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "conversationMemoryItemCount": 0
+            }
+        });
+
+        let reason = assistant_run_answer_quality_retry_reason_with_judge(
+            "当前资料不足，无法回答。",
+            &evidence_state,
+            &request,
+            &placeholder_runtime(),
+        )
+        .await;
+
+        assert_eq!(reason, Some("insufficient_or_uncertain_answer"));
+    }
+
+    #[tokio::test]
+    async fn complete_judge_skips_placeholder_runtime() {
+        let request = judge_request("请判断这份文档里邓工是谁？");
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "conversationMemoryItemCount": 0
+            }
+        });
+
+        let decision = complete_assistant_run_answer_quality_judge(
+            &placeholder_runtime(),
+            &request,
+            &evidence_state,
+            "邓工是项目负责人。",
+        )
+        .await;
+
+        assert_eq!(decision, None);
     }
 
     #[test]

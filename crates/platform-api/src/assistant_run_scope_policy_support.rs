@@ -56,6 +56,95 @@ pub(crate) fn assistant_run_scope_prefers_detail(scope: &Value) -> bool {
             .is_some_and(|value| value == "detail_first")
 }
 
+pub(crate) fn assistant_run_scope_is_external_channel(scope: Option<&Value>) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    scope
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "external_channel")
+        || scope
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "external_channel")
+}
+
+pub(crate) fn assistant_run_preferred_dataset_id_strings_from_scope(scope: &Value) -> Vec<String> {
+    scope
+        .get("preferred_dataset_ids")
+        .or_else(|| scope.get("preferredDatasetIds"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            let mut ids = Vec::new();
+            for item in items {
+                let Some(raw) = item.as_str().map(str::trim) else {
+                    continue;
+                };
+                if raw.is_empty() || ids.iter().any(|id| id == raw) {
+                    continue;
+                }
+                ids.push(raw.to_string());
+            }
+            ids
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn assistant_run_requested_dataset_supply_policy(intent: &str) -> Value {
+    json!({
+        "intent": if intent.trim().is_empty() { "data_question" } else { intent.trim() },
+        "retrievalPolicy": "standard",
+        "preferDetail": false,
+        "noFakeData": true,
+        "answerPolicy": "model_authored_host_supplied",
+        "candidatePolicy": "selected_or_inferred_visible_datasets_only",
+        "recommendedActions": ["retrieval.search"],
+    })
+}
+
+pub(crate) fn assistant_run_active_static_page_supply_policy(
+    has_dataset: bool,
+    has_memory: bool,
+) -> Value {
+    let mut recommended_actions = Vec::new();
+    if has_dataset {
+        recommended_actions.push("retrieval.search");
+        recommended_actions.push("retrieval.read_detail");
+    }
+    recommended_actions.push("static_page.update_draft");
+
+    json!({
+        "intent": "static_page",
+        "answerPolicy": "model_authored_host_supplied",
+        "currentArtifactPolicy": "active_static_page_draft",
+        "actionPolicy": "model_may_request_controlled_actions_host_validates",
+        "contextBudgetPolicy": if has_dataset || has_memory {
+            "quality_first_token_tolerant"
+        } else {
+            "compact_until_retrieval_needed"
+        },
+        "candidatePolicy": if has_dataset {
+            "selected_or_inferred_visible_datasets_only"
+        } else {
+            "ordinary_chat_without_forced_dataset"
+        },
+        "historyPolicy": if has_memory {
+            "intent_gated_selected"
+        } else {
+            "intent_gated"
+        },
+        "retrievalPolicy": if has_dataset {
+            "detail_first"
+        } else {
+            "not_requested"
+        },
+        "preferDetail": has_dataset,
+        "recommendedActions": recommended_actions,
+        "noFakeData": true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +236,93 @@ mod tests {
         assert!(!assistant_run_scope_prefers_detail(
             &json!({"supply_policy": {"retrievalPolicy": "search"}})
         ));
+    }
+
+    #[test]
+    fn scope_is_external_channel_reads_type_or_mode() {
+        assert!(assistant_run_scope_is_external_channel(Some(
+            &json!({"type": "external_channel"})
+        )));
+        assert!(assistant_run_scope_is_external_channel(Some(
+            &json!({"mode": "external_channel"})
+        )));
+        assert!(!assistant_run_scope_is_external_channel(Some(
+            &json!({"type": "ordinary_chat", "mode": "normal"})
+        )));
+        assert!(!assistant_run_scope_is_external_channel(None));
+    }
+
+    #[test]
+    fn preferred_dataset_ids_trim_dedupe_and_read_aliases() {
+        assert_eq!(
+            assistant_run_preferred_dataset_id_strings_from_scope(&json!({
+                "preferred_dataset_ids": [" dataset-a ", "", "dataset-a", 42, "dataset-b"]
+            })),
+            vec!["dataset-a".to_string(), "dataset-b".to_string()]
+        );
+        assert_eq!(
+            assistant_run_preferred_dataset_id_strings_from_scope(&json!({
+                "preferredDatasetIds": ["dataset-c"]
+            })),
+            vec!["dataset-c".to_string()]
+        );
+        assert!(assistant_run_preferred_dataset_id_strings_from_scope(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn requested_dataset_supply_policy_uses_selected_dataset_contract() {
+        let static_policy = assistant_run_requested_dataset_supply_policy(" static_page ");
+        assert_eq!(static_policy["intent"], json!("static_page"));
+        assert_eq!(static_policy["retrievalPolicy"], json!("standard"));
+        assert_eq!(
+            static_policy["candidatePolicy"],
+            json!("selected_or_inferred_visible_datasets_only")
+        );
+        assert_eq!(
+            static_policy["answerPolicy"],
+            json!("model_authored_host_supplied")
+        );
+        assert_eq!(static_policy["preferDetail"], json!(false));
+
+        let default_policy = assistant_run_requested_dataset_supply_policy(" ");
+        assert_eq!(default_policy["intent"], json!("data_question"));
+    }
+
+    #[test]
+    fn active_static_page_supply_policy_tracks_dataset_and_memory_context() {
+        let artifact_only = assistant_run_active_static_page_supply_policy(false, false);
+        assert_eq!(artifact_only["retrievalPolicy"], json!("not_requested"));
+        assert_eq!(artifact_only["historyPolicy"], json!("intent_gated"));
+        assert_eq!(
+            artifact_only["contextBudgetPolicy"],
+            json!("compact_until_retrieval_needed")
+        );
+        assert_eq!(
+            artifact_only["currentArtifactPolicy"],
+            json!("active_static_page_draft")
+        );
+        assert_eq!(
+            artifact_only["candidatePolicy"],
+            json!("ordinary_chat_without_forced_dataset")
+        );
+
+        let with_dataset_and_memory = assistant_run_active_static_page_supply_policy(true, true);
+        assert_eq!(
+            with_dataset_and_memory["retrievalPolicy"],
+            json!("detail_first")
+        );
+        assert_eq!(
+            with_dataset_and_memory["historyPolicy"],
+            json!("intent_gated_selected")
+        );
+        assert_eq!(with_dataset_and_memory["preferDetail"], json!(true));
+        assert_eq!(
+            with_dataset_and_memory["recommendedActions"],
+            json!([
+                "retrieval.search",
+                "retrieval.read_detail",
+                "static_page.update_draft"
+            ])
+        );
     }
 }

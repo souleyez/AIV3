@@ -1,4 +1,4 @@
-use contracts::ExternalRequestedSkillView;
+use contracts::{CreateAssistantRunRequest, ExternalRequestedSkillView};
 use domain_model::DocumentId;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -219,6 +219,46 @@ pub(crate) fn external_requested_skills_policy_value(
     })
 }
 
+pub(crate) fn assistant_run_request_requested_skills_policy(
+    request: &CreateAssistantRunRequest,
+) -> Option<&Value> {
+    let policy = request
+        .startup_briefing
+        .as_ref()
+        .and_then(|briefing| briefing.get("requestedSkills"))
+        .or_else(|| {
+            request
+                .context_policy_hint
+                .as_ref()
+                .and_then(|policy| policy.get("skill_policy"))
+                .and_then(|policy| policy.get("requested_skills"))
+        })?;
+    external_requested_skills_policy_has_skills(policy).then_some(policy)
+}
+
+pub(crate) fn assistant_run_request_document_template_skills_policy(
+    request: &CreateAssistantRunRequest,
+) -> Option<&Value> {
+    let policy = request
+        .startup_briefing
+        .as_ref()
+        .and_then(|briefing| briefing.get("documentTemplateSkills"))
+        .or_else(|| {
+            request
+                .context_policy_hint
+                .as_ref()
+                .and_then(|policy| policy.get("document_template_skill_policy"))
+        })?;
+    external_requested_skills_policy_has_skills(policy).then_some(policy)
+}
+
+fn external_requested_skills_policy_has_skills(policy: &Value) -> bool {
+    policy
+        .get("skills")
+        .and_then(Value::as_array)
+        .is_some_and(|skills| !skills.is_empty())
+}
+
 pub(crate) fn external_requested_skills_bad_request(
     reason: &str,
     message: impl Into<String>,
@@ -411,5 +451,81 @@ mod tests {
             external_document_template_skill_output_type(&no_arguments),
             "any"
         );
+    }
+
+    #[test]
+    fn assistant_run_request_skill_policies_read_startup_or_context_policy_only_when_non_empty() {
+        let startup = request_with_policies(
+            Some(json!({
+                "requestedSkills": {
+                    "skills": [{"skill_id": "risk_review"}]
+                },
+                "documentTemplateSkills": {
+                    "skills": [{"skill_id": "document_template_skill"}]
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(
+            assistant_run_request_requested_skills_policy(&startup)
+                .and_then(|policy| policy["skills"][0]["skill_id"].as_str()),
+            Some("risk_review")
+        );
+        assert_eq!(
+            assistant_run_request_document_template_skills_policy(&startup)
+                .and_then(|policy| policy["skills"][0]["skill_id"].as_str()),
+            Some("document_template_skill")
+        );
+
+        let context = request_with_policies(
+            None,
+            Some(json!({
+                "skill_policy": {
+                    "requested_skills": {"skills": [{"skill_id": "analysis"}]}
+                },
+                "document_template_skill_policy": {
+                    "skills": [{"skill_id": "template_from_document"}]
+                }
+            })),
+        );
+
+        assert_eq!(
+            assistant_run_request_requested_skills_policy(&context)
+                .and_then(|policy| policy["skills"][0]["skill_id"].as_str()),
+            Some("analysis")
+        );
+        assert_eq!(
+            assistant_run_request_document_template_skills_policy(&context)
+                .and_then(|policy| policy["skills"][0]["skill_id"].as_str()),
+            Some("template_from_document")
+        );
+
+        let empty = request_with_policies(
+            Some(json!({
+                "requestedSkills": {"skills": []},
+                "documentTemplateSkills": {"skills": []}
+            })),
+            None,
+        );
+
+        assert!(assistant_run_request_requested_skills_policy(&empty).is_none());
+        assert!(assistant_run_request_document_template_skills_policy(&empty).is_none());
+    }
+
+    fn request_with_policies(
+        startup_briefing: Option<Value>,
+        context_policy_hint: Option<Value>,
+    ) -> CreateAssistantRunRequest {
+        CreateAssistantRunRequest {
+            prompt: "test".to_string(),
+            local_thread_id: None,
+            startup_briefing,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint,
+            current_artifact: None,
+            messages: Vec::new(),
+        }
     }
 }

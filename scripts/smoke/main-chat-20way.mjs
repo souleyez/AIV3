@@ -250,11 +250,18 @@ function summarizeRun(args, runId, results) {
   const acceptedCount = results.filter((item) => item.accepted).length;
   const assistantMessageCount = results.filter((item) => item.assistantMessageObserved).length;
   const latencies = results.map((item) => item.latencyMs);
+  const checks = {
+    allTasksPassed: results.length - okCount === 0,
+    allAccepted: acceptedCount === results.length,
+    assistantMessageObservedWhenPolled: args.pollTimeoutMs === 0 || assistantMessageCount === results.length,
+  };
   return {
     runId,
     baseUrl: args.baseUrl,
     datasetId: args.datasetId,
     concurrency: args.concurrency,
+    ok: Object.values(checks).every(Boolean),
+    checks,
     okCount,
     failedCount: results.length - okCount,
     acceptedCount,
@@ -299,6 +306,27 @@ async function runSelfTest(args) {
     ...summarizeRun(fixtureArgs, runId, results),
     selfTest: true,
   };
+  const missingAssistantSummary = summarizeRun(
+    { ...fixtureArgs, concurrency: 1 },
+    runId,
+    [
+      {
+        ...results[0],
+        ok: false,
+        assistantMessageObserved: false,
+        pollCount: 2,
+        polls: [
+          { httpStatus: 200, messageCount: 1, assistantMessageObserved: false },
+          { httpStatus: 200, messageCount: 1, assistantMessageObserved: false },
+        ],
+      },
+    ],
+  );
+  const noPollSummary = summarizeRun(
+    { ...fixtureArgs, concurrency: 1, pollTimeoutMs: 0 },
+    runId,
+    [{ ...results[0], assistantMessageObserved: false }],
+  );
   const checks = {
     defaultConcurrencyIsTwenty: fixtureArgs.concurrency === 20,
     payloadCountMatchesConcurrency: payloads.length === 20,
@@ -311,6 +339,14 @@ async function runSelfTest(args) {
       && summary.assistantMessageCount === 20
       && summary.failedCount === 0,
     latencyPercentilesComputed: summary.p50LatencyMs === 109 && summary.p95LatencyMs === 118 && summary.maxLatencyMs === 119,
+    liveSummaryMachineOk: summary.ok === true
+      && summary.checks.allTasksPassed === true
+      && summary.checks.allAccepted === true
+      && summary.checks.assistantMessageObservedWhenPolled === true,
+    missingAssistantSummaryFails: missingAssistantSummary.ok === false
+      && missingAssistantSummary.checks.assistantMessageObservedWhenPolled === false,
+    noPollSummaryDoesNotRequireAssistantMessage: noPollSummary.ok === true
+      && noPollSummary.checks.assistantMessageObservedWhenPolled === true,
   };
   const ok = Object.values(checks).every(Boolean);
   const report = {
@@ -318,6 +354,8 @@ async function runSelfTest(args) {
       ...summary,
       ok,
       checks,
+      missingAssistantSummary,
+      noPollSummary,
       generatedAt: new Date().toISOString(),
     },
     payloadShape: {
@@ -361,7 +399,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (summary.failedCount > 0) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }

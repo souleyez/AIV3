@@ -1,5 +1,19 @@
+use crate::assistant_run_scope_policy_support::assistant_run_scope_prefers_detail;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
+
+pub(crate) const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
+
+pub(crate) fn assistant_run_detail_targets_for_scope(
+    selected_scope: &Value,
+    supplied_items: &[Value],
+) -> Vec<Value> {
+    assistant_run_detail_targets_for_supply(
+        assistant_run_scope_prefers_detail(selected_scope),
+        supplied_items,
+        ASSISTANT_RUN_DETAIL_TARGET_LIMIT,
+    )
+}
 
 pub(crate) fn assistant_run_detail_targets_for_supply(
     prefer_detail: bool,
@@ -148,6 +162,28 @@ mod tests {
         assert_eq!(targets[0]["has_timestamped_evidence"], json!(true));
         assert_eq!(targets[1]["document_id"], json!("doc-text"));
         assert_eq!(targets[1]["reason"], json!("detail_first_scope"));
+    }
+
+    #[test]
+    fn detail_targets_for_scope_uses_scope_preference_and_default_limit() {
+        let targets = assistant_run_detail_targets_for_scope(
+            &json!({"supply_policy": {"preferDetail": true}}),
+            &[
+                json!({"type": "retrieval_evidence", "document_id": "doc-1"}),
+                json!({"type": "retrieval_evidence", "document_id": "doc-2"}),
+                json!({"type": "retrieval_evidence", "document_id": "doc-3"}),
+                json!({"type": "retrieval_evidence", "document_id": "doc-4"}),
+            ],
+        );
+
+        assert_eq!(targets.len(), ASSISTANT_RUN_DETAIL_TARGET_LIMIT);
+        assert_eq!(targets[0]["document_id"], json!("doc-1"));
+        assert_eq!(targets[2]["document_id"], json!("doc-3"));
+        assert!(assistant_run_detail_targets_for_scope(
+            &json!({"supply_policy": {"preferDetail": false}}),
+            &[json!({"type": "retrieval_evidence", "document_id": "doc-1"})],
+        )
+        .is_empty());
     }
 
     #[test]

@@ -33,6 +33,13 @@ pub(crate) fn external_channel_static_page_status_source_refs(source_refs: &Valu
     Value::Object(output)
 }
 
+pub(crate) fn external_channel_static_page_recovery_status_source_refs(
+    draft_source_refs: Option<&Value>,
+    run_selected_scope: &Value,
+) -> Value {
+    external_channel_static_page_status_source_refs(draft_source_refs.unwrap_or(run_selected_scope))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +110,39 @@ mod tests {
         assert!(filtered.get("message_external_id").is_none());
         assert_eq!(filtered["recipient_delivery"], Value::Null);
         assert_eq!(filtered["artifact_stability"], Value::Null);
+    }
+
+    #[test]
+    fn recovery_status_source_refs_prefers_draft_source_refs() {
+        let draft_source_refs = json!({
+            "channel_connection_id": "draft-channel",
+            "conversation_external_id": "draft-conv"
+        });
+        let run_selected_scope = json!({
+            "channel_connection_id": "run-channel",
+            "conversation_external_id": "run-conv"
+        });
+
+        let recovered = external_channel_static_page_recovery_status_source_refs(
+            Some(&draft_source_refs),
+            &run_selected_scope,
+        );
+
+        assert_eq!(recovered["channel_connection_id"], json!("draft-channel"));
+        assert_eq!(recovered["conversation_external_id"], json!("draft-conv"));
+    }
+
+    #[test]
+    fn recovery_status_source_refs_falls_back_to_run_selected_scope() {
+        let run_selected_scope = json!({
+            "channel_connection_id": "run-channel",
+            "conversation_external_id": "run-conv"
+        });
+
+        let recovered =
+            external_channel_static_page_recovery_status_source_refs(None, &run_selected_scope);
+
+        assert_eq!(recovered["channel_connection_id"], json!("run-channel"));
+        assert_eq!(recovered["conversation_external_id"], json!("run-conv"));
     }
 }

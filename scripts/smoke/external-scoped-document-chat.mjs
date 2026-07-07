@@ -499,6 +499,39 @@ function summarizeCase(caseId, payload, response, expectedTokens = []) {
   };
 }
 
+function caseByIdFragment(cases, fragment) {
+  return cases.find((item) => String(item.caseId || '').includes(fragment)) || null;
+}
+
+function allExpectedTokensPresent(caseSummary) {
+  return Boolean(caseSummary)
+    && caseSummary.textLength > 0
+    && caseSummary.expectedTokenHits.length > 0
+    && caseSummary.expectedTokenHits.every((hit) => hit.present === true);
+}
+
+function allExpectedTokensAbsent(caseSummary) {
+  return Boolean(caseSummary)
+    && caseSummary.textLength > 0
+    && caseSummary.expectedTokenHits.length > 0
+    && caseSummary.expectedTokenHits.every((hit) => hit.present === false);
+}
+
+function buildScopedDocumentChatChecks(parseReady, cases) {
+  const datasetUnion = caseByIdFragment(cases, 'dataset-union');
+  const followup = caseByIdFragment(cases, 'same-conversation-followup');
+  const isolated = caseByIdFragment(cases, 'isolated-conversation-no-scope');
+  const attachment = caseByIdFragment(cases, 'attachment-title-scope');
+  return {
+    parseReadyAllSucceeded: parseReady.length > 0
+      && parseReady.every((item) => item.ready === true && item.failed === false),
+    datasetUnionIncludesAuthorizedTokens: allExpectedTokensPresent(datasetUnion),
+    sameConversationFollowupInheritsScope: allExpectedTokensPresent(followup),
+    isolatedConversationDoesNotLeakScope: allExpectedTokensAbsent(isolated),
+    attachmentScopeIncludesAttachmentToken: allExpectedTokensPresent(attachment),
+  };
+}
+
 async function runSelfTest(args) {
   const runId = `${makeRunId()}-self-test`;
   const fixtures = buildFixtures(runId);
@@ -547,6 +580,14 @@ async function runSelfTest(args) {
       text: `${fixtures.expected.alphaToken}\n${fixtures.expected.betaToken}\n${fixtures.expected.extraToken}`,
     },
   };
+  const followupResponse = {
+    assistant_run_id: 'run-self-test-followup',
+    reply: {
+      reply_type: 'answered',
+      task_status: 'answered',
+      text: fixtures.expected.extraToken,
+    },
+  };
   const isolatedResponse = {
     assistant_run_id: 'run-self-test-isolated',
     reply: {
@@ -555,16 +596,31 @@ async function runSelfTest(args) {
       text: '当前会话没有可见授权资料。',
     },
   };
+  const attachmentResponse = {
+    assistant_run_id: 'run-self-test-attachment',
+    reply: {
+      reply_type: 'answered',
+      task_status: 'answered',
+      text: fixtures.expected.attachmentToken,
+    },
+  };
   const cases = [
     summarizeCase('dataset-union', datasetUnionPayload, datasetUnionResponse, [
       fixtures.expected.alphaToken,
       fixtures.expected.betaToken,
       fixtures.expected.extraToken,
     ]),
+    summarizeCase('same-conversation-followup', followupPayload, followupResponse, [
+      fixtures.expected.extraToken,
+    ]),
     summarizeCase('isolated-conversation-no-scope', isolatedPayload, isolatedResponse, [
       fixtures.expected.extraToken,
     ]),
+    summarizeCase('attachment-title-scope', attachmentPayload, attachmentResponse, [
+      fixtures.expected.attachmentToken,
+    ]),
   ];
+  const scopedSummaryChecks = buildScopedDocumentChatChecks([readyStatus], cases);
   const markdown = renderMarkdown({
     ok: true,
     runId,
@@ -612,7 +668,13 @@ async function runSelfTest(args) {
     replyTextIncludesExpectedUnionTokens:
       cases[0].expectedTokenHits.every((hit) => hit.present === true),
     isolatedReplyDoesNotLeakExtraToken:
-      cases[1].expectedTokenHits.every((hit) => hit.present === false),
+      cases[2].expectedTokenHits.every((hit) => hit.present === false),
+    scopedSummaryChecksMachineOk:
+      scopedSummaryChecks.parseReadyAllSucceeded === true
+      && scopedSummaryChecks.datasetUnionIncludesAuthorizedTokens === true
+      && scopedSummaryChecks.sameConversationFollowupInheritsScope === true
+      && scopedSummaryChecks.isolatedConversationDoesNotLeakScope === true
+      && scopedSummaryChecks.attachmentScopeIncludesAttachmentToken === true,
     markdownRendered: markdown.includes('# External Scoped Document Chat Smoke'),
   };
   const ok = Object.values(checks).every(Boolean);
@@ -625,6 +687,7 @@ async function runSelfTest(args) {
     connectionId: args.connectionId,
     sourceId: args.sourceId,
     checks,
+    scopedSummaryChecks,
     payloadShape: {
       datasetUnion: {
         datasetExternalIdCount: datasetUnionPayload.dataset_external_ids.length,
@@ -746,9 +809,12 @@ async function main() {
   );
 
   const finishedAt = new Date().toISOString();
+  const checks = buildScopedDocumentChatChecks(parseReady, cases);
+  const ok = Object.values(checks).every(Boolean);
   const summary = {
     smoke: 'external-scoped-document-chat',
-    ok: true,
+    ok,
+    checks,
     runId,
     baseUrl: args.baseUrl,
     connectionId: args.connectionId,
@@ -771,7 +837,10 @@ async function main() {
   const markdownPath = join(args.outputDir, `${runId}.md`);
   await writeFile(reportPath, JSON.stringify(summary, null, 2), 'utf8');
   await writeFile(markdownPath, renderMarkdown(summary), 'utf8');
-  console.log(JSON.stringify({ ok: true, runId, reportPath, markdownPath, caseCount: cases.length }, null, 2));
+  console.log(JSON.stringify({ ok, runId, reportPath, markdownPath, caseCount: cases.length }, null, 2));
+  if (!ok) {
+    process.exitCode = 1;
+  }
 }
 
 function renderMarkdown(summary) {

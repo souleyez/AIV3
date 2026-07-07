@@ -153,13 +153,19 @@ function buildSummary(args, { statusResult, queueResult }) {
     modelGatewayStatusLoaded: statusResult.response.ok && Boolean(statusResult.data),
     workflowQueueStatsLoaded: queueResult.response.ok && Boolean(queueResult.data),
     codexWorkerPresent: Boolean(codexWorker),
+    codexConcurrencyNonZero: codexConcurrency > 0,
     codexConcurrencyAtLeastMin: codexConcurrency >= args.minExpected,
     codexConcurrencyWithinMax: codexConcurrency <= args.maxAllowed,
     watchedQueuesWithinMax: maxRunning <= args.maxAllowed,
+    noCookieOrBearerPrinted: true,
   };
   const ok = Object.values(checks).every(Boolean);
   const summary = {
     ok,
+    ready: ok,
+    pending: false,
+    failed: !ok,
+    selfTest: args.selfTest,
     baseUrl: args.baseUrl,
     maxAllowed: args.maxAllowed,
     minExpected: args.minExpected,
@@ -177,6 +183,16 @@ function buildSummary(args, { statusResult, queueResult }) {
     queueHttpStatus: queueResult.response.status,
     statusBodyPrefix: statusResult.text.slice(0, 300),
     queueBodyPrefix: queueResult.text.slice(0, 300),
+    auth: {
+      credentialsProvided: Boolean(args.cookie || args.bearer),
+      cookiePrinted: false,
+      bearerPrinted: false,
+    },
+    redaction: {
+      cookiePrinted: false,
+      bearerPrinted: false,
+      rawEnvValuesPrinted: false,
+    },
   };
   return { summary, report };
 }
@@ -224,8 +240,31 @@ async function runSelfTest(args) {
     statusResult: fixtureStatus,
     queueResult: fixtureQueues,
   });
-  summary.selfTest = true;
   report.summary = summary;
+  const overCapQueues = structuredClone(fixtureQueues);
+  overCapQueues.data.queues = [
+    { logical_queue: 'codex', running: DEFAULT_MAX_ALLOWED + 1, queued: 0, retrying: 0, task_count: 9 },
+  ];
+  const { summary: overCapSummary } = buildSummary(fixtureArgs, {
+    statusResult: fixtureStatus,
+    queueResult: overCapQueues,
+  });
+  const missingWorkerStatus = structuredClone(fixtureStatus);
+  missingWorkerStatus.data.runtime.worker_pools = [{ service: 'static-page-worker', concurrency: 5 }];
+  const { summary: missingWorkerSummary } = buildSummary(fixtureArgs, {
+    statusResult: missingWorkerStatus,
+    queueResult: fixtureQueues,
+  });
+  report.selfTestCases = {
+    passingSummaryOk: summary.ok === true,
+    overCapSummaryFails: overCapSummary.ok === false
+      && overCapSummary.checks.watchedQueuesWithinMax === false,
+    missingWorkerSummaryFails: missingWorkerSummary.ok === false
+      && missingWorkerSummary.checks.codexWorkerPresent === false,
+  };
+  if (!Object.values(report.selfTestCases).every(Boolean)) {
+    throw new Error(`cloudflare fallback self-test failed: ${JSON.stringify(report.selfTestCases)}`);
+  }
   const reportPath = await writeReport(fixtureArgs, report);
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);

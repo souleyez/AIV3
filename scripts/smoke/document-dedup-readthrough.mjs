@@ -172,6 +172,69 @@ function summarizeScope(scope) {
   };
 }
 
+function caseById(report, caseId) {
+  return (report.cases || []).find((item) => item.caseId === caseId) || null;
+}
+
+function buildSummary(report) {
+  const duplicateDocument = caseById(report, 'duplicate_document_ref_reads_canonical_chunks');
+  const duplicateDataset = caseById(report, 'duplicate_dataset_ref_reads_canonical_chunks');
+  const multiDataset = caseById(report, 'multiple_dataset_groups_deduplicate_canonical_supply');
+  const mixedAuthorization = caseById(report, 'document_and_dataset_authorization_deduplicate_supply');
+  const inherited = caseById(report, 'conversation_scope_inherits_previous_authorization');
+  const isolated = caseById(report, 'different_conversation_without_authorization_stays_empty');
+  const redaction = report.redaction || {};
+  const checks = {
+    resultPassed: report.result === 'passed',
+    caseCountMatches: Number(report.caseCount || 0) === 6,
+    duplicateDocumentReadsCanonicalChunk:
+      duplicateDocument?.canonicalDocumentCount === 1 &&
+      duplicateDocument?.canonicalDocumentIds?.[0] === 'doc-canonical-alpha' &&
+      duplicateDocument?.chunkRefs?.[0] === 'chunk-alpha-canonical',
+    duplicateDatasetReadsCanonicalChunk:
+      duplicateDataset?.canonicalDocumentCount === 1 &&
+      duplicateDataset?.canonicalDocumentIds?.[0] === 'doc-canonical-alpha' &&
+      duplicateDataset?.chunkRefs?.[0] === 'chunk-alpha-canonical',
+    multipleDatasetsDeduplicateCanonicalSupply:
+      multiDataset?.canonicalDocumentCount === 2 &&
+      multiDataset?.chunkCount === 2 &&
+      new Set(multiDataset?.canonicalDocumentIds || []).size === 2,
+    documentAndDatasetAuthorizationDeduplicatesSupply:
+      mixedAuthorization?.canonicalDocumentCount === 1 &&
+      mixedAuthorization?.chunkCount === 1,
+    conversationScopeInheritsPreviousAuthorization:
+      inherited?.inherited === true &&
+      inherited?.canonicalDocumentIds?.[0] === 'doc-canonical-alpha',
+    isolatedConversationStaysEmpty:
+      isolated?.inherited === false &&
+      isolated?.canonicalDocumentCount === 0 &&
+      isolated?.chunkCount === 0,
+    noRawDocumentTextIncluded: redaction.rawDocumentTextIncluded === false,
+    noRawPayloadIncluded: redaction.rawPayloadIncluded === false,
+    noRawObjectPathIncluded: redaction.rawObjectPathIncluded === false,
+    noCredentialIncluded: redaction.credentialIncluded === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    ready: Object.values(checks).every(Boolean),
+    pending: false,
+    failed: !Object.values(checks).every(Boolean),
+    case_count: Number(report.caseCount || 0),
+    canonical_document_count: new Set(
+      (report.cases || []).flatMap((item) => item.canonicalDocumentIds || []),
+    ).size,
+  };
+}
+
+function assertSummaryFailure(name, report, expectedCheckName) {
+  const summary = buildSummary(report);
+  assert.equal(summary.ok, false, `${name} should fail summary`);
+  if (expectedCheckName) {
+    assert.equal(summary.checks[expectedCheckName], false, `${name} should fail ${expectedCheckName}`);
+  }
+}
+
 function runSelfTest() {
   const fixture = buildFixture();
   const cases = [];
@@ -238,6 +301,38 @@ function runSelfTest() {
   };
 }
 
+function assertSelfTestSummary(report) {
+  const summary = buildSummary(report);
+  assert.equal(summary.ok, true, 'document dedup readthrough summary should pass');
+
+  const brokenDuplicate = JSON.parse(JSON.stringify(report));
+  caseById(brokenDuplicate, 'duplicate_document_ref_reads_canonical_chunks').chunkRefs = [];
+  assertSummaryFailure(
+    'duplicate document missing canonical chunk',
+    brokenDuplicate,
+    'duplicateDocumentReadsCanonicalChunk',
+  );
+
+  const leakingConversation = JSON.parse(JSON.stringify(report));
+  const isolated = caseById(leakingConversation, 'different_conversation_without_authorization_stays_empty');
+  isolated.canonicalDocumentIds = ['doc-canonical-alpha'];
+  isolated.canonicalDocumentCount = 1;
+  isolated.chunkRefs = ['chunk-alpha-canonical'];
+  isolated.chunkCount = 1;
+  assertSummaryFailure(
+    'isolated conversation leaked previous scope',
+    leakingConversation,
+    'isolatedConversationStaysEmpty',
+  );
+
+  const rawPayloadLeak = JSON.parse(JSON.stringify(report));
+  rawPayloadLeak.redaction.rawPayloadIncluded = true;
+  assertSummaryFailure('raw payload leak', rawPayloadLeak, 'noRawPayloadIncluded');
+
+  report.summary = summary;
+  report.ok = summary.ok;
+}
+
 async function writeReport(outputDir, report, pretty = false) {
   await mkdir(outputDir, { recursive: true });
   const filename = `document-dedup-readthrough-self-test-${makeRunId()}.json`;
@@ -253,8 +348,12 @@ async function main() {
     throw new Error('--self-test is required for this deterministic smoke');
   }
   const report = runSelfTest();
+  assertSelfTestSummary(report);
   const reportPath = await writeReport(args.outputDir, report, args.pretty);
   console.log(`OK document dedup readthrough self-test: cases=${report.caseCount} report=${reportPath}`);
+  if (report.summary.ok === false) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

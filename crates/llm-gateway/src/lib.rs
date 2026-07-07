@@ -219,6 +219,9 @@ pub struct OpenAiCompatibleLlmProviderConfig {
     pub reasoning_wire_field: OpenAiCompatibleReasoningWireField,
 }
 
+const OPENAI_COMPATIBLE_DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
+const OPENAI_COMPATIBLE_MAX_CONNECT_TIMEOUT_MS: u64 = 60_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenAiCompatibleReasoningWireField {
@@ -1705,6 +1708,7 @@ impl OpenAiCompatibleLlmProvider {
             provider_name: provider_name.into(),
             client: {
                 let mut builder = Client::builder();
+                builder = builder.connect_timeout(openai_compatible_connect_timeout_duration());
                 if let Some(timeout_ms) = config.timeout_ms {
                     builder = builder.timeout(Duration::from_millis(timeout_ms.max(1)));
                 }
@@ -1721,6 +1725,24 @@ impl OpenAiCompatibleLlmProvider {
         self.prompt_registry = prompt_registry;
         self
     }
+}
+
+fn openai_compatible_connect_timeout_duration() -> Duration {
+    Duration::from_millis(openai_compatible_connect_timeout_ms())
+}
+
+fn openai_compatible_connect_timeout_ms() -> u64 {
+    std::env::var("LLM_GATEWAY_OPENAI_COMPATIBLE_CONNECT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| value.parse::<u64>().ok())
+                .flatten()
+        })
+        .filter(|value| *value > 0)
+        .map(|value| value.min(OPENAI_COMPATIBLE_MAX_CONNECT_TIMEOUT_MS))
+        .unwrap_or(OPENAI_COMPATIBLE_DEFAULT_CONNECT_TIMEOUT_MS)
 }
 
 fn apply_openai_compatible_reasoning_config(
@@ -4012,6 +4034,43 @@ mod tests {
     }
 
     #[test]
+    fn openai_compatible_connect_timeout_defaults_and_clamps_env() {
+        let _guard = openai_compatible_env_lock()
+            .lock()
+            .expect("openai-compatible env lock");
+        let key = "LLM_GATEWAY_OPENAI_COMPATIBLE_CONNECT_TIMEOUT_MS";
+        std::env::remove_var(key);
+
+        assert_eq!(
+            openai_compatible_connect_timeout_ms(),
+            OPENAI_COMPATIBLE_DEFAULT_CONNECT_TIMEOUT_MS
+        );
+
+        std::env::set_var(key, " 2500 ");
+        assert_eq!(openai_compatible_connect_timeout_ms(), 2_500);
+
+        std::env::set_var(key, "0");
+        assert_eq!(
+            openai_compatible_connect_timeout_ms(),
+            OPENAI_COMPATIBLE_DEFAULT_CONNECT_TIMEOUT_MS
+        );
+
+        std::env::set_var(key, "bad");
+        assert_eq!(
+            openai_compatible_connect_timeout_ms(),
+            OPENAI_COMPATIBLE_DEFAULT_CONNECT_TIMEOUT_MS
+        );
+
+        std::env::set_var(key, "120000");
+        assert_eq!(
+            openai_compatible_connect_timeout_ms(),
+            OPENAI_COMPATIBLE_MAX_CONNECT_TIMEOUT_MS
+        );
+
+        std::env::remove_var(key);
+    }
+
+    #[test]
     fn openai_compatible_provider_applies_configured_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
@@ -4541,6 +4600,11 @@ mod tests {
     }
 
     fn openclaw_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn openai_compatible_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }

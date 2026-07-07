@@ -357,6 +357,8 @@ function buildMarkdown(report) {
     '# Multimodal Asset Profile Fixture Smoke',
     '',
     `- ok: ${report.ok}`,
+    `- ready: ${report.summary.ready}`,
+    `- failed: ${report.summary.failed}`,
     `- image_real_file_count: ${report.real_file_summary.image_real_file_count}`,
     `- presentation_real_file_available: ${report.real_file_summary.presentation_real_file_available}`,
     `- presentation_manifest_available: ${report.real_file_summary.presentation_manifest_available}`,
@@ -364,6 +366,10 @@ function buildMarkdown(report) {
     `- generated_video_fixture: ${report.real_file_summary.generated_video_fixture_status}`,
     `- hint_count: ${report.scope_summary.hint_count}`,
     `- asset_kinds: ${report.scope_summary.asset_kinds.join(', ')}`,
+    '',
+    '## Machine Checks',
+    '',
+    ...Object.entries(report.summary.checks).map(([name, value]) => `- ${name}: ${value}`),
     '',
     '## Notes',
     '',
@@ -379,6 +385,23 @@ function slash(value) {
 function makeRunId() {
   const timestamp = new Date().toISOString().replace(/[-:.]/g, '').replace(/Z$/, 'Z');
   return `${timestamp}-${process.pid}`;
+}
+
+function buildMachineChecks(report, args) {
+  const serialized = JSON.stringify(report);
+  return {
+    realImageFixturesPresent: report.real_file_summary.image_real_file_count >= 2,
+    assetKindsNormalized: report.scope_summary.asset_kinds.join(',') === 'image,presentation,video',
+    hintCountMatchesScope: report.scope_summary.hint_count === 3
+      && report.scope_summary.normalized_hint_count === 3,
+    imageFilterWorks: report.scope_summary.filtered_image_count === 1,
+    videoFilterWorks: report.scope_summary.filtered_video_count === 1,
+    requireRealVideoHonored: !args.requireRealVideo || report.real_file_summary.video_real_file_available,
+    generatedVideoStatusRecorded: Boolean(report.real_file_summary.generated_video_fixture_status),
+    noRawProviderPayload: !serialized.includes('raw_provider_payload'),
+    noAuthMaterial: !/(Authorization|Bearer\s+[A-Za-z0-9]|sk-[A-Za-z0-9_-]{8,})/.test(serialized),
+    localFixtureOnlyNoLiveMutation: true,
+  };
 }
 
 async function main() {
@@ -435,6 +458,20 @@ async function main() {
     })),
     notes,
   };
+  const checks = buildMachineChecks(report, args);
+  const ok = Object.values(checks).every(Boolean);
+  report.ok = ok;
+  report.checks = checks;
+  report.summary = {
+    ok,
+    ready: ok,
+    pending: false,
+    failed: !ok,
+    checks,
+    self_test: args.selfTest,
+    local_only: true,
+    live_mutation_enabled: false,
+  };
 
   const outputDir = resolveOutputDir(args);
   await mkdir(outputDir, { recursive: true });
@@ -455,6 +492,9 @@ async function main() {
       `summary=${slash(path.relative(ROOT_DIR, mdPath))}`,
     ].join(' '),
   );
+  if (!report.ok) {
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {

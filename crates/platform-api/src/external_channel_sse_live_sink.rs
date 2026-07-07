@@ -10,7 +10,8 @@ use llm_gateway::LlmStreamDelta;
 use serde_json::{json, Value};
 
 use crate::{
-    external_channel_answer_retrying_text, external_channel_assistant_run_reply_status_url,
+    external_channel_answer_retrying_sse_event_name, external_channel_answer_retrying_text,
+    external_channel_assistant_run_reply_status_url, external_channel_sse_delta_event_name,
     external_channel_sse_public_payload, external_channel_static_page_sse_sequence,
     sse_support::sse_text_delta_event, ApiError,
 };
@@ -27,6 +28,16 @@ pub(crate) struct ExternalChannelSseProgressMessage {
     pub(crate) dedupe_key: String,
     pub(crate) display_text: String,
     pub(crate) payload: Value,
+}
+
+pub(crate) fn external_channel_answer_retrying_sse_dedupe_key(
+    reason: &str,
+    sequence: i64,
+) -> String {
+    format!(
+        "{}:{reason}:{sequence}",
+        external_channel_answer_retrying_sse_event_name()
+    )
 }
 
 #[derive(Clone)]
@@ -76,7 +87,11 @@ impl ExternalChannelAnswerDeltaSink {
         let _ = self
             .sender
             .send(ExternalChannelEventSseWorkerMessage::AnswerDelta(
-                sse_text_delta_event("external_channel.delta", delta.index, &delta.delta),
+                sse_text_delta_event(
+                    external_channel_sse_delta_event_name(),
+                    delta.index,
+                    &delta.delta,
+                ),
             ));
     }
 
@@ -120,13 +135,13 @@ impl ExternalChannelAnswerDeltaSink {
             Some(15),
             data,
         );
-        let dedupe_key = format!("external_channel.answer_retrying:{reason}:{sequence}");
+        let dedupe_key = external_channel_answer_retrying_sse_dedupe_key(reason, sequence);
         let _ = self
             .sender
             .send(ExternalChannelEventSseWorkerMessage::Progress(
                 ExternalChannelSseProgressMessage {
                     run_id,
-                    event_name: "external_channel.answer_retrying",
+                    event_name: external_channel_answer_retrying_sse_event_name(),
                     dedupe_key,
                     display_text: display_text.to_string(),
                     payload,
@@ -160,7 +175,10 @@ mod tests {
         else {
             panic!("expected answer delta");
         };
-        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains(&format!(
+            "event: {}",
+            external_channel_sse_delta_event_name()
+        )));
         assert!(body.contains("\"index\":2"));
         assert!(body.contains("继续"));
     }
@@ -194,10 +212,18 @@ mod tests {
             panic!("expected progress");
         };
         assert_eq!(progress.run_id, run_id);
-        assert_eq!(progress.event_name, "external_channel.answer_retrying");
-        assert!(progress
-            .dedupe_key
-            .starts_with("external_channel.answer_retrying:provider_timeout:"));
+        assert_eq!(
+            external_channel_answer_retrying_sse_event_name(),
+            "external_channel.answer_retrying"
+        );
+        assert_eq!(
+            progress.event_name,
+            external_channel_answer_retrying_sse_event_name()
+        );
+        assert!(progress.dedupe_key.starts_with(&format!(
+            "{}:provider_timeout:",
+            external_channel_answer_retrying_sse_event_name()
+        )));
         assert_eq!(progress.payload["status"], json!("retrying"));
         assert_eq!(progress.payload["phase"], json!("answering"));
         assert_eq!(progress.payload["reason"], json!("provider_timeout"));

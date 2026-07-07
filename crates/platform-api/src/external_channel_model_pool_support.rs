@@ -69,6 +69,32 @@ pub(crate) fn external_channel_chat_runtime_attempts(
     attempts
 }
 
+pub(crate) fn assistant_run_chat_runtime_attempts(
+    primary: LlmRuntimeSelection,
+) -> Vec<ExternalChannelChatRuntimeAttempt> {
+    let mut attempts = vec![ExternalChannelChatRuntimeAttempt {
+        env_prefix: "ASSISTANT_RUN".to_string(),
+        label: "primary".to_string(),
+        runtime: primary.clone(),
+        profile: None,
+        lane_limits: None,
+    }];
+
+    if let Some(fallback) = external_channel_fallback_runtime_selection_from_env() {
+        if !external_channel_same_runtime_selection(&primary, &fallback) {
+            attempts.push(ExternalChannelChatRuntimeAttempt {
+                env_prefix: "ASSISTANT_RUN_FALLBACK".to_string(),
+                label: "fallback".to_string(),
+                runtime: fallback,
+                profile: None,
+                lane_limits: None,
+            });
+        }
+    }
+
+    attempts
+}
+
 pub(crate) fn external_channel_chat_attempt_from_db_profile(
     profile: ModelGatewayProfile,
 ) -> ExternalChannelChatRuntimeAttempt {
@@ -273,6 +299,52 @@ mod tests {
         assert_eq!(attempts[1].env_prefix, "ASSISTANT_RUN_FALLBACK");
         assert_eq!(attempts[1].runtime.provider, "minimax");
         assert_eq!(attempts[1].runtime.model, "fallback-v1");
+
+        clear_attempt_env();
+    }
+
+    #[test]
+    fn assistant_run_chat_runtime_attempts_add_distinct_fallback_only() {
+        let _guard = env_lock();
+        clear_attempt_env();
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "minimax");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL", "fallback-v1");
+
+        let attempts = assistant_run_chat_runtime_attempts(primary_runtime());
+
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|attempt| attempt.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["primary", "fallback"]
+        );
+        assert_eq!(attempts[0].env_prefix, "ASSISTANT_RUN");
+        assert_eq!(attempts[1].env_prefix, "ASSISTANT_RUN_FALLBACK");
+        assert_eq!(attempts[1].runtime.provider, "minimax");
+        assert!(attempts.iter().all(|attempt| attempt.profile.is_none()));
+
+        clear_attempt_env();
+    }
+
+    #[test]
+    fn assistant_run_chat_runtime_attempts_skip_same_fallback_and_primary_retry() {
+        let _guard = env_lock();
+        clear_attempt_env();
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_PROVIDER", "openai");
+        std::env::set_var("ASSISTANT_RUN_FALLBACK_RUNTIME_MODEL", "primary-v1");
+
+        let attempts = assistant_run_chat_runtime_attempts(primary_runtime());
+
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|attempt| attempt.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["primary"]
+        );
 
         clear_attempt_env();
     }

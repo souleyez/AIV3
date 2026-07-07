@@ -8,12 +8,14 @@ use crate::react_agent_tools::{
     AssistantRunReactToolResult,
 };
 use crate::{
-    assistant_run_evidence_supplied_count, assistant_run_scope_intent, env_flag,
-    selected_dataset_ids_from_scope, selected_document_ids_from_scope,
-    selected_scope_requests_conversation_memory, truncate_assistant_supply_text, value_array,
+    assistant_run_evidence_supplied_count, assistant_run_scope_intent,
+    complete_assistant_run_provider, env_flag, selected_dataset_ids_from_scope,
+    selected_document_ids_from_scope, selected_scope_requests_conversation_memory,
+    truncate_assistant_supply_text, value_array,
 };
 use chrono::Utc;
 use domain_model::{AssistantRunId, DatasetId, DocumentId};
+use llm_gateway::{render_runtime_manifest, LlmRuntimeSelection, MODEL_LANE_ASSISTANT_CHAT};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -161,6 +163,29 @@ pub(crate) fn assistant_run_sanitize_customer_facing_answer_text(output_text: &s
         return "本轮回答包含内部检索指令，系统已拦截未直接展示。请稍后重试，我会基于当前可见资料直接给出结论。".to_string();
     }
     sanitized
+}
+
+pub(crate) async fn complete_assistant_run_react_natural_answer_fallback(
+    chat_runtime: &LlmRuntimeSelection,
+    provider_input: String,
+) -> Option<(String, Value)> {
+    if chat_runtime.mode == "placeholder" {
+        return None;
+    }
+    let response = complete_assistant_run_provider(
+        MODEL_LANE_ASSISTANT_CHAT,
+        chat_runtime.mode.clone(),
+        chat_runtime.provider.clone(),
+        chat_runtime.model.clone(),
+        provider_input,
+    )
+    .await
+    .ok()?;
+    let answer = response.output_text.trim().to_string();
+    if answer.is_empty() {
+        return None;
+    }
+    Some((answer, render_runtime_manifest(&response.runtime)))
 }
 
 pub(crate) fn bounded_duration_ms(duration_ms: u128) -> u64 {
@@ -952,6 +977,15 @@ mod tests {
         }
     }
 
+    fn placeholder_runtime() -> LlmRuntimeSelection {
+        LlmRuntimeSelection {
+            mode: "placeholder".to_string(),
+            provider: "none".to_string(),
+            model: "none".to_string(),
+            lane: "assistant_chat".to_string(),
+        }
+    }
+
     #[test]
     fn react_max_steps_uses_default_and_clamps_env_values() {
         assert_eq!(
@@ -1182,6 +1216,18 @@ mod tests {
         assert!(assistant_content.contains("解析质量较低"));
         assert_eq!(sanitized[0]["source"], json!("keep"));
         assert_eq!(sanitized[1]["content"], json!("parse_degraded"));
+    }
+
+    #[tokio::test]
+    async fn natural_answer_fallback_skips_placeholder_runtime() {
+        assert_eq!(
+            complete_assistant_run_react_natural_answer_fallback(
+                &placeholder_runtime(),
+                "请直接回答。".to_string(),
+            )
+            .await,
+            None
+        );
     }
 
     #[test]

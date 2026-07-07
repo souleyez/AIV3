@@ -1,3 +1,5 @@
+use contracts::CreateAssistantRunRequest;
+
 use crate::assistant_run_resume_prompt_support::{
     prompt_requests_resume_certificate_ranking, prompt_requests_resume_company_ranking,
     prompt_requests_resume_education_ranking, prompt_requests_resume_experience_statistics,
@@ -63,6 +65,15 @@ pub(crate) fn prompt_requests_spreadsheet_row_level_analysis(prompt: &str) -> bo
         ],
     );
     has_row_context && has_row_question
+}
+
+pub(crate) fn assistant_run_request_is_first_visible_turn(
+    request: &CreateAssistantRunRequest,
+) -> bool {
+    request
+        .messages
+        .iter()
+        .all(|message| message.content.trim().is_empty())
 }
 
 pub(crate) fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
@@ -613,6 +624,8 @@ pub(crate) fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use contracts::AssistantRunMessageView;
+    use domain_model::ChatMessageRole;
 
     #[test]
     fn prompt_request_support_detects_row_level_spreadsheet_questions() {
@@ -679,5 +692,37 @@ mod tests {
         assert!(!assistant_run_prompt_requests_point_list_table(
             "按技能出现频次排序出表"
         ));
+    }
+
+    #[test]
+    fn request_is_first_visible_turn_allows_empty_history_only() {
+        assert!(assistant_run_request_is_first_visible_turn(
+            &request_with_messages(Vec::new())
+        ));
+        assert!(assistant_run_request_is_first_visible_turn(
+            &request_with_messages(vec![AssistantRunMessageView {
+                role: ChatMessageRole::User,
+                content: "   \n\t ".to_string(),
+            }])
+        ));
+        assert!(!assistant_run_request_is_first_visible_turn(
+            &request_with_messages(vec![AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: "之前已经回复过".to_string(),
+            }])
+        ));
+    }
+
+    fn request_with_messages(messages: Vec<AssistantRunMessageView>) -> CreateAssistantRunRequest {
+        CreateAssistantRunRequest {
+            prompt: "test".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages,
+        }
     }
 }

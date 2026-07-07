@@ -225,23 +225,62 @@ function buildReport() {
     focus: null,
     artifactLinkCount: 0,
   }));
+  const safety = {
+    dataMaxCalled: false,
+    publicArtifactPublished: false,
+    productionMutation: false,
+  };
+  const summary = buildSummary({ reportCases, ordinaryCases, safety });
   return {
     reportType: 'external_report_focus_self_test',
     generatedAt: new Date().toISOString(),
     primaryTemplateId: PRIMARY_XINBAI_TEMPLATE_ID,
+    ok: summary.ok,
+    summary,
     reportCaseCount: reportCases.length,
     ordinaryGuardCaseCount: ordinaryCases.length,
     reportCases,
     ordinaryCases,
-    safety: {
-      dataMaxCalled: false,
-      publicArtifactPublished: false,
-      productionMutation: false,
-    },
+    safety,
+  };
+}
+
+function buildSummary({ reportCases, ordinaryCases, safety }) {
+  const triggeredReportCount = reportCases.filter((item) => item.triggered).length;
+  const expectedFocusMatchCount = reportCases.filter((item) => item.focus === item.expectedFocus).length;
+  const primaryTemplateCount = reportCases.filter((item) => item.primaryTemplateUsed).length;
+  const fallbackTemplateCount = reportCases.filter((item) => item.fallbackTemplateUsed).length;
+  const ordinaryMisrouteCount = ordinaryCases.filter((item) => item.triggered || item.artifactLinkCount > 0).length;
+  const artifactLinkCount = reportCases.reduce((sum, item) => sum + item.artifactLinkCount, 0)
+    + ordinaryCases.reduce((sum, item) => sum + item.artifactLinkCount, 0);
+  const checks = {
+    allReportCasesTriggered: triggeredReportCount === reportCases.length,
+    allReportCasesFocusMatched: expectedFocusMatchCount === reportCases.length,
+    allReportCasesUsePrimaryTemplate: primaryTemplateCount === reportCases.length,
+    noFallbackTemplateUsed: fallbackTemplateCount === 0,
+    ordinaryQuestionsRemainOrdinary: ordinaryMisrouteCount === 0,
+    oneArtifactLinkPerReportCase: artifactLinkCount === reportCases.length,
+    noLiveMutation: safety.dataMaxCalled === false
+      && safety.publicArtifactPublished === false
+      && safety.productionMutation === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    reportCaseCount: reportCases.length,
+    ordinaryGuardCaseCount: ordinaryCases.length,
+    triggeredReportCount,
+    expectedFocusMatchCount,
+    primaryTemplateCount,
+    fallbackTemplateCount,
+    ordinaryMisrouteCount,
+    artifactLinkCount,
   };
 }
 
 function assertReport(report) {
+  assert.equal(report.ok, true, 'report summary should pass');
+  assert.equal(report.summary?.ok, true, 'summary ok should pass');
   for (const item of report.reportCases) {
     assert.equal(item.triggered, true, `${item.id} should trigger report workflow`);
     assert.equal(item.focus, item.expectedFocus, `${item.id} focus`);

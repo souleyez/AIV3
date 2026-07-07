@@ -250,6 +250,7 @@ function markdownReport(report) {
   const lines = [
     '# Production Placeholder Readiness',
     '',
+    `- Machine summary: ${report.summary?.ok ? 'passed' : 'failed'}`,
     `- Ready: ${report.ready}`,
     `- Pending: ${report.pending}`,
     `- Head: ${report.head}`,
@@ -282,6 +283,45 @@ function markdownReport(report) {
     }
   }
   return `${lines.join('\n')}\n`;
+}
+
+function buildSummary(args, report) {
+  const selfTestCases = Array.isArray(report.self_test_cases) ? report.self_test_cases : [];
+  const selfTestPassed = selfTestCases.every((item) => item.result.ready === item.expected_ready);
+  const missingKeyCount = report.dataset_output?.missing_keys?.length || 0;
+  const placeholderKeyCount = report.dataset_output?.placeholder_keys?.length || 0;
+  const knownReplaceCount = report.known_replace_required?.length || 0;
+  const checks = {
+    terminalStateIsConsistent: report.ready === !report.pending,
+    readinessSatisfiedOrAllowed: report.ready === true || args.allowNotReady === true,
+    datasetOutputEvaluated: Boolean(report.dataset_output?.checks)
+      && typeof report.dataset_output.ready === 'boolean',
+    reportPlannerInspected: Boolean(report.report_planner?.file)
+      && typeof report.report_planner.ready === 'boolean',
+    notReadyHasReason: report.ready === true
+      || missingKeyCount > 0
+      || placeholderKeyCount > 0
+      || knownReplaceCount > 0,
+    selfTestFixturesPassed: report.self_test !== true || selfTestPassed,
+    noRawEnvValuesPrinted: report.redaction?.raw_env_values_printed === false
+      && report.dataset_output?.raw_values_printed === false,
+    noProviderKeyValuesPrinted: report.redaction?.provider_key_values_printed === false,
+  };
+  return {
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    ready: report.ready === true,
+    pending: report.pending === true,
+    not_ready_allowed: args.allowNotReady === true,
+    self_test: report.self_test === true,
+    dataset_output_ready: report.dataset_output?.ready === true,
+    report_planner_ready: report.report_planner?.ready === true,
+    missing_key_count: missingKeyCount,
+    placeholder_key_count: placeholderKeyCount,
+    known_replace_required_count: knownReplaceCount,
+    self_test_case_count: selfTestCases.length,
+    self_test_passed: selfTestPassed,
+  };
 }
 
 async function main() {
@@ -332,6 +372,8 @@ async function main() {
       provider_key_values_printed: false,
     },
   };
+  report.summary = buildSummary(args, report);
+  report.ok = report.summary.ok;
 
   if (args.jsonStdout) {
     console.log(JSON.stringify(report, null, 2));
@@ -349,12 +391,13 @@ async function main() {
       report_planner_ready: report.report_planner.ready,
       missing_keys: report.dataset_output.missing_keys,
       placeholder_keys: report.dataset_output.placeholder_keys,
+      ok: report.ok,
       report: jsonPath,
     }, null, 2));
     console.log(`summary=${mdPath}`);
   }
 
-  if (!ready && !args.allowNotReady) {
+  if (!report.ok) {
     process.exitCode = 1;
   }
 }
