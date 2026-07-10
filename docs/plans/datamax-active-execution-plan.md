@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — Task 7 已 `PASS`、P0 已关闭；Task 8 数据写入/幂等/rollback 已通过，任务卡接线代码已提交为 `59b5e2ff`，用户已批准 push、Web 部署和最终可见性复验，当前处于发布中。
+**Status:** ACTIVE — Task 7–8 已 `PASS`、P0 已关闭；Task 9 真实 parser 为下一 READY 任务，尚未开始实现、提交或部署。
 
 ---
 
@@ -58,11 +58,11 @@
 | --- | --- |
 | 仓库 | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3` |
 | 分支 | `main` |
-| 本地 / `origin/main` | `bf602a6fff2fdd8540e66fd0d7087aa302b40244` |
+| 本地 / `origin/main` | `a59faaca8509d56b1d84bb0a4ad2bf83cd2cfb23` |
 | 应用 RC commit | `f9463861ced34022fb98ed959bccda015c8b7800` |
 | 收尾文档 commit | `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` |
-| GitHub Actions | `29084788399`：Rust Minimal 与 No-Credential Smoke 全部成功 |
-| tracked 工作区 | Task 8 代码提交 `59b5e2ff` 已快进到本地 `main`；Task 7/8 脱敏回执文档已 staged，尚未 push |
+| GitHub Actions | `29130645814`：Task 8 最终 SHA 的 Rust Minimal 与 No-Credential Smoke 全部成功 |
+| tracked 工作区 | `main` 与 `origin/main` 已同步；除两项明确排除的 untracked 外无 Task 8 tracked 差异 |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
 已经证明：`cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 400/400、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过。
@@ -72,7 +72,7 @@
 | 项目 | 2026-07-10 只读核对状态 |
 | --- | --- |
 | 应用仓库 | `/srv/aiv3/repo` |
-| 应用 HEAD / `origin/main` | `bf602a6fff2fdd8540e66fd0d7087aa302b40244`，工作区干净 |
+| 应用 HEAD / `origin/main` | `a59faaca8509d56b1d84bb0a4ad2bf83cd2cfb23`，工作区干净 |
 | 与 GitHub 差距 | 无；guarded RC 与 R5 已 feature-off 部署 |
 | PostgreSQL | 18.4 active/enabled，checksums on |
 | PG17 | inactive/disabled，数据目录与备份保留 |
@@ -87,9 +87,9 @@
 
 - 已完成并冻结：原 Task 1–6、Task 14。
 - 已完成并关闭 P0：guarded RC、`0017_asset_parse_runs.sql`、六服务 feature-off 暗发布、主站 streaming live 和 `generic-chat-main` 静态页 live。
-- Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投和 flag rollback；主站任务卡未接线的缺口已形成本地候选，尚未发布和复验。
+- Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投、flag rollback、任务卡 Web 发布和认证浏览器复验；任务卡刷新稳定、字段账本可见、重复卡为 0，Task 8 `PASS`。
 - 尚未执行：真实 parser、asset evidence、第三方私有入口、operator 并发、客户端联合验收。
-- Task 8 发布授权已取得，正在执行 push、CI、Web 部署与最终可见性复验；通过前 Task 9 继续阻塞。
+- Task 9 已解除前置阻塞并进入 `READY`；本地实现可在独立 worktree 开始，commit/push、8 服务器部署、flag/env 和单图 live 仍需 Task 9 独立授权。
 
 ---
 
@@ -108,8 +108,8 @@ Task 7  feature-off 暗发布并关闭 P0
 | 里程碑 | Task | 当前状态 | 交付 | 工程估算 |
 | --- | --- | --- | --- | --- |
 | M1C | 7 | PASS | 8 服务器 feature-off RC、P0 关闭 | 已完成 |
-| M2 | 8 | IN_PROGRESS，已获发布授权 | 写入/幂等/rollback 已过，正在发布任务卡并复验 | 0.5–1 天 |
-| M3 | 9–10 | PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
+| M2 | 8 | PASS | 写入/幂等/rollback、任务卡 Web 发布和认证复验通过 | 已完成 |
+| M3 | 9–10 | Task 9 READY / Task 10 PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
 | M4 | 11 | PENDING | 单 connection 私有入口、公开契约不变 | 1–2 天 |
 | M5 | 12–13 | PENDING | 受控并发结论、V3/Codex 联合回执 | 1–2 天 |
 
@@ -319,7 +319,7 @@ Observe the six restarted units for 10 minutes. Record sanitized error types/cou
 
 ## 6. Task 8：主站测试租户资产导入 pilot
 
-**Status:** IN_PROGRESS；隔离 scope 的 live write、幂等和 flag rollback 已通过；任务卡接线代码已提交为 `59b5e2ff` 并快进本地 `main`，用户已批准 push、Web 部署和最终主站可见性复验。
+**Status:** PASS；隔离 scope 的 live write、幂等和 flag rollback、任务卡接线、两轮 CI/Web 发布及最终认证主站可见性复验全部通过。
 
 **Goal:** Validate only the main-site write path, idempotency, task card and safe readback. Parser may remain pending and unified retrieval is not part of this task.
 
@@ -396,16 +396,19 @@ $env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BEARER=$null
 - 测试用户/scope 下新增 HTML、report、static-page、client-artifact 数量均为 0；cleanup manifest 已生成但未执行。
 - rollback 已完成：`MAIN_SITE_ASSET_IMPORT_ENABLED=false`、allowlist 清空，只重启 platform-api，health/ready 通过；回退后普通主站 streaming live、静态页 self-test 和公开契约 guard 通过。
 - live 后发现主站任务卡 helper 未接入实际任务架；隔离分支 `codex/task8-asset-task-card` 以 asset-library scope 重建稳定、去重、脱敏卡片并接入现有右侧任务架，不新增 API、表或轮询。
-- 本地候选门禁：任务卡/产物卡定向测试 27/27（含实际任务架去重、字段账本可见和原始定位信息不泄漏）、Web 402/402、Next webpack production build、资产 self-test/preflight、公开契约、`cargo fmt --check`、`cargo check --workspace` 和 `git diff --check` 全部通过；4 个 Task 8 代码/测试文件已提交为 `59b5e2ff`。
+- 本地候选门禁：任务卡/产物卡定向测试 27/27（含实际任务架去重、字段账本可见和原始定位信息不泄漏）、Web 402/402、Next webpack production build、资产 self-test/preflight、公开契约、`cargo fmt --check`、`cargo check --workspace` 和 `git diff --check` 全部通过；初始接线提交为 `59b5e2ff`。
 - 2026-07-11 发布前只读复核：资产导入 flag 为 false、allowlist 为空、platform-api/Web 均 active、health/ready 均 HTTP 200；保留测试会话文件仍为 0600，仅用于获批后的最终验收。
 - 2026-07-11 Git/GitHub 发布就绪复核：本地 `main`、`origin/main`、Task 8 worktree 和 8 服务器 HEAD 均为 `bf602a6f...`，远端尚无 Task 8 分支；GitHub CLI 已认证，当前基线 CI `29084788399` 为 success。获批后仅发布 `main`、等待该 SHA 的 DataMax CI 通过，再在 8 服务器构建并重启 Web，不重启 API、不打开写入 flag。
-- 用户已明确批准提交推送 Task 8、部署 Web 并执行最终认证复验；当前尚未 push/deploy，只有发布后用主站测试会话证明卡片可见、刷新仍在且重复导入不增卡，Task 8 才可改为 `PASS`。
+- 初次发布 `fd7c1a9223a6f413ce24ef0f22212090f81f9cdb` 的 CI `29129558997` 通过，8 服务器仅构建/重启 Web；认证浏览器随即证明任务卡可见、刷新稳定、重复卡 0、locator 泄漏 0，同时发现字段账本仅在数据对象中、DOM 不可见。
+- 字段账本可见性先补失败测试，再以 `a59faaca8509d56b1d84bb0a4ad2bf83cd2cfb23` 修复；最终 CI `29130645814` 全绿，8 服务器第二次仅构建/重启 Web，platform-api PID 全程保持 `649091` 未重启。
+- 最终认证浏览器通过 SSH loopback 直连已部署 Web：session 和批准资产库可见，刷新前后图库任务卡均为 1，标题稳定，字段账本可见，重复卡 0，raw locator 泄漏 0，Runtime exception 0；唯一 network error 为缺失 favicon。
+- 部署后普通问答/静态页 self-test、公开契约 guard、health/ready、doc/v3 Web 均通过；写入/parser/evidence/private flags 仍关闭，远端工作区干净。测试会话已正常 logout/revoke，临时 Cookie 文件已删除，0600 operator note 保留脱敏撤销记录。Task 8 `PASS`。
 
 ---
 
 ## 7. Task 9：接通 `ingest-worker` 真实 parser
 
-**Status:** PENDING on Task 8; implement in an isolated worktree and release as one independent commit.
+**Status:** READY；Task 8 已 PASS。下一步在新的独立 worktree 实现，不得复用 Task 8 测试会话或发布授权。
 
 **Goal:** Move pending asset parse runs through an asynchronous worker to an accepted profile with bounded retry and safe provider handling.
 
@@ -801,9 +804,10 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-当前下一任务仍是 Task 8。先检查 `codex/task8-asset-task-card` worktree 差异和
-上述本地门禁；没有用户明确 commit/push/Web 部署授权时返回 AUTH_REQUIRED。
-不得重做数据写入、执行 cleanup、启动 parser 或进入 Task 9。
+当前下一任务是 Task 9。先从 `origin/main` 新建独立 worktree，按失败测试开始
+`parse_asset_profile` enqueue/worker 状态机；不得复用 Task 8 测试身份、Cookie、
+live-write approval 或 deployment window。Task 9 commit/push、8 服务器部署、
+flag/env 修改和单图 live 分别取得独立授权；不得提前进入 Task 10。
 ```
 
 ### 13.3 本计划完成条件
