@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — 下一任务是 Task 7；Task 8–13 依赖前序 gate。
+**Status:** ACTIVE — Task 7 已 `PASS`、P0 已关闭；Task 8 数据写入/幂等/rollback 已通过，任务卡接线代码已提交为 `59b5e2ff`，用户已批准 push、Web 部署和最终可见性复验，当前处于发布中。
 
 ---
 
@@ -58,11 +58,11 @@
 | --- | --- |
 | 仓库 | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3` |
 | 分支 | `main` |
-| 本地 / `origin/main` | `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` |
+| 本地 / `origin/main` | `bf602a6fff2fdd8540e66fd0d7087aa302b40244` |
 | 应用 RC commit | `f9463861ced34022fb98ed959bccda015c8b7800` |
 | 收尾文档 commit | `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` |
-| GitHub Actions | `29077240679`：Rust Minimal 与 No-Credential Smoke 全部成功 |
-| tracked 工作区 | 干净 |
+| GitHub Actions | `29084788399`：Rust Minimal 与 No-Credential Smoke 全部成功 |
+| tracked 工作区 | Task 8 代码提交 `59b5e2ff` 已快进到本地 `main`；Task 7/8 脱敏回执文档已 staged，尚未 push |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
 已经证明：`cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 400/400、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过。
@@ -72,23 +72,24 @@
 | 项目 | 2026-07-10 只读核对状态 |
 | --- | --- |
 | 应用仓库 | `/srv/aiv3/repo` |
-| 应用 HEAD / 远端缓存 | `e71e1ef75d9ee54745c96b8864595a193521a583`，工作区干净 |
-| 与 GitHub 差距 | 尚未 fetch/deploy `f9463861` / `b02008ab` |
+| 应用 HEAD / `origin/main` | `bf602a6fff2fdd8540e66fd0d7087aa302b40244`，工作区干净 |
+| 与 GitHub 差距 | 无；guarded RC 与 R5 已 feature-off 部署 |
 | PostgreSQL | 18.4 active/enabled，checksums on |
 | PG17 | inactive/disabled，数据目录与备份保留 |
-| `asset_parse_runs` | 尚不存在；应由 Task 7 启动 migration 后创建 |
+| `asset_parse_runs` | 已由 `0017` 创建，feature-off 部署后为 0 行 |
 | 新能力 flags | 六项均未开启 |
 | 核心服务 | platform-api、Web、assistant/chat/static/report、ingest、retrieval 均 active |
 | API | `healthz=200`、`readyz=200` |
 
-数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 仍需在应用 migration 前创建一份新的 PG18 pre-deploy 逻辑备份。
+数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。
 
 ### 2.3 已完成与未完成
 
 - 已完成并冻结：原 Task 1–6、Task 14。
-- 尚未部署：guarded RC 应用代码、`0017_asset_parse_runs.sql`。
-- 尚未执行：测试 tenant 真实导入、真实 parser、asset evidence、第三方私有入口、operator 并发、客户端联合验收。
-- P0 只有在 Task 7 `PASS` 后关闭。
+- 已完成并关闭 P0：guarded RC、`0017_asset_parse_runs.sql`、六服务 feature-off 暗发布、主站 streaming live 和 `generic-chat-main` 静态页 live。
+- Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投和 flag rollback；主站任务卡未接线的缺口已形成本地候选，尚未发布和复验。
+- 尚未执行：真实 parser、asset evidence、第三方私有入口、operator 并发、客户端联合验收。
+- Task 8 发布授权已取得，正在执行 push、CI、Web 部署与最终可见性复验；通过前 Task 9 继续阻塞。
 
 ---
 
@@ -106,8 +107,8 @@ Task 7  feature-off 暗发布并关闭 P0
 
 | 里程碑 | Task | 当前状态 | 交付 | 工程估算 |
 | --- | --- | --- | --- | --- |
-| M1C | 7 | READY，待部署授权 | 8 服务器 feature-off RC、P0 关闭 | 0.5–1 天 |
-| M2 | 8 | PENDING | 测试 tenant 写入、幂等、任务卡和 flag rollback | 0.5–1 天 |
+| M1C | 7 | PASS | 8 服务器 feature-off RC、P0 关闭 | 已完成 |
+| M2 | 8 | IN_PROGRESS，已获发布授权 | 写入/幂等/rollback 已过，正在发布任务卡并复验 | 0.5–1 天 |
 | M3 | 9–10 | PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
 | M4 | 11 | PENDING | 单 connection 私有入口、公开契约不变 | 1–2 天 |
 | M5 | 12–13 | PENDING | 受控并发结论、V3/Codex 联合回执 | 1–2 天 |
@@ -147,7 +148,7 @@ git diff --check
 
 ## 5. Task 7：8 服务器 feature-off 暗发布并关闭 P0
 
-**Status:** READY；需要用户明确批准 8 服务器 fast-forward、PG18 additive migration、构建和服务重启。
+**Status:** PASS；fast-forward、PG18 备份、`0017` migration、构建、六服务重启、feature-off 回归、主站 streaming live、静态页 live 和观察窗口全部通过，P0 已关闭。
 
 **Goal:** 部署执行前明确批准的 `APPROVED_RELEASE_SHA`。该提交必须包含应用 RC `f9463861...` 和本 R5 计划，但不得包含排除项；部署后创建 `asset_parse_runs` 底座，同时保持资产写、资产画像供料、第三方结构化图片、parser、asset evidence 和第三方私有导入全部关闭。
 
@@ -302,11 +303,23 @@ Observe the six restarted units for 10 minutes. Record sanitized error types/cou
 
 **Done:** remote HEAD equals the recorded `APPROVED_RELEASE_SHA`; server build and live regressions pass; `asset_parse_runs` exists; all six features remain off; targeted existing capabilities pass; 10-minute errors are acceptable. P0 closes only here.
 
+**Current receipt (2026-07-10):**
+
+- `APPROVED_RELEASE_SHA=bf602a6fff2fdd8540e66fd0d7087aa302b40244`；GitHub Actions `29084788399` 全绿。
+- 8 服务器 fast-forward 后 `cargo fmt --check`、storage migration 5/5、asset-import 58/58、platform check、Web build 和五个 release binaries 全部通过。
+- PG18 pre-deploy 备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`；dump 57,271,874 bytes、restore list 506 行、SHA-256 `PASS`。
+- 六服务重启成功；`asset_parse_runs` 已创建且 0 行；六项新能力 flag 全部关闭；health/ready、Web 本机/公网均 HTTP 200。
+- 主站流式 self-test、静态页 self-test、资产 preflight 和公开契约 guard 全部通过；远端工作区干净。
+- 连续观察 627 秒：journal priority error 0、JSON ERROR/FATAL 0、`asset_parse_runs` 仍为 0 行。
+- 主站 streaming live 无需复制用户 Cookie 即通过：create/continue 均成功，delta 87/77，首 delta 2,533/5,195 ms，无重复终稿；回执 `/srv/aiv3/repo/target/main-assistant-streaming-smoke-task7-bf602a6f/20260710104236.json`。
+- 静态页 live 使用 `local-dev` 下 enabled `generic-chat-main` 的现有 bearer，仅在服务器子进程环境临时注入且未打印/落盘；单请求 accepted、artifact 1/1、无 terminal failure，12,521 ms；回执 `/srv/aiv3/repo/target/static-page-5way-smoke-task7-bf602a6f/20260710104421.json`。
+- live 后六服务 active、health/ready 正常、六项新能力 flag 仍全部关闭、`asset_parse_runs=0`，journal priority error 0；Task 7 `PASS`，P0 关闭。
+
 ---
 
 ## 6. Task 8：主站测试租户资产导入 pilot
 
-**Status:** PENDING on Task 7; requires test identity/scope, env change, restart and live-write approval.
+**Status:** IN_PROGRESS；隔离 scope 的 live write、幂等和 flag rollback 已通过；任务卡接线代码已提交为 `59b5e2ff` 并快进本地 `main`，用户已批准 push、Web 部署和最终主站可见性复验。
 
 **Goal:** Validate only the main-site write path, idempotency, task card and safe readback. Parser may remain pending and unified retrieval is not part of this task.
 
@@ -315,6 +328,8 @@ Observe the six restarted units for 10 minutes. Record sanitized error types/cou
 - Modify only if a proven defect exists: `crates/platform-api/src/asset_import_support.rs`
 - Modify only if a proven defect exists: `apps/web/app/HomePageClient.js`
 - Modify only if a proven defect exists: `apps/web/app/components/WorkspaceDirectoryPanel.js`
+- Modify for the proven task-card wiring defect: `apps/web/app/lib/asset-library-view-model.js`
+- Test the proven defect: `apps/web/app/lib/asset-library-view-model.test.mjs`
 - Test/receipt: `scripts/smoke/fashion-design-asset-import.mjs`
 - Receipt: `docs/validation/datamax-main-gap-closure.md`
 
@@ -371,6 +386,20 @@ $env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BEARER=$null
 **Stop:** cross-tenant visibility, duplicate writes, locator leakage, unrelated artifact creation or ordinary chat regression.
 
 **Done:** smallest live fixtures and idempotency pass, flag is off again, test rows and cleanup manifest are recorded, parser result is not overstated.
+
+**Current receipt (2026-07-10):**
+
+- 用户批准 Task 8；真实 tenant/user/dataset/asset-library UUID 仅保存在服务器 0600 operator note，本文和共享账本只记录占位 scope。
+- authenticated flag-off 和 wrong-tenant allowlist 写入探针分别返回 `feature_disabled` / `tenant_not_allowlisted`，四类业务计数均保持 0。
+- live receipt：`/srv/aiv3/repo/target/fashion-design-asset-import-smoke-task8-live-bf602a6f/20260710T105852514Z-648174-execute.json`；上传 PNG+ZIP 各 1，导入资产 3、dataset membership 3、pending parse run 3、fashion profile 3。
+- 使用完全相同的 PNG/ZIP 引用和 package external id 复投；asset/membership/parse/profile 增量均为 0，资产、parse run、profile 身份摘要均稳定。
+- 测试用户/scope 下新增 HTML、report、static-page、client-artifact 数量均为 0；cleanup manifest 已生成但未执行。
+- rollback 已完成：`MAIN_SITE_ASSET_IMPORT_ENABLED=false`、allowlist 清空，只重启 platform-api，health/ready 通过；回退后普通主站 streaming live、静态页 self-test 和公开契约 guard 通过。
+- live 后发现主站任务卡 helper 未接入实际任务架；隔离分支 `codex/task8-asset-task-card` 以 asset-library scope 重建稳定、去重、脱敏卡片并接入现有右侧任务架，不新增 API、表或轮询。
+- 本地候选门禁：任务卡/产物卡定向测试 27/27（含实际任务架去重、字段账本可见和原始定位信息不泄漏）、Web 402/402、Next webpack production build、资产 self-test/preflight、公开契约、`cargo fmt --check`、`cargo check --workspace` 和 `git diff --check` 全部通过；4 个 Task 8 代码/测试文件已提交为 `59b5e2ff`。
+- 2026-07-11 发布前只读复核：资产导入 flag 为 false、allowlist 为空、platform-api/Web 均 active、health/ready 均 HTTP 200；保留测试会话文件仍为 0600，仅用于获批后的最终验收。
+- 2026-07-11 Git/GitHub 发布就绪复核：本地 `main`、`origin/main`、Task 8 worktree 和 8 服务器 HEAD 均为 `bf602a6f...`，远端尚无 Task 8 分支；GitHub CLI 已认证，当前基线 CI `29084788399` 为 success。获批后仅发布 `main`、等待该 SHA 的 DataMax CI 通过，再在 8 服务器构建并重启 Web，不重启 API、不打开写入 flag。
+- 用户已明确批准提交推送 Task 8、部署 Web 并执行最终认证复验；当前尚未 push/deploy，只有发布后用主站测试会话证明卡片可见、刷新仍在且重复导入不增卡，Task 8 才可改为 `PASS`。
 
 ---
 
@@ -772,8 +801,9 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-当前下一任务是 Task 7。没有用户明确部署授权时，只做本地/远端只读 preflight，
-并返回 AUTH_REQUIRED；不得 fetch 后 merge、构建、migration、重启或改 env。
+当前下一任务仍是 Task 8。先检查 `codex/task8-asset-task-card` worktree 差异和
+上述本地门禁；没有用户明确 commit/push/Web 部署授权时返回 AUTH_REQUIRED。
+不得重做数据写入、执行 cleanup、启动 parser 或进入 Task 9。
 ```
 
 ### 13.3 本计划完成条件

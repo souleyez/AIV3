@@ -28,6 +28,105 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - R5 candidate preparation is `PASS`;
   - commit/push and Task 7 deployment remain `AUTH_REQUIRED` until separately approved.
 
+## 2026-07-10 Task 7 Feature-Off Dark Release Deployment Verification
+
+- Release:
+  - user approved R5 commit/push and Task 7 deployment;
+  - commit `bf602a6fff2fdd8540e66fd0d7087aa302b40244` was pushed to `origin/main`;
+  - DataMax CI run `29084788399` passed: No-Credential Smoke in 23 seconds and Rust Minimal in 4 minutes 43 seconds.
+- 8-server preflight and build:
+  - `/srv/aiv3/repo` was clean at `e71e1ef75d9ee54745c96b8864595a193521a583` before fetch;
+  - fetched `origin/main`, proved exact `APPROVED_RELEASE_SHA` and ancestry from application RC `f9463861ced34022fb98ed959bccda015c8b7800`, then fast-forwarded without merge drift;
+  - all six reviewed dark-release flags were off before build/restart;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -q -p storage migrations --lib`: passed, 5/5;
+  - `CC=clang CXX=clang++ cargo test -q -p platform-api asset_import --lib`: passed, 58/58;
+  - `CC=clang CXX=clang++ cargo check -q -p platform-api`: passed;
+  - `npm --prefix apps/web run build`: passed with existing middleware-deprecation and NFT trace warnings only;
+  - release builds for platform-api, assistant-run-worker, chat-session-worker, static-page-worker, and report-planner-worker passed.
+- Database safety and migration:
+  - PG18 pre-deploy backup path: `/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`;
+  - custom dump size was 57,271,874 bytes, restore list contained 506 lines, and SHA-256 verification passed;
+  - platform-api restart applied append-only `0017_asset_parse_runs.sql`;
+  - `asset_parse_runs` existed with 0 rows after restart and remained at 0 after the observation window.
+- Service and feature-off verification:
+  - restarted only platform-api, Web, assistant-run-worker, chat-session-worker, static-page-worker, and report-planner-worker;
+  - all six services were active; local health/ready, local Web, and public `https://v3.elepcloud.com/` returned HTTP 200;
+  - main-assistant streaming self-test, static-page self-test, asset-import preflight, and public third-party contract guard passed;
+  - remote HEAD was `bf602a6fff2fdd8540e66fd0d7087aa302b40244`, the worktree was clean, and all six new feature flags remained off.
+- Stability observation:
+  - observed 627 seconds from restart;
+  - journal priority-error lines: 0;
+  - JSON ERROR/FATAL or panic lines: 0;
+  - service/health/ready polling stayed successful throughout.
+- Targeted live closure:
+  - main-site streaming ran against `https://v3.elepcloud.com` without copying a user cookie or creating a substitute session;
+  - main-site receipt: `/srv/aiv3/repo/target/main-assistant-streaming-smoke-task7-bf602a6f/20260710104236.json`;
+  - main-site result: `ok=true`; create/continue passed; 87/77 delta frames; first delta at 2,533/5,195 ms; total latency 4,013/13,316 ms; completed responses were present and no duplicate final delta was detected;
+  - the database metadata probe found an enabled `local-dev` `generic-chat-main` row with an inbound bearer present; no bearer value was selected into operator output;
+  - static-page live loaded that existing bearer inside the 8-server shell, injected it only into the smoke child process, unset it on exit, and did not print or persist it;
+  - static-page receipt: `/srv/aiv3/repo/target/static-page-5way-smoke-task7-bf602a6f/20260710104421.json`;
+  - static-page result: one request accepted and passed, one artifact observed, no terminal failure, latency 12,521 ms;
+  - after live smoke, the six reviewed services remained active, health/ready passed, all six dark-release flags remained off, `asset_parse_runs` remained at 0, the remote worktree remained clean, and priority-error journal entries were 0;
+  - Task 7 is `PASS`; P0 is closed and Task 8 becomes `READY` subject to a separate live-write approval.
+- Safety:
+  - no permanent credential/env change, cookie extraction, substitute database session, asset import, parser task, asset evidence write, third-party private route, source sync, backfill, delete, cleanup, PG17 data change, 10-server action, or 120-server action occurred;
+  - the targeted static-page check created exactly one generic smoke artifact under the established `local-dev` third-party smoke scope; no dataset or document external id was supplied.
+
+## 2026-07-10 Task 8 Main-Site Asset Import Pilot and Task-Card Candidate
+
+- Authorization and private scope:
+  - the user explicitly approved Task 8 test identity/scope provisioning, env changes, platform-api restarts, and the smallest live write;
+  - approval reference: `codex-chat-20260710-task8-20260710T105604Z`;
+  - the real tenant, user, dataset, and asset-library UUIDs were recorded only in a server-side mode-0600 operator note; shared receipts use `[test-tenant]`, `[test-user]`, `[test-dataset]`, and `[test-asset-library]` placeholders;
+  - the test account used the normal dataset secret-binding, `/v1/auth/key/login`, and claim-local-data flow; no database session was fabricated.
+- Disabled and isolation guards:
+  - authenticated readiness with the feature off returned `feature_disabled`;
+  - a valid authenticated import probe with the feature off returned `asset_import_feature_disabled` and changed no asset, membership, parse-run, or profile count;
+  - the feature was then enabled with a random non-matching tenant allowlist; readiness returned `tenant_not_allowlisted`, the import probe returned `asset_import_tenant_not_allowlisted`, and the same four counts remained `0|0|0|0`;
+  - only the approved test tenant was then allowlisted; platform-api alone was restarted and health/ready passed.
+- Smallest live fixture:
+  - preflight receipt: `/srv/aiv3/repo/target/fashion-design-asset-import-smoke-task8-preflight-bf602a6f/20260710T105413239Z-647536-preflight.json`;
+  - execute receipt: `/srv/aiv3/repo/target/fashion-design-asset-import-smoke-task8-live-bf602a6f/20260710T105852514Z-648174-execute.json`;
+  - one 70-byte PNG and one 449-byte ZIP were accepted; the ZIP expanded two supported image entries;
+  - live result: accepted asset count 3, package count 1, expanded asset count 2, dataset membership count 3, pending parse-run count 3, and fashion profile count 3;
+  - the scope summary returned three usable profile hints, three visible pending parse runs, and no raw locator in the shared output.
+- Idempotency and unrelated-output checks:
+  - the same uploaded PNG/ZIP references, package external id, profile payload, and approval hash were submitted again;
+  - asset, dataset-membership, parse-run, and profile deltas were all zero;
+  - sorted asset, parse-run, and profile identity digests were unchanged;
+  - the dedicated test user/dataset produced zero HTML artifacts, report plans, published reports, report render outputs, static-page drafts, static-page image jobs, static-page render outputs, and V3 client artifacts;
+  - the execute receipt produced a redacted cleanup manifest, but no cleanup was executed.
+- Rollback and existing-capability regression:
+  - `MAIN_SITE_ASSET_IMPORT_ENABLED=false` and the tenant allowlist was cleared; only platform-api was restarted;
+  - authenticated readiness returned `feature_disabled`, platform-api remained active, and health/ready passed;
+  - retained test counts were `3|3|3|3`; parser status remains `pending` and is not overstated;
+  - static-page self-test and the public third-party contract guard passed;
+  - two strict multi-delta probes returned complete HTTP-200 responses with one full delta in at least one leg and no duplicate final text; a subsequent ordinary streaming live gate passed with create/continue delta counts 79/75, proving ordinary chat remained available while recording the transient chunking variation.
+- Proven task-card gap and local candidate:
+  - inspection showed `normalizeFashionDesignAssetImportTaskCardDraft` was referenced only by tests/smoke and not wired into `HomePageClient`, so the live data result alone could not prove a user-visible persistent task card;
+  - isolated branch/worktree `codex/task8-asset-task-card` now derives one stable task from the selected asset-library scope, hashes the asset set for a non-raw stable id, rejects stale cross-library scope, and feeds the existing right-side task shelf;
+  - reordered identical assets keep the same task id; the field ledger, source summary, retry surface, no-chat rule, no-unrelated-artifact rule, and locator redaction remain intact;
+  - modified candidate files: `apps/web/app/HomePageClient.js`, `apps/web/app/lib/asset-library-view-model.js`, `apps/web/app/lib/asset-library-view-model.test.mjs`, and `apps/web/app/lib/artifact-task-cards.test.mjs`.
+- Local candidate verification:
+  - failing test first: missing `buildFashionDesignAssetImportShelfTask` export failed before implementation;
+  - focused asset-library tests: 21/21 passed;
+  - focused asset-library plus artifact-card tests: 27/27 passed, including one real task-shelf integration case proving reordered duplicate scope tasks collapse to one card, the field-ledger notice remains visible after card truncation, and raw object locators stay absent;
+  - complete Web tests: 402/402 passed;
+  - Next 16.2.9 webpack production build passed; the default Turbopack attempt was blocked only by the isolated worktree dependency junction pointing outside its inferred root;
+  - asset self-test and preflight passed; public third-party contract guard passed;
+  - `cargo fmt --check`, `cargo check --workspace`, and `git diff --check` passed.
+- Current status and safety:
+  - the user explicitly approved Task 8 commit/push, Web deployment, and final authenticated task-card visibility/refresh/dedup verification;
+  - the four-file task-card implementation was committed as `59b5e2ff` on `codex/task8-asset-task-card` and fast-forwarded into local `main`; no temporary remote branch was pushed;
+  - Task 8 is `IN_PROGRESS` until the approved main push, CI, Web deployment, and authenticated verification all pass;
+  - a 2026-07-11 read-only release precheck reconfirmed the import flag is false, the allowlist is empty, platform-api and Web are active, health/ready return HTTP 200, and the retained session file remains mode 0600;
+  - the same precheck confirmed local `main`, `origin/main`, the isolated Task 8 worktree, and the 8-server repository all remain at `bf602a6fff2fdd8540e66fd0d7087aa302b40244`; the remote Task 8 branch is absent, GitHub CLI authentication is ready, and baseline DataMax CI run `29084788399` remains successful;
+  - the approved release path will publish only `main`, wait for DataMax CI on the released SHA, then build/restart only `aiv3-web.service`; platform-api and asset-import feature flags are outside that deployment mutation scope;
+  - the import flag and allowlist remain closed while awaiting that approval; Task 9 has not started;
+  - the root-only test session is not printed or committed and will be revoked after final post-deploy verification;
+  - no credential, cookie, raw UUID scope, database URL, raw object locator, provider payload, customer row, source sync, delete, cleanup, parser execution, evidence write, 10-server action, or 120-server action was recorded or performed outside the explicitly listed test writes.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
