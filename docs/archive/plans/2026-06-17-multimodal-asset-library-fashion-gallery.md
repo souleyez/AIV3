@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-10:** 历史设计参考，不能覆盖当前任务顺序、授权边界或发布门禁。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
+
 # Multimodal Asset Library and Fashion Gallery Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

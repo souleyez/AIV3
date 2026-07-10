@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-10:** R4 交接与 PostgreSQL 18.4 升级完成凭据。本文不再是活动计划；唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
+
 # DataMax V3 盘点后收版、暗发布与资产链路 Implementation Plan
 
 > **For Codex:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task. Do not skip task gates or combine live-write tasks without explicit user approval.
@@ -21,7 +23,7 @@
 1. 本文是 DataMax V3 后续开发的唯一活动计划。
 2. `docs/plans/datamax-active-execution-plan.md` 保持冻结，只作历史执行账本，不再追加流水记录。
 3. `docs/validation/datamax-main-gap-closure.md` 是本计划所有本地验证、提交、部署和 live 回执的唯一记录入口。
-4. `docs/plans/2026-06-17-multimodal-asset-library-fashion-gallery.md`、`docs/plans/2026-06-17-fashion-postchain-absorption-plan.md` 只作设计参考，不能覆盖本文任务顺序和门禁。
+4. `docs/archive/plans/2026-06-17-multimodal-asset-library-fashion-gallery.md`、`docs/archive/plans/2026-06-17-fashion-postchain-absorption-plan.md` 只作设计参考，不能覆盖本文任务顺序和门禁。
 5. `docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` 不属于本 release train；不得把 10 服务器或 120 服务器混入本计划。
 
 ### 1.2 授权边界
@@ -1343,7 +1345,7 @@ npm run smoke:v3-client-artifact-joint -- --preflight --base-url <approved-platf
 首轮只执行 Task 1 和 Task 2：
 
 ```text
-接手 DataMax V3 主线。完整阅读 docs/plans/2026-07-10-datamax-v3-project-handoff-and-next-development-plan.md。
+接手 DataMax V3 主线。完整阅读 docs/plans/datamax-active-execution-plan.md。
 
 只执行 Task 1 和 Task 2：保护当前 dirty worktree，不 reset、不覆盖用户改动，不 commit、不 push、不部署、不真实写入、不改第三方公开契约。
 
@@ -1368,7 +1370,7 @@ npm run smoke:v3-client-artifact-joint -- --preflight --base-url <approved-platf
 
 - `docs/validation/datamax-main-gap-closure.md`：唯一验证和部署回执。
 - `docs/plans/datamax-active-execution-plan.md`：冻结历史账本。
-- `docs/plans/2026-06-17-multimodal-asset-library-fashion-gallery.md`：资产库原始设计参考。
+- `docs/archive/plans/2026-06-17-multimodal-asset-library-fashion-gallery.md`：资产库原始设计参考。
 - `docs/integrations/v3-codex-client-boundary-contract.md`：V3 与 Codex 客户端边界。
 - `docs/operations/v3-system-manual.zh-CN.md`：服务和运行说明。
 - `docs/architecture/v3-rust-architecture.md`：总体架构。

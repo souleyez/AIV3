@@ -2,6 +2,32 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-07-10 R5 Active Plan Consolidation Local Verification
+
+- Scope:
+  - rebuild `docs/plans/datamax-active-execution-plan.md` as the single R5 activity entrypoint for Task 7 through Task 13;
+  - move the frozen execution ledger, R4 handoff plan, and two June asset-design plans into `docs/archive/plans/` without deleting their historical content;
+  - keep `decks/` and the untracked server10 deployment plan outside staged scope.
+- Current baseline:
+  - local `main` and `origin/main` were `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` before this doc-only candidate;
+  - 8-server read-only preflight showed repo HEAD and cached `origin/main` at `e71e1ef75d9ee54745c96b8864595a193521a583`, with a clean worktree;
+  - PostgreSQL 18 was active, PostgreSQL 17 inactive, the six reviewed AIV3 services active, health/ready HTTP 200, `asset_parse_runs` absent, and all six dark-release feature flags off.
+- Local verification:
+  - `git diff --check` and `git diff --cached --check`: passed with expected Windows LF/CRLF warnings only;
+  - the R5 Markdown fence count was even and Task 7 through Task 13 headings were present;
+  - all referenced workflow, source, smoke, integration-contract, and validation paths existed;
+  - `npm run smoke:v3-client-artifact-joint -- --self-test`: passed;
+  - `npm run smoke:v3-codex-client-boundary-sync -- --self-test`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed;
+  - `npm run smoke:main-assistant-streaming -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed with the existing module-type warning only.
+- Staged boundary:
+  - candidate contains only the canonical R5 plan, four archived source plans, and this validation receipt;
+  - no code, migration, workflow, smoke script, deck, server10 plan, secret, credential, customer payload, database URL, locator, object key, provider payload, commit, push, fetch, migration, restart, env change, or live write is included.
+- Status:
+  - R5 candidate preparation is `PASS`;
+  - commit/push and Task 7 deployment remain `AUTH_REQUIRED` until separately approved.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
