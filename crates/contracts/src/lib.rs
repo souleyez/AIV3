@@ -12,6 +12,7 @@ use domain_model::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
@@ -3394,6 +3395,10 @@ pub struct AssetLibraryScopeSummaryView {
     pub authorized_dataset_count: usize,
     pub asset_count: usize,
     pub asset_profile_hint_count: usize,
+    #[serde(default)]
+    pub asset_parse_status_counts: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub asset_parse_run_count: usize,
     pub scope_policy: String,
 }
 
@@ -3499,6 +3504,27 @@ pub struct AssetProfileView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetParseRunView {
+    pub id: String,
+    pub asset_id: String,
+    pub parser_name: String,
+    pub parser_version: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssetItemScopeSummaryView {
     pub asset: AssetItemView,
     #[serde(default)]
@@ -3519,6 +3545,138 @@ pub struct AssetProfileSupplyHintView {
     pub noun_terms: Vec<String>,
     #[serde(default)]
     pub facets: Vec<String>,
+}
+
+pub const FASHION_DESIGN_IMAGE_PROFILE_SCHEMA: &str = "fashion_design_image_v1";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FashionDesignImageProfileV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audience: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub silhouettes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collars: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleeves: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waists: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hems: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crafts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sku_text_marks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_text: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub noun_terms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateFashionDesignImageAssetImportRequest {
+    pub dataset_id: DatasetId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub profile_payload: Value,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateFashionDesignImageAssetImportResponse {
+    pub asset: AssetItemView,
+    pub dataset_membership: DatasetAssetMembershipView,
+    pub parse_run: AssetParseRunView,
+    pub profile: AssetProfileView,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FashionDesignImageAssetImportItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub profile_payload: Value,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FashionDesignImageAssetImportPackage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub object_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateFashionDesignImageAssetImportBatchRequest {
+    pub dataset_id: DatasetId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<FashionDesignImageAssetImportItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<FashionDesignImageAssetImportPackage>,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateFashionDesignImageAssetImportBatchResponse {
+    pub accepted: bool,
+    pub asset_count: usize,
+    #[serde(default)]
+    pub package_count: usize,
+    #[serde(default)]
+    pub expanded_asset_count: usize,
+    pub items: Vec<CreateFashionDesignImageAssetImportResponse>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -7232,6 +7390,8 @@ mod tests {
             authorized_dataset_count: 1,
             asset_count: 0,
             asset_profile_hint_count: 0,
+            asset_parse_status_counts: BTreeMap::from([("pending".to_string(), 2usize)]),
+            asset_parse_run_count: 2,
             scope_policy: "asset_library_memberships_intersect_authorized_datasets".to_string(),
         };
 
@@ -7252,6 +7412,8 @@ mod tests {
         assert_eq!(encoded["denied_dataset_count"], json!(1));
         assert_eq!(encoded["asset_count"], json!(0));
         assert_eq!(encoded["asset_profile_hint_count"], json!(0));
+        assert_eq!(encoded["asset_parse_status_counts"]["pending"], json!(2));
+        assert_eq!(encoded["asset_parse_run_count"], json!(2));
         assert!(encoded.get("denied_dataset_ids").is_none());
 
         let decoded: AssetLibraryScopeSummaryView =
@@ -7264,6 +7426,8 @@ mod tests {
         assert_eq!(decoded.denied_dataset_count, 1);
         assert_eq!(decoded.membership_count, 2);
         assert_eq!(decoded.asset_count, 0);
+        assert_eq!(decoded.asset_parse_status_counts.get("pending"), Some(&2));
+        assert_eq!(decoded.asset_parse_run_count, 2);
     }
 
     #[test]
@@ -7360,6 +7524,128 @@ mod tests {
             serde_json::from_value(encoded).expect("supply hint should deserialize");
         assert_eq!(decoded.asset_kind, "image");
         assert_eq!(decoded.facets.len(), 2);
+    }
+
+    #[test]
+    fn fashion_design_image_profile_v1_uses_structured_partial_wire_shape() {
+        let profile = FashionDesignImageProfileV1 {
+            category: Some("dress".to_string()),
+            audience: vec!["women".to_string()],
+            seasons: vec!["spring_summer".to_string()],
+            styles: vec!["commute".to_string(), "resort".to_string()],
+            silhouettes: vec!["a_line".to_string()],
+            collars: vec!["round_neck".to_string()],
+            sleeves: vec!["short_sleeve".to_string()],
+            waists: vec!["high_waist".to_string()],
+            hems: vec!["midi".to_string()],
+            materials: vec!["cotton".to_string()],
+            crafts: vec!["pleated".to_string()],
+            colors: vec!["green".to_string(), "white".to_string()],
+            patterns: vec!["floral".to_string()],
+            scenes: vec!["xiaohongshu_launch".to_string()],
+            sku_text_marks: vec!["SKU-001".to_string()],
+            visible_text: vec!["新款".to_string()],
+            tags: vec!["连衣裙".to_string()],
+            noun_terms: vec!["泡泡袖".to_string(), "碎花".to_string()],
+            caption: Some("春夏通勤连衣裙灵感图。".to_string()),
+            confidence: Some(0.91),
+        };
+
+        let encoded = serde_json::to_value(&profile).expect("fashion profile should serialize");
+
+        assert_eq!(
+            FASHION_DESIGN_IMAGE_PROFILE_SCHEMA,
+            "fashion_design_image_v1"
+        );
+        assert_eq!(encoded["category"], json!("dress"));
+        assert_eq!(encoded["styles"], json!(["commute", "resort"]));
+        assert_eq!(encoded["colors"], json!(["green", "white"]));
+        assert_eq!(encoded["visible_text"], json!(["新款"]));
+
+        let partial: FashionDesignImageProfileV1 =
+            serde_json::from_value(json!({"caption": "仅有视觉摘要"}))
+                .expect("partial fashion profile should deserialize");
+        assert_eq!(partial.caption.as_deref(), Some("仅有视觉摘要"));
+        assert!(partial.colors.is_empty());
+        assert!(partial.category.is_none());
+    }
+
+    #[test]
+    fn fashion_design_image_asset_import_request_uses_dataset_scoped_wire_shape() {
+        let dataset_id = DatasetId::new();
+        let request: CreateFashionDesignImageAssetImportRequest = serde_json::from_value(json!({
+            "dataset_id": dataset_id.to_string(),
+            "asset_library_id": "asset-library-001",
+            "collection_id": "collection-001",
+            "external_id": "img-001",
+            "title": "春夏连衣裙灵感图",
+            "image_url": "https://example.com/img-001.png",
+            "object_key": "assets/fashion/img-001.png",
+            "content_type": "image/png",
+            "profile_payload": {
+                "category": "dress",
+                "color": ["green", "white"]
+            },
+            "metadata": {
+                "source": "operator_fixture"
+            }
+        }))
+        .expect("asset import request should deserialize");
+
+        assert_eq!(request.dataset_id, dataset_id);
+        assert_eq!(
+            request.asset_library_id.as_deref(),
+            Some("asset-library-001")
+        );
+        assert_eq!(request.external_id.as_deref(), Some("img-001"));
+        assert_eq!(request.profile_payload["category"], json!("dress"));
+
+        let encoded = serde_json::to_value(&request).expect("request should serialize");
+        assert_eq!(encoded["dataset_id"], json!(dataset_id.to_string()));
+        assert!(encoded.get("raw_provider_payload").is_none());
+    }
+
+    #[test]
+    fn fashion_design_image_asset_import_batch_request_uses_dataset_scoped_wire_shape() {
+        let dataset_id = DatasetId::new();
+        let request: CreateFashionDesignImageAssetImportBatchRequest =
+            serde_json::from_value(json!({
+                "dataset_id": dataset_id.to_string(),
+                "asset_library_id": "asset-library-001",
+                "collection_id": "collection-001",
+                "metadata": {
+                    "source_package": "fashion-zip-001"
+                },
+                "assets": [
+                    {
+                        "external_id": "img-001",
+                        "title": "春夏连衣裙灵感图",
+                        "image_url": "https://example.com/img-001.png",
+                        "content_type": "image/png",
+                        "profile_payload": {
+                            "category": "dress",
+                            "color": ["green", "white"]
+                        },
+                        "metadata": {
+                            "filename": "img-001.png"
+                        }
+                    }
+                ]
+            }))
+            .expect("asset import batch request should deserialize");
+
+        assert_eq!(request.dataset_id, dataset_id);
+        assert_eq!(request.assets.len(), 1);
+        assert_eq!(request.assets[0].external_id.as_deref(), Some("img-001"));
+        assert_eq!(
+            request.assets[0].profile_payload["category"],
+            json!("dress")
+        );
+
+        let encoded = serde_json::to_value(&request).expect("batch request should serialize");
+        assert_eq!(encoded["asset_library_id"], json!("asset-library-001"));
+        assert_eq!(encoded["assets"][0]["title"], json!("春夏连衣裙灵感图"));
+        assert!(encoded.get("raw_provider_payload").is_none());
     }
 
     #[test]

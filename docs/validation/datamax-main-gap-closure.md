@@ -2,6 +2,1376 @@
 
 This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
+## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1014 under the enterprise asset library / fashion design asset import plan;
+  - define the private third-party `asset-imports` endpoint contract guard before adding a real public endpoint or updating external docs;
+  - prove the intended endpoint remains private-by-default, returns structured JSON for customer storage, supports dataset/asset-library attachment scope, and keeps public docs closed until explicit review.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_third_party_asset_import_private_endpoint_guard_dry_run`, producing `fashion_design_third_party_asset_import_private_endpoint_guard_dry_run_v1`;
+  - the helper fixes `surface=third_party_private_asset_import_endpoint_review`, `mode=dry_run`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_external_sse=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - the helper distinguishes `ready_for_private_endpoint_review`, `blocked_public_docs_expose_unreviewed_asset_imports`, `blocked_inbound_secret_not_configured`, `blocked_connection_scope`, `blocked_source_scope`, `blocked_dataset_scope_missing`, `blocked_asset_library_scope_missing`, and `blocked_assets_missing`;
+  - the helper records private request/response contracts, default privacy policy, dataset attachment policy, field ledger, operator controls, and redaction flags without any real third-party values;
+  - `smoke:fashion-design-asset-import` now includes `thirdPartyPrivateAssetImportEndpointGuard` in followup evidence and reports private endpoint readiness through JSON and markdown;
+  - smoke checks now verify `thirdPartyPrivateAssetImportEndpointGuardReady`, `thirdPartyPrivateAssetImportDefaultPrivate`, `thirdPartyPrivateAssetImportStructuredJsonReady`, `thirdPartyPrivateAssetImportScopeGuardReady`, `thirdPartyPrivateAssetImportPublicDocsClosed`, and `thirdPartyPrivateAssetImportEndpointGuardRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 53/53 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T112029518Z-18444-self-test.json`, markdown `target/fashion-design-asset-import-smoke/20260709T112029518Z-18444-self-test.md`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T112029531Z-30332-preflight.json`, markdown `target/fashion-design-asset-import-smoke/20260709T112029531Z-30332-preflight.md`;
+  - JSON readback confirmed all six private endpoint guard checks true: guard ready, default private, structured JSON, scope guard, public docs closed, and redaction;
+  - JSON readback confirmed `thirdPartyPrivateAssetImportEndpointStatus=ready_for_private_endpoint_review`;
+  - markdown readback confirmed the latest preflight includes `third_party_private_asset_import_endpoint_guard_ready`, `third_party_private_asset_import_endpoint_status`, `third_party_private_asset_import_default_private`, `third_party_private_asset_import_structured_json_ready`, `third_party_private_asset_import_scope_guard_ready`, `third_party_private_asset_import_public_docs_closed`, and `third_party_private_asset_import_endpoint_guard_redacted`;
+  - redaction scan over the latest preflight JSON receipt found no URL, object-key alias, raw provider payload, bearer, authorization, cookie, or repo path material.
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not add or expose a real third-party `asset-imports` route, does not update public third-party docs, does not run live execute, does not create assets, does not attach datasets, does not write profiles or retrieval evidence, does not create/update task cards, does not emit external SSE, does not trigger callbacks, and does not change production configuration;
+  - public integration docs remain protected by `npm run test:third-party-public-contract-guard` before any future general release.
+
+## 2026-07-09 P5 Asset Retrieval Evidence Writer Readiness Dry-Run Local Verification
+
+- Scope:
+  - continue #1013 under the enterprise asset library / fashion design asset import plan;
+  - prove the asset profile retrieval evidence live writer can be reviewed before any production write by checking the field ledger, materialized-text precondition, dataset membership guard, idempotency, rollback, audit, and union-search readiness;
+  - keep this as a no-credential dry-run: no asset evidence table migration, no DB write, no delete, no callback, no task creation, no production execute, and no public third-party contract change.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_retrieval_evidence_live_writer_readiness_dry_run`, producing `fashion_design_asset_retrieval_evidence_live_writer_readiness_dry_run_v1`;
+  - the helper distinguishes `ready_for_controlled_writer_review`, `blocked_profile_not_ready`, `blocked_materialized_text_missing`, `blocked_dataset_membership_guard`, `blocked_asset_evidence_table_missing`, and `blocked_union_search_adapter_missing`;
+  - the helper records the planned write order: verify profile, materialize retrieval text, verify dataset asset membership, upsert asset retrieval evidence, and verify union search source kind;
+  - the helper fixes `mode=dry_run`, `surface=asset_retrieval_evidence_writer_review`, `source_kind=asset_profile`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `production_write_allowed=false`, `reviewed_migration_required=true`, and `live_write_still_requires_operator_ack=true`;
+  - `smoke:fashion-design-asset-import` now builds `assetRetrievalEvidenceWriterReadinessDryRuns` from retrieval evidence adapters and reports writer status/checks through JSON and markdown;
+  - smoke checks now verify `assetRetrievalEvidenceWriterReadinessReady`, `assetRetrievalEvidenceWriterFieldLedgerReady`, `assetRetrievalEvidenceWriterIdempotent`, `assetRetrievalEvidenceWriterMembershipGuardReady`, `assetRetrievalEvidenceWriterRollbackAuditReady`, and `assetRetrievalEvidenceWriterRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting `platform-api`;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 50/50 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T105818143Z-26824-self-test.json`, markdown `target/fashion-design-asset-import-smoke/20260709T105818143Z-26824-self-test.md`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T105818142Z-31800-preflight.json`, markdown `target/fashion-design-asset-import-smoke/20260709T105818142Z-31800-preflight.md`;
+  - JSON readback confirmed all six asset retrieval evidence writer checks true: readiness, field ledger, idempotency, membership guard, rollback/audit, and redaction;
+  - JSON readback confirmed `assetRetrievalEvidenceWriterReadinessCount=2` and `assetRetrievalEvidenceWriterStatuses=ready_for_controlled_writer_review`;
+  - markdown readback confirmed the latest preflight includes `asset_retrieval_evidence_writer_readiness_ready`, `asset_retrieval_evidence_writer_statuses`, `asset_retrieval_evidence_writer_field_ledger_ready`, `asset_retrieval_evidence_writer_idempotent`, `asset_retrieval_evidence_writer_membership_guard_ready`, `asset_retrieval_evidence_writer_rollback_audit_ready`, and `asset_retrieval_evidence_writer_redacted`;
+  - redaction scan over the latest preflight JSON receipt found no URL, object-key alias, raw provider payload, bearer, authorization, cookie, or repo path material.
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not run live execute, call a parser worker, run OCR/VLM, create a migration, write asset retrieval evidence, write real asset profiles, clean up real objects, create/update task cards, mutate task-card status enums, emit external SSE, trigger callbacks, open third-party `asset-imports`, change public integration docs, or change production configuration;
+  - the shared receipt records only readiness booleans, status labels, count-only audit metadata, field-ledger allowlists, membership guard labels, idempotency labels, rollback/audit labels, and redaction flags.
+
+## 2026-07-09 P5 Fashion Design Parser Live Adapter Readiness Dry-Run Local Verification
+
+- Scope:
+  - continue #1012 under the enterprise asset library / fashion design asset import plan;
+  - start the P5 small-slice path after the P4 final validation bundle by proving the real parser worker input/output contracts can be evaluated by a live-adapter readiness gate before any controlled worker execution;
+  - keep this as a no-credential dry-run: no parser worker endpoint value, no network, no model call, no DB write, no callback, no production execute.
+- Code change:
+  - `fashion_postchain_adapter_support` now exposes `fashion_design_image_parser_live_adapter_readiness_dry_run`, producing `fashion_design_image_parser_live_adapter_readiness_dry_run_v1`;
+  - the helper validates parser worker input contract, worker output contract, accepted worker statuses, profile payload readiness, retrieval evidence readiness, sensitive material exclusion, and operator next-step labels;
+  - the helper distinguishes `ready_for_profile_and_retrieval_commit`, `ready_for_partial_retry_adapter`, `blocked_worker_input_contract`, `blocked_worker_output_contract`, `blocked_worker_status`, and `blocked_sensitive_material`;
+  - the helper fixes `mode=dry_run`, `no_network=true`, `no_model_call=true`, `no_write=true`, `no_callback=true`, `production_write_allowed=false`, `live_execute_still_requires_worker_endpoint=true`, and `worker_endpoint_value_included=false`;
+  - `smoke:fashion-design-asset-import` now builds matching parser worker input/output contracts, adds `parserLiveAdapterReadinessDryRuns` to followup evidence, and reports parser live-adapter status/checks through JSON and markdown;
+  - smoke checks now verify `parserLiveAdapterReadinessDryRunReady`, `parserLiveAdapterNoNetworkOrModelCall`, `parserLiveAdapterRequiresEndpointOnly`, `parserLiveAdapterContractsStable`, `parserLiveAdapterNoRawPayload`, and `parserLiveAdapterRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting `platform-api`;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 47/47 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T102626088Z-22412-self-test.json`, markdown `target/fashion-design-asset-import-smoke/20260709T102626088Z-22412-self-test.md`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T102626102Z-33240-preflight.json`, markdown `target/fashion-design-asset-import-smoke/20260709T102626102Z-33240-preflight.md`;
+  - JSON readback confirmed all six parser live-adapter checks true: readiness dry-run, no network/model call, endpoint-only requirement, contract stability, no raw payload, and redaction;
+  - markdown readback confirmed the latest preflight includes `parser_live_adapter_readiness_dry_run_ready`, `parser_live_adapter_statuses`, `parser_live_adapter_no_network_or_model_call`, `parser_live_adapter_requires_endpoint_only`, `parser_live_adapter_contracts_stable`, `parser_live_adapter_no_raw_payload`, and `parser_live_adapter_redacted`;
+  - redaction scan over the latest preflight JSON receipt found no URL, object-key alias, raw provider payload, bearer, authorization, cookie, repo path, or user home path material.
+- Safety:
+  - this does not run live execute, call a parser worker, include a worker endpoint value, include a worker request/response payload, call OCR/VLM, upload production fixtures, write real asset imports, write retrieval evidence, clean up real objects, create/update task cards, mutate task-card status enums, emit external SSE, trigger callbacks, open third-party `asset-imports`, change public integration docs, or change production configuration;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Final Validation Readiness Bundle Dry-Run Local Verification
+
+- Scope:
+  - continue #1011 under the enterprise asset library / fashion design asset import plan;
+  - fold the operator-ready handoff receipt into one final validation/readiness bundle dry-run so an operator can review one top-level gate before any future live execute;
+  - keep the bundle review-only and prove it still requires private operator input values, manual review, and controlled execute after review.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_final_validation_readiness_bundle_dry_run`, producing `fashion_design_asset_import_final_validation_readiness_bundle_dry_run_v1`;
+  - the bundle validates the operator-ready handoff receipt contract, handoff readiness, private-value-only state, public contract stability, task-card contract stability, shared validation receipt stability, main-site display field stability, no task-card/shared-receipt mutation, no external side effects, and redaction readiness;
+  - the bundle fixes `surface=final_validation_readiness_bundle`, `mode=dry_run`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, `production_write_allowed=false`, `ready_for_live_execute=false`, and `live_execute_still_requires_private_values=true`;
+  - `smoke:fashion-design-asset-import` now includes `final_validation_readiness_bundle` and `final_validation_readiness_bundle_summary` in self-test, preflight, and execute receipts;
+  - markdown summaries now include `final_validation_bundle_status`, `final_validation_bundle_ready`, `final_validation_bundle_release_blockers`, and `final_validation_bundle_redacted`;
+  - smoke checks now verify `finalValidationReadinessBundleReady`, `finalValidationBundleSingleGateReady`, `finalValidationBundleRequiresOnlyPrivateValues`, `finalValidationBundleContractsStable`, `finalValidationBundleNoExternalEffects`, and `finalValidationBundleRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting `platform-api`;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 47/47 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T091752394Z-12184-self-test.json`, markdown `target/fashion-design-asset-import-smoke/20260709T091752394Z-12184-self-test.md`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T091922050Z-25352-preflight.json`, markdown `target/fashion-design-asset-import-smoke/20260709T091922050Z-25352-preflight.md`;
+  - JSON readback confirmed both latest self-test and preflight have all six final validation bundle checks true, `bundleStatus=ready_for_operator_review_bundle`, `bundleReadyForOperatorReview=true`, `releaseBlockerCount=0`, `readyForLiveExecute=false`, `liveExecuteStillRequiresPrivateValues=true`, and `singleGateReady=true`;
+  - markdown readback confirmed both latest self-test and preflight include `final_validation_bundle_status`, `final_validation_bundle_ready`, `final_validation_bundle_release_blockers`, and `final_validation_bundle_redacted`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, update a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, change main-site display fields, or change production configuration;
+  - the bundle only records one top-level readiness gate, release blocker labels/counts, stable-contract booleans, operator next-step labels, forbidden behavior booleans, status labels, validation flags, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Operator Ready Handoff Receipt Dry-Run Local Verification
+
+- Scope:
+  - continue #1010 under the enterprise asset library / fashion design asset import plan;
+  - add the final operator-ready handoff receipt that ties together the execute manifest, operator validation release summary, and release-summary field-ledger guard;
+  - prove the next live step only requires private operator input values and controlled execute after review, without changing public third-party contracts, task-card status enums, shared validation receipts, or main-site display fields.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_ready_handoff_receipt_dry_run`, producing `fashion_design_asset_import_operator_ready_handoff_receipt_dry_run_v1`;
+  - the receipt validates execute manifest contract, release summary contract, field-ledger guard contract, private-input declaration, manifest review gate, release readiness, field-ledger readiness, public contract stability, task-card contract stability, shared validation receipt stability, and no-side-effect guards;
+  - the receipt fixes `surface=operator_ready_private_execute_handoff_receipt`, `mode=dry_run`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, `production_write_allowed=false`, `ready_for_live_execute=false`, and `live_execute_still_requires_private_values=true`;
+  - `smoke:fashion-design-asset-import` now includes `operator_ready_handoff_receipt` and `operator_ready_handoff_receipt_summary` in self-test, preflight, and execute receipts;
+  - markdown summaries now include handoff status, private-value-only readiness, contract stability, and redaction status;
+  - smoke checks now verify `operatorReadyHandoffReceiptReady`, `operatorReadyHandoffRequiresOnlyPrivateValues`, `operatorReadyHandoffContractsStable`, `operatorReadyHandoffNoTaskCardOrSharedReceiptMutation`, `operatorReadyHandoffNoExternalEffects`, and `operatorReadyHandoffReceiptRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting `platform-api`;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 44/44 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T083318519Z-9184-self-test.json`, markdown `target/fashion-design-asset-import-smoke/20260709T083318519Z-9184-self-test.md`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T083522679Z-7164-preflight.json`, markdown `target/fashion-design-asset-import-smoke/20260709T083522679Z-7164-preflight.md`;
+  - JSON readback confirmed both latest self-test and preflight have all six operator-ready handoff checks true, `handoffStatus=ready_for_operator_private_values`, `handoffReadyForOperatorPrivateValues=true`, `readyForLiveExecute=false`, `publicContractStable=true`, `taskCardContractStable=true`, and `sharedValidationReceiptStable=true`;
+  - markdown readback confirmed both latest self-test and preflight include `operator_ready_handoff_status`, `operator_ready_handoff_requires_only_private_values`, `operator_ready_handoff_contracts_stable`, and `operator_ready_handoff_redacted`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, update a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, change main-site display fields, or change production configuration;
+  - the receipt only records private input labels, contract-stability booleans, operator next-step labels, forbidden behavior booleans, status labels, validation flags, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Release Summary Field Ledger Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1009 under the enterprise asset library / fashion design asset import plan;
+  - add a field-ledger guard for the operator validation release summary so task detail, validation ledger, and markdown summaries can display only allowlisted release fields;
+  - prove the release summary remains display/review-only and cannot automatically trigger live execute, create task cards, update task cards, mutate task-card status enums, change shared validation receipts, emit external SSE, trigger callbacks, or expose private input values.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_validation_release_summary_field_ledger_guard_dry_run`, producing `fashion_design_asset_import_operator_validation_release_summary_field_ledger_guard_dry_run_v1`;
+  - the guard validates release summary contract, release readiness, detail-only mode, no-live-execute guard, public contract stability, task-card contract stability, shared validation receipt stability, and no-side-effect guards;
+  - the guard fixes `surface=task_detail_validation_ledger_field_allowlist`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - the guard records allowlisted task-detail and validation-ledger field names plus forbidden private material and forbidden ledger behavior booleans;
+  - `smoke:fashion-design-asset-import` now includes `operator_validation_release_summary_field_ledger_guard` and `operator_validation_release_summary_field_ledger_guard_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorValidationReleaseSummaryFieldLedgerGuardReady`, `operatorValidationReleaseSummaryFieldLedgerOnly`, `operatorValidationReleaseSummaryFieldLedgerNoLiveExecute`, `operatorValidationReleaseSummaryFieldLedgerTaskCardStable`, `operatorValidationReleaseSummaryFieldLedgerSharedReceiptStable`, and `operatorValidationReleaseSummaryFieldLedgerGuardRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 41/41 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T064605086Z-29408-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T064742237Z-27468-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six release-summary field-ledger checks true, `ledgerStatus=ready_for_release_summary_field_ledger`, `fieldLedgerOnly=true`, `noLiveExecute=true`, `taskCardContractStable=true`, and `sharedValidationReceiptStable=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, update a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the guard only records allowed field labels, forbidden-material booleans, forbidden ledger behavior booleans, status labels, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Operator Validation Release Summary Dry-Run Local Verification
+
+- Scope:
+  - continue #1008 under the enterprise asset library / fashion design asset import plan;
+  - add a final dry-run release summary that ties the real execute preflight manifest to the operator validation rollup display guard;
+  - prove that once legal operator credentials are available, the remaining live step is private input injection and manual review, not public contract changes, task-card enum changes, shared receipt changes, callbacks, external SSE, or automatic live execute.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_validation_release_summary_dry_run`, producing `fashion_design_asset_import_operator_validation_release_summary_dry_run_v1`;
+  - the summary validates the execute manifest contract, rollup display guard contract, manifest side-effect guards, display guard readiness, private input placeholders, public contract stability, task-card contract stability, and shared validation receipt stability;
+  - the summary fixes `surface=operator_execute_preflight_release_summary`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - the summary reports `release_status=ready_for_private_operator_input_review`, `release_ready_for_operator_private_input_injection=true`, `ready_for_live_execute=false`, and `live_execute_still_requires_private_values=true`;
+  - `smoke:fashion-design-asset-import` now includes `operator_validation_release_summary` and `operator_validation_release_summary_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorValidationReleaseSummaryReady`, `operatorValidationReleaseSummaryPrivateInputsOnly`, `operatorValidationReleaseSummaryContractsStable`, `operatorValidationReleaseSummaryDoesNotCreateOrMutateTaskCard`, `operatorValidationReleaseSummaryDoesNotChangeSharedReceipt`, and `operatorValidationReleaseSummaryRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 38/38 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T055050946Z-15764-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T055051309Z-5024-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six operator validation release summary checks true, `releaseStatus=ready_for_private_operator_input_review`, `readyForLiveExecute=false`, and `liveExecuteStillRequiresPrivateValues=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, update a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the summary only records contract-ok booleans, private input placeholder booleans, missing input labels, unchanged-contract booleans, forbidden behavior booleans, status labels, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Operator Validation Rollup Display Contract Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1007 under the enterprise asset library / fashion design asset import plan;
+  - add a display contract guard for the operator validation rollup so the rollup can be shown in task detail, validation ledger, and markdown summary only;
+  - prove the rollup display does not automatically trigger live execute, create task cards, update task cards, mutate task-card status enums, emit external SSE, trigger callbacks, or place private runbook / command template / raw input requirements into shared receipts.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_validation_rollup_display_contract_guard_dry_run`, producing `fashion_design_asset_import_operator_validation_rollup_display_contract_guard_dry_run_v1`;
+  - the guard validates the validation-rollup contract, rollup readiness, live-execute non-readiness, private-input requirement, shared receipt safety, forbidden-material flags, and no-side-effect guards;
+  - the guard fixes `surface=validation_rollup_detail_and_markdown_only`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now includes `operator_validation_rollup_display_contract_guard` and `operator_validation_rollup_display_contract_guard_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorValidationRollupDisplayContractGuardReady`, `operatorValidationRollupDisplayOnly`, `operatorValidationRollupDoesNotTriggerLiveExecute`, `operatorValidationRollupDoesNotCreateOrUpdateTaskCard`, `operatorValidationRollupSharedReceiptExcludesPrivateMaterial`, and `operatorValidationRollupDisplayContractGuardRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 35/35 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T042252436Z-24324-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T042252436Z-8072-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six operator validation rollup display contract-guard checks true, `displayStatus=ready_for_validation_gate_display`, `notLiveExecuteReady=true`, `livePrivateInputsRequired=true`, and `safeForMarkdownSummary=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check -- crates\platform-api\src\asset_import_support.rs scripts\smoke\fashion-design-asset-import.mjs docs\plans\datamax-active-execution-plan.md docs\validation\datamax-main-gap-closure.md`: passed, with only existing docs CRLF conversion warnings.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, update a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the guard only records rollup display-safety booleans, allowed display field labels, forbidden display behavior booleans, status labels, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Operator Validation Rollup Dry-Run Local Verification
+
+- Scope:
+  - continue #1006 under the enterprise asset library / fashion design asset import plan;
+  - add a single validation rollup that compresses the #1003 readiness contract guard, #1004 private runbook receipt package, and #1005 display contract guard into one release-blocker/readiness summary;
+  - keep the rollup as a dry-run operator validation gate only, so later live execution still requires private operator credentials, reviewed dataset, reviewed asset library, reviewed approval, and `ack-live-write`.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_validation_rollup_dry_run`, producing `fashion_design_asset_import_operator_validation_rollup_dry_run_v1`;
+  - the rollup validates the three input contracts, readiness guard safety, receipt package safety, display guard safety, and no-side-effect guards;
+  - the rollup fixes `surface=operator_validation_release_gate_summary`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - the rollup reports `rollup_status=ready_for_operator_validation_review`, `validation_rollup_ready=true`, `release_blocker_count=0`, and explicitly keeps `ready_for_live_execute=false`;
+  - `smoke:fashion-design-asset-import` now includes `operator_validation_rollup` and `operator_validation_rollup_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorValidationRollupDryRunReady`, `operatorValidationRollupInputContractsOk`, `operatorValidationRollupSingleGateReady`, `operatorValidationRollupLiveExecuteStillRequiresPrivateInputs`, `operatorValidationRollupNoSideEffects`, and `operatorValidationRollupRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 32/32 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T030212377Z-24864-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T030212377Z-18936-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six operator validation rollup checks true, `rollupStatus=ready_for_operator_validation_review`, `releaseBlockerCount=0`, `readyForLiveExecute=false`, and `liveExecuteStillRequiresPrivateInputs=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the rollup only records contract-ok booleans, guard-ready booleans, blocker count, operator input requirements, status labels, forbidden-material flags, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Receipt Package Display Contract Drift Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1005 under the enterprise asset library / fashion design asset import plan;
+  - add a contract drift guard proving the private-runbook receipt package is detail-only for task-card and validation display;
+  - prove the package does not create task cards, mutate task-card status enums, emit external SSE, trigger callbacks, change public docs, or leak the private runbook / command template into the shared validation receipt;
+  - keep the guard as a local dry-run receipt artifact without live execute, production writes, callback dispatch, task creation, or public API changes.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_receipt_package_display_contract_drift_guard_dry_run`, producing `fashion_design_asset_import_receipt_package_display_contract_drift_guard_dry_run_v1`;
+  - the guard validates the receipt package contract, package readiness, private/shared separation, shared receipt safety, command-template exclusion, and no-side-effect guards;
+  - the guard fixes `surface=task_card_detail_and_validation_receipt_only`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now includes `receipt_package_display_contract_guard` and `receipt_package_display_contract_guard_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorReceiptPackageDisplayContractGuardReady`, `operatorReceiptPackageDetailOnly`, `operatorReceiptPackageDoesNotCreateTaskCard`, `operatorReceiptPackageDoesNotMutateStatusEnum`, `operatorReceiptPackageSharedReceiptExcludesPrivateMaterial`, and `operatorReceiptPackageDisplayContractGuardRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 29/29 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T022328476Z-28844-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T022328476Z-29636-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six receipt-package display contract-guard checks true and `displayStatus=ready_for_detail_display`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the guard only records display-safety booleans, forbidden display behavior booleans, allowed detail field labels, surface/status labels, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Private Runbook Receipt Package Dry-Run Local Verification
+
+- Scope:
+  - continue #1004 under the enterprise asset library / fashion design asset import plan;
+  - add a dry-run package that explicitly separates the private operator runbook from the shared validation receipt;
+  - prove the pre-execute package does not contain raw session, dataset, asset library, approval, or object locator values;
+  - keep the package as a local review artifact only, without live execute, production writes, cleanup, callback dispatch, task creation, or public API changes.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_live_execute_private_runbook_receipt_package_dry_run`, producing `fashion_design_asset_import_live_execute_private_runbook_receipt_package_dry_run_v1`;
+  - the package derives readiness from the readiness contract guard, then emits separate `private_operator_runbook`, `shared_validation_receipt`, `separation`, `validation`, `operator_controls`, and `redaction` sections;
+  - the private runbook is marked operator-only and excluded from the shared validation receipt; the shared validation receipt excludes command template, raw session, raw dataset, raw asset library, raw approval, and raw object locator material;
+  - the package fixes `surface=private_runbook_and_shared_validation_receipt_split`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now includes `private_runbook_receipt_package` and `private_runbook_receipt_package_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorPrivateRunbookReceiptPackageReady`, `operatorPrivateRunbookSeparatedFromSharedReceipt`, `operatorPrivateRunbookPreExecuteNoRawMaterial`, `operatorSharedValidationReceiptSafe`, `operatorReceiptPackageNoSideEffects`, and `operatorReceiptPackageRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 26/26 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T013340663Z-25092-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T013340663Z-25704-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six private-runbook receipt-package checks true and `packageStatus=ready_for_operator_review`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the package only records private/shared section boundaries, status labels, allowed section labels, redaction booleans, operator controls, and validation booleans;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-09 P4 Fashion Design Operator Readiness Contract Drift Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1003 under the enterprise asset library / fashion design asset import plan;
+  - add a contract drift guard between the operator readiness rollup, live execute command template, and public docs validation;
+  - prove the readiness rollup contains no executable command args and no base URL, session, dataset, asset library, approval, or object locator values;
+  - prove the public third-party docs still do not expose unreviewed `asset-imports` / fashion design image asset contracts.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_readiness_contract_drift_guard_dry_run`, producing `fashion_design_asset_import_operator_readiness_contract_drift_guard_dry_run_v1`;
+  - the guard validates the readiness rollup contract and side-effect guards, checks the redacted command template is placeholder-only, and records public docs asset-import state as closed;
+  - the guard fixes `surface=private_operator_runbook_and_validation_only`, `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now includes `operator_readiness_contract_guard` and `operator_readiness_contract_guard_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorReadinessContractDriftGuardReady`, `operatorReadinessRollupContainsNoCommandMaterial`, `operatorReadinessPrivateRunbookOnly`, `operatorReadinessCommandTemplateRedacted`, `operatorReadinessPublicDocsDoNotExposeAssetImports`, and `operatorReadinessContractGuardRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 23/23 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T005015150Z-8548-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260709T005015150Z-28284-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six readiness contract-guard checks true and `driftStatus=safe_private_runbook_only`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the guard only records contract-ok booleans, redaction booleans, public-docs closed booleans, drift status labels, operator controls, and forbidden-material flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Operator Readiness Rollup Dry-Run Local Verification
+
+- Scope:
+  - continue #1002 under the enterprise asset library / fashion design asset import plan;
+  - add an operator-ready release/readiness rollup that combines the live execute manifest, handoff contract guard, and post-execute cleanup manifest;
+  - keep the rollup as a dry-run review artifact only, without live execute, production writes, cleanup, callback dispatch, task creation, or public API changes.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_readiness_rollup_dry_run`, producing `fashion_design_asset_import_operator_readiness_rollup_dry_run_v1`;
+  - the rollup validates the three input contract names, aggregates `execute_ready`, `handoff_detail_safe`, `cleanup_manifest_ready`, `cleanup_auto_allowed`, and `live_receipt_supplied`, then derives `waiting_for_execute_inputs`, `ready_for_execute_review`, `executed_waiting_for_cleanup_manifest`, `ready_for_cleanup_review`, or blocked states;
+  - the rollup fixes `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now includes `operator_readiness_rollup` and `operator_readiness_rollup_summary` in self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorReadinessRollupDryRunReady`, `operatorReadinessRollupInputContractsOk`, `operatorReadinessRollupExecuteGateConsistent`, `operatorReadinessRollupCleanupGateConsistent`, `operatorReadinessRollupNoSideEffects`, and `operatorReadinessRollupRedacted`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 20/20 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T154248620Z-34492-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T154248620Z-36996-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all six readiness-rollup checks true, `overallStatus=waiting_for_execute_inputs`, `readyForExecute=false`, and `readyForCleanup=false`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the rollup only records contract-ok booleans, readiness booleans, status labels, review gates, operator controls, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Operator Handoff Contract Drift Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #1001 under the enterprise asset library / fashion design asset import plan;
+  - add a contract drift guard proving the operator handoff summary is detail-only and does not replace main task-card status, create new task cards, mutate existing task-card status enums, trigger callbacks, emit public SSE, or change third-party/public contracts;
+  - keep the guard as a local dry-run receipt artifact without live execute, production writes, callback dispatch, task creation, or public API changes.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_handoff_contract_drift_guard_dry_run`, producing `fashion_design_asset_import_operator_handoff_contract_drift_guard_dry_run_v1`;
+  - the guard records surface `task_card_detail_panel_only`, allowed detail statuses (`waiting_for_inputs`, `ready`, `executed`), allowed execute states, allowed cleanup states, field-contract rules, operator controls, and redaction flags;
+  - the guard fixes `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, `existing_task_card_status_enum_mutation_allowed=false`, `new_task_card_creation_allowed=false`, `third_party_callback_allowed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now builds the guard from the handoff summary for self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorHandoffContractDriftGuardReady`, `operatorHandoffDetailStatusAllowed`, `operatorHandoffDetailOnly`, `operatorHandoffDoesNotMutateTaskCardStatus`, `operatorHandoffDoesNotCreateTaskCard`, `operatorHandoffNoCallbackOrPublicContractChange`, and `operatorHandoffContractGuardRedacted`.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 17/17 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T152802908Z-24728-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T152802908Z-6100-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all seven contract-guard checks true, `surface=task_card_detail_panel_only`, `detailStatus=waiting_for_inputs`, `detailDisplayOnly=true`, and `publicContractChanged=false`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, mutate task-card status enums, emit external SSE, trigger a callback, change public integration docs, or change production configuration;
+  - the guard only records detail status labels, allowed state labels, booleans, surface name, and redaction flags;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Operator Handoff Summary Dry-Run Local Verification
+
+- Scope:
+  - continue #1000 under the enterprise asset library / fashion design asset import plan;
+  - add a safe operator handoff summary between the live execute manifest and post-execute cleanup manifest;
+  - compress "can execute / has executed / can clean / cannot auto-clean / needs manual confirmation" into task-card and validation-friendly fields;
+  - keep the summary read-only and free of raw credentials, raw dataset/library ids, raw approval ids or hashes, raw record ids, raw object locators, source URLs, local paths, and customer payloads.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_operator_handoff_summary_dry_run`, producing `fashion_design_asset_import_operator_handoff_summary_dry_run_v1`;
+  - the Rust contract records `task_card_summary`, `validation_summary`, `operator_controls`, and redaction flags while fixing `no_write=true`, `no_delete=true`, `no_callback=true`, `no_task_creation=true`, `public_contract_changed=false`, and `production_write_allowed=false`;
+  - the handoff state machine returns `waiting_for_inputs` / `ready` / `executed`, plus execute states `blocked_missing_execute_inputs`, `ready_for_controlled_execute`, or `executed_receipt_available`;
+  - cleanup state is summarized as `cleanup_waiting_for_live_receipt`, `cleanup_manifest_waiting_for_counts_or_review`, or `cleanup_manifest_ready_for_review`;
+  - `smoke:fashion-design-asset-import` now builds the same handoff summary from the operator manifest and cleanup manifest for self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorHandoffDryRunReady`, `operatorHandoffExecuteStateConsistent`, `operatorHandoffCleanupStateConsistent`, `operatorHandoffTaskCardSummarySafe`, `operatorHandoffValidationSummarySafe`, `operatorHandoffNoSideEffects`, and `operatorHandoffRedacted`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 15/15 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T151945038Z-30992-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T151945044Z-2208-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all seven handoff checks true; handoff status is `waiting_for_inputs`, execute state is `blocked_missing_execute_inputs`, and cleanup state is `cleanup_waiting_for_live_receipt`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, create a task card, trigger a callback, change public integration docs, or change production configuration;
+  - the handoff summary is a dry-run review artifact for task-card/validation display only;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Post-Execute Cleanup Manifest Dry-Run Local Verification
+
+- Scope:
+  - continue #999 under the enterprise asset library / fashion design asset import plan;
+  - add a post-live-execute cleanup-manifest dry-run so an operator can understand how smoke assets would be found by approval hash after a controlled live execute;
+  - make the cleanup receipt shape, selection policy, cleanup actions, review gates, and audit requirements explicit without deleting or archiving anything;
+  - keep shared receipts count-only and free of raw credentials, raw record ids, raw dataset/library ids, raw approval hash values, raw object locators, source URLs, local paths, and customer payloads.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_post_execute_cleanup_manifest_dry_run`, producing `fashion_design_asset_import_post_execute_cleanup_manifest_dry_run_v1`;
+  - the Rust contract records required post-execute inputs, receipt shape, approval-hash selection policy, counts, six planned cleanup actions, execution controls, audit requirements, and redaction requirements;
+  - the dry-run fixes `no_write=true`, `no_delete=true`, `automatic_cleanup_allowed=false`, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now builds the cleanup manifest for self-test, preflight, and execute receipts;
+  - smoke checks now verify `cleanupManifestDryRunReady`, `cleanupManifestRequiresPostExecuteReceipt`, `cleanupManifestReadyMatchesInputs`, `cleanupManifestNoAutoCleanup`, `cleanupManifestRunbookReady`, `cleanupManifestAuditCountsOnly`, and `cleanupManifestRedacted`;
+  - self-test/preflight intentionally keep `cleanupManifestReady=false` because no live execute receipt exists, while still proving the manifest shape and safety gates.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 13/13 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T151238104Z-35648-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T151238103Z-18104-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all seven cleanup manifest checks true, `cleanupNoDelete=true`, `cleanupReady=false`, `cleanupActionCount=6`, and `liveReceiptSupplied=false`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, clean up real objects, delete or archive real rows, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, change public integration docs, or change production configuration;
+  - the cleanup manifest is a dry-run review artifact; actual cleanup remains blocked behind a private operator-reviewed cleanup manifest and explicit approval;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Live Execute Operator Manifest Dry-Run Local Verification
+
+- Scope:
+  - continue #998 under the enterprise asset library / fashion design asset import plan;
+  - add a live-execute preflight operator manifest dry-run for the controlled fashion-design asset import smoke;
+  - make the real V3 user session, existing dataset, existing asset library, ack-live-write, approval id, planned write scopes, rollback plan, and audit requirements reviewable before any live execute;
+  - keep the manifest safe for self-test/preflight receipts without recording raw credentials, raw dataset/library ids, raw approval id, raw object locators, source URLs, local paths, or customer payloads.
+- Code change:
+  - `asset_import_support` now exposes `fashion_design_asset_import_live_execute_operator_manifest_dry_run`, producing `fashion_design_asset_import_live_execute_operator_manifest_dry_run_v1`;
+  - the Rust contract records required-input booleans, four planned steps, manual review gates, rollback requirements, audit requirements, redaction requirements, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now builds the same operator manifest for self-test, preflight, and execute receipts;
+  - smoke checks now verify `operatorManifestDryRunReady`, `operatorManifestRequiredInputsTracked`, `operatorManifestExecuteReadyMatchesInputs`, `operatorManifestRequiresManualReview`, `operatorManifestRunbookReady`, `operatorManifestAuditCountsOnly`, and `operatorManifestRedacted`;
+  - manifest audit wording uses object locator terminology so receipts do not contain an `object_key` field name that would violate existing safety scans.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 11/11 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T150523135Z-30408-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T150523134Z-37764-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have all seven operator manifest checks true, `manifestNoWrite=true`, and `manifestProductionWriteAllowed=false`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no URL, object-key alias, raw provider marker, private object locator, bearer, authorization, cookie, repo path, or user home path material;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 11/11 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - this does not run live execute, upload fixtures to production, write real asset imports, write retrieval evidence, call a parser, enqueue a parser job, open a third-party `asset-imports` contract, change public integration docs, or change production configuration;
+  - the manifest is a dry-run planning and review artifact; execute mode still requires explicit `--execute --ack-live-write --approval-id --dataset-id --asset-library-id` plus V3 session material;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object locator, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design AssistantRun Progress Contract Drift Guard Dry-Run Local Verification
+
+- Scope:
+  - continue #997 under the enterprise asset library / fashion design asset import plan;
+  - add a dry-run contract drift guard proving AssistantRun progress summaries do not mutate existing external SSE envelope fields, do not emit live SSE by themselves, do not trigger third-party callback/write behavior, and do not turn failure/parse/supply gaps into answer-blocking terminal states;
+  - keep the guard as local summary-only evidence without changing public streaming fields, third-party request/response contracts, production task cards, or live event emission.
+- Code change:
+  - `assistant_run_model_supply_budget_support` now has `assistant_run_supply_progress_contract_drift_guard_dry_run`, producing an `assistant_run_supply_progress_contract_drift_guard_dry_run_v1` contract;
+  - the guard records the existing external SSE schema `v3.external_channel.sse.v1` and public envelope field set (`schema`, `event_id`, `sequence`, `assistant_run_id`, `idempotency_key`, `conversation_external_id`, `phase`, `status`, `display_text`, `status_url`, `poll_after_seconds`, `data`) while fixing `public_stream_field_mutation_allowed=false` and `new_progress_events_emit_live_sse=false`;
+  - the third-party guard fixes `callback_triggered=false`, `public_request_or_response_field_added=false`, and `requires_new_third_party_contract=false`;
+  - the main-site task-card guard fixes `allowed_surface=detail_progress_summary`, `creates_task_card_without_user_action=false`, `mutates_task_card_status_enum=false`, and `task_card_detail_only=true`;
+  - the answer-liveness guard fixes `failure_status_blocks_answer=false`, `parse_or_supply_gap_is_terminal=false`, and preserves answer-first / continue-after-reply flags from the progress dry-run;
+  - static-page asset profile summaries now expose compact `assistant_run_supply_progress_contract_drift_guard` fields only;
+  - `smoke:fashion-design-asset-import` now verifies `assistantRunProgressContractDriftGuardReady=true`, `assistantRunProgressDoesNotMutatePublicSseFields=true`, `assistantRunProgressNoCallbackOrWrite=true`, `assistantRunProgressFailureDoesNotBlockAnswer=true`, and `assistantRunProgressTaskCardDetailOnly=true`.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 11/11 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T144054839Z-32304-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T144054840Z-37492-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `assistantRunProgressContractDriftGuardReady=true`, `assistantRunProgressDoesNotMutatePublicSseFields=true`, `assistantRunProgressNoCallbackOrWrite=true`, `assistantRunProgressFailureDoesNotBlockAnswer=true`, `assistantRunProgressTaskCardDetailOnly=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, bearer, authorization, cookie, repo path, user home path, or URL material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, emit live SSE, trigger any callback, or change public integration docs;
+  - the drift guard is a local dry-run contract and is not wired into live AssistantRun event emission, external streaming, third-party callback dispatch, or production task-card creation;
+  - the guard only records field names, booleans, schema labels, and liveness flags, not raw source bodies, raw provider payloads, object locators, auth material, local paths, or customer content;
+  - existing external SSE event names, public payload compaction, static-page progress statuses, task-card status enums, third-party request/response fields, and production configuration remain unchanged;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library / production write approval was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design AssistantRun Non-Blocking Progress Events Dry-Run Local Verification
+
+- Scope:
+  - continue #996 under the enterprise asset library / fashion design asset import plan;
+  - add an AssistantRun-facing dry-run contract that turns "supply ready", "insufficient supply continues expansion", "asset profile is only an understanding signal", and "parse waiting or retrying" into non-blocking progress summaries;
+  - make the summaries consumable by main-site task cards and third-party streams without changing live SSE, public third-party fields, production retrieval, or parser execution.
+- Code change:
+  - `assistant_run_model_supply_budget_support` now has `assistant_run_supply_progress_events_dry_run`, producing an `assistant_run_supply_progress_events_dry_run_v1` contract;
+  - the contract reuses `assistant_run_asset_document_supply_gate_dry_run`, emits compact event types `supply_ready`, `asset_profile_signal`, `supply_expanding`, and `parse_waiting_or_retry`, and marks every event `blocking=false`, `third_party_visible=true`, `task_card_visible=true`, and `sensitive_payload_included=false`;
+  - the continuation policy explicitly keeps `answer_with_current_evidence_first=true`, `continue_actions_after_reply=true`, `final_failure_without_answer=false`, and `parse_or_supply_gap_is_not_terminal=true`;
+  - static-page asset profile summaries now expose compact `assistant_run_supply_progress_events_dry_run` fields including event count, event types, visibility counts, continuation flags, parse-waiting flag, and redaction status;
+  - `smoke:fashion-design-asset-import` now mirrors the dry-run contract and verifies `assistantRunSupplyProgressEventsDryRunReady=true`, `assistantRunProgressNonBlocking=true`, `assistantRunProgressInsufficientSupplyContinues=true`, `assistantRunProgressParseWaitingOrRetryVisible=true`, and `assistantRunProgressNoRawLocator=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 11/11 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T143108488Z-31352-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T143108504Z-35104-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `assistantRunSupplyProgressEventsDryRunReady=true`, `assistantRunProgressNonBlocking=true`, `assistantRunProgressInsufficientSupplyContinues=true`, `assistantRunProgressParseWaitingOrRetryVisible=true`, `assistantRunProgressNoRawLocator=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, bearer, authorization, cookie, repo path, user home path, or URL material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the progress contract is a dry-run planning/test artifact and is not wired into live SSE or production AssistantRun event emission yet;
+  - event summaries contain only event types, statuses, visibility flags, continuation policy, and redaction flags, not raw source bodies, raw provider payloads, object locators, auth material, local paths, or customer content;
+  - existing document retrieval, quality gate, model supply item compaction, public route names, auth, third-party request/response fields, and production configuration remain unchanged;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library / production write approval was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design AssistantRun Supply Budget and Quality Gate Dry-Run Local Verification
+
+- Scope:
+  - continue #995 under the enterprise asset library / fashion design asset import plan;
+  - add an AssistantRun-facing dry-run contract proving ordinary document evidence and `asset_profile` evidence can enter model supply budgeting and quality gating without collapsing source types;
+  - make token-budget estimate, source-kind dedupe, citation labels, and insufficient-supply continuation behavior testable without changing production retrieval, public contracts, or live execution.
+- Code change:
+  - `assistant_run_model_supply_budget_support` now has `assistant_run_asset_document_supply_gate_dry_run`, producing an `assistant_run_asset_document_supply_budget_quality_gate_dry_run_v1` contract;
+  - the contract uses existing `assistant_run_model_budgeted_supply_items` output, records bucket limits, included/omitted counts, approximate prompt chars/tokens, first-seen `source_kind` order and duplicate counts, citation labels, and a quality gate status/next action;
+  - the quality gate keeps `document_chunk` and `asset_profile` separate, labels asset profiles as `asset_profile_signal`, disallows exact asset-profile citation, and requires document/database/media evidence for exact claims;
+  - when only asset-profile supply exists, the dry-run marks `partial_asset_context_only` with `next_action=continue_expand_supply`;
+  - static-page asset profile summaries now expose compact `assistant_run_supply_gate_dry_run` status fields only;
+  - `smoke:fashion-design-asset-import` now verifies `assistantRunSupplyBudgetQualityGateDryRunReady=true`, `assetDocumentSupplySourceKindDedupeReady=true`, `insufficientSupplyContinuePlanned=true`, and `assistantRunSupplyGateNoRawLocator=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: passed, 14/14 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 11/11 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T141037608Z-38868-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T141037586Z-30920-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `assistantRunSupplyBudgetQualityGateDryRunReady=true`, `assetDocumentSupplySourceKindDedupeReady=true`, `insufficientSupplyContinuePlanned=true`, `assistantRunSupplyGateNoRawLocator=true`, `modelFacingSupplyCompressionDryRunReady=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, bearer, authorization, cookie, repo path, user home path, or URL material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the dry-run contract is a local planning/test artifact and is not wired as a live AssistantRun decision point;
+  - existing document retrieval, quality gate, model supply item compaction, public route names, auth, third-party request/response fields, and production configuration remain unchanged;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library / production write approval was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Union Search Explain Debug and Model-Facing Compression Dry-Run Local Verification
+
+- Scope:
+  - continue #994 under the enterprise asset library / fashion design asset import plan;
+  - add a no-write explain/debug summary shape for future union search results;
+  - add a model-facing supply compression dry-run that lets asset-profile evidence reach the model as a compact understanding signal without becoming an exact document citation.
+- Code change:
+  - `asset_profile_supply_support` now has `build_asset_profile_union_search_explain_debug_summary_dry_run`, producing an `asset_profile_union_search_explain_debug_summary_v1` contract with result counts, top source kind, source-kind mix, rank reason codes, membership guard status, and redaction flags;
+  - `asset_profile_supply_support` now has `build_asset_profile_model_facing_supply_compression_dry_run`, producing an `asset_profile_model_facing_supply_compression_v1` contract with compact text, term/facet counts, citation policy, exact-claim policy, and redaction checks;
+  - static-page asset profile summaries now expose compact `union_search_explain_debug_summary` and `model_facing_supply_compression_dry_run` status only, not raw asset locators, provider payloads, or source bodies;
+  - `smoke:fashion-design-asset-import` now verifies `unionSearchExplainDebugSummaryReady=true`, `modelFacingSupplyCompressionDryRunReady=true`, and `modelFacingSupplyCompressionNoRawLocator=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T135840104Z-22300-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T135840104Z-34744-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `unionSearchExplainDebugSummaryReady=true`, `modelFacingSupplyCompressionDryRunReady=true`, `modelFacingSupplyCompressionNoRawLocator=true`, `unionSearchMergeRankFixtureReady=true`, `sourceKindRegressionDryRunReady=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, bearer, authorization, cookie, repo path, user home path, or URL material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the explain/debug summary is no-write and exposes only counts, source kinds, reason codes, and guard status suitable for future task/debug UI;
+  - the model-facing compression explicitly marks asset profiles as understanding signals, not exact source citations, and requires document/database/media evidence for exact claims;
+  - existing document retrieval remains unchanged, and asset-profile evidence is still modeled as a future separate evidence source rather than synthetic document/chunk data;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library / production write approval was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Union Search Merge/Rank Fixture and Source-Kind Regression Dry-Run Local Verification
+
+- Scope:
+  - continue #993 under the enterprise asset library / fashion design asset import plan;
+  - add a no-write fixture proving document evidence and `asset_profile` evidence can be merged and ranked with stable `source_kind` values;
+  - make source-kind regression and locator redaction testable before adding any production retrieval schema, worker execution, or public asset import API.
+- Code change:
+  - `asset_profile_supply_support` now has `build_asset_profile_union_search_merge_rank_fixture_dry_run`, producing an `asset_profile_union_search_merge_rank_fixture_v1` contract;
+  - the fixture contains one document result and one asset-profile result, ranks the higher-score asset profile first, preserves `source_kind=document_chunk` and `source_kind=asset_profile`, requires tenant/dataset/asset membership guard, and records `production_write_allowed=false`;
+  - static-page asset profile summaries now expose only compact merge/rank fixture status: contract, no-write flag, result count, first result source kind, source-kind preservation, membership guard, locator redaction, and production-write denial;
+  - `smoke:fashion-design-asset-import` now verifies `unionSearchMergeRankFixtureReady=true`, `sourceKindRegressionDryRunReady=true`, and `unionSearchMergeRankNoRawLocator=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed after formatting;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 10/10 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T134725470Z-28992-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T134725476Z-31200-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `unionSearchMergeRankFixtureReady=true`, `sourceKindRegressionDryRunReady=true`, `unionSearchMergeRankNoRawLocator=true`, `assetRetrievalEvidenceMigrationSketchReady=true`, `unionSearchNoWriteAdapterDraftReady=true`, `assetSearchMembershipGuardPlanned=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, bearer, authorization, cookie, repo path, user home path, or URL material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the fixture is a local no-write regression contract only; it proves result shape, rank order, source-kind preservation, membership guard, and locator redaction before any production union-search implementation;
+  - existing document retrieval remains unchanged, and asset-profile evidence is still modeled as a future separate evidence source rather than synthetic document/chunk data;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library / production write approval was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Evidence Migration Sketch and Union Search No-Write Adapter Local Verification
+
+- Scope:
+  - continue #992 under the enterprise asset library / fashion design asset import plan;
+  - add a reviewed-sketch-only contract for a future `asset_retrieval_evidences` table and a no-write union search adapter draft;
+  - make table/index/search-result source kind/membership guard requirements testable without adding a production migration or changing live retrieval behavior.
+- Code change:
+  - `asset_profile_supply_support` now has `build_asset_retrieval_evidence_migration_sketch_dry_run`, producing an `asset_retrieval_evidences_migration_sketch_v1` contract with table columns, unique key, btree/gin index plan, membership guard, search-result contract, review gates, and `production_migration_allowed=false`;
+  - `asset_profile_supply_support` now has `build_asset_profile_union_search_no_write_adapter_draft`, producing an `asset_profile_union_search_no_write_adapter_v1` draft with dataset-scope input requirements, existing document retrieval unchanged, asset evidence query step, merge/rank step, result source kind, membership guard, and `production_write_allowed=false`;
+  - static-page asset profile summaries now include compact `asset_retrieval_evidence_migration_sketch` and `union_search_no_write_adapter_draft` summaries with no raw locators or provider payloads;
+  - `smoke:fashion-design-asset-import` now verifies `assetRetrievalEvidenceMigrationSketchReady=true`, `unionSearchNoWriteAdapterDraftReady=true`, and `assetSearchMembershipGuardPlanned=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T132050249Z-12832-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T132050241Z-6664-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `assetRetrievalEvidenceMigrationSketchReady=true`, `unionSearchNoWriteAdapterDraftReady=true`, `assetSearchMembershipGuardPlanned=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, URL, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not add a migration file, change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the migration sketch is deliberately `reviewed_sketch_only` and requires operator-reviewed migration, backfill plan, rollback plan, small-batch execution, and search source-kind regression tests before any production use;
+  - the union search adapter is no-write and keeps existing document retrieval input unchanged while requiring tenant/dataset/asset membership guard for asset evidence;
+  - static-page planning gets only compact table/index/source-kind/guard metadata, not raw asset locators, source bodies, provider payloads, raw idempotency keys, or document/chunk spoofing material;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Profile Retrieval Storage Mapping Dry-Run Local Verification
+
+- Scope:
+  - continue #991 under the enterprise asset library / fashion design asset import plan;
+  - decide how asset-profile retrieval evidence should map into storage before changing production retrieval tables or enabling real OCR/VLM worker writes;
+  - explicitly reject synthetic document/chunk reuse for asset profiles and keep the result as a dry-run migration/search design contract.
+- Code change:
+  - `asset_profile_supply_support` now has `build_asset_profile_retrieval_storage_mapping_dry_run`, producing an `asset_profile_retrieval_storage_mapping_v1` contract;
+  - the dry-run records current `retrieval_evidences` constraints: document id and document chunk id are required, conflict key is `execution_id/document_chunk_id`, and existing retrieval-worker input is document chunks;
+  - the selected strategy is `add_asset_retrieval_evidences_table_then_union_search`; `reuse_retrieval_evidences_with_synthetic_document_chunk` is explicitly not recommended;
+  - static-page asset profile summaries now include a compact `retrieval_evidence_storage_mapping_dry_run` summary with selected strategy, search method, proposed table name, migration readiness, and `production_write_allowed=false`;
+  - `smoke:fashion-design-asset-import` now verifies `assetProfileRetrievalStorageMappingDryRunReady=true`, `syntheticDocumentChunkRejected=true`, and `assetEvidenceTableRecommended=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T130830545Z-20344-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T130830551Z-34700-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `assetProfileRetrievalStorageMappingDryRunReady=true`, `syntheticDocumentChunkRejected=true`, `assetEvidenceTableRecommended=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, URL, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not change production retrieval schema, add a migration, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the dry-run contract keeps the existing document retrieval table unchanged and moves asset retrieval evidence to a reviewed future `asset_retrieval_evidences` table plus union search path;
+  - static-page planning gets only compact mapping metadata, not raw asset locators, source bodies, provider payloads, raw idempotency keys, or document/chunk spoofing material;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Retrieval Evidence Adapter Dry-Run and Profile/Evidence Write Order Local Verification
+
+- Scope:
+  - continue #990 under the enterprise asset library / fashion design asset import plan;
+  - define the dry-run shape for asset-profile retrieval evidence writing before changing production retrieval tables or enabling real OCR/VLM worker writes;
+  - lock the worker execution order so profile upsert, retrieval evidence materialization/upsert, and parse-run completion cannot be reordered into a false completed state.
+- Code change:
+  - `asset_profile_supply_support` now has `build_asset_profile_retrieval_evidence_adapter_dry_run`, producing an `asset_profile_retrieval_evidence_writer_v1` dry-run contract with input requirements, evidence draft shape, safe write-plan summary, write order, completion gate, and partial-failure policy;
+  - `fashion_design_image_parse_run_metadata.followup_plan` now includes `worker_commit_order` and `worker_commit_gate`; completion is gated behind `asset_profile_upserted` and `retrieval_evidence_upserted`, and partial failures move to `retrying`;
+  - static-page asset profile summaries now include a compact `retrieval_evidence_adapter_dry_run` summary with adapter contract, status, write order, completion gate, evidence draft presence, and `dry_run_only`, without raw storage locators or raw idempotency keys;
+  - `smoke:fashion-design-asset-import` now verifies `retrievalEvidenceAdapterDryRunReady=true` and `profileEvidenceWriteOrderConstrained=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 7/7 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T124953290Z-35316-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T124953289Z-33616-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `retrievalEvidenceAdapterDryRunReady=true`, `profileEvidenceWriteOrderConstrained=true`, `retrievalEvidenceIdempotencyPlanned=true`, `parseStatusTransitionDryRunReady=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, URL, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not change production retrieval schema, write real retrieval evidence, call a real parser, enqueue a real parser job, open a third-party `asset-imports` contract, or change public integration docs;
+  - the adapter shape is explicitly dry-run and logical; mapping to production `retrieval_evidences` storage remains a later reviewed step;
+  - static-page planning gets only compact write-order and completion-gate metadata, not raw locators, source bodies, provider payloads, or raw idempotency keys;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Parser Status Transition and Retrieval Evidence Idempotency Dry-Run Local Verification
+
+- Scope:
+  - continue #989 under the enterprise asset library / fashion design asset import plan;
+  - add no-credential dry-run boundaries for parser task status transitions and retrieval evidence write idempotency before enabling real OCR/VLM worker execution or real retrieval evidence writes;
+  - prove the follow-up plan can express retry/completion behavior and stable dedupe keys without exposing raw object locators, URLs, local paths, provider payloads, or source bodies.
+- Code change:
+  - `fashion_postchain_adapter_support` now has `fashion_design_image_parser_status_transition_dry_run`, which normalizes parser states and plans pending/parsing/failed/completed transitions based on worker output readiness;
+  - `fashion_design_image_parse_run_metadata.followup_plan.parse_queue` now carries a compact `status_transition_policy` for ready/partial parser outcomes;
+  - `fashion_design_image_parse_run_metadata.followup_plan.retrieval_evidence` now records action `upsert_retrieval_evidence`, an idempotency key template, and dedupe scope `tenant_id/dataset_id/asset_id/profile_kind/parser_name/parser_version`;
+  - `asset_profile_supply_support` now has `build_asset_profile_retrieval_evidence_write_plan`, producing a deterministic source locator, idempotency key, dedupe scope, write policy, ready flag, and evidence text size from a compact asset profile hint;
+  - static-page asset profile summaries now include a safe `retrieval_evidence_write_plan` summary with action, source kind, write policy, ready flag, dedupe scope, and idempotency key presence, but not the raw idempotency key or storage locator;
+  - `smoke:fashion-design-asset-import` now verifies `parseStatusTransitionDryRunReady=true` and `retrievalEvidenceIdempotencyPlanned=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests, with the existing Node typeless module warning only;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T124211889Z-36804-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T124211895Z-35356-preflight.json`;
+  - JSON readback confirmed both latest self-test and preflight have `parseStatusTransitionDryRunReady=true`, `retrievalEvidenceIdempotencyPlanned=true`, `retrievalEvidenceTextMaterialized=true`, `parseQueueDryRunReady=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, URL, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not call a real parser, enqueue a real parser job, write retrieval evidence, open a third-party `asset-imports` contract, or change public integration docs;
+  - parser state transitions and evidence idempotency remain dry-run/planning metadata only;
+  - static-page planning gets only a compact write-plan summary, not raw storage locators or raw idempotency keys;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Parser Contract and Retrieval Text Materialization Local Verification
+
+- Scope:
+  - continue #988 under the enterprise asset library / fashion design asset import plan;
+  - add no-credential parser worker input/output contract mocks and a pure asset-profile-to-retrieval-text materializer before enabling real OCR/VLM worker execution;
+  - prove the contracts are safe summaries and do not require exposing raw object locators, URLs, local paths, provider payloads, or source bodies in smoke receipts.
+- Code change:
+  - `fashion_postchain_adapter_support` now defines parser constants for `fashion_design_image_ocr_vlm`, `datamax-fashion-image-parser`, parser version `2026-06-17`, and profile schema `fashion_design_image_v1`;
+  - added `FashionDesignImageParserWorkerInput` and `fashion_design_image_parser_worker_input_contract`, returning a safe worker input contract with source presence/kind, content type, profile seeded state, and requested outputs;
+  - added `fashion_design_image_parser_worker_output_contract`, which normalizes loose/mock worker payloads into `fashion_design_image_v1` profile payload plus retrieval evidence readiness without keeping raw provider payloads;
+  - `fashion_design_image_parse_run_metadata.followup_plan` now embeds the safe worker input contract alongside parse queue and retrieval evidence write policy;
+  - `asset_profile_supply_support` now has `materialize_asset_profile_retrieval_evidence_text`, which turns a compact `AssetProfileSupplyHint` into deterministic retrieval text using only title/kind/schema/summary/terms/facets;
+  - static-page asset profile summaries now include a compact `retrieval_evidence_text_preview` generated through that materializer, so the function is exercised by an existing planning path without changing public API contracts;
+  - `smoke:fashion-design-asset-import` now verifies `retrievalEvidenceTextMaterialized=true` in self-test and preflight follow-up summaries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api asset_profile_supply --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: passed, 26/26 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T122555348Z-27596-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T122555348Z-21644-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `parseQueueDryRunReady=true`, `retrievalEvidenceDryRunReady=true`, `retrievalEvidenceTextMaterialized=true`, `followupDryRunRedacted=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, URL, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not call a real parser, enqueue a real parser job, write retrieval evidence, open a third-party `asset-imports` contract, or change public integration docs;
+  - static-page planning gets only a compact retrieval text preview derived from already compact profile hints, not raw asset storage details;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Parse Queue and Retrieval Evidence Dry-Run Local Verification
+
+- Scope:
+  - continue #987 under the enterprise asset library / fashion design asset import plan;
+  - make the controlled design-image import path explicitly describe the follow-up parse queue and retrieval evidence materialization plan before real OCR/VLM worker execution is enabled;
+  - keep the proof no-credential and dry-run only, with no production parse enqueue, retrieval evidence write, upload, or network call.
+- Code change:
+  - `fashion_design_image_parse_run_metadata` now includes a safe `followup_plan` section;
+  - `followup_plan.parse_queue` records action, task kind `fashion_design_image_ocr_vlm`, parser name/version, pending status, source-ref presence, and source kind;
+  - `followup_plan.retrieval_evidence` records `asset_profile` as the future evidence source, profile schema, dry-run readiness, and write policy `after_profile_available`;
+  - the follow-up plan intentionally records only safe booleans, enums, parser identifiers, and schema names; it does not record URLs, object keys, local paths, entry names, raw metadata, provider payloads, or source bodies;
+  - `smoke:fashion-design-asset-import` self-test/preflight now builds `followup_summary` with parse queue pending count and retrieval evidence dry-run preview count, and adds machine checks `parseQueueDryRunReady`, `retrievalEvidenceDryRunReady`, and `followupDryRunRedacted`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T120916366Z-29236-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T120953014Z-24872-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `parseQueueDryRunReady=true`, `retrievalEvidenceDryRunReady=true`, `followupDryRunRedacted=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no raw provider marker, private object locator, object key alias, raw local path, raw customer file name, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/frontend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this does not enqueue a real parser job, does not write retrieval evidence, and does not open a third-party `asset-imports` contract;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design ZIP Metadata File Reference Redaction Local Verification
+
+- Scope:
+  - continue #986 under the enterprise asset library / fashion design asset import plan;
+  - prevent design-image ZIP package expansion from leaking ZIP entry names, local paths, file names, content hashes, or raw provider payload aliases through metadata, generated source ids, frontend payloads, or smoke receipts;
+  - keep controlled top-level object locator fields available where the system needs them to read uploaded ZIP/image objects.
+- Code change:
+  - ZIP child asset `external_id` now uses `package.external_id:NNNN` when supplied, or `zip-ref-<short package object hash>:NNNN` when the package has no external id, so prepared asset `source_id` does not fall back to the extracted file path;
+  - ZIP entry metadata now records `entry_name_present`, extension, entry index, and size only; it no longer stores raw `entry_name`;
+  - backend package metadata sanitization now filters file/path/hash aliases including `filename`, `file_name`, `original_name`, `path`, `file_path`, `local_path`, `content_hash`, and `sha256`;
+  - frontend import payload builders and ZIP package normalization filter the same file/path/hash aliases before request construction;
+  - smoke fixtures now inject raw file names, local paths, object keys, hashes, and raw provider payloads into single, batch, and ZIP metadata, then prove the constructed payloads and receipts stay redacted.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 9/9 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T120425872Z-23336-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T120425870Z-35080-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `payloadItemMetadataRedacted=true`, `payloadRootMetadataRedacted=true`, `payloadPackageMetadataRedacted=true`, `normalizedImportResponseRedacted=true`, `scopeAssetsRedacted=true`, `planningLayerRedacted=true`, and `noNetworkOrProductionWrite=true`;
+  - redaction scan over the latest self-test/preflight JSON receipts found no `raw_provider_payload`, fixture raw provider marker, private object locator, raw local path, raw customer file name, bearer, authorization, cookie, repo path, or user home path material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched backend/frontend/smoke/docs paths: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this remains a main-site controlled import and no third-party `asset-imports` contract was opened;
+  - real object locators still remain only in controlled top-level fields/storage fields needed for reading uploaded assets, not in model-facing metadata, UI summaries, or smoke receipts;
+  - no backend public route name, third-party request field, third-party response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Frontend Metadata Sanitizer Local Verification
+
+- Scope:
+  - continue #985 under the enterprise asset library / fashion design asset import plan;
+  - prevent main-site fashion-design import request bodies from duplicating raw source URLs, object locators, source ids, raw provider payloads, or auth-like values inside metadata;
+  - keep actual top-level `image_url` / `object_key` import fields available where the controlled import API needs them.
+- Code change:
+  - `buildFashionDesignImageAssetImportPayload` now recursively sanitizes user metadata before adding it to single-image import payloads;
+  - `buildFashionDesignImageAssetImportBatchPayload` now recursively sanitizes root batch metadata;
+  - `normalizeAssetImportPackages` now recursively sanitizes ZIP package metadata;
+  - ZIP package metadata now records `package_source_present=true` instead of duplicating the raw package source in `package_source`;
+  - sensitive metadata keys filtered by the frontend builder include `source`, `url`, `image_url`, `object_key`, `source_id`, `raw_provider_payload`, `provider_payload`, `raw_payload`, `authorization`, and `cookie`.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T114940711Z-22264-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T114940710Z-32636-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `payloadItemMetadataRedacted=true`, `payloadRootMetadataRedacted=true`, `payloadPackageMetadataRedacted=true`, `normalizedImportResponseRedacted=true`, and `scopeAssetsRedacted=true`;
+  - redaction scan over the latest self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, repo path, or fixture locator material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `git diff --check` on the touched frontend/smoke files: passed, with only existing LF/CRLF warnings.
+- Safety:
+  - this only removes duplicate sensitive material from metadata; top-level controlled import fields still carry the actual source references needed by the system;
+  - no backend contract type, platform API route, public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Metadata Source Redaction Local Verification
+
+- Scope:
+  - continue #984 under the enterprise asset library / fashion design asset import plan;
+  - prevent controlled fashion-design asset import payloads and stored metadata from duplicating raw source URLs, object locators, source ids, raw provider payloads, or auth-like values;
+  - keep public third-party contracts, platform routes, asset/profile/parse-run table shape, and production configuration unchanged.
+- Code change:
+  - `buildFashionDesignImageAssetImportBatchPayload` no longer writes raw `source` into per-item metadata;
+  - per-item metadata now uses `source_present` and `source_kind` for main-site batch imports;
+  - `fashion_design_image_asset_metadata` now stores safe source booleans and `source_kind` instead of raw `image_url`;
+  - `fashion_design_image_parse_run_metadata` now stores safe source booleans and `source_kind` instead of raw `source`;
+  - backend import metadata is recursively sanitized for known sensitive keys such as `source`, `url`, `image_url`, `object_key`, `source_id`, `raw_provider_payload`, `provider_payload`, `raw_payload`, `authorization`, and `cookie`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 8/8 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T114336524Z-37044-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T114336682Z-7804-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `payloadItemMetadataRedacted=true`, `normalizedImportResponseRedacted=true`, `scopeAssetsRedacted=true`, and `planningLayerRedacted=true`;
+  - redaction scan over the latest self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, repo path, or fixture locator material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - real locators still remain in controlled asset fields where the platform needs them to read stored assets; the change removes duplicate copies from metadata and receipts;
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, model provider route, or production configuration was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Response Redaction Local Verification
+
+- Scope:
+  - continue #983 under the enterprise asset library / fashion design asset import plan;
+  - prevent main-site normalized design-image import responses from carrying raw asset locators, source ids, parse metadata, profile attributes, or raw provider payloads into UI state or smoke receipts;
+  - keep backend contract types, platform API routes, asset import write semantics, parse-run creation, profile writes, dataset membership writes, and public third-party contracts unchanged.
+- Code change:
+  - `normalizeFashionDesignImageAssetImportResponse` now maps backend `asset`, `dataset_membership`, `parse_run`, and `profile` objects into safe frontend summaries;
+  - asset summaries reuse the existing safe asset summary shape and drop raw `object_key`, `objectKey`, `source_id`, `sourceId`, and `metadata`;
+  - parse-run summaries keep parser/status/error code/timestamps but drop raw metadata and error message body;
+  - profile summaries keep kind/version/embedding status and `attributesPresent`, but drop raw attributes;
+  - `smoke:fashion-design-asset-import` mock import responses now include raw locators, raw provider payload, parse metadata, and profile attributes, then verify normalized responses remain redacted.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T113600422Z-7568-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T113600422Z-37080-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `normalizedImportResponseRedacted=true`, `pendingParseRunCount=4`, `scopeAssetsRedacted=true`, and `planningLayerRedacted=true`;
+  - redaction scan over the latest self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, repo path, or fixture locator material.
+- Safety:
+  - no backend contract type, platform API route, public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Scope Summary Backend Redaction Local Verification
+
+- Scope:
+  - continue #982 under the enterprise asset library / fashion design asset import plan;
+  - prevent API scope-summary responses from carrying raw asset locators, source ids, or raw metadata into main-site state, smoke receipts, or downstream planning helpers;
+  - keep single asset item view mapping, asset import responses, asset import write semantics, parse-run creation, profile writes, dataset membership writes, and public third-party contracts unchanged.
+- Code change:
+  - `asset_library_scope_summary_response` maps `assets` through a safe asset view before building `AssetLibraryScopeSummaryView`;
+  - safe asset views clear `source_id` and `object_key`;
+  - raw metadata is replaced by `storage_locator_present`, `source_id_present`, and `metadata_present` booleans;
+  - frontend `normalizeAssetLibraryScope` reads these safe booleans and still does not retain raw asset fields.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_library_scope_summary --lib`: passed, 4/4 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 18/18 tests;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T112210125Z-29548-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T112111194Z-28300-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `scopeAssetsRedacted=true` and `scopeAssetLocatorsRedacted=true`;
+  - redaction scan over those self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, repo path, or fixture locator material;
+  - `npm run test:third-party-public-contract-guard`: passed;
+  - `git diff --check`: passed.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, model provider route, single asset item view mapper, or asset import response contract was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Scope Asset Redaction Local Verification
+
+- Scope:
+  - continue #981 under the enterprise asset library / fashion design asset import plan;
+  - prevent main-site normalized asset-library scope from carrying raw asset locators, source ids, or metadata into UI state, smoke receipts, or downstream planning helpers;
+  - keep platform API behavior, asset import write semantics, parse-run creation, profile writes, dataset membership writes, and public third-party contracts unchanged.
+- Code change:
+  - `normalizeAssetLibraryScope` now maps backend `assets` into safe frontend summaries instead of preserving raw `AssetItemView` objects;
+  - safe summaries keep id, title, asset/library/collection/external ids, asset kind, source kind, content type, profile count, created/updated timestamps, and locator/source presence booleans;
+  - safe summaries drop raw `object_key`, `objectKey`, `source_id`, `sourceId`, and `metadata`;
+  - `smoke:fashion-design-asset-import` scope fixture now includes an asset with a raw locator, source id, and raw provider payload metadata, then verifies normalized scope and receipts stay redacted.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 17/17 tests;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T111619234Z-30916-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T111619234Z-37292-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `scopeAssetsRedacted=true`, `scopeAssetCount=1`, and `scopeAssetLocatorsRedacted=true`;
+  - redaction scan over the latest self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, repo path, or fixture locator material;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - an initial smoke run correctly failed because a new summary field name contained object-key wording; the field was renamed to locator wording before final verification;
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Scope Guard Smoke Local Verification
+
+- Scope:
+  - continue #980 under the enterprise asset library / fashion design asset import plan;
+  - make the no-credential design-image asset import smoke prove collection-scoped imports cannot be built without an asset library;
+  - keep platform API behavior, asset import write semantics, parse-run creation, profile writes, dataset membership writes, and public third-party contracts unchanged.
+- Code change:
+  - `scripts/smoke/fashion-design-asset-import.mjs` now builds `scope_guard_summary` in self-test and preflight;
+  - self-test/preflight checks now assert `collectionScopedSingleImportRequiresAssetLibrary=true`;
+  - self-test/preflight checks now assert `collectionScopedBatchImportRequiresAssetLibrary=true`;
+  - the new smoke coverage reuses the main-site payload builders and records only booleans, not source URLs, object keys, or local paths.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T111022463Z-35568-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T111022463Z-1312-preflight.json`;
+  - JSON readback confirmed both self-test and preflight have `collectionScopedSingleImportRequiresAssetLibrary=true` and `collectionScopedBatchImportRequiresAssetLibrary=true`;
+  - redaction scan over the latest self-test/preflight JSON/Markdown receipts found no URL, object key, raw provider payload, bearer, authorization, cookie, provider key, local path, or repo path material;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 17/17 tests.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Frontend Scope Guard Local Verification
+
+- Scope:
+  - continue #979 under the enterprise asset library / fashion design asset import plan;
+  - align main-site payload builders with the backend asset library / collection scope guard;
+  - keep third-party public docs and public third-party contracts unchanged.
+- Code change:
+  - `buildFashionDesignImageAssetImportPayload` now rejects collection-scoped single-image imports when `assetLibraryId` is absent;
+  - `buildFashionDesignImageAssetImportBatchPayload` now rejects collection-scoped batch/package imports when `assetLibraryId` is absent;
+  - added view-model coverage for both payload builders.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: passed, 17/17 tests;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T110652512Z-33408-preflight.json`.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Collection Scope Guard Local Verification
+
+- Scope:
+  - continue #978 under the enterprise asset library / fashion design asset import plan;
+  - prevent controlled design-image imports from writing inconsistent asset library / collection relationships;
+  - keep third-party public docs and public third-party contracts unchanged.
+- Code change:
+  - `storage::PgAssetLibraryRepository` now exposes a read-only `get_collection_asset_library_id` lookup;
+  - single and batch `fashion-design-images` controlled import paths validate asset library and collection references before asset/profile/parse-run writes;
+  - `collection_id` now requires `asset_library_id`;
+  - collection ownership must match the requested asset library;
+  - missing collections return `asset_collection_not_found`, and mismatches return `asset_import_collection_library_mismatch`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 8/8 tests;
+  - `cargo check -q -p storage`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T110322522Z-9252-preflight.json`;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Third-Party Public Asset Contract Guard Local Verification
+
+- Scope:
+  - continue #977 under the enterprise asset library / fashion design asset import plan;
+  - keep third-party public integration docs from exposing unreviewed asset import endpoints or fields before formal contract review;
+  - keep platform API behavior, asset import write semantics, parse-run creation, profile writes, dataset membership writes, and public third-party contracts unchanged.
+- Code change:
+  - added `tools/third-party-public-contract-guard.test.mjs`;
+  - added `npm run test:third-party-public-contract-guard`;
+  - the guard scans `docs/integrations` and `apps/web/public/external-integrations` Markdown/HTML files;
+  - forbidden unreviewed public terms are `asset-imports`, `fashion-design-images`, `asset_library_external_id(s)`, `asset_collection_external_id(s)`, and `asset_external_id(s)`.
+- Local verification:
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1 test;
+  - `npm run test:pure-third-party-guide-html`: passed, 5/5 tests;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T105115161Z-35480-preflight.json`.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document content, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design Asset Import Planning Smoke Local Verification
+
+- Scope:
+  - continue #976 under the enterprise asset library / fashion design asset import plan;
+  - extend the no-credential fashion-design asset import smoke so it also proves the planning layer sees asset parse status after import/scope normalization;
+  - keep asset import write semantics, parse-run creation, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - `scripts/smoke/fashion-design-asset-import.mjs` now builds a `planning_summary` in self-test and preflight from the existing scope fixture;
+  - self-test/preflight checks now assert static-page planning sees parse status, report-planner AST sees parse status, pending assets cause `asset_materials` insertion, and planning receipts remain redacted;
+  - execute-mode receipts now include live `parseStatusCounts` and `parseRunCount` from normalized scope summary, plus a `scopeParseStatusVisible` check;
+  - generated Markdown receipts now show `scope_parse_run_count` and `planning_parse_status_visible`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T104108980Z-34508-self-test.json`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T104108980Z-24340-preflight.json`;
+  - preflight JSON readback contains `planning_summary.staticPageEvidenceParseStatusVisible=true`, `planning_summary.reportPlannerAstParseStatusVisible=true`, `staticPagePlanningSeesParseStatus=true`, `reportPlannerAstSeesParseStatus=true`, and `planningLayerRedacted=true`;
+  - preflight Markdown readback contains `scope_parse_run_count: 3`, `planning_parse_status_visible: true`, and the new planning checks;
+  - redaction scan over the latest JSON/Markdown receipts found no object key, raw provider payload, source URL, bearer, authorization, or cookie material.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Parse Status Report Planner AST Local Verification
+
+- Scope:
+  - continue #975 under the enterprise asset library / fashion design asset import plan;
+  - make image/design/PPT/video asset parse status available to report-planner AST so generated reports can distinguish ready visual/profile assets from pending, retrying, or failed assets;
+  - keep asset import write semantics, parse-run creation, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - `report-planner-worker` now loads dataset-linked assets, profiles, and parse runs before creating the report AST;
+  - AST top-level output now includes `asset_parse_status_summary` next to `asset_profile_summary`;
+  - the `asset_materials` module also carries `asset_parse_status_summary`;
+  - if a dataset has assets with pending/parsing/retrying/failed status but no usable profile hints yet, the planner still inserts `asset_materials` so partial asset availability is visible to downstream renderers;
+  - parse status summary keeps only compact safe fields: asset id, title, asset/source kind, content type, model status, parse status, error code, and update time.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p report-planner-worker report_ast_includes_asset_parse_status_summary_when_assets_need_attention --bin report-planner-worker`: 1/1 passed;
+  - `cargo test -q -p report-planner-worker report_ast_includes_asset_profile_summary_module_when_available --bin report-planner-worker`: 1/1 passed;
+  - `cargo test -q -p report-planner-worker --bin report-planner-worker`: 7/7 passed;
+  - `cargo check -q -p report-planner-worker`: passed;
+  - the targeted AST test asserts retrying asset status appears in `asset_parse_status_summary`, inserts `asset_materials`, and does not serialize object keys, raw provider payloads, or raw error text.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Parse Status Static Page Evidence Summary Local Verification
+
+- Scope:
+  - continue #974 under the enterprise asset library / fashion design asset import plan;
+  - make image/design/PPT/video asset parse status available to static-page template evidence summaries so page planning can avoid treating unavailable assets as ready visual material;
+  - keep asset import write semantics, parse-run creation, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - `static_page_template_evidence_summary` now emits `asset_parse_status_summary` beside `asset_profile_summary`;
+  - the summary aggregates `scanned_asset_count`, `not_ready_asset_count`, `failed_asset_count`, `retrying_asset_count`, and status counts from internal `asset_parse_status` supplied items;
+  - the summary includes at most 8 attention assets with compact safe fields only: asset id, title, asset/source kind, content type, model status, parse status, error code, and update time;
+  - model guidance tells static-page planning to use parse status as availability context and rely on completed profiles/retrieval/database/document evidence for exact claims.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api evidence_summary_surfaces_asset_profiles_for_page_planning --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api static_page_template_reference_support --lib`: 26/26 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T102219906Z-15608-preflight.json`;
+  - the targeted test asserts `asset_parse_status_summary` counts/statuses are surfaced and object keys/raw provider payloads are not serialized.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Parse Status Assistant Supply Local Verification
+
+- Scope:
+  - continue #973 under the enterprise asset library / fashion design asset import plan;
+  - make image/design/PPT/video asset parse status available to assistant-run model supply so the model can explain pending/running/retrying/failed asset understanding without guessing from filenames or titles;
+  - keep asset import write semantics, parse-run creation, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - assistant-run dataset supply now adds an internal `asset_parse_status` supplied item when a selected visible dataset has linked assets whose latest parse run is pending/parsing/retrying/failed;
+  - the supplied item aggregates latest per-asset status counts and includes only compact safe attention fields: asset id, title, asset/source kind, content type, profile count, parse/model status, parser name/version, error code, and update time;
+  - `assistant_run_model_supply_item_support` compacts `asset_parse_status` for model input and excludes object keys, raw metadata, source package paths, and raw provider payloads;
+  - `assistant_run_model_supply_budget_support` puts `asset_parse_status` in the existing asset-profile budget bucket;
+  - `assistant_run_supply_quality_support` reports `assetParseStatusCount`, `assetNotReadyCount`, `assetFailedCount`, and `assetRetryingCount`, adds corresponding notes/guidance, and allows parse-recovery heuristics to see asset parse failures/retries.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_asset_parse_model_status_normalizes_worker_states --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_item_support --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api assistant_run_model_supply_budget_support --lib`: 5/5 passed;
+  - `cargo test -q -p platform-api assistant_run_supply_quality_support --lib`: 14/14 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T101242548Z-35368-preflight.json`;
+  - the latest preflight report includes `scope_summary.parseStatusPendingCount=2`, `scope_summary.parseRunCount=3`, and `checks.scopeParseStatusVisible=true`;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/assistant_run_model_supply_item_support.rs crates/platform-api/src/assistant_run_model_supply_budget_support.rs crates/platform-api/src/assistant_run_supply_quality_support.rs crates/platform-api/src/assistant_run_react_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document, or model provider route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Library Parse Status Main-Site Card Local Verification
+
+- Scope:
+  - continue #972 under the enterprise asset library / fashion design asset import plan;
+  - make the parse-run status summary already returned by asset-library scope summary visible in the main-site asset library card;
+  - keep asset import write semantics, parse-run creation, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - added `assetParseStatusEntries` to `apps/web/app/lib/asset-library-view-model.js` to map parse statuses into stable, compact UI entries;
+  - `WorkspaceDirectoryPanel` now shows a "解析任务" metric and a compact status row for pending/running/retrying/failed/completed parse counts when a selected asset library has parse runs;
+  - added CSS for the compact parse status row without adding polling, task creation, or new API calls.
+- Local verification:
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: 15/15 passed, with the existing Node module-type warning only;
+  - `npm --prefix apps/web run build`: passed, with existing Next middleware deprecation and NFT tracing warnings only;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T094930066Z-756-preflight.json`;
+  - the latest preflight report includes `scope_summary.parseStatusPendingCount=2`, `scope_summary.parseRunCount=3`, and `checks.scopeParseStatusVisible=true`;
+  - `git diff --check -- apps/web/app/components/WorkspaceDirectoryPanel.js apps/web/app/globals.css apps/web/app/lib/asset-library-view-model.js apps/web/app/lib/asset-library-view-model.test.mjs`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, external integration document, or model route was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Asset Library Parse Status Scope Summary Local Verification
+
+- Scope:
+  - continue #971 under the enterprise asset library / fashion design asset import plan;
+  - make asset parse status visible in asset-library scope summaries so UI/model context can distinguish pending/running/completed/failed asset parsing without reading raw parse-run rows;
+  - keep asset import write semantics, profile writes, dataset membership writes, third-party request fields, and public third-party contracts unchanged.
+- Code change:
+  - `AssetLibraryScopeSummaryView` now includes `asset_parse_status_counts` and `asset_parse_run_count` with serde defaults for old payload compatibility;
+  - `load_asset_library_authorized_asset_supply` aggregates parse-run status counts only for assets authorized through the selected asset library's visible dataset intersection;
+  - `normalizeAssetLibraryScope` exposes `assetParseStatusCounts` and `assetParseRunCount` for the main-site asset library card;
+  - `smoke:fashion-design-asset-import` preflight now asserts `scopeParseStatusVisible=true`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p contracts asset_library_scope_summary --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api asset_library_scope_summary --lib`: 4/4 passed;
+  - `cargo test -q -p platform-api asset_library_asset_supply --lib`: 2/2 passed;
+  - `node --test apps/web/app/lib/asset-library-view-model.test.mjs`: 14/14 passed;
+  - `cargo test -q -p platform-api asset_import --lib`: 7/7 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T094036127Z-24732-preflight.json`;
+  - the latest preflight report includes `scope_summary.parseStatusPendingCount=2`, `scope_summary.parseRunCount=3`, and `checks.scopeParseStatusVisible=true`.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, or external integration document was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P4 Fashion Design ZIP Package Metadata Redaction Local Verification
+
+- Scope:
+  - continue #970 under the enterprise asset library / fashion design asset import plan;
+  - reduce unnecessary object-key exposure in ZIP package-derived asset metadata without changing the existing internal asset item view or opening third-party asset import fields;
+  - keep direct image import, ZIP image expansion, parse-run creation, profile creation, dataset membership creation, and main-site import routes unchanged.
+- Code change:
+  - `fashion_design_image_zip_entry_metadata` no longer stores raw `source_package.object_key`;
+  - package metadata now stores `object_key_present=true`, external id, title, package index, and zip entry metadata;
+  - module tests now assert the raw package `object_key` is absent from `source_package` metadata while ZIP-derived child assets still prepare with pending parse runs.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: 7/7 passed;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, report `target/fashion-design-asset-import-smoke/20260708T092649895Z-33180-preflight.json`;
+  - the smoke still reports `summary.ok=true`, `mode=preflight`, `normalizedResponseIncludesParseRun=true`, `scopeProfileHintsUsable=true`, and `noNetworkOrProductionWrite=true`.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, or external integration document was changed;
+  - no live execute was run because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, GitHub push, or 120-server access was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, raw package object key, local object path, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
+## 2026-07-08 P5 AI Golf Skill Reply Helper Local Verification
+
+- Scope:
+  - continue #969 P5 behavior-preserving helper extraction under `platform-api`;
+  - move AI Golf course-map segmentation reply/output-artifact/event-replay helpers from `lib.rs` into `crates/platform-api/src/external_aigolf_skill_support.rs`;
+  - keep requested skill input validation, schema string, event name, artifact type, third-party API request/response shape, production writes, deployment, and separate AIGOLF project scope unchanged.
+- Code change:
+  - added `external_aigolf_course_map_segmentation_reply_for_conversation` to build the existing card reply with the same text, payload card, task status, and no-confirmation semantics;
+  - added `external_aigolf_course_map_segmentation_output_artifacts` to preserve artifact `type`, `source`, `content`, and payload clone behavior;
+  - added `external_channel_aigolf_skill_reply_from_events` to the AI Golf skill module so duplicate/replay handling restores the latest persisted reply or falls back to event payload reconstruction.
+- Local verification:
+  - `cargo test -q -p platform-api external_aigolf_skill_support --lib`: 9/9 passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_returns_schema_card --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_event_restores_schema_card --lib`: 1/1 passed;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: 1/1 passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `cargo fmt --check`: passed.
+- Safety:
+  - no source database write, schema migration, source sync, object cleanup, production backfill, production prewarm enablement, production data mutation, deployment, GitHub push, 8-server change, or 120-server change was performed;
+  - this local helper extraction is not present on 8-server until a release build/deploy is run;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, prompt/input body, provider error body, or raw Authorization value was recorded.
+
 ## 2026-07-04 P5 External Channel Streaming Smoke Machine Summary Local Verification
 
 - Scope:
@@ -13400,6 +14770,36 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no production row mapping, public third-party URL, auth method, required request field, or existing response field was changed;
   - no raw document text, chunk content, object path, source URL, provider payload, cookie, bearer token, local key, database URL, or secret env value was recorded;
   - 120 server was not touched.
+
+## 2026-07-10 DataMax V3 Guarded RC Local Closeout
+
+- Scope:
+  - classified and staged the current DataMax V3 asset-library, assistant supply, static-page/report, third-party image extraction, CI, PostgreSQL 18.4 preparation, plan, and validation changes;
+  - excluded `decks/` and `docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` from the release candidate;
+  - included the AI Golf helper extraction because the staged `platform-api/src/lib.rs` helper split depends on the moved behavior and the change preserves the existing route contract.
+- Release guards:
+  - moved `asset_parse_runs` out of the released `0015_asset_libraries.sql` contract into append-only `0017_asset_parse_runs.sql`;
+  - added server-side default-off gates for main-site asset import, asset-profile model/report supply, and external image structured extraction;
+  - main-site import additionally requires an exact tenant allowlist match and authenticated readiness before the Web form is visible;
+  - PostgreSQL 18.4 is a separate cold-migration task; no database migration was performed during local closeout.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `git diff --check` and `git diff --cached --check`: passed with Windows LF/CRLF warnings only;
+  - `cargo check --workspace`: passed;
+  - storage migration tests: 5/5 passed;
+  - platform-api asset import tests: 58/58 passed;
+  - fashion adapter tests: 8/8 passed;
+  - asset profile supply tests: 11/11 passed;
+  - external image structured extraction tests: 32/32 passed;
+  - report planner tests: 8/8 passed;
+  - Web unit tests: 400/400 passed from the `apps/web` package cwd;
+  - Next.js production build: passed with the existing middleware/module tracing warnings;
+  - third-party public contract guard: 1/1 passed;
+  - fashion asset import syntax, self-test, and no-write preflight: passed;
+  - main assistant streaming and static-page 5-way self-tests: passed.
+- Safety:
+  - no commit, push, application deployment, feature enablement, live asset import, provider call, schema migration, source sync, backfill, or production data write occurred during local closeout;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer content, object key, or local absolute source path was added to the validation receipt.
 
 ### 2026-06-07 Active Plan Task 5 Duplicate And Canonical Read-Through Smoke
 
@@ -33039,6 +34439,458 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-07-08 P5 Assistant-Run External Document ACL-Snapshot Scope Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move external-channel selected-scope ACL-snapshot allowance logic out of `lib.rs` into `crates/platform-api/src/assistant_run_scope_selection_support.rs`.
+- Code change:
+  - moved `selected_scope_allows_external_document_range_without_acl_snapshot` into the selected scope support module;
+  - kept the ACL filter, selected document checks, source/dataset document scope checks, status allow-list, temporary dataset restoration, and third-party document-range behavior unchanged;
+  - added module tests for resolved external id ranges, source document scope, dataset document scope, `document_ids_missing` rejection, and missing document selection rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_scope_selection_support --lib`: passed, 8/8 tests;
+  - `cargo test -q -p platform-api external_source_document_scope_allows_missing_acl_snapshot --lib`: passed;
+  - `cargo test -q -p platform-api external_attachment_title_scope_allows_missing_acl_snapshot_for_matched_document --lib`: passed;
+  - `cargo test -q -p platform-api assistant_run_requested_dataset_only_scope_is_not_overwritten_by_ordinary_chat_plan --lib`: passed;
+  - `cargo test -q -p platform-api assistant_run_scope_promotes_active_static_page_followup_intent --lib`: passed;
+  - `cargo test -q -p platform-api assistant_run_visible_dataset_range_respects_no_forced_dataset_policy --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 Assistant-Run Continue Max-Steps Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move AssistantRun continue max-step normalization out of `lib.rs` into `crates/platform-api/src/assistant_run_continue_request_support.rs`.
+- Code change:
+  - moved `normalize_assistant_run_continue_max_steps` into the continue request support module;
+  - moved the continue default/max step constants with the helper;
+  - added module tests covering missing max steps, zero lower-bound clamp, ordinary values, and oversized upper-bound clamp.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_continue_request_support --lib`: passed, 11/11 tests;
+  - `cargo test -q -p platform-api assistant_run_continue_appends_event_trail_and_output --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no provider input text, ReAct continue flow, continue event payload, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External-Channel Public Stream Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move external-channel first-turn public-event follow-up and public stream latest-sequence helpers out of `lib.rs` into `crates/platform-api/src/external_channel_sse_support.rs`.
+- Code change:
+  - moved `external_channel_response_should_follow_first_turn_public_events` into the external channel SSE support module;
+  - moved `external_channel_public_stream_latest_sequence_from_events` into the same module;
+  - kept static-page pipeline exclusion, text-only follow-up gating, planned-action prompt detection, public schema filtering, and default sequence fallback unchanged;
+  - added module tests for public schema sequence reads, empty sequence fallback, text action follow-up, task-status rejection, static-page pipeline rejection, and ordinary summary prompt rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_sse_support --lib`: passed, 37/37 tests;
+  - `cargo test -q -p platform-api external_channel_static_page_sse_continue_polling_uses_public_envelope --lib`: passed;
+  - `cargo test -q -p platform-api external_channel_action_planning_gates_plain_questions --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_channel_sse_support.rs`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, SSE envelope, or production data mapping was changed;
+  - no provider input text, model routing, runtime selection, static-page pipeline behavior, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 Assistant-Run External User Context Scope Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move selected-scope external user context conversation-id extraction out of `lib.rs` into `crates/platform-api/src/assistant_run_scope_selection_support.rs`.
+- Code change:
+  - moved `selected_scope_external_user_context_conversation_id` into the selected scope support module;
+  - kept the `user_context_scope.conversation_external_id` lookup path, trim behavior, empty-value rejection, and caller behavior unchanged;
+  - added module coverage for a trimmed conversation id, a blank conversation id, and a missing `user_context_scope`.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api assistant_run_scope_selection_support --lib`: passed, 9/9 tests;
+  - `cargo test -q -p platform-api external_user_context --lib`: passed, 2/2 tests;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/assistant_run_scope_selection_support.rs`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no provider input text, model routing, runtime selection, user-context supply rules, conversation-memory guard, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External-Channel Source Document Scope Config Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party source-document-scope enablement config parsing out of `lib.rs` into `crates/platform-api/src/external_channel_scope_document_support.rs`.
+- Code change:
+  - moved `external_channel_source_document_scope_enabled` into the external channel document scope module;
+  - kept the accepted config keys unchanged: `allow_source_document_scope`, `allowSourceDocumentScope`, `enable_source_document_scope`, and `enableSourceDocumentScope`;
+  - kept bool and string truthy parsing unchanged for `1`, `true`, `yes`, and `on`;
+  - removed now-unused `external_config_bool` from `lib.rs`;
+  - added module tests for snake/camel aliases, truthy strings, default false, explicit false, false string, and redacted string rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_scope_document_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api external_source_document_scope --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source document scope enrichment behavior, ACL/owner filtering, temporary dataset recovery, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External-Channel Image Idempotency Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image-variant idempotency helpers out of `lib.rs` into `crates/platform-api/src/external_channel_image_idempotency_support.rs`.
+- Code change:
+  - moved `external_message_payload_summaries_match_for_idempotency`;
+  - moved `external_message_payload_summaries_match_except_attachments`;
+  - moved `external_channel_image_variant_fingerprint`;
+  - moved `external_channel_image_variant_idempotency_key`;
+  - kept `external_channel_message_allows_image_variant_idempotency` in `lib.rs` because it still depends on existing image structured-extract intent helpers;
+  - added module tests for received-at-only idempotency reuse, attachment-change exclusion, non-attachment mismatch rejection, stable attachment fingerprint fields, redacted URL exclusion, trimmed original idempotency key, and missing attachment fallback.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_channel_image_idempotency_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api external_message_idempotency_reuse_allows_image_variant_key --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no image structured-extract trigger, payload summary shape, duplicate idempotency conflict behavior, derived image variant key format, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Message Conflict Summary Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party idempotency payload mismatch public-summary construction out of `lib.rs` into `crates/platform-api/src/external_message_summary.rs`.
+- Code change:
+  - moved `external_message_event_conflict_public_summary` as `message_event_conflict_public_summary`;
+  - kept the public summary fields unchanged: `message_external_id`, `message_type`, `text_chars`, `attachment_count`, `attachments`, `dataset_external_count`, `requested_skill_count`, `output_format`, `render_mode`, and `artifact_type`;
+  - added module tests proving the summary keeps shape fields and redacted attachment summaries while omitting text fingerprints, dataset ID lists, requested-skill details, and received timestamps;
+  - added missing-field coverage to keep null placeholders stable.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_message_summary --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api external_message_idempotency_reuse_allows_image_variant_key --lib`: passed;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no idempotency conflict status/code/message, payload summary shape, image variant idempotency behavior, image structured-extract trigger, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Message Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image attachment detection and first image URL selection out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_message_support.rs`.
+- Code change:
+  - moved `external_attachment_ref_is_image`;
+  - moved `external_image_structured_extract_first_image_url`;
+  - kept the existing priority order: image attachment URL first, any attachment URL second, then text URL fallback;
+  - added module tests for content-type / filename-suffix image detection and first-image fallback behavior.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_message_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_message_support.rs`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no image structured-extract trigger, attachment URL selection priority, text URL fallback, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Message Metadata Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract message metadata helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_message_support.rs`.
+- Code change:
+  - moved `external_image_structured_extract_attachment_summaries`;
+  - moved `external_image_structured_extract_schema_from_message`;
+  - moved `external_image_structured_extract_output_format_is_json`;
+  - moved `external_image_structured_extract_id`;
+  - kept attachment summary shape, schema priority, output-format check, and extraction-id hash inputs unchanged;
+  - added module tests for redacted attachment summary shape, disabled skill schema skipping, enabled skill schema/fields priority, default recharge-order schema, JSON output format, and attachment-id-sensitive extraction IDs.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_message_support --lib`: passed, 5/5 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_message_support.rs`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no attachment summary field, schema fallback, requested skill matching, output JSON decision, extraction ID format, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Intent Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract intent and artifact-guard helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_message_support.rs`.
+- Code change:
+  - moved `external_channel_message_requests_image_structured_extract`;
+  - moved `external_channel_message_has_requested_image_extract_skill`;
+  - moved `external_channel_message_is_artifact_generation_request`;
+  - moved `external_channel_message_has_image_attachment`;
+  - kept `external_channel_message_has_image_attachment` visible as `pub(crate)` because `external_aigolf_skill_support` already reuses it for image-input validation;
+  - added module tests for explicit requested skill routing, image message routing, artifact-mode rejection, and non-image text rejection.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_message_support --lib`: passed, 6/6 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_returns_schema_card --lib`: passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_accepts_image_attachment --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_message_support.rs`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no requested-skill whitelist, disabled-skill handling, Image message fallback behavior, artifact generation guard, AI Golf image-input validation, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Prompt Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract prompt construction helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_prompt_support.rs`.
+- Code change:
+  - added `external_image_structured_extract_prompt_support`;
+  - moved `external_image_structured_extract_prompt`;
+  - moved `external_image_structured_extract_retry_prompt`;
+  - kept extraction ID, trimmed user prompt, schema serialization, strict JSON requirements, row-completion instructions, and retry previous-summary shape unchanged;
+  - added module tests for base prompt content and retry prompt previous-summary content.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_prompt_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_request_uses_high_detail_and_reasoning --lib`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_retry_detects_missing_visible_rows --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_prompt_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no system prompt, request payload shape, retry trigger, quality scoring, provider input content semantics, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Reply Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract reply and user-facing text helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_reply_support.rs`.
+- Code change:
+  - added `external_image_structured_extract_reply_support`;
+  - moved `external_image_structured_extract_reply_for_conversation`;
+  - moved `external_image_structured_extract_text`;
+  - kept card payload cloning, `reply_type=Card`, task status from payload status, JSON pretty text mode, answered summary text, and review-needed text unchanged;
+  - added module tests for normal card reply, payload/task status propagation, JSON text output, and needs-review text output.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_reply_support --lib`: passed, 2/2 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_reply_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no event replay, card shape, task status, JSON output mode, answer/review text semantics, provider input text, model routing, runtime selection, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Runtime Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract runtime config, failure runtime, and provider response text helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_runtime_support.rs`.
+- Code change:
+  - added `external_image_structured_extract_runtime_support`;
+  - moved `ExternalImageStructuredExtractRuntimeConfig`;
+  - moved `ExternalImageStructuredExtractFailure`;
+  - moved runtime env/config resolution, endpoint URL joining, provider failure runtime JSON construction, and chat-completions response content text extraction;
+  - kept env var precedence, default model, timeout/token/retry/reasoning limits, provider label default, failure runtime shape, and content extraction semantics unchanged;
+  - added module tests for URL joining, provider failure runtime fields/message truncation, and string/array/object response content extraction.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_runtime_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_request_uses_high_detail_and_reasoning --lib`: passed;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_returns_schema_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_runtime_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no runtime model routing, provider request payload shape, failure card shape, retry behavior, AI Golf shared image input path, image structured-extract public contract, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Provider Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract provider request payload and model JSON-object extraction helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_provider_support.rs`.
+- Code change:
+  - added `external_image_structured_extract_provider_support`;
+  - moved the default image structured-extract system prompt constant;
+  - moved `external_image_structured_extract_request_payload`;
+  - moved `external_image_structured_extract_request_payload_with_system`;
+  - moved `parse_json_object_from_model_text`;
+  - kept JSON response format, high-detail image URL payload, temperature, max_tokens, reasoning passthrough, default/custom system prompt behavior, and fenced/wrapped JSON extraction semantics unchanged;
+  - added module tests for JSON mode/high-detail/reasoning payload shape, no-reasoning payload shape, custom system prompt, and plain/fenced/wrapped JSON extraction.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_provider_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api external_image_structured_extract_request_uses_high_detail_and_reasoning --lib`: passed;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_returns_schema_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_provider_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no system prompt text, request payload shape, provider HTTP submission, retry behavior, runtime model routing, AI Golf shared image input path, image structured-extract public contract, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Provider HTTP Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract provider HTTP call helpers out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_provider_support.rs`, next to the provider payload and JSON extraction helpers.
+- Code change:
+  - moved `external_image_structured_extract_call_provider`;
+  - moved `external_image_structured_extract_call_provider_with_system`;
+  - moved `external_image_structured_extract_submit_provider_request`;
+  - kept the reqwest client creation call site in `lib.rs`, and kept endpoint, bearer auth, JSON body submission, response status handling, response text read, provider JSON parsing, content extraction, output JSON extraction, failure runtime shape, and retry behavior unchanged.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_provider_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_request_uses_high_detail_and_reasoning --lib`: passed;
+  - `cargo test -q -p platform-api external_aigolf_course_map_segmentation_returns_schema_card --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_provider_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no system prompt text, request payload shape, provider HTTP semantics, retry behavior, runtime model routing, AI Golf shared image input path, image structured-extract public contract, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Event Reply Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract event replay reply helper out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_reply_support.rs`.
+- Code change:
+  - moved `EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME`;
+  - moved `external_channel_image_structured_extract_reply_from_events`;
+  - kept event name string, latest-event selection, persisted reply restoration, payload fallback reply rebuild, JSON text fallback mode, and conversation id fallback behavior unchanged;
+  - added module tests for persisted reply restoration and payload fallback card reply rebuild.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_reply_support --lib`: passed, 3/3 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_message_idempotency_reuse_allows_image_variant_key --lib`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_request_uses_high_detail_and_reasoning --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_reply_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no event name string, append_event payload, duplicate request restoration, card/reply shape, JSON output mode, runtime model routing, image structured-extract public contract, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P5 External Image Structured-Extract Output Artifact Helper Local Verification
+
+- Purpose:
+  - continue behavior-preserving P5 helper extraction under `platform-api`;
+  - move third-party image structured-extract output artifact construction out of `lib.rs` into `crates/platform-api/src/external_image_structured_extract_reply_support.rs`.
+- Code change:
+  - moved the image structured-extract output artifact type constant;
+  - added `external_image_structured_extract_output_artifacts`;
+  - kept artifact `type`, `source`, `content`, `payload`, reply-text priority, JSON-text fallback, and downstream `attach_output_artifacts` semantics unchanged;
+  - added module tests for artifact type/source/content/payload and missing-reply-text fallback.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api external_image_structured_extract_reply_support --lib`: passed, 4/4 tests;
+  - `cargo test -q -p platform-api external_image_message_extracts_order_records_as_structured_card --lib`: passed;
+  - `cargo test -q -p platform-api external_message_idempotency_reuse_allows_image_variant_key --lib`: passed;
+  - `cargo check -q -p platform-api`: passed;
+  - `git diff --check -- crates/platform-api/src/lib.rs crates/platform-api/src/external_image_structured_extract_reply_support.rs docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with Windows CRLF warnings only.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no output artifact type string, source, content selection, payload clone behavior, event payload, duplicate request restoration, card/reply shape, image structured-extract public contract, or third-party contract was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed;
+  - no service was restarted during local verification;
+  - 120 server was not touched.
+
+## 2026-07-08 P4 Fashion Design Asset Import Smoke Harness Local Verification
+
+- Purpose:
+  - continue the P4 enterprise asset library / fashion design asset import plan;
+  - make the existing `smoke:fashion-design-asset-import` usable for release preflight and reviewed live verification without opening third-party `asset-imports`.
+- Code change:
+  - extended `scripts/smoke/fashion-design-asset-import.mjs` from self-test-only to three explicit modes: `--self-test`, `--preflight`, and guarded `--execute`;
+  - `--preflight` writes local PNG/ZIP fixtures, validates payload/normalization/profile-hint behavior, emits a redacted reviewed-live command template, and performs no network call or production write;
+  - `--execute` now requires an existing dataset id, existing asset library id, V3 user session auth, `--ack-live-write`, and `--approval-id` before any mutation;
+  - execute mode uploads the PNG/ZIP via the main-site local upload route, attaches the existing dataset to the existing asset library, verifies the returned membership matches the requested dataset/library, submits `fashion-design-images/batch`, and reads asset-library scope summary to verify profile hints are usable.
+  - all modes now emit machine-readable `summary.ok`, `summary.ready`, `summary.pending`, `summary.failed`, and `summary.checks`.
+- Local verification:
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed, `mode=self_test`, `ok=true`;
+  - `npm run smoke:fashion-design-asset-import -- --preflight --pretty`: passed, `mode=preflight`, `ok=true`.
+- Safety:
+  - no public third-party endpoint, request field, response field, auth method, production schema, or external integration document was changed;
+  - no live execute was run in this slice because no reviewed V3 user session / target dataset / target asset library was supplied;
+  - generated receipts are checked to exclude source URLs, object keys, session secrets, provider keys, raw provider payloads, and local absolute paths;
+  - no production upload, asset import, source sync, object cleanup, schema migration, service restart, 8-server deploy, or 120-server access was performed.
 
 ## 2026-06-30 P5 Assistant-Run Answer-Quality Spreadsheet Helper Local Verification
 

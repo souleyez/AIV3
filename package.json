@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "test:web": "npm --prefix apps/web test",
     "capture:authorized-video": "node scripts/capture-authorized-video.mjs",
     "smoke:external-channel-20way": "node scripts/smoke/external-channel-20way.mjs",
     "smoke:external-channel-streaming-10way": "node scripts/smoke/external-channel-streaming-10way.mjs",
@@ -13,6 +14,7 @@
     "smoke:main-assistant-streaming": "node scripts/smoke/main-assistant-streaming.mjs",
     "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
     "smoke:multimodal-asset-profile-fixtures": "node scripts/smoke/multimodal-asset-profile-fixtures.mjs",
+    "smoke:fashion-design-asset-import": "node scripts/smoke/fashion-design-asset-import.mjs",
     "smoke:v3-client-artifact-joint": "node scripts/smoke/v3-client-artifact-joint-smoke.mjs",
     "smoke:v3-codex-client-boundary-sync": "node scripts/smoke/v3-codex-client-boundary-sync.mjs",
     "smoke:model-gateway-operator": "node scripts/smoke/model-gateway-operator.mjs",
@@ -36,6 +38,7 @@
     "smoke:video-ppt-upload-main": "node scripts/smoke/video-ppt-upload-main.mjs",
     "smoke:heavy-static-page-5way": "node scripts/smoke/heavy-static-page-5way.mjs",
     "smoke:cloudflare-fallback-2way": "node scripts/smoke/cloudflare-fallback-2way.mjs",
+    "test:third-party-public-contract-guard": "node --test tools/third-party-public-contract-guard.test.mjs",
     "test:pure-third-party-guide-html": "node --test tools/render-pure-third-party-guide-html.test.mjs",
     "test:static-page-planning-smoke-html": "node --test tools/render-static-page-planning-smoke-html.test.mjs",
     "test:static-page-export-artifact": "node --test tools/validate-static-page-export-artifact.test.mjs",

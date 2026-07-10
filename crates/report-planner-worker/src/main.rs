@@ -4,7 +4,7 @@ use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use storage::{
-    AssetItemRecord, AssetProfileRecord, NewReportPlanAstVersion, PgStorage,
+    AssetItemRecord, AssetParseRunRecord, AssetProfileRecord, NewReportPlanAstVersion, PgStorage,
     DEFAULT_LOCAL_DATABASE_URL,
 };
 use tokio::time::Duration;
@@ -97,20 +97,27 @@ async fn process_task(
         .await?
         .ok_or_else(|| anyhow!("report plan {} not found", report_plan_id))?;
 
-    let asset_profile_summary =
-        match load_report_plan_asset_profile_summary(storage, &report_plan).await {
-            Ok(summary) => summary,
+    let (asset_profile_summary, asset_parse_status_summary) =
+        match load_report_plan_asset_summaries(storage, &report_plan).await {
+            Ok(summaries) => summaries,
             Err(error) => {
                 tracing::warn!(
                     error = ?error,
                     report_plan_id = %report_plan.id,
                     dataset_id = %report_plan.dataset_id,
-                    "report planner skipped asset profile summary after storage failure"
+                    "report planner skipped asset summaries after storage failure"
                 );
-                empty_report_asset_profile_summary()
+                (
+                    empty_report_asset_profile_summary(),
+                    empty_report_asset_parse_status_summary(),
+                )
             }
         };
-    let ast = build_report_ast_with_asset_profile_summary(&report_plan, asset_profile_summary);
+    let ast = build_report_ast_with_asset_summaries(
+        &report_plan,
+        asset_profile_summary,
+        asset_parse_status_summary,
+    );
 
     let process_result: Result<()> = async {
         let ast_version = storage
@@ -241,12 +248,29 @@ impl ReportPlanFocus {
 
 #[cfg(test)]
 fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
-    build_report_ast_with_asset_profile_summary(plan, empty_report_asset_profile_summary())
+    build_report_ast_with_asset_summaries(
+        plan,
+        empty_report_asset_profile_summary(),
+        empty_report_asset_parse_status_summary(),
+    )
 }
 
+#[cfg(test)]
 fn build_report_ast_with_asset_profile_summary(
     plan: &domain_model::ReportPlan,
     asset_profile_summary: Value,
+) -> Value {
+    build_report_ast_with_asset_summaries(
+        plan,
+        asset_profile_summary,
+        empty_report_asset_parse_status_summary(),
+    )
+}
+
+fn build_report_ast_with_asset_summaries(
+    plan: &domain_model::ReportPlan,
+    asset_profile_summary: Value,
+    asset_parse_status_summary: Value,
 ) -> Value {
     let focus = infer_report_plan_focus(plan);
     let modules = match focus {
@@ -255,7 +279,11 @@ fn build_report_ast_with_asset_profile_summary(
         | ReportPlanFocus::XinbaiRisk => build_xinbai_modules(focus),
         ReportPlanFocus::GeneralDatasetReport => build_general_dataset_modules(),
     };
-    let modules = apply_asset_profile_summary_to_report_modules(modules, &asset_profile_summary);
+    let modules = apply_asset_summaries_to_report_modules(
+        modules,
+        &asset_profile_summary,
+        &asset_parse_status_summary,
+    );
 
     json!({
         "schema_version": "0.2.0",
@@ -270,6 +298,7 @@ fn build_report_ast_with_asset_profile_summary(
         "focus_key": focus.as_str(),
         "template_candidate": focus.template_candidate(),
         "asset_profile_summary": asset_profile_summary,
+        "asset_parse_status_summary": asset_parse_status_summary,
         "layout_policy": {
             "default_time_grain": if focus.is_xinbai() { "month" } else { "source_scope" },
             "mobile_first": focus.is_xinbai(),
@@ -297,22 +326,33 @@ fn build_report_ast_with_asset_profile_summary(
     })
 }
 
-async fn load_report_plan_asset_profile_summary(
+async fn load_report_plan_asset_summaries(
     storage: &PgStorage,
     plan: &domain_model::ReportPlan,
-) -> Result<Value> {
+) -> Result<(Value, Value)> {
     const ASSET_LIMIT: usize = 24;
+
+    if !report_asset_profile_supply_enabled() {
+        return Ok((
+            empty_report_asset_profile_summary(),
+            empty_report_asset_parse_status_summary(),
+        ));
+    }
 
     let assets = storage
         .asset_items()
         .list_by_dataset_ids(plan.tenant_id, &[plan.dataset_id], ASSET_LIMIT)
         .await?;
     if assets.is_empty() {
-        return Ok(empty_report_asset_profile_summary());
+        return Ok((
+            empty_report_asset_profile_summary(),
+            empty_report_asset_parse_status_summary(),
+        ));
     }
 
     let mut hints = Vec::new();
-    for asset in assets {
+    let mut parse_status_entries = Vec::new();
+    for asset in &assets {
         let profiles = storage
             .asset_items()
             .list_profiles(plan.tenant_id, asset.id)
@@ -322,16 +362,44 @@ async fn load_report_plan_asset_profile_summary(
                 hints.push(hint);
             }
         }
+
+        let parse_runs = storage
+            .asset_items()
+            .list_parse_runs(plan.tenant_id, asset.id)
+            .await?;
+        parse_status_entries.push(report_asset_parse_status_entry(asset, parse_runs.first()));
     }
 
-    Ok(build_report_asset_profile_summary(hints))
+    Ok((
+        build_report_asset_profile_summary(hints),
+        build_report_asset_parse_status_summary(parse_status_entries),
+    ))
 }
 
-fn apply_asset_profile_summary_to_report_modules(
+fn report_asset_profile_supply_enabled() -> bool {
+    report_asset_profile_supply_enabled_from_value(
+        std::env::var("ASSET_PROFILE_SUPPLY_ENABLED")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn report_asset_profile_supply_enabled_from_value(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn apply_asset_summaries_to_report_modules(
     mut modules: Vec<Value>,
     asset_profile_summary: &Value,
+    asset_parse_status_summary: &Value,
 ) -> Vec<Value> {
-    if !asset_profile_summary_has_hints(asset_profile_summary) {
+    if !asset_profile_summary_has_hints(asset_profile_summary)
+        && !asset_parse_status_summary_needs_attention(asset_parse_status_summary)
+    {
         return modules;
     }
 
@@ -341,6 +409,7 @@ fn apply_asset_profile_summary_to_report_modules(
         "binding_slot": "assets.profile_summary",
         "purpose": "根据当前数据集的图片、视频、PPT、文档资产画像，为报告选择可用素材、视觉主题和需进一步核验的证据入口。",
         "asset_profile_summary": asset_profile_summary,
+        "asset_parse_status_summary": asset_parse_status_summary,
         "evidence_policy": "profile_hints_are_planning_signals_not_citations"
     });
 
@@ -366,6 +435,17 @@ fn asset_profile_summary_has_hints(summary: &Value) -> bool {
         .is_some_and(|count| count > 0)
 }
 
+fn asset_parse_status_summary_needs_attention(summary: &Value) -> bool {
+    summary
+        .get("not_ready_asset_count")
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count > 0)
+        || summary
+            .get("attention_assets")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+}
+
 fn empty_report_asset_profile_summary() -> Value {
     json!({
         "count": 0,
@@ -376,6 +456,22 @@ fn empty_report_asset_profile_summary() -> Value {
         "planning_policy": [
             "asset profiles are optional planning signals",
             "do not cite asset profile hints as exact source evidence"
+        ]
+    })
+}
+
+fn empty_report_asset_parse_status_summary() -> Value {
+    json!({
+        "count": 0,
+        "scanned_asset_count": 0,
+        "not_ready_asset_count": 0,
+        "failed_asset_count": 0,
+        "retrying_asset_count": 0,
+        "status_counts": {},
+        "attention_assets": [],
+        "planning_policy": [
+            "asset parse status is optional availability context",
+            "do not plan key visual modules around pending, parsing, retrying, or failed assets unless the report explains the partial state"
         ]
     })
 }
@@ -402,6 +498,116 @@ fn report_asset_profile_hint(
         "noun_terms": report_asset_profile_terms(&profile.attributes),
         "facets": report_asset_profile_facets(&profile.attributes),
     }))
+}
+
+fn report_asset_parse_status_entry(
+    asset: &AssetItemRecord,
+    latest_parse_run: Option<&AssetParseRunRecord>,
+) -> Value {
+    let model_status = latest_parse_run
+        .map(|run| report_asset_parse_model_status(&run.status))
+        .unwrap_or_else(|| "pending".to_string());
+    json!({
+        "asset_id": asset.id,
+        "title": compact_report_text(&asset.title, 160),
+        "asset_kind": compact_report_text(&asset.asset_kind, 80),
+        "source_kind": compact_report_text(&asset.source_kind, 80),
+        "content_type": asset
+            .content_type
+            .as_deref()
+            .map(|value| compact_report_text(value, 120))
+            .unwrap_or_default(),
+        "model_status": model_status,
+        "parse_status": latest_parse_run
+            .map(|run| compact_report_text(&run.status, 80))
+            .unwrap_or_else(|| "missing".to_string()),
+        "parser_name": latest_parse_run
+            .map(|run| compact_report_text(&run.parser_name, 120))
+            .unwrap_or_default(),
+        "parser_version": latest_parse_run
+            .map(|run| compact_report_text(&run.parser_version, 120))
+            .unwrap_or_default(),
+        "error_code": latest_parse_run
+            .and_then(|run| run.error_code.as_ref())
+            .map(|value| compact_report_text(value, 120))
+            .unwrap_or_default(),
+        "updated_at": latest_parse_run
+            .map(|run| run.updated_at.to_rfc3339())
+            .unwrap_or_else(|| asset.updated_at.to_rfc3339()),
+    })
+}
+
+fn report_asset_parse_model_status(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "completed" | "complete" | "succeeded" | "success" | "indexed" => "completed",
+        "failed" | "error" => "failed",
+        "running" | "processing" | "parsing" | "indexing" => "parsing",
+        "retrying" | "reparsing" | "reparse_queued" => "retrying",
+        "queued" | "pending" | "created" | "accepted" => "pending",
+        "skipped" => "skipped",
+        "unsupported" => "unsupported",
+        _ => "pending",
+    }
+    .to_string()
+}
+
+fn report_asset_parse_status_needs_attention(status: &str) -> bool {
+    matches!(status, "pending" | "parsing" | "retrying" | "failed")
+}
+
+fn build_report_asset_parse_status_summary(entries: Vec<Value>) -> Value {
+    const ATTENTION_LIMIT: usize = 8;
+
+    let mut status_counts = BTreeMap::<String, usize>::new();
+    let mut attention_assets = Vec::new();
+    let mut not_ready_asset_count = 0usize;
+    let mut failed_asset_count = 0usize;
+    let mut retrying_asset_count = 0usize;
+
+    for entry in &entries {
+        let model_status = entry
+            .get("model_status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending");
+        *status_counts.entry(model_status.to_string()).or_insert(0) += 1;
+        if report_asset_parse_status_needs_attention(model_status) {
+            not_ready_asset_count += 1;
+            if attention_assets.len() < ATTENTION_LIMIT {
+                attention_assets.push(json!({
+                    "asset_id": entry.get("asset_id").cloned().unwrap_or(Value::Null),
+                    "title": entry.get("title").cloned().unwrap_or(Value::Null),
+                    "asset_kind": entry.get("asset_kind").cloned().unwrap_or(Value::Null),
+                    "source_kind": entry.get("source_kind").cloned().unwrap_or(Value::Null),
+                    "content_type": entry.get("content_type").cloned().unwrap_or(Value::Null),
+                    "model_status": entry.get("model_status").cloned().unwrap_or(Value::Null),
+                    "parse_status": entry.get("parse_status").cloned().unwrap_or(Value::Null),
+                    "error_code": entry.get("error_code").cloned().unwrap_or(Value::Null),
+                    "updated_at": entry.get("updated_at").cloned().unwrap_or(Value::Null),
+                }));
+            }
+        }
+        if model_status == "failed" {
+            failed_asset_count += 1;
+        }
+        if model_status == "retrying" {
+            retrying_asset_count += 1;
+        }
+    }
+
+    json!({
+        "count": entries.len(),
+        "scanned_asset_count": entries.len(),
+        "not_ready_asset_count": not_ready_asset_count,
+        "failed_asset_count": failed_asset_count,
+        "retrying_asset_count": retrying_asset_count,
+        "status_counts": status_counts,
+        "attention_assets": attention_assets,
+        "planning_policy": [
+            "use asset parse status to decide whether image, design, PPT, or video material is ready for report planning",
+            "do not plan key visual modules around pending, parsing, retrying, or failed assets unless the report explicitly explains partial availability",
+            "parse status is availability context only; use completed profiles, retrieval evidence, source detail, or database rows for exact claims"
+        ]
+    })
 }
 
 fn build_report_asset_profile_summary(hints: Vec<Value>) -> Value {
@@ -1021,6 +1227,81 @@ mod tests {
     }
 
     #[test]
+    fn report_ast_includes_asset_parse_status_summary_when_assets_need_attention() {
+        let plan = sample_plan("服装图库分析", "按图库主题生成商品报告", "default");
+        let now = Utc::now();
+        let asset_id = ReportPlanId::new().0;
+        let asset = AssetItemRecord {
+            id: asset_id,
+            tenant_id: plan.tenant_id,
+            asset_library_id: Some(ReportPlanId::new().0),
+            collection_id: None,
+            external_id: Some("asset-external-1".to_string()),
+            title: "未完成设计图".to_string(),
+            asset_kind: "image".to_string(),
+            source_kind: "upload".to_string(),
+            source_id: Some("source-1".to_string()),
+            content_type: Some("image/png".to_string()),
+            object_key: Some("must-not-leak".to_string()),
+            metadata: json!({
+                "raw_provider_payload": "must-not-leak"
+            }),
+            profile_count: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        let parse_run = AssetParseRunRecord {
+            id: ReportPlanId::new().0,
+            tenant_id: plan.tenant_id,
+            asset_id: asset.id,
+            parser_name: "datamax-fashion-image-parser".to_string(),
+            parser_version: "2026-07-08".to_string(),
+            status: "retrying".to_string(),
+            started_at: Some(now),
+            finished_at: None,
+            error_code: Some("provider_timeout".to_string()),
+            error_message: Some("must-not-leak".to_string()),
+            metadata: json!({
+                "raw_provider_payload": "must-not-leak"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        let parse_summary =
+            build_report_asset_parse_status_summary(vec![report_asset_parse_status_entry(
+                &asset,
+                Some(&parse_run),
+            )]);
+
+        let ast = build_report_ast_with_asset_summaries(
+            &plan,
+            empty_report_asset_profile_summary(),
+            parse_summary,
+        );
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["asset_parse_status_summary"]["count"], json!(1));
+        assert_eq!(
+            ast["asset_parse_status_summary"]["retrying_asset_count"],
+            json!(1)
+        );
+        assert_eq!(
+            ast["asset_parse_status_summary"]["status_counts"]["retrying"],
+            json!(1)
+        );
+        assert_eq!(kinds[0], "scope_summary");
+        assert_eq!(kinds[1], "asset_materials");
+        assert_eq!(
+            ast["modules"][1]["asset_parse_status_summary"]["attention_assets"][0]["model_status"],
+            json!("retrying")
+        );
+        let serialized = serde_json::to_string(&ast).expect("ast should serialize");
+        assert!(!serialized.contains("object_key"));
+        assert!(!serialized.contains("raw_provider_payload"));
+        assert!(!serialized.contains("must-not-leak"));
+    }
+
+    #[test]
     fn report_asset_profile_summary_keeps_compact_safe_fields() {
         let summary = build_report_asset_profile_summary(vec![json!({
             "asset_id": "asset-raw",
@@ -1046,6 +1327,18 @@ mod tests {
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item
                 == "asset profiles are compact planning signals and are not citable exact source evidence")));
+    }
+
+    #[test]
+    fn asset_profile_supply_is_default_off_for_report_planner() {
+        assert!(!report_asset_profile_supply_enabled_from_value(None));
+        assert!(!report_asset_profile_supply_enabled_from_value(Some(
+            "false"
+        )));
+        assert!(report_asset_profile_supply_enabled_from_value(Some(
+            " TRUE "
+        )));
+        assert!(report_asset_profile_supply_enabled_from_value(Some("on")));
     }
 }
 

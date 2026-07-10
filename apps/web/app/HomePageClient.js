@@ -29,8 +29,13 @@ import {
   applyAssetLibraryPresetToDraft,
   assetLibraryContainsDataset,
   buildAssetLibraryCreatePayload,
+  buildFashionDesignImageAssetImportBatchPayload,
+  buildFashionDesignImageAssetImportPayload,
   normalizeAssetLibraries,
+  normalizeAssetImportReadiness,
   normalizeAssetLibraryScope,
+  normalizeFashionDesignImageAssetImportBatchResponse,
+  normalizeFashionDesignImageAssetImportResponse,
   selectedAssetLibraryView,
 } from './lib/asset-library-view-model';
 import {
@@ -226,6 +231,20 @@ function normalizedUniqueStrings(values = []) {
     .filter(Boolean))];
 }
 
+function assetUploadFileSignal(savedFile, file) {
+  return `${savedFile?.content_type || ''} ${file?.type || ''} ${savedFile?.name || ''} ${file?.name || ''}`.toLowerCase();
+}
+
+function assetUploadFileIsImage(savedFile, file) {
+  const signal = assetUploadFileSignal(savedFile, file);
+  return signal.includes('image/') || /\.(png|jpe?g|webp|gif|bmp|tiff?)(\s|$)/i.test(signal);
+}
+
+function assetUploadFileIsZip(savedFile, file) {
+  const signal = assetUploadFileSignal(savedFile, file);
+  return signal.includes('application/zip') || signal.includes('application/x-zip-compressed') || /\.zip(\s|$)/i.test(signal);
+}
+
 function emptyVisibleArtifactTaskRefs() {
   return {
     reportPlanIds: [],
@@ -310,6 +329,7 @@ export default function HomePageClient() {
   const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
   const [selectedAssetLibraryId, setSelectedAssetLibraryId] = useState('');
   const [assetLibraryScope, setAssetLibraryScope] = useState(null);
+  const [assetImportReadiness, setAssetImportReadiness] = useState(() => normalizeAssetImportReadiness(null));
   const [selectedReportPlanId, setSelectedReportPlanId] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [outputs, setOutputs] = useState([]);
@@ -328,6 +348,12 @@ export default function HomePageClient() {
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '', secret: '' });
   const [assetLibraryDraft, setAssetLibraryDraft] = useState({ name: '', domain: 'general', description: '', metadata: {} });
+  const [assetImageImportDraft, setAssetImageImportDraft] = useState({
+    title: '',
+    imageUrl: '',
+    externalId: '',
+    profilePayloadText: '',
+  });
   const [localSecretDraft, setLocalSecretDraft] = useState('');
   const [activeSecretCount, setActiveSecretCount] = useState(0);
   const [accountEmailDraft, setAccountEmailDraft] = useState('');
@@ -350,6 +376,7 @@ export default function HomePageClient() {
   const [reportDetailLoading, setReportDetailLoading] = useState(false);
   const [creatingDataset, setCreatingDataset] = useState(false);
   const [creatingAssetLibrary, setCreatingAssetLibrary] = useState(false);
+  const [importingAssetImage, setImportingAssetImage] = useState(false);
   const [assetLibraryLoading, setAssetLibraryLoading] = useState(false);
   const [assetLibraryActionBusy, setAssetLibraryActionBusy] = useState('');
   const [resolvingSecret, setResolvingSecret] = useState(false);
@@ -1592,6 +1619,21 @@ export default function HomePageClient() {
     }
   }
 
+  async function refreshAssetImportReadiness() {
+    try {
+      const response = await fetchJson('/api/v3/asset-imports/fashion-design-images/readiness');
+      const readiness = normalizeAssetImportReadiness(response);
+      setAssetImportReadiness(readiness);
+      return readiness;
+    } catch (loadError) {
+      setAssetImportReadiness(normalizeAssetImportReadiness(null));
+      if (!assetLibraryAuthRequired(loadError)) {
+        console.warn('asset import readiness unavailable', loadError);
+      }
+      return normalizeAssetImportReadiness(null);
+    }
+  }
+
   async function refreshAssetLibraryScope(assetLibraryId, options = {}) {
     const { silent = false } = options;
     if (!assetLibraryId) {
@@ -1988,6 +2030,181 @@ export default function HomePageClient() {
       return false;
     } finally {
       setAssetLibraryActionBusy('');
+    }
+  }
+
+  async function handleImportFashionDesignImageAsset() {
+    if (!assetImportReadiness.enabled) {
+      setError('当前租户未启用设计图资产导入。');
+      return;
+    }
+    if (!authSession.user) {
+      setError('请先登录主系统后再导入设计图资产。');
+      return;
+    }
+    if (!selectedAssetLibraryId) {
+      setError('请先选择资产库。');
+      return;
+    }
+    const targetDatasetId = selectedDatasetId || selectedDatasetIds[0] || '';
+    const batchDraft = {
+      ...assetImageImportDraft,
+      imageUrlsText: assetImageImportDraft.imageUrl,
+    };
+    const batch = buildFashionDesignImageAssetImportBatchPayload(
+      batchDraft,
+      {
+        datasetId: targetDatasetId,
+        assetLibraryId: selectedAssetLibraryId,
+      },
+    );
+    const single = buildFashionDesignImageAssetImportPayload(
+      assetImageImportDraft,
+      {
+        datasetId: targetDatasetId,
+        assetLibraryId: selectedAssetLibraryId,
+      },
+    );
+    const useBatch = batch.assetCount > 1;
+    const { payload, errors } = useBatch ? batch : single;
+    if (errors.length) {
+      setError(errors[0]);
+      return;
+    }
+
+    setImportingAssetImage(true);
+    setError('');
+    try {
+      const response = await fetchJson(
+        useBatch
+          ? '/api/v3/asset-imports/fashion-design-images/batch'
+          : '/api/v3/asset-imports/fashion-design-images',
+        {
+          method: 'POST',
+          body: payload,
+        },
+      );
+      const imported = useBatch
+        ? normalizeFashionDesignImageAssetImportBatchResponse(response)
+        : normalizeFashionDesignImageAssetImportResponse(response);
+      setAssetImageImportDraft({
+        title: '',
+        imageUrl: '',
+        externalId: '',
+        profilePayloadText: '',
+      });
+      await Promise.all([
+        refreshAssetLibraries({ preferredAssetLibraryId: selectedAssetLibraryId, silent: true }),
+        refreshAssetLibraryScope(selectedAssetLibraryId, { silent: true }),
+      ]);
+      setBanner(useBatch
+        ? `已导入 ${imported.assetCount || payload.assets.length} 个设计图资产。`
+        : `已导入设计图资产 ${imported.title || imported.assetId || payload.title}。`);
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : '设计图资产导入失败');
+    } finally {
+      setImportingAssetImage(false);
+    }
+  }
+
+  async function handleImportFashionDesignImageAssetFiles(fileList) {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) {
+      return;
+    }
+    if (!assetImportReadiness.enabled) {
+      setError('当前租户未启用设计图资产导入。');
+      return;
+    }
+    if (!authSession.user) {
+      setError('请先登录主系统后再导入设计图资产。');
+      return;
+    }
+    if (!selectedAssetLibraryId) {
+      setError('请先选择资产库。');
+      return;
+    }
+    const targetDatasetId = selectedDatasetId || selectedDatasetIds[0] || '';
+    if (!targetDatasetId) {
+      setError('请选择要写入的目标数据集。');
+      return;
+    }
+
+    setImportingAssetImage(true);
+    setError('');
+    try {
+      const savedFiles = await saveFilesForLocalIngest(files);
+      const entries = savedFiles.map((savedFile, index) => ({
+        savedFile,
+        file: files[index],
+      }));
+      const imageEntries = entries.filter(({ savedFile, file }) => assetUploadFileIsImage(savedFile, file));
+      const zipEntries = entries.filter(({ savedFile, file }) => assetUploadFileIsZip(savedFile, file));
+      if (!imageEntries.length && !zipEntries.length) {
+        setError('请选择图片或 ZIP 文件后导入资产库。');
+        return;
+      }
+
+      const objectKeys = imageEntries
+        .map(({ savedFile }) => savedFile?.object_key)
+        .filter(Boolean)
+        .join('\n');
+      const packages = zipEntries
+        .map(({ savedFile, file }, index) => ({
+          title: savedFile?.name || file?.name || `设计图 ZIP ${index + 1}`,
+          object_key: savedFile?.object_key,
+          content_type: savedFile?.content_type || file?.type || 'application/zip',
+          metadata: {
+            upload_source: 'main_workspace_file_picker',
+            original_name: savedFile?.name || file?.name || '',
+            size_bytes: savedFile?.size || file?.size || 0,
+          },
+        }))
+        .filter((item) => item.object_key);
+      const batch = buildFashionDesignImageAssetImportBatchPayload(
+        {
+          ...assetImageImportDraft,
+          imageUrl: objectKeys,
+          packages,
+          metadata: {
+            upload_source: 'main_workspace_file_picker',
+            uploaded_file_count: files.length,
+            zip_package_count: packages.length,
+            saved_image_count: imageEntries.length,
+          },
+        },
+        {
+          datasetId: targetDatasetId,
+          assetLibraryId: selectedAssetLibraryId,
+        },
+      );
+      if (batch.errors.length) {
+        setError(batch.errors[0]);
+        return;
+      }
+
+      const response = await fetchJson('/api/v3/asset-imports/fashion-design-images/batch', {
+        method: 'POST',
+        body: batch.payload,
+      });
+      const imported = normalizeFashionDesignImageAssetImportBatchResponse(response);
+      setAssetImageImportDraft({
+        title: '',
+        imageUrl: '',
+        externalId: '',
+        profilePayloadText: '',
+      });
+      await Promise.all([
+        refreshAssetLibraries({ preferredAssetLibraryId: selectedAssetLibraryId, silent: true }),
+        refreshAssetLibraryScope(selectedAssetLibraryId, { silent: true }),
+      ]);
+      setBanner(packages.length
+        ? `已导入 ${imported.assetCount || imageEntries.length} 个设计图资产；已展开 ${packages.length} 个 ZIP。`
+        : `已导入 ${imported.assetCount || imageEntries.length} 个设计图资产。`);
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : '设计图文件导入失败');
+    } finally {
+      setImportingAssetImage(false);
     }
   }
 
@@ -3604,9 +3821,13 @@ export default function HomePageClient() {
       setAssetLibraries([]);
       setSelectedAssetLibraryId('');
       setAssetLibraryScope(null);
+      setAssetImportReadiness(normalizeAssetImportReadiness(null));
       return;
     }
-    refreshAssetLibraries({ silent: true });
+    Promise.all([
+      refreshAssetLibraries({ silent: true }),
+      refreshAssetImportReadiness(),
+    ]);
   }, [authSession.user?.id]);
 
   useEffect(() => {
@@ -4350,7 +4571,10 @@ export default function HomePageClient() {
     selectedAssetLibrary,
     assetLibraryScope,
     assetLibraryDraft,
+    assetImageImportDraft,
+    assetImportEnabled: assetImportReadiness.enabled,
     creatingAssetLibrary,
+    importingAssetImage,
     assetLibraryLoading,
     assetLibraryActionBusy,
     onSelectAssetLibrary: setSelectedAssetLibraryId,
@@ -4359,6 +4583,10 @@ export default function HomePageClient() {
     onApplyAssetLibraryPreset: (presetId) =>
       setAssetLibraryDraft((current) => applyAssetLibraryPresetToDraft(current, presetId)),
     onCreateAssetLibrary: handleCreateAssetLibrary,
+    onAssetImageImportDraftChange: (field, value) =>
+      setAssetImageImportDraft((current) => ({ ...current, [field]: value })),
+    onImportFashionDesignImageAsset: handleImportFashionDesignImageAsset,
+    onImportFashionDesignImageAssetFiles: handleImportFashionDesignImageAssetFiles,
     onToggleAssetLibraryDataset: handleToggleAssetLibraryDataset,
     onRefreshAssetLibraries: () => refreshAssetLibraries({ silent: false }),
     selectedDatasetId,

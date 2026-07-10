@@ -1,12 +1,13 @@
 use axum::http::HeaderMap;
-use contracts::{ExternalBotMessageView, ExternalChannelEventResponse};
+use contracts::{ExternalBotMessageView, ExternalBotReplyTypeView, ExternalChannelEventResponse};
 use domain_model::{AssistantRunEvent, AssistantRunId};
 use serde_json::{json, Map, Value};
 use std::{collections::HashMap, time::Duration as StdDuration};
 
 use crate::{
-    codex_host_fixed_task_public_artifact_url_allowed, external_channel_api_public_base_url,
-    external_channel_generated_artifact_public_base_url,
+    codex_host_fixed_task_public_artifact_url_allowed,
+    external_channel_action_prompt_support::external_channel_prompt_may_need_planned_action,
+    external_channel_api_public_base_url, external_channel_generated_artifact_public_base_url,
     external_channel_public_artifact::{
         external_channel_public_artifact_url_from_links_value,
         external_channel_public_artifact_url_from_reply,
@@ -492,6 +493,21 @@ pub(crate) fn external_channel_public_stream_has_event(
     })
 }
 
+pub(crate) fn external_channel_public_stream_latest_sequence_from_events(
+    events: &[AssistantRunEvent],
+    default_sequence_no: i32,
+) -> i32 {
+    events
+        .iter()
+        .filter(|event| {
+            event.payload.get("schema").and_then(Value::as_str)
+                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        })
+        .map(|event| event.sequence_no)
+        .max()
+        .unwrap_or(default_sequence_no)
+}
+
 pub(crate) fn external_channel_public_stream_dedupe_hash(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
     sha256_hex([bytes.as_slice()])
@@ -848,6 +864,20 @@ pub(crate) fn external_channel_response_is_static_page_pipeline(
                 || card_type == "v3_static_page_image2_pipeline"
         })
         .unwrap_or(false)
+}
+
+pub(crate) fn external_channel_response_should_follow_first_turn_public_events(
+    message: &ExternalBotMessageView,
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    if external_channel_response_is_static_page_pipeline(response) {
+        return false;
+    }
+    if response.reply.reply_type != ExternalBotReplyTypeView::Text {
+        return false;
+    }
+    let prompt = message.text.as_deref().unwrap_or_default();
+    external_channel_prompt_may_need_planned_action(prompt)
 }
 
 pub(crate) fn external_channel_static_page_sse_status(
@@ -1845,6 +1875,35 @@ mod tests {
     }
 
     #[test]
+    fn public_stream_latest_sequence_reads_only_public_schema_events() {
+        let run_id = AssistantRunId::new();
+        let events = vec![
+            assistant_run_event(run_id, 12, "internal.event", json!({"schema": "internal"})),
+            assistant_run_event(
+                run_id,
+                8,
+                "external_channel.started",
+                json!({"schema": EXTERNAL_CHANNEL_SSE_SCHEMA_V1}),
+            ),
+            assistant_run_event(
+                run_id,
+                21,
+                "external_channel.completed",
+                json!({"schema": EXTERNAL_CHANNEL_SSE_SCHEMA_V1}),
+            ),
+        ];
+
+        assert_eq!(
+            external_channel_public_stream_latest_sequence_from_events(&events, 3),
+            21
+        );
+        assert_eq!(
+            external_channel_public_stream_latest_sequence_from_events(&[], 3),
+            3
+        );
+    }
+
+    #[test]
     fn public_stream_dedupe_hash_is_stable_for_same_payload() {
         let payload = json!({"status": "completed", "sequence": 3});
 
@@ -2186,6 +2245,51 @@ mod tests {
         assert!(!external_channel_response_is_static_page_pipeline(
             &non_pipeline
         ));
+    }
+
+    #[test]
+    fn response_follow_first_turn_public_events_requires_text_action_and_non_pipeline() {
+        let mut message = external_bot_message();
+        message.text = Some("请查询第三方产物状态".to_string());
+        let mut text_response = external_channel_response(None, None, Vec::new());
+        text_response.reply.reply_type = ExternalBotReplyTypeView::Text;
+
+        assert!(
+            external_channel_response_should_follow_first_turn_public_events(
+                &message,
+                &text_response
+            )
+        );
+
+        text_response.reply.reply_type = ExternalBotReplyTypeView::TaskStatus;
+        assert!(
+            !external_channel_response_should_follow_first_turn_public_events(
+                &message,
+                &text_response
+            )
+        );
+
+        let mut pipeline_response = external_channel_response(
+            Some(json!({"type": "v3_static_page_image2_pipeline"})),
+            None,
+            Vec::new(),
+        );
+        pipeline_response.reply.reply_type = ExternalBotReplyTypeView::Text;
+        assert!(
+            !external_channel_response_should_follow_first_turn_public_events(
+                &message,
+                &pipeline_response
+            )
+        );
+
+        message.text = Some("总结一下资料".to_string());
+        text_response.reply.reply_type = ExternalBotReplyTypeView::Text;
+        assert!(
+            !external_channel_response_should_follow_first_turn_public_events(
+                &message,
+                &text_response
+            )
+        );
     }
 
     #[test]

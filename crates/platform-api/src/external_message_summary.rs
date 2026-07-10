@@ -84,6 +84,21 @@ pub(crate) fn artifact_template_summary(template: &ExternalArtifactTemplateView)
     })
 }
 
+pub(crate) fn message_event_conflict_public_summary(summary: &Value) -> Value {
+    json!({
+        "message_external_id": summary.get("message_external_id").cloned().unwrap_or(Value::Null),
+        "message_type": summary.get("message_type").cloned().unwrap_or(Value::Null),
+        "text_chars": summary.get("text_chars").cloned().unwrap_or(Value::Null),
+        "attachment_count": summary.get("attachment_count").cloned().unwrap_or(Value::Null),
+        "attachments": summary.get("attachments").cloned().unwrap_or(Value::Null),
+        "dataset_external_count": summary.get("dataset_external_count").cloned().unwrap_or(Value::Null),
+        "requested_skill_count": summary.get("requested_skill_count").cloned().unwrap_or(Value::Null),
+        "output_format": summary.get("output_format").cloned().unwrap_or(Value::Null),
+        "render_mode": summary.get("render_mode").cloned().unwrap_or(Value::Null),
+        "artifact_type": summary.get("artifact_type").cloned().unwrap_or(Value::Null),
+    })
+}
+
 fn message_text_fingerprint(value: &str) -> String {
     let hash = sha256_hex([value.trim().as_bytes()]);
     format!("sha256:{}", &hash[..16])
@@ -92,4 +107,57 @@ fn message_text_fingerprint(value: &str) -> String {
 fn attachment_download_url_fingerprint(value: &str) -> String {
     let hash = sha256_hex([value.trim().as_bytes()]);
     format!("sha256:{}", &hash[..16])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn conflict_public_summary_keeps_shape_fields_and_omits_sensitive_values() {
+        let summary = json!({
+            "message_external_id": "msg-1",
+            "message_type": "image",
+            "text_chars": 18,
+            "text_fingerprint": "sha256:text",
+            "attachment_count": 1,
+            "attachments": [{
+                "attachment_external_id": "img-1",
+                "filename": "order.png",
+                "download_url_redacted": "[redacted]",
+                "download_url_fingerprint": "sha256:url"
+            }],
+            "dataset_external_count": 2,
+            "dataset_external_ids": ["dataset-a", "dataset-b"],
+            "requested_skill_count": 1,
+            "requested_skills": [{"skill_id": "image_extract"}],
+            "output_format": "json",
+            "render_mode": "normal",
+            "artifact_type": "none",
+            "received_at": "2026-07-08T00:00:00Z"
+        });
+
+        let public = message_event_conflict_public_summary(&summary);
+
+        assert_eq!(public["message_external_id"], json!("msg-1"));
+        assert_eq!(public["attachment_count"], json!(1));
+        assert_eq!(
+            public["attachments"][0]["download_url_redacted"],
+            json!("[redacted]")
+        );
+        assert!(public.get("text_fingerprint").is_none());
+        assert!(public.get("dataset_external_ids").is_none());
+        assert!(public.get("requested_skills").is_none());
+        assert!(public.get("received_at").is_none());
+    }
+
+    #[test]
+    fn conflict_public_summary_uses_null_for_missing_shape_fields() {
+        let public = message_event_conflict_public_summary(&json!({}));
+
+        assert_eq!(public["message_external_id"], Value::Null);
+        assert_eq!(public["message_type"], Value::Null);
+        assert_eq!(public["attachments"], Value::Null);
+    }
 }

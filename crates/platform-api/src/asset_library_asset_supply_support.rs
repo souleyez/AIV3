@@ -11,17 +11,31 @@ use crate::{
     asset_profile_supply_support, ApiError, AppState,
 };
 
+pub(crate) struct AssetLibraryAuthorizedAssetSupply {
+    pub(crate) assets: Vec<AssetItemView>,
+    pub(crate) asset_profile_hints: Vec<AssetProfileSupplyHintView>,
+    pub(crate) asset_parse_status_counts: BTreeMap<String, usize>,
+    pub(crate) asset_parse_run_count: usize,
+}
+
 pub(crate) async fn load_asset_library_authorized_asset_supply(
     state: &AppState,
     asset_library_id: Uuid,
     authorized_dataset_ids: &BTreeSet<DatasetId>,
-) -> std::result::Result<(Vec<AssetItemView>, Vec<AssetProfileSupplyHintView>), ApiError> {
+) -> std::result::Result<AssetLibraryAuthorizedAssetSupply, ApiError> {
     if authorized_dataset_ids.is_empty() {
-        return Ok((vec![], vec![]));
+        return Ok(AssetLibraryAuthorizedAssetSupply {
+            assets: vec![],
+            asset_profile_hints: vec![],
+            asset_parse_status_counts: BTreeMap::new(),
+            asset_parse_run_count: 0,
+        });
     }
 
     let mut asset_views = Vec::new();
     let mut profile_inputs = Vec::new();
+    let mut asset_parse_status_counts = BTreeMap::new();
+    let mut asset_parse_run_count = 0usize;
     let direct_assets = state
         .storage
         .asset_items()
@@ -43,6 +57,7 @@ pub(crate) async fn load_asset_library_authorized_asset_supply(
         assets_by_id.entry(asset.id).or_insert(asset);
     }
 
+    let mut authorized_assets = Vec::new();
     for asset in assets_by_id.into_values().take(100) {
         let dataset_memberships = state
             .storage
@@ -56,14 +71,52 @@ pub(crate) async fn load_asset_library_authorized_asset_supply(
         {
             continue;
         }
+        authorized_assets.push(asset);
+    }
 
-        let profiles = state
+    let asset_ids = authorized_assets
+        .iter()
+        .map(|asset| asset.id)
+        .collect::<Vec<_>>();
+    let mut profiles_by_asset_id = BTreeMap::new();
+    for profile in state
+        .storage
+        .asset_items()
+        .list_profiles_by_asset_ids(
+            state.tenant_id,
+            &asset_ids,
+            asset_ids.len().saturating_mul(4),
+        )
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        profiles_by_asset_id
+            .entry(profile.asset_id)
+            .or_insert_with(Vec::new)
+            .push(profile);
+    }
+
+    for asset in authorized_assets {
+        for parse_run in state
             .storage
             .asset_items()
-            .list_profiles(state.tenant_id, asset.id)
+            .list_parse_runs(state.tenant_id, asset.id)
             .await
-            .map_err(ApiError::from_storage)?;
-        profile_inputs.extend(asset_profile_supply_inputs(&asset, &profiles));
+            .map_err(ApiError::from_storage)?
+        {
+            asset_parse_run_count = asset_parse_run_count.saturating_add(1);
+            let status = parse_run.status.trim();
+            if !status.is_empty() {
+                *asset_parse_status_counts
+                    .entry(status.to_string())
+                    .or_insert(0) += 1;
+            }
+        }
+        let profiles = profiles_by_asset_id
+            .get(&asset.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        profile_inputs.extend(asset_profile_supply_inputs(&asset, profiles));
         asset_views.push(asset_item_view(asset));
     }
     let asset_profile_hints =
@@ -72,7 +125,12 @@ pub(crate) async fn load_asset_library_authorized_asset_supply(
             .map(asset_profile_supply_hint_view)
             .collect::<Vec<_>>();
 
-    Ok((asset_views, asset_profile_hints))
+    Ok(AssetLibraryAuthorizedAssetSupply {
+        assets: asset_views,
+        asset_profile_hints,
+        asset_parse_status_counts,
+        asset_parse_run_count,
+    })
 }
 
 fn asset_library_authorized_dataset_ids_for_query(

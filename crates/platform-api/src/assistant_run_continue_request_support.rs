@@ -8,6 +8,14 @@ use crate::{assistant_run_insert_safe_scalar_field, assistant_run_safe_artifact_
 
 const ASSISTANT_RUN_COMPLETION_DISPATCH_DEFAULT_PROMPT: &str =
     "后台视频/PPT提取已完成，请基于待模型接手请求和已完成 observation，用模型自己的口吻输出下一条结果说明。";
+const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
+const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
+
+pub(crate) fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
+    value
+        .unwrap_or(ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS)
+        .clamp(1, ASSISTANT_RUN_CONTINUE_MAX_STEPS)
+}
 
 pub(crate) fn assistant_run_create_request_from_continue(
     run: &AssistantRun,
@@ -392,6 +400,14 @@ mod tests {
         assert_eq!(request.max_steps, Some(1));
         assert_eq!(request.current_artifact, None);
         assert!(request.messages.is_empty());
+    }
+
+    #[test]
+    fn continue_request_support_normalizes_max_steps() {
+        assert_eq!(normalize_assistant_run_continue_max_steps(None), 3);
+        assert_eq!(normalize_assistant_run_continue_max_steps(Some(0)), 1);
+        assert_eq!(normalize_assistant_run_continue_max_steps(Some(2)), 2);
+        assert_eq!(normalize_assistant_run_continue_max_steps(Some(99)), 5);
     }
 
     #[test]

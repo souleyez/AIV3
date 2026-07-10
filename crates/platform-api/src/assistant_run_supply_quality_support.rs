@@ -68,6 +68,28 @@ pub(crate) fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_profile_hint"))
         .count();
+    let asset_parse_status_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+        .count();
+    let asset_not_ready_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+        .filter_map(|item| item.get("not_ready_asset_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
+    let asset_failed_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+        .filter_map(|item| item.get("failed_asset_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
+    let asset_retrying_count: usize = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+        .filter_map(|item| item.get("retrying_asset_count").and_then(Value::as_u64))
+        .map(|value| value as usize)
+        .sum();
     let document_parse_status_count = supplied_items
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("document_parse_status"))
@@ -107,6 +129,9 @@ pub(crate) fn assistant_run_supply_quality_report(
         || document_failed_count > 0
         || document_reparsing_count > 0
         || document_degraded_parse_count > 0
+        || asset_not_ready_count > 0
+        || asset_failed_count > 0
+        || asset_retrying_count > 0
         || low_text_evidence_count > 0
         || (prefer_detail && !detail_targets.is_empty())
     {
@@ -141,6 +166,18 @@ pub(crate) fn assistant_run_supply_quality_report(
     }
     if asset_profile_hint_count > 0 {
         notes.push("asset_profile_hints_available");
+    }
+    if asset_parse_status_count > 0 {
+        notes.push("asset_parse_status_available");
+    }
+    if asset_not_ready_count > 0 {
+        notes.push("some_assets_not_ready_or_parsing");
+    }
+    if asset_failed_count > 0 {
+        notes.push("some_assets_failed_parse");
+    }
+    if asset_retrying_count > 0 {
+        notes.push("asset_parse_retry_in_progress");
     }
     if document_parse_status_count > 0 {
         notes.push("document_parse_status_available");
@@ -188,6 +225,10 @@ pub(crate) fn assistant_run_supply_quality_report(
         "datasetFactSnapshotCount": dataset_fact_snapshot_count,
         "spreadsheetRowAnalysisCount": spreadsheet_row_analysis_count,
         "assetProfileHintCount": asset_profile_hint_count,
+        "assetParseStatusCount": asset_parse_status_count,
+        "assetNotReadyCount": asset_not_ready_count,
+        "assetFailedCount": asset_failed_count,
+        "assetRetryingCount": asset_retrying_count,
         "documentParseStatusCount": document_parse_status_count,
         "documentNotReadyCount": document_not_ready_count,
         "documentFailedCount": document_failed_count,
@@ -206,6 +247,7 @@ pub(crate) fn assistant_run_supply_quality_report(
             "when dataset_entity_scan contains scanned_document_count, use it as the total scanned document count and do not sum company_rows.document_count as total documents",
             "when spreadsheet_row_analysis is present, use its rows as the deterministic computed table for attendance, work-hour, absence, and date/time row questions",
             "when asset_profile_hint is present, treat it as compact asset understanding for choosing relevant assets and terms; do not cite it as exact source evidence",
+            "when asset_parse_status reports pending, parsing, retrying, or failed assets, tell the user the relevant image/design/PPT/video asset understanding is still parsing or failed instead of guessing from filename or title",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "fallback_visible_document_chunks_used means indexed retrieval was expanded with visible document chunks; do not describe that as parser-not-ready unless document_parse_status or low_text_document_evidence says so",
             "when fallback_reason is weak_indexed_evidence_expansion, use those expanded chunks before saying the document did not directly mention the requested flow",
@@ -376,6 +418,9 @@ pub(crate) fn assistant_run_supply_quality_suggests_parse_recovery(evidence_stat
         "documentDegradedParseCount",
         "documentFailedCount",
         "documentReparsingCount",
+        "assetNotReadyCount",
+        "assetFailedCount",
+        "assetRetryingCount",
     ]
     .iter()
     .any(|key| {
@@ -392,7 +437,11 @@ pub(crate) fn assistant_run_supply_quality_suggests_parse_recovery(evidence_stat
         .any(|note| {
             matches!(
                 note.as_str(),
-                Some("low_text_document_evidence") | Some("parse_quality_degraded")
+                Some("low_text_document_evidence")
+                    | Some("parse_quality_degraded")
+                    | Some("some_assets_not_ready_or_parsing")
+                    | Some("some_assets_failed_parse")
+                    | Some("asset_parse_retry_in_progress")
             )
         })
 }
@@ -417,6 +466,8 @@ pub(crate) fn assistant_run_answer_quality_case_supply_sources(
         ("media_context_count", "media_context"),
         ("assetProfileHintCount", "asset_profile_hint"),
         ("asset_profile_hint_count", "asset_profile_hint"),
+        ("assetParseStatusCount", "asset_parse_status"),
+        ("asset_parse_status_count", "asset_parse_status"),
     ] {
         if supply_quality
             .get(field)
@@ -632,6 +683,12 @@ mod tests {
                     "type": "asset_profile_hint",
                     "summary": "资产画像"
                 }),
+                json!({
+                    "type": "asset_parse_status",
+                    "not_ready_asset_count": 2,
+                    "failed_asset_count": 1,
+                    "retrying_asset_count": 1
+                }),
             ],
             &[json!({"id": "dataset-1"})],
             &[],
@@ -643,6 +700,10 @@ mod tests {
         assert_eq!(report["status"], json!("partial"));
         assert_eq!(report["documentNotReadyCount"], json!(1));
         assert_eq!(report["assetProfileHintCount"], json!(1));
+        assert_eq!(report["assetParseStatusCount"], json!(1));
+        assert_eq!(report["assetNotReadyCount"], json!(2));
+        assert_eq!(report["assetFailedCount"], json!(1));
+        assert_eq!(report["assetRetryingCount"], json!(1));
         assert_eq!(report["citationLocators"], json!(["facts#1"]));
         let notes = report["notes"].as_array().expect("notes should be array");
         assert!(notes.iter().any(|note| {
@@ -657,6 +718,18 @@ mod tests {
         assert!(notes
             .iter()
             .any(|note| note.as_str() == Some("asset_profile_hints_available")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("asset_parse_status_available")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("some_assets_not_ready_or_parsing")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("some_assets_failed_parse")));
+        assert!(notes
+            .iter()
+            .any(|note| note.as_str() == Some("asset_parse_retry_in_progress")));
     }
 
     #[test]
@@ -726,6 +799,13 @@ mod tests {
                 }
             })
         ));
+        assert!(assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "assetFailedCount": 1
+                }
+            })
+        ));
     }
 
     #[test]
@@ -734,6 +814,13 @@ mod tests {
             &json!({
                 "supply_quality": {
                     "notes": ["parse_quality_degraded"]
+                }
+            })
+        ));
+        assert!(assistant_run_supply_quality_suggests_parse_recovery(
+            &json!({
+                "supply_quality": {
+                    "notes": ["some_assets_not_ready_or_parsing"]
                 }
             })
         ));

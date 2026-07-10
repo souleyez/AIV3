@@ -13,6 +13,7 @@ import {
 import {
   ASSET_LIBRARY_PRESETS,
   assetLibraryContainsDataset,
+  assetParseStatusEntries,
   assetProfileKindOptions,
   filterAssetProfileHints,
 } from '../lib/asset-library-view-model';
@@ -261,24 +262,33 @@ function AssetLibraryManager({
   selectedAssetLibrary,
   assetLibraryScope,
   assetLibraryDraft,
+  assetImageImportDraft,
+  assetImportEnabled = false,
   creatingAssetLibrary,
+  importingAssetImage,
   assetLibraryLoading,
   assetLibraryActionBusy,
   selectedDatasetId,
+  selectedDatasetIds = [],
   onSelectAssetLibrary,
   onAssetLibraryDraftChange,
   onApplyAssetLibraryPreset,
   onCreateAssetLibrary,
+  onAssetImageImportDraftChange,
+  onImportFashionDesignImageAsset,
+  onImportFashionDesignImageAssetFiles,
   onToggleAssetLibraryDataset,
   onRefreshAssetLibraries,
 }) {
-  const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
-  const selectedDatasetIsInLibrary = selectedDatasetId
-    ? assetLibraryContainsDataset(assetLibraryScope, selectedDatasetId)
+  const targetDatasetId = selectedDatasetId || selectedDatasetIds[0] || '';
+  const selectedDataset = datasets.find((dataset) => dataset.id === targetDatasetId) || null;
+  const selectedDatasetIsInLibrary = targetDatasetId
+    ? assetLibraryContainsDataset(assetLibraryScope, targetDatasetId)
     : false;
   const [assetProfileQuery, setAssetProfileQuery] = useState('');
   const [assetProfileKind, setAssetProfileKind] = useState('all');
   const assetProfileKinds = assetProfileKindOptions(assetLibraryScope);
+  const parseStatusEntries = assetParseStatusEntries(assetLibraryScope);
   const filteredAssetProfileHints = filterAssetProfileHints(assetLibraryScope, {
     query: assetProfileQuery,
     assetKind: assetProfileKind,
@@ -368,7 +378,18 @@ function AssetLibraryManager({
             <MiniMetric label="无权限" value={assetLibraryScope?.deniedDatasetCount || 0} />
             <MiniMetric label="可见资产" value={assetLibraryScope?.assetCount || 0} />
             <MiniMetric label="画像摘要" value={assetLibraryScope?.assetProfileHintCount || 0} />
+            <MiniMetric label="解析任务" value={assetLibraryScope?.assetParseRunCount || 0} />
           </div>
+          {parseStatusEntries.length ? (
+            <div className="asset-library-parse-status-row" aria-label="资产解析状态">
+              {parseStatusEntries.map((entry) => (
+                <span key={entry.status}>
+                  {entry.label}
+                  <strong>{entry.count}</strong>
+                </span>
+              ))}
+            </div>
+          ) : null}
           {assetLibraryScope?.assetProfileHints?.length ? (
             <div className="asset-profile-gallery">
               <div className="asset-profile-filter-row">
@@ -410,6 +431,70 @@ function AssetLibraryManager({
                 <div className="directory-empty compact-empty">当前筛选无匹配画像。</div>
               )}
             </div>
+          ) : null}
+          {assetImportEnabled ? (
+          <form
+            className="asset-library-import-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onImportFashionDesignImageAsset?.();
+            }}
+          >
+            <div className="asset-library-import-head">
+              <strong>导入设计图</strong>
+              <span>{selectedDataset ? `写入 ${selectedDataset.title}` : '先选一个目标数据集'}</span>
+            </div>
+            <div className="asset-library-create-row">
+              <input
+                value={assetImageImportDraft?.title || ''}
+                onChange={(event) => onAssetImageImportDraftChange?.('title', event.target.value)}
+                placeholder="图片标题，可留空自动取文件名"
+                disabled={importingAssetImage}
+              />
+              <input
+                value={assetImageImportDraft?.externalId || ''}
+                onChange={(event) => onAssetImageImportDraftChange?.('externalId', event.target.value)}
+                placeholder="外部 ID，可选"
+                disabled={importingAssetImage}
+              />
+              <button
+                className="primary-btn compact-action-btn"
+                type="submit"
+                disabled={importingAssetImage || !selectedDataset}
+              >
+                {importingAssetImage ? '导入中' : '导入'}
+              </button>
+            </div>
+            <textarea
+              className="asset-library-import-url"
+              value={assetImageImportDraft?.imageUrl || ''}
+              onChange={(event) => onAssetImageImportDraftChange?.('imageUrl', event.target.value)}
+              placeholder="https://.../image.png，可每行粘贴一个"
+              disabled={importingAssetImage}
+            />
+            <textarea
+              value={assetImageImportDraft?.profilePayloadText || ''}
+              onChange={(event) => onAssetImageImportDraftChange?.('profilePayloadText', event.target.value)}
+              placeholder='可选画像 JSON，如 {"category":"dress","color":["green"]}'
+              disabled={importingAssetImage}
+            />
+            <div className="asset-library-import-file-row">
+              <label className="ghost-btn compact-action-btn">
+                选择图片/ZIP
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,.zip,application/zip"
+                  disabled={importingAssetImage}
+                  onChange={(event) => {
+                    onImportFashionDesignImageAssetFiles?.(event.target.files);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              <span>图片直接入库；ZIP 会展开其中图片后入库。</span>
+            </div>
+          </form>
           ) : null}
           {selectedDataset ? (
             <button
@@ -749,13 +834,19 @@ function DatasetsPage({
   selectedAssetLibrary,
   assetLibraryScope,
   assetLibraryDraft,
+  assetImageImportDraft,
+  assetImportEnabled = false,
   creatingAssetLibrary,
+  importingAssetImage,
   assetLibraryLoading,
   assetLibraryActionBusy,
   onSelectAssetLibrary,
   onAssetLibraryDraftChange,
   onApplyAssetLibraryPreset,
   onCreateAssetLibrary,
+  onAssetImageImportDraftChange,
+  onImportFashionDesignImageAsset,
+  onImportFashionDesignImageAssetFiles,
   onToggleAssetLibraryDataset,
   onRefreshAssetLibraries,
   selectedDatasetId,
@@ -836,14 +927,21 @@ function DatasetsPage({
           selectedAssetLibrary={selectedAssetLibrary}
           assetLibraryScope={assetLibraryScope}
           assetLibraryDraft={assetLibraryDraft}
+          assetImageImportDraft={assetImageImportDraft}
+          assetImportEnabled={assetImportEnabled}
           creatingAssetLibrary={creatingAssetLibrary}
+          importingAssetImage={importingAssetImage}
           assetLibraryLoading={assetLibraryLoading}
           assetLibraryActionBusy={assetLibraryActionBusy}
           selectedDatasetId={selectedDatasetId}
+          selectedDatasetIds={selectedDatasetIds}
           onSelectAssetLibrary={onSelectAssetLibrary}
           onAssetLibraryDraftChange={onAssetLibraryDraftChange}
           onApplyAssetLibraryPreset={onApplyAssetLibraryPreset}
           onCreateAssetLibrary={onCreateAssetLibrary}
+          onAssetImageImportDraftChange={onAssetImageImportDraftChange}
+          onImportFashionDesignImageAsset={onImportFashionDesignImageAsset}
+          onImportFashionDesignImageAssetFiles={onImportFashionDesignImageAssetFiles}
           onToggleAssetLibraryDataset={onToggleAssetLibraryDataset}
           onRefreshAssetLibraries={onRefreshAssetLibraries}
         />
@@ -1334,13 +1432,19 @@ export default function WorkspaceDirectoryPanel({
   selectedAssetLibrary,
   assetLibraryScope,
   assetLibraryDraft,
+  assetImageImportDraft,
+  assetImportEnabled = false,
   creatingAssetLibrary,
+  importingAssetImage,
   assetLibraryLoading,
   assetLibraryActionBusy,
   onSelectAssetLibrary,
   onAssetLibraryDraftChange,
   onApplyAssetLibraryPreset,
   onCreateAssetLibrary,
+  onAssetImageImportDraftChange,
+  onImportFashionDesignImageAsset,
+  onImportFashionDesignImageAssetFiles,
   onToggleAssetLibraryDataset,
   onRefreshAssetLibraries,
   selectedDatasetId,
@@ -1391,13 +1495,19 @@ export default function WorkspaceDirectoryPanel({
           selectedAssetLibrary={selectedAssetLibrary}
           assetLibraryScope={assetLibraryScope}
           assetLibraryDraft={assetLibraryDraft}
+          assetImageImportDraft={assetImageImportDraft}
+          assetImportEnabled={assetImportEnabled}
           creatingAssetLibrary={creatingAssetLibrary}
+          importingAssetImage={importingAssetImage}
           assetLibraryLoading={assetLibraryLoading}
           assetLibraryActionBusy={assetLibraryActionBusy}
           onSelectAssetLibrary={onSelectAssetLibrary}
           onAssetLibraryDraftChange={onAssetLibraryDraftChange}
           onApplyAssetLibraryPreset={onApplyAssetLibraryPreset}
           onCreateAssetLibrary={onCreateAssetLibrary}
+          onAssetImageImportDraftChange={onAssetImageImportDraftChange}
+          onImportFashionDesignImageAsset={onImportFashionDesignImageAsset}
+          onImportFashionDesignImageAssetFiles={onImportFashionDesignImageAssetFiles}
           onToggleAssetLibraryDataset={onToggleAssetLibraryDataset}
           onRefreshAssetLibraries={onRefreshAssetLibraries}
           selectedDatasetId={selectedDatasetId}

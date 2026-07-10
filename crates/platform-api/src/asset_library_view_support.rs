@@ -1,8 +1,10 @@
 use contracts::{
-    AssetItemView, AssetLibraryDatasetMembershipView, AssetLibraryView, AssetProfileSupplyHintView,
+    AssetItemView, AssetLibraryDatasetMembershipView, AssetLibraryView, AssetParseRunView,
+    AssetProfileSupplyHintView, AssetProfileView, DatasetAssetMembershipView,
 };
 use storage::{
-    AssetItemRecord, AssetLibraryDatasetMembershipRecord, AssetLibraryRecord, AssetProfileRecord,
+    AssetItemRecord, AssetLibraryDatasetMembershipRecord, AssetLibraryRecord, AssetParseRunRecord,
+    AssetProfileRecord, DatasetAssetMembershipRecord,
 };
 
 use crate::asset_profile_supply_support;
@@ -84,6 +86,48 @@ pub(crate) fn asset_profile_supply_hint_view(
         summary: hint.summary,
         noun_terms: hint.noun_terms,
         facets: hint.facets,
+    }
+}
+
+pub(crate) fn dataset_asset_membership_view(
+    membership: DatasetAssetMembershipRecord,
+) -> DatasetAssetMembershipView {
+    DatasetAssetMembershipView {
+        dataset_id: membership.dataset_id,
+        asset_id: membership.asset_id.to_string(),
+        membership_kind: membership.membership_kind,
+        expires_at: membership.expires_at,
+        created_at: membership.created_at,
+    }
+}
+
+pub(crate) fn asset_profile_view(profile: AssetProfileRecord) -> AssetProfileView {
+    AssetProfileView {
+        id: profile.id.to_string(),
+        asset_id: profile.asset_id.to_string(),
+        profile_kind: profile.profile_kind,
+        profile_version: profile.profile_version,
+        attributes: profile.attributes,
+        embedding_status: profile.embedding_status,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+    }
+}
+
+pub(crate) fn asset_parse_run_view(parse_run: AssetParseRunRecord) -> AssetParseRunView {
+    AssetParseRunView {
+        id: parse_run.id.to_string(),
+        asset_id: parse_run.asset_id.to_string(),
+        parser_name: parse_run.parser_name,
+        parser_version: parse_run.parser_version,
+        status: parse_run.status,
+        started_at: parse_run.started_at,
+        finished_at: parse_run.finished_at,
+        error_code: parse_run.error_code,
+        error_message: parse_run.error_message,
+        metadata: parse_run.metadata,
+        created_at: parse_run.created_at,
+        updated_at: parse_run.updated_at,
     }
 }
 
@@ -226,5 +270,55 @@ mod tests {
         assert_eq!(hint_view.asset_id, asset_id.to_string());
         assert_eq!(hint_view.noun_terms, vec!["女装".to_string()]);
         assert_eq!(hint_view.facets, vec!["场景: 陈列".to_string()]);
+    }
+
+    #[test]
+    fn asset_library_view_support_maps_dataset_asset_membership_and_profile() {
+        let dataset_id = DatasetId(Uuid::from_u128(9));
+        let asset_id = Uuid::from_u128(10);
+        let membership = dataset_asset_membership_view(DatasetAssetMembershipRecord {
+            tenant_id: tenant_id(),
+            dataset_id,
+            asset_id,
+            membership_kind: "imported".to_string(),
+            expires_at: None,
+            created_at: timestamp(),
+        });
+        assert_eq!(membership.dataset_id, dataset_id);
+        assert_eq!(membership.asset_id, asset_id.to_string());
+        assert_eq!(membership.membership_kind, "imported");
+
+        let profile = asset_profile_view(AssetProfileRecord {
+            id: Uuid::from_u128(11),
+            tenant_id: tenant_id(),
+            asset_id,
+            profile_kind: "fashion_design_image_v1".to_string(),
+            profile_version: "v1".to_string(),
+            attributes: json!({"category": "dress"}),
+            embedding_status: "not_requested".to_string(),
+            created_at: timestamp(),
+            updated_at: timestamp(),
+        });
+        assert_eq!(profile.asset_id, asset_id.to_string());
+        assert_eq!(profile.attributes["category"], "dress");
+
+        let parse_run = asset_parse_run_view(AssetParseRunRecord {
+            id: Uuid::from_u128(12),
+            tenant_id: tenant_id(),
+            asset_id,
+            parser_name: "datamax-fashion-image-parser".to_string(),
+            parser_version: "2026-06-17".to_string(),
+            status: "pending".to_string(),
+            started_at: None,
+            finished_at: None,
+            error_code: None,
+            error_message: None,
+            metadata: json!({"parse_method": "ocr_vlm_pending"}),
+            created_at: timestamp(),
+            updated_at: timestamp(),
+        });
+        assert_eq!(parse_run.asset_id, asset_id.to_string());
+        assert_eq!(parse_run.status, "pending");
+        assert_eq!(parse_run.metadata["parse_method"], "ocr_vlm_pending");
     }
 }

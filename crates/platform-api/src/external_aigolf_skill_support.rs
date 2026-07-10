@@ -2,7 +2,11 @@
 use chrono::Utc;
 #[cfg(test)]
 use contracts::{ExternalAttachmentRefView, ExternalChannelPlatformView, ExternalMessageTypeView};
-use contracts::{ExternalBotMessageView, ExternalRequestedSkillView};
+use contracts::{
+    ExternalBotMessageView, ExternalBotReplyTypeView, ExternalBotReplyView,
+    ExternalRequestedSkillView,
+};
+use domain_model::AssistantRunEvent;
 use serde_json::{json, Map, Value};
 
 use crate::{
@@ -266,9 +270,76 @@ pub(crate) fn external_aigolf_requested_skill_policy(
     }))
 }
 
+pub(crate) fn external_aigolf_course_map_segmentation_reply_for_conversation(
+    conversation_external_id: &str,
+    payload: &Value,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::Card,
+        text: Some(
+            "DataMax 已接收 AI Golf 球场地图分割任务，并返回可复核的结构化初稿。".to_string(),
+        ),
+        card: Some(payload.clone()),
+        artifact_links: Vec::new(),
+        task_status: Some("aigolf_course_map_segmentation_needs_review".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+pub(crate) fn external_aigolf_course_map_segmentation_output_artifacts(
+    payload: &Value,
+    reply: &ExternalBotReplyView,
+) -> Value {
+    json!([{
+        "type": EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_ARTIFACT_TYPE,
+        "source": "external_channel_requested_skill",
+        "content": reply.text.clone().unwrap_or_default(),
+        "payload": payload.clone(),
+    }])
+}
+
+pub(crate) fn external_channel_aigolf_skill_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME)?;
+    event
+        .payload
+        .get("reply")
+        .cloned()
+        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
+        .or_else(|| {
+            event.payload.get("payload").map(|payload| {
+                external_aigolf_course_map_segmentation_reply_for_conversation(
+                    conversation_external_id,
+                    payload,
+                )
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain_model::{AssistantRunEventId, AssistantRunId, TenantId};
+
+    fn event(event_name: &str, sequence_no: i64, payload: Value) -> AssistantRunEvent {
+        AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId::new(),
+            run_id: AssistantRunId::new(),
+            sequence_no: sequence_no as i32,
+            event_name: event_name.to_string(),
+            payload,
+            created_at: Utc::now(),
+        }
+    }
 
     fn sample_message() -> ExternalBotMessageView {
         ExternalBotMessageView {
@@ -426,5 +497,126 @@ mod tests {
             .expect("disabled skill should not be validated");
         assert!(external_aigolf_course_map_segmentation_skill(&message).is_none());
         assert!(external_aigolf_requested_skill_policy(&message.requested_skills).is_none());
+    }
+
+    #[test]
+    fn course_map_segmentation_reply_uses_card_payload_and_review_status() {
+        let payload = json!({
+            "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+            "status": "needs_review",
+            "holes": [],
+            "warnings": ["operator_review_required_before_publish"]
+        });
+
+        let reply =
+            external_aigolf_course_map_segmentation_reply_for_conversation("conv-aigolf", &payload);
+
+        assert_eq!(reply.target_conversation_external_id, "conv-aigolf");
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            reply.text.as_deref(),
+            Some("DataMax 已接收 AI Golf 球场地图分割任务，并返回可复核的结构化初稿。")
+        );
+        assert_eq!(reply.card.as_ref(), Some(&payload));
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("aigolf_course_map_segmentation_needs_review")
+        );
+        assert!(!reply.requires_confirmation);
+    }
+
+    #[test]
+    fn course_map_segmentation_output_artifacts_keep_type_source_content_and_payload() {
+        let payload = json!({
+            "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+            "status": "needs_review",
+            "holes": [{ "hole": 1 }]
+        });
+        let reply =
+            external_aigolf_course_map_segmentation_reply_for_conversation("conv-aigolf", &payload);
+
+        let artifacts = external_aigolf_course_map_segmentation_output_artifacts(&payload, &reply);
+
+        assert_eq!(
+            artifacts[0]["type"],
+            json!("aigolf_course_map_segmentation")
+        );
+        assert_eq!(
+            artifacts[0]["source"],
+            json!("external_channel_requested_skill")
+        );
+        assert_eq!(
+            artifacts[0]["content"],
+            json!("DataMax 已接收 AI Golf 球场地图分割任务，并返回可复核的结构化初稿。")
+        );
+        assert_eq!(artifacts[0]["payload"], payload);
+    }
+
+    #[test]
+    fn course_map_segmentation_reply_from_events_prefers_latest_persisted_reply() {
+        let stale_payload = json!({
+            "payload": {
+                "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+                "status": "stale"
+            }
+        });
+        let latest_payload = json!({
+            "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+            "status": "latest"
+        });
+        let latest_reply = external_aigolf_course_map_segmentation_reply_for_conversation(
+            "conv-latest",
+            &latest_payload,
+        );
+        let events = vec![
+            event(
+                EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME,
+                1,
+                stale_payload,
+            ),
+            event(
+                "assistant_run.other_event",
+                2,
+                json!({ "payload": { "status": "ignored" } }),
+            ),
+            event(
+                EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME,
+                3,
+                json!({
+                    "payload": { "status": "fallback_should_not_win" },
+                    "reply": latest_reply
+                }),
+            ),
+        ];
+
+        let reply =
+            external_channel_aigolf_skill_reply_from_events(&events, "conv-fallback").unwrap();
+
+        assert_eq!(reply.target_conversation_external_id, "conv-latest");
+        assert_eq!(reply.card.as_ref(), Some(&latest_payload));
+    }
+
+    #[test]
+    fn course_map_segmentation_reply_from_events_falls_back_to_payload() {
+        let payload = json!({
+            "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+            "status": "needs_review",
+            "warnings": ["operator_review_required_before_publish"]
+        });
+        let events = vec![event(
+            EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME,
+            1,
+            json!({ "payload": payload }),
+        )];
+
+        let reply =
+            external_channel_aigolf_skill_reply_from_events(&events, "conv-fallback").unwrap();
+
+        assert_eq!(reply.target_conversation_external_id, "conv-fallback");
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("aigolf_course_map_segmentation_needs_review")
+        );
+        assert_eq!(reply.card, Some(payload));
     }
 }

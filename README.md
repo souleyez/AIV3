@@ -63,11 +63,16 @@ Important current limits:
 ## Local Dependencies
 
 The local compose stack includes PostgreSQL, Redis, NATS JetStream, Qdrant, and
-MinIO. Fresh environments target PostgreSQL 17.9:
+MinIO. Fresh environments target PostgreSQL 18.4:
 
 ```powershell
 docker compose -f .\infra\compose\docker-compose.local.yml up -d
 ```
+
+PostgreSQL 18 uses the versioned data directory layout from the official image.
+The compose file therefore mounts a dedicated `postgres18-data` volume at
+`/var/lib/postgresql`. Existing PostgreSQL 16/17 volumes are not upgraded by
+changing the image tag; migrate them explicitly with PostgreSQL tools.
 
 PostgreSQL defaults are:
 

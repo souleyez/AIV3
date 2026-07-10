@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::{
     AssetItemView, AssetLibraryDatasetMembershipView, AssetLibraryScopeSummaryResponse,
     AssetLibraryScopeSummaryView, AssetLibraryView, AssetProfileSupplyHintView, DatasetSummary,
 };
 use domain_model::{Dataset, DatasetId, DatasetLifecycle, SecretBindingId, UserId};
+use serde_json::{json, Value};
 use storage::{AssetLibraryDatasetMembershipRecord, AssetLibraryRecord};
 use uuid::Uuid;
 
@@ -29,6 +30,8 @@ pub(crate) struct AssetLibraryScopeSummaryResponseInput {
     pub(crate) dataset_ids: Vec<DatasetId>,
     pub(crate) assets: Vec<AssetItemView>,
     pub(crate) asset_profile_hints: Vec<AssetProfileSupplyHintView>,
+    pub(crate) asset_parse_status_counts: BTreeMap<String, usize>,
+    pub(crate) asset_parse_run_count: usize,
     pub(crate) denied_dataset_count: usize,
     pub(crate) membership_count: usize,
     pub(crate) authorized_dataset_count: usize,
@@ -37,7 +40,8 @@ pub(crate) struct AssetLibraryScopeSummaryResponseInput {
 pub(crate) fn asset_library_scope_summary_response(
     input: AssetLibraryScopeSummaryResponseInput,
 ) -> AssetLibraryScopeSummaryResponse {
-    let asset_count = input.assets.len();
+    let assets = asset_library_scope_summary_safe_asset_views(input.assets);
+    let asset_count = assets.len();
     let asset_profile_hint_count = input.asset_profile_hints.len();
 
     AssetLibraryScopeSummaryResponse {
@@ -46,15 +50,48 @@ pub(crate) fn asset_library_scope_summary_response(
             memberships: input.memberships,
             datasets: input.datasets,
             dataset_ids: input.dataset_ids,
-            assets: input.assets,
+            assets,
             asset_profile_hints: input.asset_profile_hints,
             denied_dataset_count: input.denied_dataset_count,
             membership_count: input.membership_count,
             authorized_dataset_count: input.authorized_dataset_count,
             asset_count,
             asset_profile_hint_count,
+            asset_parse_status_counts: input.asset_parse_status_counts,
+            asset_parse_run_count: input.asset_parse_run_count,
             scope_policy: ASSET_LIBRARY_SCOPE_POLICY.to_string(),
         },
+    }
+}
+
+fn asset_library_scope_summary_safe_asset_views(assets: Vec<AssetItemView>) -> Vec<AssetItemView> {
+    assets
+        .into_iter()
+        .map(asset_library_scope_summary_safe_asset_view)
+        .collect()
+}
+
+fn asset_library_scope_summary_safe_asset_view(mut asset: AssetItemView) -> AssetItemView {
+    let metadata = asset_library_scope_summary_safe_asset_metadata(&asset);
+    asset.source_id = None;
+    asset.object_key = None;
+    asset.metadata = metadata;
+    asset
+}
+
+fn asset_library_scope_summary_safe_asset_metadata(asset: &AssetItemView) -> Value {
+    json!({
+        "storage_locator_present": asset.object_key.as_ref().is_some_and(|value| !value.trim().is_empty()),
+        "source_id_present": asset.source_id.as_ref().is_some_and(|value| !value.trim().is_empty()),
+        "metadata_present": asset_library_scope_summary_metadata_present(&asset.metadata),
+    })
+}
+
+fn asset_library_scope_summary_metadata_present(metadata: &Value) -> bool {
+    match metadata {
+        Value::Null => false,
+        Value::Object(object) => !object.is_empty(),
+        _ => true,
     }
 }
 
@@ -85,7 +122,7 @@ pub(crate) async fn load_asset_library_scope_summary_response(
     );
     let authorized_dataset_ids =
         authorized_dataset_ids_for_scope_summary(&memberships, &visible_datasets);
-    let (assets, asset_profile_hints) = load_asset_library_authorized_asset_supply(
+    let supply = load_asset_library_authorized_asset_supply(
         state,
         asset_library_id,
         &authorized_dataset_ids,
@@ -97,8 +134,10 @@ pub(crate) async fn load_asset_library_scope_summary_response(
             asset_library,
             memberships,
             visible_datasets,
-            assets,
-            asset_profile_hints,
+            supply.assets,
+            supply.asset_profile_hints,
+            supply.asset_parse_status_counts,
+            supply.asset_parse_run_count,
         ),
     ))
 }
@@ -137,6 +176,8 @@ fn asset_library_scope_summary_input_from_records(
     visible_datasets: Vec<Dataset>,
     assets: Vec<AssetItemView>,
     asset_profile_hints: Vec<AssetProfileSupplyHintView>,
+    asset_parse_status_counts: BTreeMap<String, usize>,
+    asset_parse_run_count: usize,
 ) -> AssetLibraryScopeSummaryResponseInput {
     let visible_datasets = visible_datasets
         .into_iter()
@@ -179,6 +220,8 @@ fn asset_library_scope_summary_input_from_records(
         dataset_ids: scope.dataset_ids,
         assets,
         asset_profile_hints,
+        asset_parse_status_counts,
+        asset_parse_run_count,
         denied_dataset_count: scope.denied_dataset_ids.len(),
         membership_count: scope.membership_count,
         authorized_dataset_count: authorized_dataset_ids.len(),
@@ -300,6 +343,8 @@ mod tests {
             ],
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
+            0,
         );
         let response = asset_library_scope_summary_response(input);
 
@@ -357,10 +402,10 @@ mod tests {
                     title: "连衣裙灵感图".to_string(),
                     asset_kind: "image".to_string(),
                     source_kind: "upload".to_string(),
-                    source_id: Some("doc-1".to_string()),
+                    source_id: Some("objects/private/source-doc-1.png".to_string()),
                     content_type: Some("image/png".to_string()),
-                    object_key: None,
-                    metadata: json!({}),
+                    object_key: Some("objects/private/look-001.png".to_string()),
+                    metadata: json!({"raw_provider_payload": {"should_not_surface": true}}),
                     profile_count: 1,
                     created_at: timestamp(),
                     updated_at: timestamp(),
@@ -375,13 +420,42 @@ mod tests {
                     noun_terms: vec!["连衣裙".to_string()],
                     facets: vec!["季节: 春夏".to_string()],
                 }],
+                asset_parse_status_counts: BTreeMap::from([
+                    ("completed".to_string(), 1usize),
+                    ("pending".to_string(), 2usize),
+                ]),
+                asset_parse_run_count: 3,
                 denied_dataset_count: 1,
                 membership_count: 2,
                 authorized_dataset_count: 1,
             });
 
         assert_eq!(response.summary.asset_count, 1);
+        assert_eq!(response.summary.assets.len(), 1);
+        assert_eq!(response.summary.assets[0].source_id, None);
+        assert_eq!(response.summary.assets[0].object_key, None);
+        assert_eq!(
+            response.summary.assets[0].metadata["storage_locator_present"],
+            json!(true)
+        );
+        assert_eq!(
+            response.summary.assets[0].metadata["source_id_present"],
+            json!(true)
+        );
+        assert_eq!(
+            response.summary.assets[0].metadata["metadata_present"],
+            json!(true)
+        );
+        let serialized_asset =
+            serde_json::to_string(&response.summary.assets[0]).expect("asset should serialize");
+        assert!(!serialized_asset.contains("objects/private"));
+        assert!(!serialized_asset.contains("raw_provider_payload"));
         assert_eq!(response.summary.asset_profile_hint_count, 1);
+        assert_eq!(response.summary.asset_parse_run_count, 3);
+        assert_eq!(
+            response.summary.asset_parse_status_counts.get("pending"),
+            Some(&2)
+        );
         assert_eq!(response.summary.denied_dataset_count, 1);
         assert_eq!(response.summary.membership_count, 2);
         assert_eq!(response.summary.authorized_dataset_count, 1);

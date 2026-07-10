@@ -44,6 +44,7 @@ jobs:
           node --check scripts/smoke/document-object-cleanup-plan.mjs
           node --check scripts/smoke/document-object-filesystem-preflight.mjs
           node --check scripts/smoke/document-object-repair-plan.mjs
+          node --check scripts/smoke/fashion-design-asset-import.mjs
 
       - name: Run deterministic smoke self-tests
         run: |
@@ -63,8 +64,17 @@ jobs:
           npm run smoke:document-object-repair-plan -- --self-test
           npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout
 
+      - name: Guard asset and public integration contracts
+        run: |
+          npm run test:third-party-public-contract-guard
+          npm run smoke:fashion-design-asset-import -- --self-test --pretty
+          npm run smoke:fashion-design-asset-import -- --preflight --pretty
+
       - name: Check generated public integration guide
         run: npm run check:pure-third-party-guide-html
+
+      - name: Run web unit tests
+        run: npm run test:web
 
       - name: Build web app
         run: npm --prefix apps/web run build
@@ -91,6 +101,14 @@ jobs:
 
       - name: Rust format
         run: cargo fmt --check
+
+      - name: Rust workspace check
+        run: cargo check --workspace
+
+      - name: Guard asset import modules
+        run: |
+          cargo test -p platform-api asset_import --lib
+          cargo test -p platform-api fashion_postchain_adapter --lib
 
       - name: Model gateway tests
         run: |

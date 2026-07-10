@@ -3,6 +3,19 @@ use serde_json::{Map, Value};
 
 use crate::document_id_from_scope_item;
 
+pub(crate) fn external_channel_source_document_scope_enabled(config: &Value) -> bool {
+    external_channel_config_bool(
+        config,
+        &[
+            "allow_source_document_scope",
+            "allowSourceDocumentScope",
+            "enable_source_document_scope",
+            "enableSourceDocumentScope",
+        ],
+        false,
+    )
+}
+
 pub(crate) fn selected_scope_document_id_by_external_ref(
     selected_scope: &Value,
     source_id: Option<&str>,
@@ -43,6 +56,23 @@ pub(crate) fn selected_scope_document_id_by_external_ref(
         }
     }
     None
+}
+
+fn external_channel_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool {
+    keys.iter()
+        .find_map(|key| {
+            config.get(*key).and_then(|value| {
+                value.as_bool().or_else(|| {
+                    value.as_str().map(|text| {
+                        matches!(
+                            text.trim().to_ascii_lowercase().as_str(),
+                            "1" | "true" | "yes" | "on"
+                        )
+                    })
+                })
+            })
+        })
+        .unwrap_or(default_value)
 }
 
 pub(crate) fn selected_scope_document_item_by_title<'a>(
@@ -91,6 +121,36 @@ fn object_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn source_document_scope_enabled_accepts_snake_and_camel_aliases() {
+        assert!(external_channel_source_document_scope_enabled(&json!({
+            "allow_source_document_scope": true
+        })));
+        assert!(external_channel_source_document_scope_enabled(&json!({
+            "allowSourceDocumentScope": "true"
+        })));
+        assert!(external_channel_source_document_scope_enabled(&json!({
+            "enable_source_document_scope": "1"
+        })));
+        assert!(external_channel_source_document_scope_enabled(&json!({
+            "enableSourceDocumentScope": "on"
+        })));
+    }
+
+    #[test]
+    fn source_document_scope_enabled_defaults_false_and_rejects_falsey_values() {
+        assert!(!external_channel_source_document_scope_enabled(&json!({})));
+        assert!(!external_channel_source_document_scope_enabled(&json!({
+            "allow_source_document_scope": false
+        })));
+        assert!(!external_channel_source_document_scope_enabled(&json!({
+            "allow_source_document_scope": "false"
+        })));
+        assert!(!external_channel_source_document_scope_enabled(&json!({
+            "allow_source_document_scope": " [redacted] "
+        })));
+    }
 
     #[test]
     fn selected_scope_document_id_by_external_ref_requires_external_id() {

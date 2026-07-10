@@ -125,6 +125,12 @@ pub const V3_CLIENT_ARTIFACTS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0016_v3_client_artifacts.sql"),
 };
 
+pub const ASSET_PARSE_RUNS_SCHEMA: Migration = Migration {
+    version: "0017",
+    description: "asset parse runs",
+    sql: include_str!("../migrations/0017_asset_parse_runs.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -141,6 +147,7 @@ pub const MIGRATIONS: &[Migration] = &[
     RETRIEVAL_LEXICAL_INDEX_SCHEMA,
     ASSET_LIBRARIES_SCHEMA,
     V3_CLIENT_ARTIFACTS_SCHEMA,
+    ASSET_PARSE_RUNS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -203,6 +210,7 @@ pub const TABLES: &[&str] = &[
     "asset_library_dataset_memberships",
     "asset_collections",
     "asset_items",
+    "asset_parse_runs",
     "dataset_asset_memberships",
     "asset_profiles",
     "v3_client_config_packages",
@@ -315,6 +323,35 @@ pub struct NewDatasetAssetMembership {
     pub dataset_id: DatasetId,
     pub membership_kind: String,
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetParseRunRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub asset_id: Uuid,
+    pub parser_name: String,
+    pub parser_version: String,
+    pub status: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetParseRun {
+    pub parser_name: String,
+    pub parser_version: String,
+    pub status: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub metadata: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -1643,6 +1680,26 @@ impl PgAssetLibraryRepository {
             .map(map_asset_library_dataset_membership_row)
             .collect())
     }
+
+    pub async fn get_collection_asset_library_id(
+        &self,
+        tenant_id: TenantId,
+        collection_id: Uuid,
+    ) -> Result<Option<Uuid>> {
+        let row = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            select asset_library_id
+            from asset_collections
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(collection_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
 }
 
 impl PgAssetItemRepository {
@@ -1936,6 +1993,79 @@ impl PgAssetItemRepository {
         Ok(rows.iter().map(map_dataset_asset_membership_row).collect())
     }
 
+    pub async fn upsert_parse_run(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+        new_parse_run: NewAssetParseRun,
+    ) -> Result<AssetParseRunRecord> {
+        let row = sqlx::query(
+            r#"
+            insert into asset_parse_runs (
+                tenant_id,
+                asset_id,
+                parser_name,
+                parser_version,
+                status,
+                started_at,
+                finished_at,
+                error_code,
+                error_message,
+                metadata
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            on conflict (tenant_id, asset_id, parser_name, parser_version) do update
+            set status = excluded.status,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                error_code = excluded.error_code,
+                error_message = excluded.error_message,
+                metadata = excluded.metadata,
+                updated_at = now()
+            returning id, tenant_id, asset_id, parser_name, parser_version, status,
+                      started_at, finished_at, error_code, error_message, metadata,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .bind(new_parse_run.parser_name)
+        .bind(new_parse_run.parser_version)
+        .bind(new_parse_run.status)
+        .bind(new_parse_run.started_at)
+        .bind(new_parse_run.finished_at)
+        .bind(new_parse_run.error_code)
+        .bind(new_parse_run.error_message)
+        .bind(new_parse_run.metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(map_asset_parse_run_row(&row))
+    }
+
+    pub async fn list_parse_runs(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+    ) -> Result<Vec<AssetParseRunRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, asset_id, parser_name, parser_version, status,
+                   started_at, finished_at, error_code, error_message, metadata,
+                   created_at, updated_at
+            from asset_parse_runs
+            where tenant_id = $1 and asset_id = $2
+            order by updated_at desc, created_at desc
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_parse_run_row).collect())
+    }
+
     pub async fn upsert_profile(
         &self,
         tenant_id: TenantId,
@@ -1989,6 +2119,35 @@ impl PgAssetItemRepository {
         )
         .bind(tenant_id.0)
         .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_profile_row).collect())
+    }
+
+    pub async fn list_profiles_by_asset_ids(
+        &self,
+        tenant_id: TenantId,
+        asset_ids: &[Uuid],
+        limit: usize,
+    ) -> Result<Vec<AssetProfileRecord>> {
+        if asset_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, asset_id, profile_kind, profile_version,
+                   attributes, embedding_status, created_at, updated_at
+            from asset_profiles
+            where tenant_id = $1
+              and asset_id = any($2)
+            order by asset_id asc, updated_at desc, profile_kind asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_ids)
+        .bind(limit.max(asset_ids.len()).min(2000) as i64)
         .fetch_all(&self.pool)
         .await?;
 
@@ -8137,6 +8296,24 @@ fn map_dataset_asset_membership_row(row: &sqlx::postgres::PgRow) -> DatasetAsset
     }
 }
 
+fn map_asset_parse_run_row(row: &sqlx::postgres::PgRow) -> AssetParseRunRecord {
+    AssetParseRunRecord {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        asset_id: row.get("asset_id"),
+        parser_name: row.get("parser_name"),
+        parser_version: row.get("parser_version"),
+        status: row.get("status"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        error_code: row.get("error_code"),
+        error_message: row.get("error_message"),
+        metadata: row.get("metadata"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
 fn map_asset_profile_row(row: &sqlx::postgres::PgRow) -> AssetProfileRecord {
     AssetProfileRecord {
         id: row.get("id"),
@@ -10221,9 +10398,28 @@ mod tests {
         assert!(ASSET_LIBRARIES_SCHEMA
             .sql
             .contains("asset_items_source_unique_idx"));
+        assert!(!ASSET_LIBRARIES_SCHEMA.sql.contains("asset_parse_runs"));
         assert!(ASSET_LIBRARIES_SCHEMA
             .sql
             .contains("asset_profiles_attributes_gin_idx"));
+    }
+
+    #[test]
+    fn migrations_include_asset_parse_runs_schema() {
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some("0017")
+        );
+        assert!(TABLES.contains(&"asset_parse_runs"));
+        assert!(ASSET_PARSE_RUNS_SCHEMA
+            .sql
+            .contains("create table if not exists asset_parse_runs"));
+        assert!(ASSET_PARSE_RUNS_SCHEMA
+            .sql
+            .contains("unique (tenant_id, asset_id, parser_name, parser_version)"));
+        assert!(ASSET_PARSE_RUNS_SCHEMA
+            .sql
+            .contains("asset_parse_runs_status_idx"));
     }
 
     #[test]
@@ -10478,7 +10674,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013", "0014", "0015", "0016"
+                "0012", "0013", "0014", "0015", "0016", "0017"
             ]
         );
         assert!(MIGRATIONS

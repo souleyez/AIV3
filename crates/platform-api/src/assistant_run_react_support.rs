@@ -155,6 +155,7 @@ pub(crate) fn assistant_run_sanitize_customer_facing_answer_text(output_text: &s
         ("low_text_coverage", "解析质量较低"),
         ("parse_degraded", "解析质量较低"),
         ("document_parse_status", "文档解析状态"),
+        ("asset_parse_status", "资产解析状态"),
         ("model_status", "解析状态"),
     ] {
         sanitized = sanitized.replace(raw, replacement);

@@ -68,6 +68,49 @@ pub(crate) fn selected_scope_has_document_selection(scope: &Value) -> bool {
             .is_some_and(|document_ids| !document_ids.is_empty())
 }
 
+pub(crate) fn selected_scope_allows_external_document_range_without_acl_snapshot(
+    selected_scope: &Value,
+) -> bool {
+    if selected_scope.get("type").and_then(Value::as_str) != Some("external_channel") {
+        return false;
+    }
+    if selected_scope.get("mode").and_then(Value::as_str) != Some("external_document_scope") {
+        return false;
+    }
+    if !matches!(
+        selected_scope
+            .get("external_document_scope_status")
+            .and_then(Value::as_str),
+        Some(
+            "resolved"
+                | "partial"
+                | "source_resolved"
+                | "dataset_resolved"
+                | "v3_dataset_resolved"
+                | "resolved_with_attachment_title",
+        )
+    ) {
+        return false;
+    }
+    let has_requested_external_ids = selected_scope
+        .get("available_document_external_ids")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty());
+    let has_source_document_scope = selected_scope
+        .get("source_document_scope")
+        .and_then(Value::as_object)
+        .is_some()
+        && !selected_dataset_ids_from_scope(selected_scope).is_empty();
+    let has_dataset_document_scope = selected_scope
+        .get("dataset_document_scope")
+        .and_then(Value::as_object)
+        .is_some()
+        && !selected_dataset_ids_from_scope(selected_scope).is_empty();
+    (has_requested_external_ids && !selected_document_ids_from_scope(selected_scope).is_empty())
+        || has_source_document_scope
+        || has_dataset_document_scope
+}
+
 pub(crate) fn selected_scope_document_template_document_ids(scope: &Value) -> Vec<DocumentId> {
     scope
         .get("document_template_skills")
@@ -139,6 +182,17 @@ pub(crate) fn selected_scope_attachment_title_document_ids(scope: &Value) -> Vec
         }
     }
     ids
+}
+
+pub(crate) fn selected_scope_external_user_context_conversation_id(
+    selected_scope: &Value,
+) -> Option<&str> {
+    selected_scope
+        .get("user_context_scope")
+        .and_then(|scope| scope.get("conversation_external_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn assistant_run_scope_action_policy(scope: &Value) -> String {
@@ -331,6 +385,56 @@ mod tests {
     }
 
     #[test]
+    fn external_document_range_without_acl_snapshot_requires_external_document_scope_status() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "external_document_scope_status": "resolved",
+                "documents": [{"type": "document", "id": document_id.to_string()}],
+                "available_document_external_ids": ["doc-ext-1"]
+            }))
+        );
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "external_document_scope_status": "source_resolved",
+                "source_document_scope": {"source_id": "src-docs"},
+                "datasets": [{"type": "dataset", "id": dataset_id.to_string()}]
+            }))
+        );
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "external_document_scope_status": "dataset_resolved",
+                "dataset_document_scope": {"source": "dataset_external_id"},
+                "datasets": [{"type": "dataset", "id": dataset_id.to_string()}]
+            }))
+        );
+        assert!(
+            !selected_scope_allows_external_document_range_without_acl_snapshot(&json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "external_document_scope_status": "document_ids_missing",
+                "source_document_scope": {"source_id": "src-docs"},
+                "datasets": [{"type": "dataset", "id": dataset_id.to_string()}]
+            }))
+        );
+        assert!(
+            !selected_scope_allows_external_document_range_without_acl_snapshot(&json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "external_document_scope_status": "resolved",
+                "available_document_external_ids": ["doc-ext-1"]
+            }))
+        );
+    }
+
+    #[test]
     fn template_documents_are_excluded_from_evidence_ids() {
         let business_document = DocumentId::new();
         let template_document = DocumentId::new();
@@ -381,6 +485,26 @@ mod tests {
         assert_eq!(
             selected_scope_attachment_title_document_ids(&scope),
             vec![first_document, second_document, third_document]
+        );
+    }
+
+    #[test]
+    fn external_user_context_conversation_id_trims_and_ignores_empty_values() {
+        assert_eq!(
+            selected_scope_external_user_context_conversation_id(&json!({
+                "user_context_scope": {"conversation_external_id": " conv-123 "}
+            })),
+            Some("conv-123")
+        );
+        assert_eq!(
+            selected_scope_external_user_context_conversation_id(&json!({
+                "user_context_scope": {"conversation_external_id": "   "}
+            })),
+            None
+        );
+        assert_eq!(
+            selected_scope_external_user_context_conversation_id(&json!({})),
+            None
         );
     }
 

@@ -10,10 +10,24 @@ use crate::static_page_template_module_support::{
     static_page_template_modules,
 };
 use crate::{
-    assistant_run_detail_target_count, assistant_run_evidence_supplied_count,
-    build_static_page_field_candidates, ensure_json_object,
-    refresh_static_page_payload_design_contract, static_page_evidence_section_title_hints,
-    static_page_generated_template_draft_id, truncate_assistant_supply_text,
+    asset_profile_supply_support::{
+        build_asset_profile_model_facing_supply_compression_dry_run,
+        build_asset_profile_retrieval_evidence_adapter_dry_run,
+        build_asset_profile_retrieval_evidence_write_plan,
+        build_asset_profile_retrieval_storage_mapping_dry_run,
+        build_asset_profile_union_search_explain_debug_summary_dry_run,
+        build_asset_profile_union_search_merge_rank_fixture_dry_run,
+        build_asset_profile_union_search_no_write_adapter_draft,
+        build_asset_retrieval_evidence_migration_sketch_dry_run,
+        materialize_asset_profile_retrieval_evidence_text, AssetProfileSupplyHint,
+    },
+    assistant_run_asset_document_supply_gate_dry_run, assistant_run_detail_target_count,
+    assistant_run_evidence_supplied_count,
+    assistant_run_supply_progress_contract_drift_guard_dry_run,
+    assistant_run_supply_progress_events_dry_run, build_static_page_field_candidates,
+    ensure_json_object, refresh_static_page_payload_design_contract,
+    static_page_evidence_section_title_hints, static_page_generated_template_draft_id,
+    truncate_assistant_supply_text,
 };
 use domain_model::AssistantRun;
 
@@ -444,6 +458,101 @@ pub(crate) fn static_page_template_evidence_summary(evidence_state: &Value) -> V
             .unwrap_or(Value::Null),
         "supplemental_metrics": build_static_page_supplemental_metrics_summary(evidence_state),
         "asset_profile_summary": build_static_page_asset_profile_summary(evidence_state),
+        "asset_parse_status_summary": build_static_page_asset_parse_status_summary(evidence_state),
+    })
+}
+
+fn build_static_page_asset_parse_status_summary(evidence_state: &Value) -> Value {
+    const ATTENTION_LIMIT: usize = 8;
+
+    let Some(items) = evidence_state
+        .get("supplied_items")
+        .or_else(|| evidence_state.get("suppliedItems"))
+        .and_then(Value::as_array)
+    else {
+        return json!({
+            "count": 0,
+            "scanned_asset_count": 0,
+            "not_ready_asset_count": 0,
+            "status_counts": {},
+            "attention_assets": [],
+            "model_guidance": [
+                "asset parse status is not available for this run",
+            ],
+        });
+    };
+
+    let mut count = 0usize;
+    let mut scanned_asset_count = 0usize;
+    let mut not_ready_asset_count = 0usize;
+    let mut failed_asset_count = 0usize;
+    let mut retrying_asset_count = 0usize;
+    let mut status_counts = BTreeMap::<String, usize>::new();
+    let mut attention_assets = Vec::new();
+
+    for item in items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+    {
+        count += 1;
+        scanned_asset_count +=
+            static_page_numeric_field(item, &["scanned_asset_count", "scannedAssetCount"]);
+        not_ready_asset_count +=
+            static_page_numeric_field(item, &["not_ready_asset_count", "notReadyAssetCount"]);
+        failed_asset_count +=
+            static_page_numeric_field(item, &["failed_asset_count", "failedAssetCount"]);
+        retrying_asset_count +=
+            static_page_numeric_field(item, &["retrying_asset_count", "retryingAssetCount"]);
+
+        if let Some(counts) = item
+            .get("status_counts")
+            .or_else(|| item.get("statusCounts"))
+            .and_then(Value::as_object)
+        {
+            for (status, value) in counts {
+                if let Some(count) = value.as_u64() {
+                    *status_counts.entry(status.clone()).or_insert(0) += count as usize;
+                }
+            }
+        }
+
+        for asset in item
+            .get("attention_assets")
+            .or_else(|| item.get("attentionAssets"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if attention_assets.len() >= ATTENTION_LIMIT {
+                break;
+            }
+            attention_assets.push(json!({
+                "asset_id": static_page_asset_profile_item_text(asset, &["asset_id", "assetId"]),
+                "title": static_page_asset_profile_item_text(asset, &["title"]),
+                "asset_kind": static_page_asset_profile_item_text(asset, &["asset_kind", "assetKind"]),
+                "source_kind": static_page_asset_profile_item_text(asset, &["source_kind", "sourceKind"]),
+                "content_type": static_page_asset_profile_item_text(asset, &["content_type", "contentType"]),
+                "model_status": static_page_asset_profile_item_text(asset, &["model_status", "modelStatus"]),
+                "parse_status": static_page_asset_profile_item_text(asset, &["parse_status", "parseStatus"]),
+                "error_code": static_page_asset_profile_item_text(asset, &["error_code", "errorCode"]),
+                "updated_at": asset.get("updated_at").or_else(|| asset.get("updatedAt")).cloned().unwrap_or(Value::Null),
+            }));
+        }
+    }
+
+    json!({
+        "count": count,
+        "scanned_asset_count": scanned_asset_count,
+        "not_ready_asset_count": not_ready_asset_count,
+        "failed_asset_count": failed_asset_count,
+        "retrying_asset_count": retrying_asset_count,
+        "status_counts": static_page_count_map_value(status_counts),
+        "attention_assets": attention_assets,
+        "model_guidance": [
+            "use asset_parse_status_summary to understand whether candidate images, design assets, slides, or videos are still parsing or failed",
+            "do not plan key visual modules around assets whose model_status is pending, parsing, retrying, or failed unless the page explicitly explains the partial state",
+            "asset parse status is availability context only; use completed asset_profile_summary, retrieval evidence, database rows, or document details for exact claims",
+        ],
     })
 }
 
@@ -475,6 +584,10 @@ fn build_static_page_asset_profile_summary(evidence_state: &Value) -> Value {
     let mut seen_terms = BTreeSet::new();
     let mut kind_counts = BTreeMap::<String, usize>::new();
     let mut profile_kind_counts = BTreeMap::<String, usize>::new();
+    let parse_status_item = items
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("asset_parse_status"))
+        .cloned();
 
     for item in items
         .iter()
@@ -503,14 +616,373 @@ fn build_static_page_asset_profile_summary(evidence_state: &Value) -> Value {
         }
 
         if hints.len() < HINT_LIMIT {
+            let asset_id = static_page_asset_profile_item_text(item, &["asset_id", "assetId"])
+                .unwrap_or_default();
+            let title = static_page_asset_profile_item_text(item, &["title"]).unwrap_or_default();
+            let summary =
+                static_page_asset_profile_item_text(item, &["summary"]).unwrap_or_default();
+            let source_kind =
+                static_page_asset_profile_item_text(item, &["source_kind", "sourceKind"])
+                    .unwrap_or_default();
+            let facets = static_page_asset_profile_text_array(item.get("facets"), FACET_LIMIT, 120);
+            let profile_hint = AssetProfileSupplyHint {
+                asset_id: asset_id.clone(),
+                title: title.clone(),
+                asset_kind: asset_kind.clone(),
+                source_kind: source_kind.clone(),
+                profile_kind: profile_kind.clone(),
+                summary: summary.clone(),
+                noun_terms: noun_terms.clone(),
+                facets: facets.clone(),
+            };
+            let retrieval_text_preview =
+                materialize_asset_profile_retrieval_evidence_text(&profile_hint)
+                    .chars()
+                    .take(360)
+                    .collect::<String>();
+            let retrieval_write_plan = build_asset_profile_retrieval_evidence_write_plan(
+                &profile_hint,
+                "asset-profile-materializer",
+                "v1",
+            );
+            let retrieval_adapter_dry_run = build_asset_profile_retrieval_evidence_adapter_dry_run(
+                &profile_hint,
+                "asset-profile-materializer",
+                "v1",
+            );
+            let retrieval_storage_mapping_dry_run =
+                build_asset_profile_retrieval_storage_mapping_dry_run(&profile_hint);
+            let migration_sketch = build_asset_retrieval_evidence_migration_sketch_dry_run();
+            let union_search_adapter =
+                build_asset_profile_union_search_no_write_adapter_draft(&profile_hint);
+            let union_search_merge_rank_fixture =
+                build_asset_profile_union_search_merge_rank_fixture_dry_run(&profile_hint);
+            let union_search_explain_debug_summary =
+                build_asset_profile_union_search_explain_debug_summary_dry_run(&profile_hint);
+            let model_facing_supply_compression =
+                build_asset_profile_model_facing_supply_compression_dry_run(&profile_hint);
+            let assistant_run_supply_gate_dry_run =
+                assistant_run_asset_document_supply_gate_dry_run(&[
+                    json!({
+                        "type": "retrieval_evidence",
+                        "source": "document_chunk_fallback",
+                        "summary": "document evidence fixture",
+                        "content_excerpt": "document evidence can support exact claims when present",
+                    }),
+                    json!({
+                        "type": "asset_profile_hint",
+                        "source": "asset_profile",
+                        "asset_id": asset_id.clone(),
+                        "title": title.clone(),
+                        "asset_kind": asset_kind.clone(),
+                        "source_kind": "asset_profile",
+                        "profile_kind": profile_kind.clone(),
+                        "summary": summary.clone(),
+                        "noun_terms": noun_terms.clone(),
+                        "facets": facets.clone(),
+                    }),
+                ]);
+            let mut assistant_run_progress_items = vec![
+                json!({
+                    "type": "retrieval_evidence",
+                    "source": "document_chunk_fallback",
+                    "summary": "document evidence fixture",
+                    "content_excerpt": "document evidence can support exact claims when present",
+                }),
+                json!({
+                    "type": "asset_profile_hint",
+                    "source": "asset_profile",
+                    "asset_id": asset_id.clone(),
+                    "title": title.clone(),
+                    "asset_kind": asset_kind.clone(),
+                    "source_kind": "asset_profile",
+                    "profile_kind": profile_kind.clone(),
+                    "summary": summary.clone(),
+                    "noun_terms": noun_terms.clone(),
+                    "facets": facets.clone(),
+                }),
+            ];
+            if let Some(parse_status_item) = parse_status_item.clone() {
+                assistant_run_progress_items.push(parse_status_item);
+            }
+            let assistant_run_supply_progress_events =
+                assistant_run_supply_progress_events_dry_run(&assistant_run_progress_items);
+            let assistant_run_supply_progress_contract_drift_guard =
+                assistant_run_supply_progress_contract_drift_guard_dry_run(
+                    &assistant_run_supply_progress_events,
+                );
             hints.push(json!({
-                "asset_id": static_page_asset_profile_item_text(item, &["asset_id", "assetId"]),
-                "title": static_page_asset_profile_item_text(item, &["title"]),
+                "asset_id": asset_id,
+                "title": title,
                 "asset_kind": asset_kind,
+                "source_kind": source_kind,
                 "profile_kind": profile_kind,
-                "summary": static_page_asset_profile_item_text(item, &["summary"]),
+                "summary": summary,
                 "noun_terms": noun_terms,
-                "facets": static_page_asset_profile_text_array(item.get("facets"), FACET_LIMIT, 120),
+                "facets": facets,
+                "retrieval_evidence_text_preview": retrieval_text_preview,
+                "retrieval_evidence_write_plan": {
+                    "action": retrieval_write_plan.get("action").cloned().unwrap_or(Value::Null),
+                    "source_kind": retrieval_write_plan.get("source_kind").cloned().unwrap_or(Value::Null),
+                    "write_policy": retrieval_write_plan.get("write_policy").cloned().unwrap_or(Value::Null),
+                    "ready": retrieval_write_plan.get("ready").cloned().unwrap_or(Value::Null),
+                    "dedupe_scope": retrieval_write_plan.get("dedupe_scope").cloned().unwrap_or(Value::Null),
+                    "idempotency_key_present": retrieval_write_plan.get("idempotency_key").is_some(),
+                },
+                "retrieval_evidence_adapter_dry_run": {
+                    "adapter_contract": retrieval_adapter_dry_run.get("adapter_contract").cloned().unwrap_or(Value::Null),
+                    "status": retrieval_adapter_dry_run.get("status").cloned().unwrap_or(Value::Null),
+                    "dry_run_only": retrieval_adapter_dry_run.get("dry_run_only").cloned().unwrap_or(Value::Null),
+                    "write_order": retrieval_adapter_dry_run.get("write_order").cloned().unwrap_or(Value::Null),
+                    "completion_gate": retrieval_adapter_dry_run.get("completion_gate").cloned().unwrap_or(Value::Null),
+                    "evidence_draft_present": retrieval_adapter_dry_run.get("evidence_draft").is_some(),
+                },
+                "retrieval_evidence_storage_mapping_dry_run": {
+                    "mapping_contract": retrieval_storage_mapping_dry_run.get("mapping_contract").cloned().unwrap_or(Value::Null),
+                    "selected_strategy": retrieval_storage_mapping_dry_run.get("selected_strategy").cloned().unwrap_or(Value::Null),
+                    "ready_for_migration_design": retrieval_storage_mapping_dry_run.get("ready_for_migration_design").cloned().unwrap_or(Value::Null),
+                    "production_write_allowed": retrieval_storage_mapping_dry_run.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                    "synthetic_document_chunk_recommended": retrieval_storage_mapping_dry_run
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .and_then(|options| options.iter().find(|option| {
+                            option.get("strategy").and_then(Value::as_str)
+                                == Some("reuse_retrieval_evidences_with_synthetic_document_chunk")
+                        }))
+                        .and_then(|option| option.get("recommended"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "search_method": retrieval_storage_mapping_dry_run
+                        .pointer("/search_integration/method")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "table_name": retrieval_storage_mapping_dry_run
+                        .pointer("/proposed_asset_evidence_table/table_name")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                },
+                "asset_retrieval_evidence_migration_sketch": {
+                    "migration_contract": migration_sketch.get("migration_contract").cloned().unwrap_or(Value::Null),
+                    "table_name": migration_sketch.pointer("/table/name").cloned().unwrap_or(Value::Null),
+                    "index_count": migration_sketch.get("indexes")
+                        .and_then(Value::as_array)
+                        .map(|indexes| indexes.len())
+                        .unwrap_or_default(),
+                    "membership_guard_required": migration_sketch
+                        .pointer("/membership_guard/required")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "search_result_source_kind": migration_sketch
+                        .pointer("/search_result_contract/source_kind")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_migration_allowed": migration_sketch.get("production_migration_allowed").cloned().unwrap_or(Value::Null),
+                    "production_write_allowed": migration_sketch.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "union_search_no_write_adapter_draft": {
+                    "adapter_contract": union_search_adapter.get("adapter_contract").cloned().unwrap_or(Value::Null),
+                    "no_write": union_search_adapter.get("no_write").cloned().unwrap_or(Value::Null),
+                    "search_method": union_search_adapter
+                        .pointer("/search_plan/method")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "membership_guard_required": union_search_adapter
+                        .pointer("/membership_guard/required")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "result_source_kind": union_search_adapter
+                        .pointer("/result_contract/source_kind")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "document_search_unchanged": union_search_adapter
+                        .pointer("/search_plan/document_search_unchanged")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": union_search_adapter.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "union_search_merge_rank_fixture": {
+                    "fixture_contract": union_search_merge_rank_fixture.get("fixture_contract").cloned().unwrap_or(Value::Null),
+                    "no_write": union_search_merge_rank_fixture.get("no_write").cloned().unwrap_or(Value::Null),
+                    "result_count": union_search_merge_rank_fixture
+                        .get("merged_results")
+                        .and_then(Value::as_array)
+                        .map(|results| results.len())
+                        .unwrap_or_default(),
+                    "first_result_source_kind": union_search_merge_rank_fixture
+                        .pointer("/merged_results/0/source_kind")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "mixed_sources_present": union_search_merge_rank_fixture
+                        .pointer("/source_kind_regression/mixed_sources_present")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "asset_profile_source_kind_preserved": union_search_merge_rank_fixture
+                        .pointer("/source_kind_regression/asset_profile_source_kind_preserved")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "document_source_kind_preserved": union_search_merge_rank_fixture
+                        .pointer("/source_kind_regression/document_source_kind_preserved")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "membership_guard_checked": union_search_merge_rank_fixture
+                        .pointer("/source_kind_regression/membership_guard_checked")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "raw_locator_excluded": union_search_merge_rank_fixture
+                        .pointer("/source_kind_regression/raw_locator_excluded")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": union_search_merge_rank_fixture.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "union_search_explain_debug_summary": {
+                    "debug_contract": union_search_explain_debug_summary.get("debug_contract").cloned().unwrap_or(Value::Null),
+                    "no_write": union_search_explain_debug_summary.get("no_write").cloned().unwrap_or(Value::Null),
+                    "merged_result_count": union_search_explain_debug_summary
+                        .pointer("/summary/merged_result_count")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "top_source_kind": union_search_explain_debug_summary
+                        .pointer("/summary/top_source_kind")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "membership_guard_status": union_search_explain_debug_summary
+                        .pointer("/summary/membership_guard_status")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "asset_profile_exact_citation_disallowed": union_search_explain_debug_summary
+                        .pointer("/summary/asset_profile_is_exact_document_citation")
+                        .and_then(Value::as_bool)
+                        .map(|value| Value::Bool(!value))
+                        .unwrap_or(Value::Null),
+                    "raw_locator_excluded": union_search_explain_debug_summary
+                        .pointer("/redaction/raw_locator_excluded")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": union_search_explain_debug_summary.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "model_facing_supply_compression_dry_run": {
+                    "compression_contract": model_facing_supply_compression.get("compression_contract").cloned().unwrap_or(Value::Null),
+                    "no_write": model_facing_supply_compression.get("no_write").cloned().unwrap_or(Value::Null),
+                    "source_kind": model_facing_supply_compression.get("source_kind").cloned().unwrap_or(Value::Null),
+                    "compressed_text_chars": model_facing_supply_compression
+                        .pointer("/model_supply/compressed_text_chars")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "asset_profile_exact_citation_disallowed": model_facing_supply_compression
+                        .pointer("/compression_checks/asset_profile_exact_citation_disallowed")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "document_evidence_required_for_exact_claims": model_facing_supply_compression
+                        .pointer("/compression_checks/document_evidence_required_for_exact_claims")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "raw_locator_excluded": model_facing_supply_compression
+                        .pointer("/compression_checks/raw_locator_excluded")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": model_facing_supply_compression.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "assistant_run_supply_gate_dry_run": {
+                    "contract": assistant_run_supply_gate_dry_run.get("contract").cloned().unwrap_or(Value::Null),
+                    "no_write": assistant_run_supply_gate_dry_run.get("no_write").cloned().unwrap_or(Value::Null),
+                    "approx_prompt_tokens": assistant_run_supply_gate_dry_run
+                        .pointer("/budget_policy/approx_prompt_tokens")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "source_kind_order": assistant_run_supply_gate_dry_run
+                        .pointer("/source_kind_dedupe/source_kind_order")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "asset_profile_exact_citation_allowed": assistant_run_supply_gate_dry_run
+                        .pointer("/citation_policy/asset_profile_exact_citation_allowed")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "exact_claims_require_document_database_or_media_evidence": assistant_run_supply_gate_dry_run
+                        .pointer("/citation_policy/exact_claims_require_document_database_or_media_evidence")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "quality_gate_status": assistant_run_supply_gate_dry_run
+                        .pointer("/quality_gate/status")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "next_action": assistant_run_supply_gate_dry_run
+                        .pointer("/quality_gate/next_action")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": assistant_run_supply_gate_dry_run.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "assistant_run_supply_progress_events_dry_run": {
+                    "contract": assistant_run_supply_progress_events.get("contract").cloned().unwrap_or(Value::Null),
+                    "no_write": assistant_run_supply_progress_events.get("no_write").cloned().unwrap_or(Value::Null),
+                    "non_blocking": assistant_run_supply_progress_events.get("non_blocking").cloned().unwrap_or(Value::Null),
+                    "consumer_targets": assistant_run_supply_progress_events.get("consumer_targets").cloned().unwrap_or(Value::Null),
+                    "event_count": assistant_run_supply_progress_event_count(&assistant_run_supply_progress_events),
+                    "event_types": assistant_run_supply_progress_event_types(&assistant_run_supply_progress_events),
+                    "third_party_visible_count": assistant_run_supply_progress_visible_event_count(&assistant_run_supply_progress_events, "third_party_visible"),
+                    "task_card_visible_count": assistant_run_supply_progress_visible_event_count(&assistant_run_supply_progress_events, "task_card_visible"),
+                    "has_supply_ready": assistant_run_supply_progress_has_event(&assistant_run_supply_progress_events, "supply_ready"),
+                    "has_supply_expanding": assistant_run_supply_progress_has_event(&assistant_run_supply_progress_events, "supply_expanding"),
+                    "has_asset_profile_signal": assistant_run_supply_progress_has_event(&assistant_run_supply_progress_events, "asset_profile_signal"),
+                    "has_parse_waiting_or_retry": assistant_run_supply_progress_has_event(&assistant_run_supply_progress_events, "parse_waiting_or_retry"),
+                    "answer_with_current_evidence_first": assistant_run_supply_progress_events
+                        .pointer("/continuation_policy/answer_with_current_evidence_first")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "continue_actions_after_reply": assistant_run_supply_progress_events
+                        .pointer("/continuation_policy/continue_actions_after_reply")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "final_failure_without_answer": assistant_run_supply_progress_events
+                        .pointer("/continuation_policy/final_failure_without_answer")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "raw_locator_excluded": assistant_run_supply_progress_events
+                        .pointer("/redaction/raw_locator_excluded")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": assistant_run_supply_progress_events.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
+                "assistant_run_supply_progress_contract_drift_guard": {
+                    "contract": assistant_run_supply_progress_contract_drift_guard.get("contract").cloned().unwrap_or(Value::Null),
+                    "no_write": assistant_run_supply_progress_contract_drift_guard.get("no_write").cloned().unwrap_or(Value::Null),
+                    "sse_schema": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/external_sse_guard/schema")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "public_stream_field_mutation_allowed": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/external_sse_guard/public_stream_field_mutation_allowed")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "new_progress_events_emit_live_sse": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/external_sse_guard/new_progress_events_emit_live_sse")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "callback_triggered": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/third_party_guard/callback_triggered")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "public_request_or_response_field_added": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/third_party_guard/public_request_or_response_field_added")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "task_card_detail_only": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/main_site_task_card_guard/task_card_detail_only")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "failure_status_blocks_answer": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/answer_liveness_guard/failure_status_blocks_answer")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "final_failure_without_answer": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/answer_liveness_guard/final_failure_without_answer")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "all_events_non_blocking": assistant_run_supply_progress_contract_drift_guard
+                        .pointer("/redaction_guard/all_events_non_blocking")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "production_write_allowed": assistant_run_supply_progress_contract_drift_guard.get("production_write_allowed").cloned().unwrap_or(Value::Null),
+                },
             }));
         }
     }
@@ -527,6 +999,12 @@ fn build_static_page_asset_profile_summary(evidence_state: &Value) -> Value {
             "when exact facts, numbers, quotations, or timestamps are needed, rely on retrieval evidence, source details, database rows, or media context",
         ],
     })
+}
+
+fn static_page_numeric_field(item: &Value, keys: &[&str]) -> usize {
+    keys.iter()
+        .find_map(|key| item.get(*key).and_then(Value::as_u64))
+        .unwrap_or(0) as usize
 }
 
 fn static_page_asset_profile_item_text(item: &Value, keys: &[&str]) -> Option<String> {
@@ -562,6 +1040,41 @@ fn static_page_count_map_value(counts: BTreeMap<String, usize>) -> Value {
             .map(|(key, count)| (key, json!(count)))
             .collect::<Map<String, Value>>(),
     )
+}
+
+fn assistant_run_supply_progress_events(report: &Value) -> &[Value] {
+    report
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| events.as_slice())
+        .unwrap_or(&[])
+}
+
+fn assistant_run_supply_progress_event_count(report: &Value) -> usize {
+    assistant_run_supply_progress_events(report).len()
+}
+
+fn assistant_run_supply_progress_event_types(report: &Value) -> Value {
+    Value::Array(
+        assistant_run_supply_progress_events(report)
+            .iter()
+            .filter_map(|event| event.get("event_type").and_then(Value::as_str))
+            .map(|event_type| json!(event_type))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn assistant_run_supply_progress_visible_event_count(report: &Value, field: &str) -> usize {
+    assistant_run_supply_progress_events(report)
+        .iter()
+        .filter(|event| event.get(field).and_then(Value::as_bool) == Some(true))
+        .count()
+}
+
+fn assistant_run_supply_progress_has_event(report: &Value, event_type: &str) -> bool {
+    assistant_run_supply_progress_events(report)
+        .iter()
+        .any(|event| event.get("event_type").and_then(Value::as_str) == Some(event_type))
 }
 
 fn build_static_page_supplemental_metrics_summary(evidence_state: &Value) -> Value {
@@ -1174,12 +1687,38 @@ mod tests {
                     "profile_kind": "video_summary",
                     "summary": "视频包含门店陈列讲解。",
                     "noun_terms": ["门店", "陈列"]
+                },
+                {
+                    "type": "asset_parse_status",
+                    "scanned_asset_count": 3,
+                    "not_ready_asset_count": 2,
+                    "failed_asset_count": 1,
+                    "retrying_asset_count": 1,
+                    "status_counts": {
+                        "pending": 1,
+                        "retrying": 1,
+                        "failed": 1
+                    },
+                    "attention_assets": [{
+                        "asset_id": "asset-image-pending",
+                        "title": "未完成设计图",
+                        "asset_kind": "image",
+                        "source_kind": "upload",
+                        "content_type": "image/png",
+                        "model_status": "pending",
+                        "parse_status": "pending",
+                        "object_key": "must-not-leak",
+                        "metadata": {
+                            "raw_provider_payload": "must-not-leak"
+                        }
+                    }]
                 }
             ]
         });
 
         let summary = static_page_template_evidence_summary(&evidence_state);
         let asset_summary = &summary["asset_profile_summary"];
+        let parse_summary = &summary["asset_parse_status_summary"];
 
         assert_eq!(asset_summary["count"], json!(2));
         assert_eq!(asset_summary["kind_counts"]["image"], json!(1));
@@ -1199,6 +1738,301 @@ mod tests {
             asset_summary["hints"][0]["summary"],
             json!("蓝色夏季连衣裙，适合主视觉。")
         );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_write_plan"]["action"],
+            json!("upsert_retrieval_evidence")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_write_plan"]["write_policy"],
+            json!("upsert_by_idempotency_key_after_profile_available")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_write_plan"]["ready"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_write_plan"]["dedupe_scope"][2],
+            json!("asset_id")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_adapter_dry_run"]["adapter_contract"],
+            json!("asset_profile_retrieval_evidence_writer_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_adapter_dry_run"]["write_order"][0]
+                ["action"],
+            json!("upsert_asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_adapter_dry_run"]["write_order"][3]
+                ["requires"],
+            json!("retrieval_evidence_upserted")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_adapter_dry_run"]["completion_gate"]
+                ["do_not_mark_completed_until_evidence_upsert_succeeds"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]
+                ["mapping_contract"],
+            json!("asset_profile_retrieval_storage_mapping_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]
+                ["selected_strategy"],
+            json!("add_asset_retrieval_evidences_table_then_union_search")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]
+                ["synthetic_document_chunk_recommended"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]
+                ["search_method"],
+            json!("union_document_and_asset_evidence_search")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]["table_name"],
+            json!("asset_retrieval_evidences")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["retrieval_evidence_storage_mapping_dry_run"]
+                ["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["asset_retrieval_evidence_migration_sketch"]
+                ["migration_contract"],
+            json!("asset_retrieval_evidences_migration_sketch_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["asset_retrieval_evidence_migration_sketch"]["table_name"],
+            json!("asset_retrieval_evidences")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["asset_retrieval_evidence_migration_sketch"]
+                ["membership_guard_required"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["asset_retrieval_evidence_migration_sketch"]
+                ["search_result_source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["asset_retrieval_evidence_migration_sketch"]
+                ["production_migration_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]["adapter_contract"],
+            json!("asset_profile_union_search_no_write_adapter_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]["no_write"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]["search_method"],
+            json!("union_document_and_asset_evidence_search")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]
+                ["membership_guard_required"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]["result_source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]
+                ["document_search_unchanged"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_no_write_adapter_draft"]
+                ["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]["fixture_contract"],
+            json!("asset_profile_union_search_merge_rank_fixture_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]["no_write"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]["result_count"],
+            json!(2)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]
+                ["first_result_source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]["mixed_sources_present"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]
+                ["asset_profile_source_kind_preserved"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]
+                ["document_source_kind_preserved"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]["raw_locator_excluded"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_merge_rank_fixture"]
+                ["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_explain_debug_summary"]["debug_contract"],
+            json!("asset_profile_union_search_explain_debug_summary_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_explain_debug_summary"]["top_source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_explain_debug_summary"]
+                ["asset_profile_exact_citation_disallowed"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["union_search_explain_debug_summary"]["raw_locator_excluded"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["model_facing_supply_compression_dry_run"]
+                ["compression_contract"],
+            json!("asset_profile_model_facing_supply_compression_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["model_facing_supply_compression_dry_run"]["source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["model_facing_supply_compression_dry_run"]
+                ["asset_profile_exact_citation_disallowed"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["model_facing_supply_compression_dry_run"]
+                ["document_evidence_required_for_exact_claims"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]["contract"],
+            json!("assistant_run_asset_document_supply_budget_quality_gate_dry_run_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]["no_write"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]
+                ["asset_profile_exact_citation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]
+                ["exact_claims_require_document_database_or_media_evidence"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]["quality_gate_status"],
+            json!("grounded_with_asset_context")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_gate_dry_run"]["next_action"],
+            json!("answer_with_citation_constraints")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]["contract"],
+            json!("assistant_run_supply_progress_events_dry_run_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["non_blocking"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["has_supply_ready"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["has_asset_profile_signal"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["has_parse_waiting_or_retry"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["final_failure_without_answer"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["raw_locator_excluded"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_events_dry_run"]
+                ["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["contract"],
+            json!("assistant_run_supply_progress_contract_drift_guard_dry_run_v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["sse_schema"],
+            json!("v3.external_channel.sse.v1")
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["public_stream_field_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["new_progress_events_emit_live_sse"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["callback_triggered"],
+            json!(false)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["task_card_detail_only"],
+            json!(true)
+        );
+        assert_eq!(
+            asset_summary["hints"][0]["assistant_run_supply_progress_contract_drift_guard"]
+                ["failure_status_blocks_answer"],
+            json!(false)
+        );
         assert!(asset_summary["hints"][0]
             .get("raw_provider_payload")
             .is_none());
@@ -1206,6 +2040,25 @@ mod tests {
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item
                 == "asset profile hints are compact understanding signals; do not cite them as exact source evidence")));
+
+        assert_eq!(parse_summary["count"], json!(1));
+        assert_eq!(parse_summary["scanned_asset_count"], json!(3));
+        assert_eq!(parse_summary["not_ready_asset_count"], json!(2));
+        assert_eq!(parse_summary["failed_asset_count"], json!(1));
+        assert_eq!(parse_summary["retrying_asset_count"], json!(1));
+        assert_eq!(parse_summary["status_counts"]["pending"], json!(1));
+        assert_eq!(
+            parse_summary["attention_assets"][0]["asset_id"],
+            json!("asset-image-pending")
+        );
+        let serialized = serde_json::to_string(parse_summary).unwrap();
+        assert!(!serialized.contains("object_key"));
+        assert!(!serialized.contains("raw_provider_payload"));
+        assert!(!serialized.contains("must-not-leak"));
+        assert!(parse_summary["model_guidance"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item
+                == "use asset_parse_status_summary to understand whether candidate images, design assets, slides, or videos are still parsing or failed")));
     }
 
     #[test]

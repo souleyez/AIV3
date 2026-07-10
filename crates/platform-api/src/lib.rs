@@ -3,6 +3,8 @@
 mod basic_view_support;
 mod client_artifact_create_support;
 
+use asset_import_access_support::*;
+use asset_import_support::*;
 use asset_library_auth_support::*;
 use asset_library_create_support::*;
 use asset_library_list_support::*;
@@ -66,24 +68,26 @@ use contracts::{
     CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
     CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
     CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
-    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
-    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
-    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
-    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
-    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentEnrichmentRunView,
-    DocumentMediaDetailView, DocumentSummary, ExternalActionConfirmationDecisionView,
-    ExternalActionConfirmationRequestView, ExternalActionConfirmationResponseView,
-    ExternalActionResultCallbackRequestView, ExternalActionResultCallbackResponseView,
-    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    CreateFashionDesignImageAssetImportBatchRequest,
+    CreateFashionDesignImageAssetImportBatchResponse, CreateFashionDesignImageAssetImportRequest,
+    CreateFashionDesignImageAssetImportResponse, CreateMemoryDirectoryRefreshResponse,
+    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
+    CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
+    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
+    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
+    DocumentDetailView, DocumentEnrichmentRunView, DocumentMediaDetailView, DocumentSummary,
+    ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
+    ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
+    ExternalActionResultCallbackResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
     ExternalConversationTestView, ExternalConversationTimelineResponse,
     ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
     ExternalIntegrationActionDispatchConfigRequest, ExternalIntegrationAuditItemView,
     ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
     ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
-    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
+    ExternalIntegrationSummaryView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
     InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
     KeyRotateResponse, ListAssetLibrariesResponse, ListExternalConversationTestsResponse,
     ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
@@ -114,8 +118,9 @@ use contracts::{
 };
 #[cfg(test)]
 use contracts::{
-    AssistantRunEventView, AssistantRunView, HtmlArtifactTemplateIdView,
-    V3ClientArtifactManifestView, V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA, V3_CLIENT_ARTIFACT_SOURCE,
+    AssistantRunEventView, AssistantRunView, ExternalAttachmentRefView, ExternalMessageTypeView,
+    HtmlArtifactTemplateIdView, V3ClientArtifactManifestView, V3_CLIENT_ARTIFACT_MANIFEST_SCHEMA,
+    V3_CLIENT_ARTIFACT_SOURCE,
 };
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
@@ -183,6 +188,9 @@ use uuid::Uuid;
 use workflow_engine::WorkflowRuntimeState;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
+mod asset_import_access_support;
+#[allow(dead_code)]
+mod asset_import_support;
 mod asset_library_asset_supply_support;
 mod asset_library_auth_support;
 mod asset_library_create_support;
@@ -331,6 +339,7 @@ mod external_channel_connection_id_support;
 mod external_channel_conversation_history_support;
 mod external_channel_direct_reply_budget_support;
 mod external_channel_fixed_task_status_support;
+mod external_channel_image_idempotency_support;
 mod external_channel_model_pool_support;
 mod external_channel_model_rejection_support;
 mod external_channel_outbound_reply_dispatch_support;
@@ -367,7 +376,12 @@ mod external_conversation_timeline;
 mod external_database_source_config_support;
 mod external_document_object_support;
 pub mod external_feishu;
+mod external_image_structured_extract_message_support;
+mod external_image_structured_extract_prompt_support;
+mod external_image_structured_extract_provider_support;
 mod external_image_structured_extract_record_support;
+mod external_image_structured_extract_reply_support;
+mod external_image_structured_extract_runtime_support;
 mod external_integration_audit_support;
 mod external_integration_config_summary_support;
 mod external_integration_dispatch_config_support;
@@ -379,6 +393,8 @@ mod external_system_user;
 mod external_template_html_artifact_support;
 pub mod external_wecom;
 pub mod fact_index;
+#[allow(dead_code)]
+mod fashion_postchain_adapter_support;
 mod hash_support;
 mod health_response_support;
 mod html_artifact_collection_support;
@@ -640,6 +656,7 @@ use external_channel_connection_id_support::*;
 use external_channel_conversation_history_support::*;
 use external_channel_direct_reply_budget_support::*;
 use external_channel_fixed_task_status_support::*;
+use external_channel_image_idempotency_support::*;
 use external_channel_model_pool_support::*;
 use external_channel_model_rejection_support::*;
 use external_channel_outbound_reply_dispatch_support::{
@@ -706,7 +723,12 @@ use external_conversation_in_flight_support::*;
 use external_conversation_timeline::*;
 use external_database_source_config_support::*;
 use external_document_object_support::*;
+use external_image_structured_extract_message_support::*;
+use external_image_structured_extract_prompt_support::*;
+use external_image_structured_extract_provider_support::*;
 use external_image_structured_extract_record_support::*;
+use external_image_structured_extract_reply_support::*;
+use external_image_structured_extract_runtime_support::*;
 use external_integration_audit_support::*;
 use external_integration_config_summary_support::*;
 use external_integration_dispatch_config_support::*;
@@ -728,6 +750,7 @@ use external_integration_summary::{
 use external_message_summary::{
     artifact_template_summary as external_artifact_template_summary,
     bot_message_payload_summary as external_bot_message_payload_summary,
+    message_event_conflict_public_summary as external_message_event_conflict_public_summary,
     requested_skills_summary as external_requested_skills_summary,
 };
 #[cfg(test)]
@@ -923,8 +946,11 @@ pub(crate) const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
 pub(crate) const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
     "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
+const ASSISTANT_RUN_ASSET_PARSE_STATUS_ASSET_LIMIT: usize = 200;
+const ASSISTANT_RUN_ASSET_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT: usize = 24;
+const ASSISTANT_RUN_ASSET_PROFILE_HINT_CANDIDATE_LIMIT: usize = 200;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
@@ -945,8 +971,6 @@ const ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT: usize = 12;
 const ASSISTANT_RUN_MODEL_SCOPE_ID_LIMIT: usize = 24;
 const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
-const ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS: usize = 3;
-const ASSISTANT_RUN_CONTINUE_MAX_STEPS: usize = 5;
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -1123,6 +1147,18 @@ pub fn router(
         .route(
             "/v1/asset-libraries",
             get(list_asset_libraries).post(create_asset_library),
+        )
+        .route(
+            "/v1/asset-imports/fashion-design-images",
+            axum::routing::post(create_fashion_design_image_asset_import),
+        )
+        .route(
+            "/v1/asset-imports/fashion-design-images/readiness",
+            get(get_fashion_design_image_asset_import_readiness),
+        )
+        .route(
+            "/v1/asset-imports/fashion-design-images/batch",
+            axum::routing::post(create_fashion_design_image_asset_import_batch),
         )
         .route(
             "/v1/client-config-packages",
@@ -3816,6 +3852,100 @@ async fn create_asset_library(
     ))
 }
 
+async fn create_fashion_design_image_asset_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateFashionDesignImageAssetImportRequest>,
+) -> std::result::Result<
+    (
+        StatusCode,
+        Json<CreateFashionDesignImageAssetImportResponse>,
+    ),
+    ApiError,
+> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    ensure_main_site_asset_import_enabled(state.tenant_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let dataset = load_visible_dataset_for_user_with_local_scope(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        Some(user.id),
+        local_thread_id.as_deref(),
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        Some(user.id),
+    )?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(create_fashion_design_image_asset_import_response(&state, request).await?),
+    ))
+}
+
+async fn create_fashion_design_image_asset_import_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateFashionDesignImageAssetImportBatchRequest>,
+) -> std::result::Result<
+    (
+        StatusCode,
+        Json<CreateFashionDesignImageAssetImportBatchResponse>,
+    ),
+    ApiError,
+> {
+    let user = require_asset_library_user_session(&state, &headers).await?;
+    ensure_main_site_asset_import_enabled(state.tenant_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let dataset = load_visible_dataset_for_user_with_local_scope(
+        &state,
+        request.dataset_id,
+        &active_secret_binding_ids,
+        Some(user.id),
+        local_thread_id.as_deref(),
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        Some(user.id),
+    )?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(create_fashion_design_image_asset_import_batch_response(&state, request).await?),
+    ))
+}
+
+async fn get_fashion_design_image_asset_import_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<Value>, ApiError> {
+    let _user = require_asset_library_user_session(&state, &headers).await?;
+    Ok(Json(main_site_asset_import_readiness(state.tenant_id)))
+}
+
+fn ensure_main_site_asset_import_enabled(tenant_id: TenantId) -> Result<(), ApiError> {
+    match main_site_asset_import_access(tenant_id) {
+        MainSiteAssetImportAccess::Enabled => Ok(()),
+        MainSiteAssetImportAccess::FeatureDisabled => Err(ApiError::service_unavailable(
+            "asset_import_feature_disabled",
+            "资产导入能力当前未启用".to_string(),
+        )),
+        MainSiteAssetImportAccess::TenantNotAllowlisted => Err(ApiError::forbidden(
+            "asset_import_tenant_not_allowlisted",
+            "当前租户未获准使用资产导入能力".to_string(),
+        )),
+    }
+}
+
 async fn create_client_config_package(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5636,20 +5766,6 @@ async fn external_channel_static_page_sse_preview_ready_events(
     Some(encoded)
 }
 
-fn external_channel_response_should_follow_first_turn_public_events(
-    message: &ExternalBotMessageView,
-    response: &ExternalChannelEventResponse,
-) -> bool {
-    if external_channel_response_is_static_page_pipeline(response) {
-        return false;
-    }
-    if response.reply.reply_type != ExternalBotReplyTypeView::Text {
-        return false;
-    }
-    let prompt = message.text.as_deref().unwrap_or_default();
-    external_channel_prompt_may_need_planned_action(prompt)
-}
-
 async fn external_channel_public_stream_completed_sequence(
     state: &AppState,
     run_id: AssistantRunId,
@@ -5670,21 +5786,6 @@ async fn external_channel_public_stream_completed_sequence(
         })
         .map(|event| event.sequence_no)
         .unwrap_or_else(|| external_channel_public_stream_latest_sequence_from_events(&events, 0))
-}
-
-fn external_channel_public_stream_latest_sequence_from_events(
-    events: &[AssistantRunEvent],
-    default_sequence_no: i32,
-) -> i32 {
-    events
-        .iter()
-        .filter(|event| {
-            event.payload.get("schema").and_then(Value::as_str)
-                == Some(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
-        })
-        .map(|event| event.sequence_no)
-        .max()
-        .unwrap_or(default_sequence_no)
 }
 
 async fn external_channel_static_page_sse_prompt_events(
@@ -14224,19 +14325,6 @@ fn collect_external_config_string_values(value: Option<&Value>, output: &mut BTr
     }
 }
 
-fn external_channel_source_document_scope_enabled(config: &Value) -> bool {
-    external_config_bool(
-        config,
-        &[
-            "allow_source_document_scope",
-            "allowSourceDocumentScope",
-            "enable_source_document_scope",
-            "enableSourceDocumentScope",
-        ],
-        false,
-    )
-}
-
 fn ensure_external_channel_platform(
     connection_id: &str,
     connection: &ExternalChannelConnectionSummary,
@@ -14414,23 +14502,6 @@ fn external_config_i64(config: &Value, keys: &[&str]) -> Option<i64> {
                 .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
         })
     })
-}
-
-fn external_config_bool(config: &Value, keys: &[&str], default_value: bool) -> bool {
-    keys.iter()
-        .find_map(|key| {
-            config.get(*key).and_then(|value| {
-                value.as_bool().or_else(|| {
-                    value.as_str().map(|text| {
-                        matches!(
-                            text.trim().to_ascii_lowercase().as_str(),
-                            "1" | "true" | "yes" | "on"
-                        )
-                    })
-                })
-            })
-        })
-        .unwrap_or(default_value)
 }
 
 fn external_platform_callback_response(
@@ -16350,88 +16421,6 @@ fn external_channel_message_allows_image_variant_idempotency(
         existing_payload_summary,
         current_payload_summary,
     ) && external_channel_image_variant_fingerprint(current_payload_summary).is_some()
-}
-
-fn external_message_payload_summaries_match_except_attachments(
-    left: &Value,
-    right: &Value,
-) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    if let Some(object) = left.as_object_mut() {
-        object.remove("attachments");
-        object.remove("received_at");
-    }
-    if let Some(object) = right.as_object_mut() {
-        object.remove("attachments");
-        object.remove("received_at");
-    }
-    left == right
-}
-
-fn external_message_payload_summaries_match_for_idempotency(left: &Value, right: &Value) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    if let Some(object) = left.as_object_mut() {
-        object.remove("received_at");
-    }
-    if let Some(object) = right.as_object_mut() {
-        object.remove("received_at");
-    }
-    left == right
-}
-
-fn external_channel_image_variant_idempotency_key(
-    original_idempotency_key: &str,
-    payload_summary: &Value,
-) -> Option<String> {
-    let fingerprint = external_channel_image_variant_fingerprint(payload_summary)?;
-    let hash = sha256_hex([
-        original_idempotency_key.trim().as_bytes(),
-        b":image:",
-        fingerprint.as_bytes(),
-    ]);
-    Some(format!(
-        "{}:image:{}",
-        original_idempotency_key.trim(),
-        &hash[..16]
-    ))
-}
-
-fn external_channel_image_variant_fingerprint(payload_summary: &Value) -> Option<String> {
-    let attachments = payload_summary.get("attachments")?.as_array()?;
-    if attachments.is_empty() {
-        return None;
-    }
-    let parts = attachments
-        .iter()
-        .map(|attachment| {
-            json!({
-                "attachment_external_id": attachment.get("attachment_external_id").cloned().unwrap_or(Value::Null),
-                "filename": attachment.get("filename").cloned().unwrap_or(Value::Null),
-                "content_type": attachment.get("content_type").cloned().unwrap_or(Value::Null),
-                "size_bytes": attachment.get("size_bytes").cloned().unwrap_or(Value::Null),
-                "download_url_fingerprint": attachment.get("download_url_fingerprint").cloned().unwrap_or(Value::Null),
-            })
-        })
-        .collect::<Vec<_>>();
-    let serialized = serde_json::to_string(&parts).ok()?;
-    Some(sha256_hex([serialized.as_bytes()]))
-}
-
-fn external_message_event_conflict_public_summary(summary: &Value) -> Value {
-    json!({
-        "message_external_id": summary.get("message_external_id").cloned().unwrap_or(Value::Null),
-        "message_type": summary.get("message_type").cloned().unwrap_or(Value::Null),
-        "text_chars": summary.get("text_chars").cloned().unwrap_or(Value::Null),
-        "attachment_count": summary.get("attachment_count").cloned().unwrap_or(Value::Null),
-        "attachments": summary.get("attachments").cloned().unwrap_or(Value::Null),
-        "dataset_external_count": summary.get("dataset_external_count").cloned().unwrap_or(Value::Null),
-        "requested_skill_count": summary.get("requested_skill_count").cloned().unwrap_or(Value::Null),
-        "output_format": summary.get("output_format").cloned().unwrap_or(Value::Null),
-        "render_mode": summary.get("render_mode").cloned().unwrap_or(Value::Null),
-        "artifact_type": summary.get("artifact_type").cloned().unwrap_or(Value::Null),
-    })
 }
 
 fn external_channel_conversation_guard_key(
@@ -19350,29 +19339,6 @@ async fn external_channel_response_with_event_static_page_artifact_links(
     Ok(response)
 }
 
-const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME: &str =
-    "assistant_run.external_channel_image_structured_extract_completed";
-const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_ARTIFACT_TYPE: &str =
-    "external_channel_image_structured_extract";
-
-#[derive(Clone, Debug)]
-struct ExternalImageStructuredExtractRuntimeConfig {
-    endpoint_url: String,
-    api_key: String,
-    model: String,
-    timeout_ms: u64,
-    max_tokens: u64,
-    reasoning_effort: Option<String>,
-    retry_enabled: bool,
-    provider_label: String,
-}
-
-#[derive(Debug)]
-struct ExternalImageStructuredExtractFailure {
-    reason: String,
-    runtime: Value,
-}
-
 fn external_aigolf_course_map_control_point_count(skill: &ExternalRequestedSkillView) -> usize {
     let Some(arguments) = external_requested_skill_argument_object(skill) else {
         return 0;
@@ -19687,25 +19653,6 @@ async fn execute_external_aigolf_course_map_segmentation(
     ))
 }
 
-fn external_aigolf_course_map_segmentation_reply_for_conversation(
-    conversation_external_id: &str,
-    payload: &Value,
-) -> ExternalBotReplyView {
-    ExternalBotReplyView {
-        target_conversation_external_id: conversation_external_id.to_string(),
-        reply_type: ExternalBotReplyTypeView::Card,
-        text: Some(
-            "DataMax 已接收 AI Golf 球场地图分割任务，并返回可复核的结构化初稿。".to_string(),
-        ),
-        card: Some(payload.clone()),
-        artifact_links: Vec::new(),
-        task_status: Some("aigolf_course_map_segmentation_needs_review".to_string()),
-        requires_confirmation: false,
-        action_id: None,
-        confirmation_id: None,
-    }
-}
-
 async fn maybe_handle_external_channel_aigolf_requested_skill(
     state: &AppState,
     connection_id: &str,
@@ -19750,12 +19697,8 @@ async fn maybe_handle_external_channel_aigolf_requested_skill(
         "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
         "at": now,
     }));
-    let output_artifacts = json!([{
-        "type": EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_ARTIFACT_TYPE,
-        "source": "external_channel_requested_skill",
-        "content": reply.text.clone().unwrap_or_default(),
-        "payload": payload.clone(),
-    }]);
+    let output_artifacts =
+        external_aigolf_course_map_segmentation_output_artifacts(&payload, &reply);
 
     state
         .storage
@@ -19824,6 +19767,9 @@ async fn maybe_handle_external_channel_image_structured_extract(
     prompt: &str,
     now: DateTime<Utc>,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    if !external_image_structured_extract_enabled() {
+        return Ok(None);
+    }
     if !external_channel_message_requests_image_structured_extract(message, prompt) {
         return Ok(None);
     }
@@ -19876,15 +19822,7 @@ async fn maybe_handle_external_channel_image_structured_extract(
         "at": now,
     }));
 
-    let output_artifacts = json!([{
-        "type": EXTERNAL_IMAGE_STRUCTURED_EXTRACT_ARTIFACT_TYPE,
-        "source": "external_channel_image",
-        "content": reply
-            .text
-            .clone()
-            .unwrap_or_else(|| external_image_structured_extract_text(&payload, true)),
-        "payload": payload.clone(),
-    }]);
+    let output_artifacts = external_image_structured_extract_output_artifacts(&payload, &reply);
     state
         .storage
         .assistant_runs()
@@ -20072,593 +20010,6 @@ async fn execute_external_image_structured_extract(
     ))
 }
 
-async fn external_image_structured_extract_call_provider(
-    client: &reqwest::Client,
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    image_url: &str,
-    prompt_text: String,
-    started_at: Instant,
-) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
-    let request_payload =
-        external_image_structured_extract_request_payload(config, image_url, prompt_text);
-    external_image_structured_extract_submit_provider_request(
-        client,
-        config,
-        request_payload,
-        started_at,
-    )
-    .await
-}
-
-async fn external_image_structured_extract_call_provider_with_system(
-    client: &reqwest::Client,
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    image_url: &str,
-    system_prompt: &str,
-    prompt_text: String,
-    started_at: Instant,
-) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
-    let request_payload = external_image_structured_extract_request_payload_with_system(
-        config,
-        image_url,
-        system_prompt,
-        prompt_text,
-    );
-    external_image_structured_extract_submit_provider_request(
-        client,
-        config,
-        request_payload,
-        started_at,
-    )
-    .await
-}
-
-async fn external_image_structured_extract_submit_provider_request(
-    client: &reqwest::Client,
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    request_payload: Value,
-    started_at: Instant,
-) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
-    let response = client
-        .post(&config.endpoint_url)
-        .bearer_auth(&config.api_key)
-        .json(&request_payload)
-        .send()
-        .await
-        .map_err(|error| ExternalImageStructuredExtractFailure {
-            reason: format!("image_extract_request_failed:{error}"),
-            runtime: external_image_structured_extract_failure_runtime(
-                config,
-                "request_failed",
-                &error.to_string(),
-                started_at.elapsed().as_millis() as u64,
-            ),
-        })?;
-    let status = response.status();
-    let response_text =
-        response
-            .text()
-            .await
-            .map_err(|error| ExternalImageStructuredExtractFailure {
-                reason: format!("image_extract_response_read_failed:{error}"),
-                runtime: external_image_structured_extract_failure_runtime(
-                    config,
-                    "response_read_failed",
-                    &error.to_string(),
-                    started_at.elapsed().as_millis() as u64,
-                ),
-            })?;
-    if !status.is_success() {
-        return Err(ExternalImageStructuredExtractFailure {
-            reason: format!("image_extract_provider_status:{}", status.as_u16()),
-            runtime: external_image_structured_extract_failure_runtime(
-                config,
-                "provider_status_error",
-                &truncate_assistant_supply_text(&response_text, 800),
-                started_at.elapsed().as_millis() as u64,
-            ),
-        });
-    }
-    let response_json = serde_json::from_str::<Value>(&response_text).map_err(|error| {
-        ExternalImageStructuredExtractFailure {
-            reason: format!("image_extract_provider_json_invalid:{error}"),
-            runtime: external_image_structured_extract_failure_runtime(
-                config,
-                "provider_json_invalid",
-                &error.to_string(),
-                started_at.elapsed().as_millis() as u64,
-            ),
-        }
-    })?;
-    let Some(content) = external_image_structured_extract_chat_response_text(&response_json) else {
-        return Err(ExternalImageStructuredExtractFailure {
-            reason: "image_extract_provider_content_missing".to_string(),
-            runtime: external_image_structured_extract_failure_runtime(
-                config,
-                "provider_content_missing",
-                &truncate_assistant_supply_text(&response_text, 800),
-                started_at.elapsed().as_millis() as u64,
-            ),
-        });
-    };
-    parse_json_object_from_model_text(&content).ok_or_else(|| {
-        ExternalImageStructuredExtractFailure {
-            reason: "image_extract_output_json_missing".to_string(),
-            runtime: external_image_structured_extract_failure_runtime(
-                config,
-                "output_json_missing",
-                &truncate_assistant_supply_text(&content, 800),
-                started_at.elapsed().as_millis() as u64,
-            ),
-        }
-    })
-}
-
-const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_SYSTEM_PROMPT: &str = "你是业务截图表格结构化抽取器。只输出 JSON，不要输出解释。必须先识别表头，再按图片从上到下逐行抽取订单/充值/支付记录。无法确定的字段填 null，不要编造，不要复用历史结果。";
-
-fn external_image_structured_extract_request_payload(
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    image_url: &str,
-    prompt_text: String,
-) -> Value {
-    external_image_structured_extract_request_payload_with_system(
-        config,
-        image_url,
-        EXTERNAL_IMAGE_STRUCTURED_EXTRACT_SYSTEM_PROMPT,
-        prompt_text,
-    )
-}
-
-fn external_image_structured_extract_request_payload_with_system(
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    image_url: &str,
-    system_prompt: &str,
-    prompt_text: String,
-) -> Value {
-    let mut payload = json!({
-        "model": config.model,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt_text
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url,
-                            "detail": "high"
-                        }
-                    }
-                ]
-            }
-        ],
-        "response_format": { "type": "json_object" },
-        "temperature": 0,
-        "max_tokens": config.max_tokens
-    });
-    if let Some(effort) = config.reasoning_effort.as_deref() {
-        payload["reasoning"] = json!({ "effort": effort });
-    }
-    payload
-}
-
-fn external_channel_message_requests_image_structured_extract(
-    message: &ExternalBotMessageView,
-    prompt: &str,
-) -> bool {
-    if external_channel_message_has_requested_image_extract_skill(message) {
-        return true;
-    }
-    if !matches!(message.message_type, ExternalMessageTypeView::Image)
-        || !external_channel_message_has_image_attachment(message)
-    {
-        return false;
-    }
-    if external_channel_message_is_artifact_generation_request(message, prompt) {
-        return false;
-    }
-    true
-}
-
-fn external_channel_message_has_requested_image_extract_skill(
-    message: &ExternalBotMessageView,
-) -> bool {
-    message.requested_skills.iter().any(|skill| {
-        if skill.mode.as_deref() == Some("disabled") {
-            return false;
-        }
-        let skill_id = skill.skill_id.trim().to_ascii_lowercase();
-        matches!(
-            skill_id.as_str(),
-            "order_screenshot_extract"
-                | "order_image_extract"
-                | "recharge_order_extract"
-                | "image_structured_extract"
-                | "screenshot_table_extract"
-                | "business_screenshot_extract"
-        )
-    })
-}
-
-fn external_channel_message_is_artifact_generation_request(
-    message: &ExternalBotMessageView,
-    prompt: &str,
-) -> bool {
-    if message
-        .render_mode
-        .as_deref()
-        .map(|value| value == "artifact")
-        .unwrap_or(false)
-        || message.artifact_type.is_some()
-        || message.template.is_some()
-    {
-        return true;
-    }
-    let lower = prompt.to_ascii_lowercase();
-    let artifact_markers = [
-        "static_page",
-        "html",
-        "artifact",
-        "dashboard",
-        "生成页面",
-        "生成报表",
-        "可视化",
-        "静态页",
-        "效果图",
-    ];
-    artifact_markers.iter().any(|marker| lower.contains(marker))
-}
-
-fn external_channel_message_has_image_attachment(message: &ExternalBotMessageView) -> bool {
-    message
-        .attachment_refs
-        .iter()
-        .any(external_attachment_ref_is_image)
-        || matches!(message.message_type, ExternalMessageTypeView::Image)
-}
-
-fn external_attachment_ref_is_image(attachment: &ExternalAttachmentRefView) -> bool {
-    if attachment
-        .content_type
-        .as_deref()
-        .map(|content_type| {
-            content_type
-                .trim()
-                .to_ascii_lowercase()
-                .starts_with("image/")
-        })
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    let Some(filename) = attachment
-        .filename
-        .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase())
-    else {
-        return false;
-    };
-    [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]
-        .iter()
-        .any(|suffix| filename.ends_with(suffix))
-}
-
-fn external_image_structured_extract_first_image_url(
-    message: &ExternalBotMessageView,
-) -> Option<String> {
-    message
-        .attachment_refs
-        .iter()
-        .filter(|attachment| external_attachment_ref_is_image(attachment))
-        .chain(message.attachment_refs.iter())
-        .find_map(|attachment| {
-            attachment
-                .download_url_redacted
-                .as_deref()
-                .and_then(non_empty_trimmed_string)
-        })
-        .or_else(|| {
-            message
-                .text
-                .as_deref()
-                .and_then(non_empty_trimmed_string)
-                .filter(|value| {
-                    value.starts_with("https://")
-                        || value.starts_with("http://")
-                        || value.starts_with("data:image/")
-                })
-        })
-}
-
-fn external_image_structured_extract_attachment_summaries(
-    message: &ExternalBotMessageView,
-) -> Value {
-    Value::Array(
-        message
-            .attachment_refs
-            .iter()
-            .map(|attachment| {
-                json!({
-                    "attachment_external_id": attachment.attachment_external_id,
-                    "filename": attachment.filename,
-                    "content_type": attachment.content_type,
-                    "size_bytes": attachment.size_bytes,
-                    "download_url_present": attachment
-                        .download_url_redacted
-                        .as_ref()
-                        .map(|value| !value.trim().is_empty())
-                        .unwrap_or(false),
-                })
-            })
-            .collect(),
-    )
-}
-
-fn external_image_structured_extract_schema_from_message(
-    message: &ExternalBotMessageView,
-) -> Value {
-    let skill_schema = message
-        .requested_skills
-        .iter()
-        .find(|skill| {
-            if skill.mode.as_deref() == Some("disabled") {
-                return false;
-            }
-            let skill_id = skill.skill_id.trim().to_ascii_lowercase();
-            matches!(
-                skill_id.as_str(),
-                "order_screenshot_extract"
-                    | "order_image_extract"
-                    | "recharge_order_extract"
-                    | "image_structured_extract"
-                    | "screenshot_table_extract"
-                    | "business_screenshot_extract"
-            )
-        })
-        .and_then(|skill| skill.arguments.as_ref())
-        .and_then(|arguments| {
-            arguments
-                .get("schema")
-                .or_else(|| arguments.get("fields"))
-                .cloned()
-        });
-    skill_schema.unwrap_or_else(|| {
-        json!({
-            "record_type": "recharge_order",
-            "fields": [
-                { "name": "recharge_amount", "type": "number", "source_label": "充值额度" },
-                { "name": "recharge_amount_raw", "type": "string", "source_label": "充值额度原文" },
-                { "name": "pay_amount", "type": "number", "source_label": "支付金额" },
-                { "name": "pay_amount_raw", "type": "string", "source_label": "支付金额原文" },
-                { "name": "payment_method", "type": "enum", "source_label": "支付方式" },
-                { "name": "payment_method_label", "type": "string", "source_label": "支付方式原文" },
-                { "name": "order_no", "type": "string", "source_label": "订单号" },
-                { "name": "status", "type": "enum", "source_label": "状态" },
-                { "name": "status_label", "type": "string", "source_label": "状态原文" },
-                { "name": "created_at", "type": "string", "source_label": "创建时间" }
-            ]
-        })
-    })
-}
-
-fn external_image_structured_extract_output_format_is_json(
-    message: &ExternalBotMessageView,
-) -> bool {
-    message.output_format.as_deref() == Some("json")
-}
-
-fn external_image_structured_extract_id(
-    connection_id: &str,
-    message: &ExternalBotMessageView,
-) -> String {
-    let attachment_key = message
-        .attachment_refs
-        .iter()
-        .map(|attachment| attachment.attachment_external_id.as_str())
-        .collect::<Vec<_>>()
-        .join("|");
-    let hash = sha256_hex([
-        connection_id.as_bytes(),
-        b":",
-        message.idempotency_key.as_bytes(),
-        b":",
-        attachment_key.as_bytes(),
-    ]);
-    format!("img-extract-{}", &hash[..24])
-}
-
-fn external_image_structured_extract_prompt(
-    prompt: &str,
-    schema: &Value,
-    extraction_id: &str,
-) -> String {
-    let schema_text = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n抽取步骤必须遵守：\n1. 先识别图片中的表头/列名和可见数据行数量。\n2. 只抽取本轮图片真实可见的订单、充值、支付记录，不要使用示例值、历史结果或字段 schema 猜测。\n3. records 必须按图片从上到下逐行输出；看到几行有效记录就输出几条，不要只输出第一行，不要合并多行。\n4. 每条记录增加 row_index，从 1 开始，对应图片中的可见行序号。\n5. 输出 visible_row_count，表示你实际看到的有效数据行数量；如果 records 数量少于 visible_row_count，必须继续补齐。\n6. 金额保留原文和数字：例如 recharge_amount_raw=\"$100\"，recharge_amount=100；pay_amount_raw=\"$700\"，pay_amount=700。\n7. 订单号要逐字符抄写，不要改写相近字符；时间按图片原文输出。\n若你无法实际看到图片、图片不可访问、图片内容与订单/充值记录无关，必须输出 {{\"records\":[],\"visible_row_count\":0,\"confidence\":0,\"needs_review\":true,\"notes\":\"image_not_visible_or_not_order_screenshot\"}}。\n输出严格 JSON：{{\"records\":[...] , \"visible_row_count\":0, \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 row_index、recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
-        prompt.trim()
-    )
-}
-
-fn external_image_structured_extract_retry_prompt(
-    prompt: &str,
-    schema: &Value,
-    extraction_id: &str,
-    previous_payload: &Value,
-) -> String {
-    let previous_summary = json!({
-        "visible_row_count": external_image_structured_extract_visible_row_count(previous_payload),
-        "record_count": external_image_structured_extract_raw_records(previous_payload).len(),
-        "quality_score": external_image_structured_extract_payload_quality_score(previous_payload),
-        "notes": previous_payload.get("notes").cloned().unwrap_or(Value::Null),
-    });
-    format!(
-        "{}\n\n上一轮抽取疑似不完整，请重新看图复核。上一轮摘要：{}。\n这次必须重点检查是否漏行、漏订单号、漏状态、漏支付方式或把多行合并成一行。最终仍只输出一份完整 JSON，不要解释。",
-        external_image_structured_extract_prompt(prompt, schema, extraction_id),
-        previous_summary
-    )
-}
-
-fn external_image_structured_extract_runtime_config(
-) -> Option<ExternalImageStructuredExtractRuntimeConfig> {
-    let base_url = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_BASE_URL",
-        "ASSISTANT_RUN_RUNTIME_BASE_URL",
-    ])?;
-    let api_path = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_API_PATH",
-        "ASSISTANT_RUN_RUNTIME_API_PATH",
-    ])
-    .unwrap_or_else(|| "/v1/chat/completions".to_string());
-    let api_key = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_API_KEY",
-        "ASSISTANT_RUN_RUNTIME_API_KEY",
-    ])?;
-    let model = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_MODEL",
-        "ASSISTANT_RUN_RUNTIME_MODEL",
-    ])
-    .unwrap_or_else(|| "gpt-5.5".to_string());
-    let timeout_ms = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_TIMEOUT_MS",
-    ])
-    .and_then(|value| value.parse::<u64>().ok())
-    .filter(|value| *value >= 1_000)
-    .unwrap_or(60_000);
-    let max_tokens = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_MAX_TOKENS",
-    ])
-    .and_then(|value| value.parse::<u64>().ok())
-    .filter(|value| (512..=16_000).contains(value))
-    .unwrap_or(4_096);
-    let reasoning_effort = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_REASONING_EFFORT",
-        "ASSISTANT_RUN_RUNTIME_REASONING_EFFORT",
-    ])
-    .map(|value| value.trim().to_ascii_lowercase())
-    .filter(|value| {
-        matches!(
-            value.as_str(),
-            "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
-        )
-    });
-    let retry_enabled = external_image_structured_extract_env_value(&[
-        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_RETRY_ENABLED",
-    ])
-    .map(|value| {
-        !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off"
-        )
-    })
-    .unwrap_or(true);
-    Some(ExternalImageStructuredExtractRuntimeConfig {
-        endpoint_url: external_image_structured_extract_join_url(&base_url, &api_path),
-        api_key,
-        model,
-        timeout_ms,
-        max_tokens,
-        reasoning_effort,
-        retry_enabled,
-        provider_label: external_image_structured_extract_env_value(&[
-            "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_PROVIDER",
-            "ASSISTANT_RUN_RUNTIME_PROVIDER",
-        ])
-        .unwrap_or_else(|| "openai_compatible_vision".to_string()),
-    })
-}
-
-fn external_image_structured_extract_env_value(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        std::env::var(key)
-            .ok()
-            .and_then(|value| non_empty_trimmed_string(&value))
-    })
-}
-
-fn external_image_structured_extract_join_url(base_url: &str, api_path: &str) -> String {
-    if api_path.starts_with("http://") || api_path.starts_with("https://") {
-        return api_path.to_string();
-    }
-    format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        api_path.trim_start_matches('/')
-    )
-}
-
-fn external_image_structured_extract_failure_runtime(
-    config: &ExternalImageStructuredExtractRuntimeConfig,
-    kind: &str,
-    message: &str,
-    latency_ms: u64,
-) -> Value {
-    json!({
-        "mode": "external_image_structured_extract",
-        "lane": "external_channel",
-        "provider": config.provider_label,
-        "model": config.model,
-        "latency_ms": latency_ms,
-        "provider_failure": {
-            "kind": kind,
-            "message": truncate_assistant_supply_text(message, 800),
-        },
-    })
-}
-
-fn external_image_structured_extract_chat_response_text(response: &Value) -> Option<String> {
-    response
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(|content| match content {
-            Value::String(text) => non_empty_trimmed_string(text),
-            Value::Array(parts) => {
-                let text = parts
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                non_empty_trimmed_string(&text)
-            }
-            other if other.is_object() || other.is_array() => Some(other.to_string()),
-            _ => None,
-        })
-}
-
-fn parse_json_object_from_model_text(text: &str) -> Option<Value> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return Some(value);
-    }
-    let unfenced = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .and_then(|value| value.strip_suffix("```"))
-        .map(str::trim)
-        .unwrap_or(trimmed);
-    if let Ok(value) = serde_json::from_str::<Value>(unfenced) {
-        return Some(value);
-    }
-    let start = unfenced.find('{')?;
-    let end = unfenced.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    serde_json::from_str::<Value>(&unfenced[start..=end]).ok()
-}
-
 async fn maybe_handle_external_channel_wechat_video_login_handoff(
     state: &AppState,
     run: &AssistantRun,
@@ -20822,98 +20173,6 @@ fn external_channel_wechat_video_login_handoff_reply_from_events(
                     &artifact,
                 ),
             )
-        })
-}
-
-fn external_image_structured_extract_reply_for_conversation(
-    conversation_external_id: &str,
-    payload: &Value,
-    output_json: bool,
-) -> ExternalBotReplyView {
-    let status = payload
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("answered");
-    ExternalBotReplyView {
-        target_conversation_external_id: conversation_external_id.to_string(),
-        reply_type: ExternalBotReplyTypeView::Card,
-        text: Some(external_image_structured_extract_text(payload, output_json)),
-        card: Some(payload.clone()),
-        artifact_links: Vec::new(),
-        task_status: Some(status.to_string()),
-        requires_confirmation: false,
-        action_id: None,
-        confirmation_id: None,
-    }
-}
-
-fn external_image_structured_extract_text(payload: &Value, output_json: bool) -> String {
-    if output_json {
-        return serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string());
-    }
-    let record_count = payload
-        .get("record_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let status = payload
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("answered");
-    if status == "answered" {
-        format!("已识别并结构化 {record_count} 条订单记录，详情见 card.records。")
-    } else {
-        let reason = payload
-            .get("failure_reason")
-            .and_then(Value::as_str)
-            .unwrap_or("needs_review");
-        format!("图片字段抽取需要复核：{reason}。详情见 card.records。")
-    }
-}
-
-fn external_channel_image_structured_extract_reply_from_events(
-    events: &[AssistantRunEvent],
-    conversation_external_id: &str,
-) -> Option<ExternalBotReplyView> {
-    let event = events
-        .iter()
-        .rev()
-        .find(|event| event.event_name == EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME)?;
-    event
-        .payload
-        .get("reply")
-        .cloned()
-        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
-        .or_else(|| {
-            event.payload.get("payload").map(|payload| {
-                external_image_structured_extract_reply_for_conversation(
-                    conversation_external_id,
-                    payload,
-                    true,
-                )
-            })
-        })
-}
-
-fn external_channel_aigolf_skill_reply_from_events(
-    events: &[AssistantRunEvent],
-    conversation_external_id: &str,
-) -> Option<ExternalBotReplyView> {
-    let event = events
-        .iter()
-        .rev()
-        .find(|event| event.event_name == EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME)?;
-    event
-        .payload
-        .get("reply")
-        .cloned()
-        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
-        .or_else(|| {
-            event.payload.get("payload").map(|payload| {
-                external_aigolf_course_map_segmentation_reply_for_conversation(
-                    conversation_external_id,
-                    payload,
-                )
-            })
         })
 }
 
@@ -40083,12 +39342,6 @@ pub(crate) fn env_flag(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
-fn normalize_assistant_run_continue_max_steps(value: Option<usize>) -> usize {
-    value
-        .unwrap_or(ASSISTANT_RUN_CONTINUE_DEFAULT_MAX_STEPS)
-        .clamp(1, ASSISTANT_RUN_CONTINUE_MAX_STEPS)
-}
-
 #[derive(Clone, Debug)]
 struct ExternalAclFilterContext {
     principal: ExternalPrincipalContext,
@@ -40263,49 +39516,6 @@ async fn document_is_visible_for_external_acl(
     Ok(ScopeResolver
         .can_access_external_document(&context.principal, &acl)
         .allowed)
-}
-
-fn selected_scope_allows_external_document_range_without_acl_snapshot(
-    selected_scope: &Value,
-) -> bool {
-    if selected_scope.get("type").and_then(Value::as_str) != Some("external_channel") {
-        return false;
-    }
-    if selected_scope.get("mode").and_then(Value::as_str) != Some("external_document_scope") {
-        return false;
-    }
-    if !matches!(
-        selected_scope
-            .get("external_document_scope_status")
-            .and_then(Value::as_str),
-        Some(
-            "resolved"
-                | "partial"
-                | "source_resolved"
-                | "dataset_resolved"
-                | "v3_dataset_resolved"
-                | "resolved_with_attachment_title",
-        )
-    ) {
-        return false;
-    }
-    let has_requested_external_ids = selected_scope
-        .get("available_document_external_ids")
-        .and_then(Value::as_array)
-        .is_some_and(|items| !items.is_empty());
-    let has_source_document_scope = selected_scope
-        .get("source_document_scope")
-        .and_then(Value::as_object)
-        .is_some()
-        && !selected_dataset_ids_from_scope(selected_scope).is_empty();
-    let has_dataset_document_scope = selected_scope
-        .get("dataset_document_scope")
-        .and_then(Value::as_object)
-        .is_some()
-        && !selected_dataset_ids_from_scope(selected_scope).is_empty();
-    (has_requested_external_ids && !selected_document_ids_from_scope(selected_scope).is_empty())
-        || has_source_document_scope
-        || has_dataset_document_scope
 }
 
 async fn load_external_acl_snapshot_cached(
@@ -40637,6 +39847,10 @@ async fn build_assistant_run_evidence_state(
         .await?;
         supplied_items.extend(parse_status_items);
 
+        let asset_parse_status_items =
+            build_assistant_run_asset_parse_status_supply(state, &dataset).await?;
+        supplied_items.extend(asset_parse_status_items);
+
         if !attachment_title_document_ids.is_empty() {
             let attachment_items = build_assistant_run_chunk_fallback_supply(
                 state,
@@ -40702,7 +39916,7 @@ async fn build_assistant_run_evidence_state(
         supplied_items.extend(spreadsheet_row_analysis_items);
 
         let asset_profile_hint_items =
-            build_assistant_run_asset_profile_hint_supply(state, &dataset).await?;
+            build_assistant_run_asset_profile_hint_supply(state, &dataset, prompt).await?;
         supplied_items.extend(asset_profile_hint_items);
 
         let evidences = if retrieval_search_backend() == RetrievalSearchBackend::PostgresLexical
@@ -40902,14 +40116,18 @@ async fn build_assistant_run_evidence_state(
 async fn build_assistant_run_asset_profile_hint_supply(
     state: &AppState,
     dataset: &Dataset,
+    prompt: &str,
 ) -> std::result::Result<Vec<Value>, ApiError> {
+    if !asset_profile_supply_enabled() {
+        return Ok(Vec::new());
+    }
     let assets = state
         .storage
         .asset_items()
         .list_by_dataset_ids(
             state.tenant_id,
             &[dataset.id],
-            ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
+            ASSISTANT_RUN_ASSET_PROFILE_HINT_CANDIDATE_LIMIT,
         )
         .await
         .map_err(ApiError::from_storage)?;
@@ -40917,20 +40135,38 @@ async fn build_assistant_run_asset_profile_hint_supply(
         return Ok(Vec::new());
     }
 
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let mut profiles_by_asset_id = std::collections::BTreeMap::new();
+    for profile in state
+        .storage
+        .asset_items()
+        .list_profiles_by_asset_ids(
+            state.tenant_id,
+            &asset_ids,
+            asset_ids.len().saturating_mul(4),
+        )
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        profiles_by_asset_id
+            .entry(profile.asset_id)
+            .or_insert_with(Vec::new)
+            .push(profile);
+    }
+
     let mut profile_inputs = Vec::new();
     for asset in assets {
-        let profiles = state
-            .storage
-            .asset_items()
-            .list_profiles(state.tenant_id, asset.id)
-            .await
-            .map_err(ApiError::from_storage)?;
-        profile_inputs.extend(asset_profile_supply_inputs(&asset, &profiles));
+        let profiles = profiles_by_asset_id
+            .get(&asset.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        profile_inputs.extend(asset_profile_supply_inputs(&asset, profiles));
     }
 
     Ok(
-        asset_profile_supply_support::build_asset_profile_supply_hints(
+        asset_profile_supply_support::build_asset_profile_supply_hints_for_query(
             &profile_inputs,
+            prompt,
             ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
         )
         .into_iter()
@@ -40957,6 +40193,148 @@ async fn build_assistant_run_asset_profile_hint_supply(
         })
         .collect(),
     )
+}
+
+async fn build_assistant_run_asset_parse_status_supply(
+    state: &AppState,
+    dataset: &Dataset,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let assets = state
+        .storage
+        .asset_items()
+        .list_by_dataset_ids(
+            state.tenant_id,
+            &[dataset.id],
+            ASSISTANT_RUN_ASSET_PARSE_STATUS_ASSET_LIMIT,
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut scanned_asset_count = 0usize;
+    let mut status_counts = BTreeMap::<String, usize>::new();
+    let mut attention_assets = Vec::new();
+    let mut active_parse_count = 0usize;
+    let mut failed_asset_count = 0usize;
+    let mut retrying_asset_count = 0usize;
+    let mut pending_asset_count = 0usize;
+    let mut completed_asset_count = 0usize;
+
+    for asset in assets {
+        let parse_runs = state
+            .storage
+            .asset_items()
+            .list_parse_runs(state.tenant_id, asset.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let Some(latest_parse_run) = parse_runs.first() else {
+            continue;
+        };
+        scanned_asset_count += 1;
+        let model_status = assistant_run_asset_parse_model_status(&latest_parse_run.status);
+        *status_counts.entry(model_status.clone()).or_insert(0) += 1;
+
+        if assistant_run_asset_parse_status_is_active(&model_status) {
+            active_parse_count += 1;
+        }
+        if model_status == "failed" {
+            failed_asset_count += 1;
+        }
+        if model_status == "retrying" {
+            retrying_asset_count += 1;
+        }
+        if model_status == "pending" {
+            pending_asset_count += 1;
+        }
+        if model_status == "completed" {
+            completed_asset_count += 1;
+        }
+
+        if assistant_run_asset_parse_status_needs_attention(&model_status)
+            && attention_assets.len() < ASSISTANT_RUN_ASSET_PARSE_STATUS_ATTENTION_LIMIT
+        {
+            attention_assets.push(json!({
+                "asset_id": asset.id,
+                "title": asset.title,
+                "asset_kind": asset.asset_kind,
+                "source_kind": asset.source_kind,
+                "content_type": asset.content_type,
+                "profile_count": asset.profile_count,
+                "parse_status": latest_parse_run.status.clone(),
+                "model_status": model_status,
+                "parser_name": latest_parse_run.parser_name.clone(),
+                "parser_version": latest_parse_run.parser_version.clone(),
+                "error_code": latest_parse_run.error_code.clone(),
+                "updated_at": latest_parse_run.updated_at,
+            }));
+        }
+    }
+
+    if scanned_asset_count == 0
+        || (active_parse_count == 0 && failed_asset_count == 0 && retrying_asset_count == 0)
+    {
+        return Ok(Vec::new());
+    }
+
+    let status_summary = assistant_scope_count_summary(&status_counts);
+    let summary = format!(
+        "资产解析状态：已扫描可见资产 {scanned_asset_count} 个，状态分布 {status_summary}。未完成/失败/重试中的图片、PPT、视频或设计图只代表素材理解暂不可完整引用；模型应据此说明解析状态，并优先使用已完成画像或其他证据。"
+    );
+
+    Ok(vec![json!({
+        "type": "asset_parse_status",
+        "source": "visible_asset_parse_state",
+        "dataset_id": dataset.id,
+        "dataset_key": dataset.key.clone(),
+        "summary": summary,
+        "score": 1.0,
+        "lexical_score": 1.0,
+        "recall_score": 1.0,
+        "scanned_asset_count": scanned_asset_count,
+        "status_summary": status_summary,
+        "status_counts": status_counts,
+        "active_parse_count": active_parse_count,
+        "pending_asset_count": pending_asset_count,
+        "failed_asset_count": failed_asset_count,
+        "retrying_asset_count": retrying_asset_count,
+        "completed_asset_count": completed_asset_count,
+        "not_ready_asset_count": active_parse_count + failed_asset_count,
+        "attention_assets": attention_assets,
+        "model_guidance": [
+            "When a relevant image, design asset, PPT, video, or asset package is pending, parsing, retrying, or failed, explain that asset understanding is not fully ready instead of guessing from filename or title.",
+            "Translate internal asset parse states into plain Chinese; do not expose raw object keys, parser internals, or provider payloads.",
+            "If completed asset_profile_hint items are present, use them for compact asset understanding; if only pending/failed assets are present, answer with available evidence and say what is still parsing.",
+            "Use this item for asset availability/status only; cite retrieval evidence, database rows, document details, or completed asset profiles for exact claims."
+        ],
+        "limits": {
+            "maxAssets": ASSISTANT_RUN_ASSET_PARSE_STATUS_ASSET_LIMIT,
+            "maxAttentionAssets": ASSISTANT_RUN_ASSET_PARSE_STATUS_ATTENTION_LIMIT,
+        },
+    })])
+}
+
+fn assistant_run_asset_parse_model_status(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "completed" | "complete" | "succeeded" | "success" | "indexed" => "completed",
+        "failed" | "error" => "failed",
+        "running" | "processing" | "parsing" | "indexing" => "parsing",
+        "retrying" | "reparsing" | "reparse_queued" => "retrying",
+        "queued" | "pending" | "created" | "accepted" => "pending",
+        "skipped" => "skipped",
+        "unsupported" => "unsupported",
+        _ => "pending",
+    }
+    .to_string()
+}
+
+fn assistant_run_asset_parse_status_is_active(status: &str) -> bool {
+    matches!(status, "pending" | "parsing" | "retrying")
+}
+
+fn assistant_run_asset_parse_status_needs_attention(status: &str) -> bool {
+    matches!(status, "pending" | "parsing" | "retrying" | "failed")
 }
 
 async fn build_assistant_run_dataset_fact_snapshot_supply(
@@ -46875,15 +46253,6 @@ async fn conversation_memory_item_allowed_for_selected_scope(
     Ok(true)
 }
 
-fn selected_scope_external_user_context_conversation_id(selected_scope: &Value) -> Option<&str> {
-    selected_scope
-        .get("user_context_scope")
-        .and_then(|scope| scope.get("conversation_external_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 async fn list_chat_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -51076,6 +50445,30 @@ mod tests {
     };
     use tool_registry::{ToolCliContract, ToolCliOutputMode, ToolDefinition, ToolInvocationMode};
     use tower::util::ServiceExt;
+
+    #[test]
+    fn assistant_run_asset_parse_model_status_normalizes_worker_states() {
+        assert_eq!(
+            assistant_run_asset_parse_model_status("completed"),
+            "completed"
+        );
+        assert_eq!(
+            assistant_run_asset_parse_model_status("processing"),
+            "parsing"
+        );
+        assert_eq!(
+            assistant_run_asset_parse_model_status("retrying"),
+            "retrying"
+        );
+        assert_eq!(assistant_run_asset_parse_model_status("queued"), "pending");
+        assert_eq!(assistant_run_asset_parse_model_status("failed"), "failed");
+        assert!(assistant_run_asset_parse_status_is_active("pending"));
+        assert!(assistant_run_asset_parse_status_is_active("parsing"));
+        assert!(assistant_run_asset_parse_status_needs_attention("failed"));
+        assert!(!assistant_run_asset_parse_status_needs_attention(
+            "completed"
+        ));
+    }
 
     #[test]
     fn xinbai_published_report_link_answer_matches_customer_phrase() {

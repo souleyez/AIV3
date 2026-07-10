@@ -16,6 +16,7 @@ pub(crate) fn assistant_run_model_supply_item_for_context(item: &Value) -> Value
         Some("retrieval_evidence") => assistant_run_model_retrieval_evidence_item(item),
         Some("search_evidence") => assistant_run_model_search_evidence_item(item),
         Some("document_parse_status") => assistant_run_model_document_parse_status_item(item),
+        Some("asset_parse_status") => assistant_run_model_asset_parse_status_item(item),
         Some("database_schema_context") => assistant_run_model_database_schema_context_item(item),
         Some("database_aggregate") => assistant_run_model_database_aggregate_item(item),
         Some("spreadsheet_row_analysis") => assistant_run_model_spreadsheet_row_analysis_item(item),
@@ -388,6 +389,54 @@ fn assistant_run_model_document_parse_status_item(item: &Value) -> Value {
     })
 }
 
+fn assistant_run_model_asset_parse_status_item(item: &Value) -> Value {
+    let attention_assets = item
+        .get("attention_assets")
+        .and_then(Value::as_array)
+        .map(|assets| {
+            assets
+                .iter()
+                .take(6)
+                .map(|asset| {
+                    json!({
+                        "asset_id": asset.get("asset_id").cloned().unwrap_or(Value::Null),
+                        "title": asset.get("title").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+                        "asset_kind": asset.get("asset_kind").cloned().unwrap_or(Value::Null),
+                        "source_kind": asset.get("source_kind").cloned().unwrap_or(Value::Null),
+                        "content_type": asset.get("content_type").cloned().unwrap_or(Value::Null),
+                        "profile_count": asset.get("profile_count").cloned().unwrap_or(Value::Null),
+                        "parse_status": asset.get("parse_status").cloned().unwrap_or(Value::Null),
+                        "model_status": asset.get("model_status").cloned().unwrap_or(Value::Null),
+                        "parser_name": asset.get("parser_name").cloned().unwrap_or(Value::Null),
+                        "parser_version": asset.get("parser_version").cloned().unwrap_or(Value::Null),
+                        "error_code": asset.get("error_code").cloned().unwrap_or(Value::Null),
+                        "updated_at": asset.get("updated_at").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "type": "asset_parse_status",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "scanned_asset_count": item.get("scanned_asset_count").cloned().unwrap_or(Value::Null),
+        "status_summary": item.get("status_summary").cloned().unwrap_or(Value::Null),
+        "status_counts": item.get("status_counts").cloned().unwrap_or(Value::Null),
+        "active_parse_count": item.get("active_parse_count").cloned().unwrap_or(Value::Null),
+        "pending_asset_count": item.get("pending_asset_count").cloned().unwrap_or(Value::Null),
+        "failed_asset_count": item.get("failed_asset_count").cloned().unwrap_or(Value::Null),
+        "retrying_asset_count": item.get("retrying_asset_count").cloned().unwrap_or(Value::Null),
+        "completed_asset_count": item.get("completed_asset_count").cloned().unwrap_or(Value::Null),
+        "not_ready_asset_count": item.get("not_ready_asset_count").cloned().unwrap_or(Value::Null),
+        "attention_assets": attention_assets,
+        "model_guidance": item.get("model_guidance").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 5)).unwrap_or(Value::Null),
+        "limits": item.get("limits").cloned().unwrap_or(Value::Null),
+    })
+}
+
 fn assistant_run_model_database_schema_context_item(item: &Value) -> Value {
     json!({
         "type": "database_schema_context",
@@ -729,6 +778,45 @@ mod tests {
         assert_eq!(model_item["noun_terms"][0], json!("女装"));
         assert!(!serialized.contains("raw_provider_payload"));
         assert!(!serialized.contains("must not enter model context"));
+    }
+
+    #[test]
+    fn asset_parse_status_keeps_compact_safe_fields_only() {
+        let item = json!({
+            "type": "asset_parse_status",
+            "source": "visible_asset_parse_state",
+            "dataset_id": "dataset-1",
+            "summary": "资产解析状态：待解析 1 个。",
+            "scanned_asset_count": 2,
+            "status_counts": {"pending": 1, "completed": 1},
+            "pending_asset_count": 1,
+            "not_ready_asset_count": 1,
+            "attention_assets": [{
+                "asset_id": "asset-1",
+                "title": "设计图 A",
+                "asset_kind": "image",
+                "source_kind": "upload",
+                "parse_status": "pending",
+                "model_status": "pending",
+                "parser_name": "datamax-fashion-image-parser",
+                "parser_version": "2026-06-17",
+                "object_key": "must-not-enter-model-context",
+                "metadata": {"raw_provider_payload": "must not enter model context"}
+            }]
+        });
+
+        let model_item = assistant_run_model_supply_item_for_context(&item);
+        let serialized = serde_json::to_string(&model_item).unwrap();
+
+        assert_eq!(model_item["type"], json!("asset_parse_status"));
+        assert_eq!(model_item["not_ready_asset_count"], json!(1));
+        assert_eq!(
+            model_item["attention_assets"][0]["title"],
+            json!("设计图 A")
+        );
+        assert!(!serialized.contains("object_key"));
+        assert!(!serialized.contains("must-not-enter-model-context"));
+        assert!(!serialized.contains("raw_provider_payload"));
     }
 
     #[test]
