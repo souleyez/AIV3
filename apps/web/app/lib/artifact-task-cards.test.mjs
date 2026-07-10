@@ -6,6 +6,7 @@ import {
   buildArtifactTaskCards,
   normalizeArtifactTaskStatus,
 } from './artifact-task-cards.js';
+import { buildFashionDesignAssetImportShelfTask } from './asset-library-view-model.js';
 
 describe('artifact task cards', () => {
   it('normalizes running drafts, published HTML artifacts, running Codex tasks, and finished Codex artifacts', () => {
@@ -285,5 +286,52 @@ describe('artifact task cards', () => {
     assert.ok(cards.some((card) => card.title === '静态页：经营健康度总览'));
     assert.ok(cards.some((card) => card.title === '静态页：固定提成取高风险识别'));
     assert.equal(cards.some((card) => /随便|我看看|成品|生成固定/.test(card.title)), false);
+  });
+
+  it('surfaces one redacted asset-import shelf card for duplicate scope tasks', () => {
+    const assetLibrary = {
+      id: 'library-private-001',
+      name: '服装设计资产库',
+    };
+    const assets = [
+      {
+        id: 'asset-a',
+        title: 'spring-dress.png',
+        object_key: 'objects/private/spring-dress.png',
+      },
+      {
+        id: 'asset-b',
+        title: 'workwear.webp',
+        source_id: 'https://example.com/workwear.webp',
+      },
+    ];
+    const buildTask = (items) => buildFashionDesignAssetImportShelfTask({
+      assetLibrary,
+      scope: {
+        summary: {
+          asset_library: assetLibrary,
+          dataset_ids: ['dataset-private-001'],
+          asset_count: 2,
+          asset_parse_status_counts: { pending: 2 },
+          asset_parse_run_count: 2,
+          assets: items,
+        },
+      },
+    });
+
+    const cards = buildArtifactTaskCards({
+      codexCustomerTasks: [buildTask(assets), buildTask([...assets].reverse())],
+    });
+
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].kind, 'codex_task');
+    assert.equal(cards[0].title, '任务：图库任务：服装设计资产库');
+    assert.equal(cards[0].status, 'queued');
+    assert.equal(cards[0].detail.resultItems.some((item) => item.text.startsWith('字段账本：')), true);
+
+    const serialized = JSON.stringify(cards[0]);
+    assert.equal(serialized.includes('objects/private'), false);
+    assert.equal(serialized.includes('https://example.com'), false);
+    assert.equal(/object[_-]?key/i.test(serialized), false);
   });
 });

@@ -29,6 +29,7 @@ import {
   applyAssetLibraryPresetToDraft,
   assetLibraryContainsDataset,
   buildAssetLibraryCreatePayload,
+  buildFashionDesignAssetImportShelfTask,
   buildFashionDesignImageAssetImportBatchPayload,
   buildFashionDesignImageAssetImportPayload,
   normalizeAssetLibraries,
@@ -424,6 +425,20 @@ export default function HomePageClient() {
   const selectedAssetLibrary = useMemo(
     () => selectedAssetLibraryView(assetLibraries, selectedAssetLibraryId),
     [assetLibraries, selectedAssetLibraryId],
+  );
+  const assetImportShelfTask = useMemo(
+    () => buildFashionDesignAssetImportShelfTask({
+      assetLibrary: selectedAssetLibrary,
+      scope: assetLibraryScope,
+    }),
+    [assetLibraryScope, selectedAssetLibrary],
+  );
+  const taskShelfCodexCustomerTasks = useMemo(
+    () => mergeCodexCustomerTasks(
+      codexCustomerTasks,
+      assetImportShelfTask ? [assetImportShelfTask] : [],
+    ),
+    [assetImportShelfTask, codexCustomerTasks],
   );
   const selectedDatasets = useMemo(
     () => selectedDatasetIds
@@ -4552,7 +4567,7 @@ export default function HomePageClient() {
     }),
     staticPageEditorOpen,
     assistantRunProgress,
-    codexCustomerTasks,
+    codexCustomerTasks: taskShelfCodexCustomerTasks,
     codexCustomerArtifacts,
     clientArtifacts: [],
     htmlArtifacts: taskCardHtmlArtifacts,

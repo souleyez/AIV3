@@ -366,6 +366,74 @@ export function normalizeFashionDesignAssetImportTaskCardDraft(input = {}) {
   };
 }
 
+export function buildFashionDesignAssetImportShelfTask({ assetLibrary, scope } = {}) {
+  const normalizedScope = normalizeAssetLibraryScope(scope);
+  const assetLibraryId = trimmedString(assetLibrary?.id);
+  const scopedAssetLibraryId = trimmedString(
+    normalizedScope.assetLibrary?.id
+    || normalizedScope.assetLibrary?.asset_library_id
+    || normalizedScope.assetLibrary?.assetLibraryId,
+  );
+  const assetIds = normalizedScope.assets
+    .map((asset) => trimmedString(asset?.id))
+    .filter(Boolean)
+    .sort();
+  if (
+    !assetLibraryId
+    || !assetIds.length
+    || (scopedAssetLibraryId && scopedAssetLibraryId !== assetLibraryId)
+  ) {
+    return null;
+  }
+
+  const card = normalizeFashionDesignAssetImportTaskCardDraft({
+    importId: `scope-${stableTaskDigest([assetLibraryId, ...assetIds])}`,
+    assetLibraryId,
+    assetLibraryName: assetLibrary.name,
+    datasetId: normalizedScope.datasetIds[0] || '',
+    requestedAssetCount: normalizedScope.assetCount,
+    batchResponse: {
+      accepted: true,
+      asset_count: normalizedScope.assetCount,
+      items: [],
+    },
+    scope: normalizedScope,
+  });
+  const updatedAt = normalizedScope.assets
+    .map((asset) => trimmedString(asset?.updatedAt || asset?.createdAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1)
+    || trimmedString(assetLibrary.updatedAt || assetLibrary.createdAt);
+  const nextAction = card.status === 'failed'
+    ? '检查失败状态后，在受控窗口内重试。'
+    : card.status === 'completed'
+      ? '资产画像已可用于图库筛选、问答和报表供料。'
+      : '打开资产库查看最新解析状态。';
+
+  return {
+    id: card.id,
+    title: card.title,
+    capability: 'customer_artifact_request',
+    route: 'asset_gallery_import_task',
+    status: card.status,
+    summary: card.subtitle,
+    resultSummary: {
+      summary: card.subtitle,
+      findings: [
+        '字段账本：仅展示提示、数据源、解析状态与验证回执。',
+        ...card.sourceLines,
+      ],
+      recommendedNextActions: [nextAction],
+      warnings: [],
+    },
+    createdAt: updatedAt,
+    permissionScope: 'selected_dataset_and_asset_library',
+    retryable: card.status === 'failed',
+    assetImportTaskCard: card,
+  };
+}
+
 export function normalizeAssetLibraryScope(payload) {
   const summary = payload?.summary || payload || {};
   const datasets = Array.isArray(summary.datasets) ? summary.datasets : [];
@@ -651,6 +719,18 @@ function stableTaskToken(value) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 140)
     || 'draft';
+}
+
+function stableTaskDigest(values) {
+  let left = 0x811c9dc5;
+  let right = 0x9e3779b9;
+  const input = (values || []).map((value) => trimmedString(value)).join('|');
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    left = Math.imul(left ^ code, 0x01000193) >>> 0;
+    right = Math.imul(right ^ (code + index), 0x85ebca6b) >>> 0;
+  }
+  return `${left.toString(16).padStart(8, '0')}${right.toString(16).padStart(8, '0')}`;
 }
 
 function normalizeTextList(values) {

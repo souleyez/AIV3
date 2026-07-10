@@ -7,6 +7,7 @@ import {
   assetParseStatusEntries,
   assetProfileKindOptions,
   buildAssetLibraryCreatePayload,
+  buildFashionDesignAssetImportShelfTask,
   buildFashionDesignImageAssetImportBatchPayload,
   buildFashionDesignImageAssetImportPayload,
   filterAssetProfileHints,
@@ -559,5 +560,70 @@ describe('asset library view model', () => {
     assert.equal(serialized.includes('objects/private'), false);
     assert.equal(serialized.includes('https://example.com'), false);
     assert.equal(/object[_-]?key/i.test(serialized), false);
+  });
+
+  it('builds one persistent shelf task from asset-library scope and deduplicates reordered assets', () => {
+    const assetLibrary = {
+      id: 'library-private-001',
+      name: '服装设计资产库',
+      updatedAt: '2026-07-10T10:00:00Z',
+    };
+    const scope = {
+      summary: {
+        asset_library: { id: 'library-private-001', name: '服装设计资产库' },
+        dataset_ids: ['dataset-private-001'],
+        asset_count: 2,
+        asset_parse_status_counts: { pending: 2 },
+        asset_parse_run_count: 2,
+        assets: [
+          {
+            id: 'asset-b',
+            title: 'workwear.webp',
+            object_key: 'objects/private/workwear.webp',
+            updated_at: '2026-07-10T10:02:00Z',
+          },
+          {
+            id: 'asset-a',
+            title: 'spring-dress.png',
+            source_id: 'https://example.com/spring-dress.png',
+            updated_at: '2026-07-10T10:01:00Z',
+          },
+        ],
+      },
+    };
+
+    const first = buildFashionDesignAssetImportShelfTask({ assetLibrary, scope });
+    const reordered = buildFashionDesignAssetImportShelfTask({
+      assetLibrary,
+      scope: {
+        summary: {
+          ...scope.summary,
+          assets: [...scope.summary.assets].reverse(),
+        },
+      },
+    });
+
+    assert.equal(first.id, reordered.id);
+    assert.equal(first.capability, 'customer_artifact_request');
+    assert.equal(first.route, 'asset_gallery_import_task');
+    assert.equal(first.status, 'queued');
+    assert.equal(first.resultSummary.findings.some((item) => item.startsWith('字段账本：')), true);
+    assert.equal(first.assetImportTaskCard.behavior.cardPersistsAfterCreation, true);
+    assert.equal(first.assetImportTaskCard.detail.dataSources.rawValuesIncluded, false);
+
+    const serialized = JSON.stringify(first);
+    assert.equal(serialized.includes('objects/private'), false);
+    assert.equal(serialized.includes('https://example.com'), false);
+    assert.equal(/object[_-]?key/i.test(serialized), false);
+    assert.equal(buildFashionDesignAssetImportShelfTask({ assetLibrary, scope: { summary: {} } }), null);
+    assert.equal(buildFashionDesignAssetImportShelfTask({
+      assetLibrary,
+      scope: {
+        summary: {
+          ...scope.summary,
+          asset_library: { id: 'another-library' },
+        },
+      },
+    }), null);
   });
 });
