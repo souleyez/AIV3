@@ -10,7 +10,7 @@
 
 **Plan Date:** 2026-07-10
 
-**Revision:** R3，增加 PostgreSQL 18.4 停机冷迁移任务；用户明确系统当前未使用且不采用蓝绿升级。
+**Revision:** R4，PostgreSQL 18.4 停机冷迁移已完成并记录验证、备份与回滚凭据。
 
 ---
 
@@ -1270,9 +1270,9 @@ npm run smoke:v3-client-artifact-joint -- --preflight --base-url <approved-platf
 3. 使用版本化 PostgreSQL 17 工具生成 globals 和数据库 custom-format 逻辑备份，并校验备份文件非空、`pg_restore --list` 可读。
 4. 对 `/var/lib/pgsql/17/data` 创建只读归档或快照，记录 checksum；不删除原目录。
 5. 安装 PostgreSQL 18.4 server/contrib，初始化 checksums-on 新集群，迁移 reviewed `postgresql.conf` 和 `pg_hba.conf` 设置。
-6. 在 5432 启动 PostgreSQL 18，恢复 globals 和 `ai_data_platform_v3`，运行 `ANALYZE`。
+6. 在 5432 启动 PostgreSQL 18，恢复 globals、`ai_data_platform_v3`、`aidp_client` 和 `home_platform`，运行 `ANALYZE`。
 7. 验证版本 18.4、checksums on、SCRAM、locale、pgcrypto、64+ 表、关键行数、GIN/全文检索索引和 migration replay。
-8. 将 15 个 AIV3 unit 的 `After=` 从 `postgresql-17.service` 改为 `postgresql-18.service`，daemon-reload 后启动服务。
+8. 将 15 个 AIV3 unit 和 `home-db-backup.service` 的依赖从 `postgresql-17.service` 改为 `postgresql-18.service`，同步更新备份脚本，daemon-reload 后启动服务。
 9. 验证全部目标服务 active、health/ready、Web、普通问答、文档、检索、静态页和 feature-off 状态。
 10. 禁用 PostgreSQL 17 自启动，但保留 17 数据目录和全部备份；清理另行审批。
 
@@ -1281,6 +1281,17 @@ npm run smoke:v3-client-artifact-joint -- --preflight --base-url <approved-platf
 **Stop:** 任一备份不可读、恢复对象/行数不一致、pgcrypto/索引缺失、系统 unit 未全部切换、health/ready 失败或出现未知写入。
 
 **Done:** PostgreSQL 18.4 active、checksums on、AIV3 全部使用新服务且业务回归通过；PG17 数据目录和备份仍保留。
+
+**Completion receipt (2026-07-10):**
+
+- Release gate: `f9463861ced34022fb98ed959bccda015c8b7800` 已推送到 `origin/main`；GitHub Actions `29075435644` 为 `success`。
+- Backup: `/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`，约 199 MB；globals、三个 custom-format 数据库 dump、restore list 和 PG17 物理归档均通过 SHA-256 校验。
+- Cluster: PostgreSQL `18.4` active/enabled，data checksums `on`，UTF-8、`en_US.UTF-8`、`Asia/Shanghai` 和 SCRAM 设置已核对；PostgreSQL 17 inactive/disabled。
+- Data parity: `ai_data_platform_v3` 64 表 / 106,974 行，`aidp_client` 42 表 / 237 行，`home_platform` 55 表 / 3,258 行；三库逐表行数均与 PG17 基线完全一致。
+- Database objects: 主库 205 个索引、9 个 GIN 索引、0 个 invalid index、0 个 unvalidated constraint；`pgcrypto` 1.4 摘要函数验证通过。
+- Runtime: 17 个维护前 active 的 AIV3 服务全部恢复 active；本机 API `healthz`、`readyz` 和 Web 均为 HTTP 200，公网 `https://v3.elepcloud.com/` 为 HTTP 200，切换后服务 priority-error 日志为 0。
+- Operations: 15 个 AIV3 unit 加 `home-db-backup.service` 已改为 PG18 依赖；备份任务实际执行成功，新 dump 可由 PG18 `pg_restore --list` 读取。
+- Rollback retained: `/var/lib/pgsql/17/data`、PG17 RPM、systemd 原件和上述备份均未删除；后续清理必须另行审批。
 
 ---
 

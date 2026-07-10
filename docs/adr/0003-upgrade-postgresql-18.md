@@ -2,14 +2,14 @@
 
 ## Status
 
-Accepted
+Implemented on 2026-07-10
 
 ## Context
 
-DataMax V3 uses PostgreSQL as its primary transactional state store. The
-production host currently runs PostgreSQL 17.9, while the local compose file
+DataMax V3 uses PostgreSQL as its primary transactional state store. Before the
+cutover, the production host ran PostgreSQL 17.9, while the local compose file
 still referenced PostgreSQL 16 and the README referenced 17.9. PostgreSQL 18.4
-is the current supported stable release.
+was selected as the supported stable target release.
 
 The production database is currently small enough for a reviewed maintenance
 window: the database is about 279 MB and the PostgreSQL 17 data directory is
@@ -19,22 +19,25 @@ upgrade.
 
 ## Decision
 
-Upgrade production from PostgreSQL 17.9 to PostgreSQL 18.4 in a cold maintenance
-window after the current application release is committed and pushed.
+Production was upgraded from PostgreSQL 17.9 to PostgreSQL 18.4 in a cold
+maintenance window after application release commit
+`f9463861ced34022fb98ed959bccda015c8b7800` was pushed and its GitHub Actions run
+completed successfully.
 
-The upgrade will:
+The implemented upgrade:
 
-- stop all AIV3 services before the final backup;
-- create both logical and filesystem backups before changing packages;
-- install PostgreSQL 18.4 and `postgresql18-contrib` from the configured PGDG
-  repository;
-- initialize a clean PostgreSQL 18 cluster with data checksums enabled;
-- restore roles and the `ai_data_platform_v3` database with versioned
-  PostgreSQL 18 tools;
-- update systemd dependencies from `postgresql-17.service` to
-  `postgresql-18.service`;
-- keep the PostgreSQL 17 data directory and backups until a separately approved
-  cleanup.
+- stopped all AIV3 services before the final backup;
+- created logical dumps for `ai_data_platform_v3`, `aidp_client`, and
+  `home_platform`, plus a filesystem archive of the PostgreSQL 17 data
+  directory;
+- installed PostgreSQL 18.4 and `postgresql18-contrib` from signed PGDG RPMs;
+- initialized a clean PostgreSQL 18 cluster with data checksums enabled;
+- restored roles and all three user databases with versioned PostgreSQL 18
+  tools, then proved exact per-table row-count parity;
+- updated 15 AIV3 systemd dependencies and the Home database backup unit from
+  `postgresql-17.service` to `postgresql-18.service`;
+- kept the PostgreSQL 17 data directory and verified backups until a separately
+  approved cleanup.
 
 No application schema change, feature enablement, backfill, or production data
 cleanup is allowed in the database upgrade window.
@@ -51,8 +54,8 @@ cleanup is allowed in the database upgrade window.
 ### Negative
 
 - Requires a maintenance window and a full service stop.
-- Fifteen AIV3 service units currently reference `postgresql-17.service` and
-  must be updated together.
+- Fifteen AIV3 service units and one database backup unit had to be updated
+  together.
 - Logical restore must preserve roles, ownership, extensions, grants, indexes,
   and full-text-search behavior.
 
