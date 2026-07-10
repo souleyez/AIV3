@@ -410,6 +410,8 @@ export function buildFashionDesignAssetImportShelfTask({ assetLibrary, scope } =
     : card.status === 'completed'
       ? '资产画像已可用于图库筛选、问答和报表供料。'
       : '打开资产库查看最新解析状态。';
+  const fieldLedgerSummary = '字段账本：仅展示提示、数据源、解析状态与验证回执。';
+  const visibleSummary = `${card.subtitle} ${fieldLedgerSummary}`;
 
   return {
     id: card.id,
@@ -417,11 +419,11 @@ export function buildFashionDesignAssetImportShelfTask({ assetLibrary, scope } =
     capability: 'customer_artifact_request',
     route: 'asset_gallery_import_task',
     status: card.status,
-    summary: card.subtitle,
+    summary: visibleSummary,
     resultSummary: {
-      summary: card.subtitle,
+      summary: visibleSummary,
       findings: [
-        '字段账本：仅展示提示、数据源、解析状态与验证回执。',
+        fieldLedgerSummary,
         ...card.sourceLines,
       ],
       recommendedNextActions: [nextAction],

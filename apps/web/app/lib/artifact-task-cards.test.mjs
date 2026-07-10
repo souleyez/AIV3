@@ -327,6 +327,7 @@ describe('artifact task cards', () => {
     assert.equal(cards[0].kind, 'codex_task');
     assert.equal(cards[0].title, '任务：图库任务：服装设计资产库');
     assert.equal(cards[0].status, 'queued');
+    assert.equal(cards[0].summary.includes('字段账本：'), true);
     assert.equal(cards[0].detail.resultItems.some((item) => item.text.startsWith('字段账本：')), true);
 
     const serialized = JSON.stringify(cards[0]);

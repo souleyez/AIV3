@@ -607,6 +607,7 @@ describe('asset library view model', () => {
     assert.equal(first.capability, 'customer_artifact_request');
     assert.equal(first.route, 'asset_gallery_import_task');
     assert.equal(first.status, 'queued');
+    assert.equal(first.resultSummary.summary.includes('字段账本：'), true);
     assert.equal(first.resultSummary.findings.some((item) => item.startsWith('字段账本：')), true);
     assert.equal(first.assetImportTaskCard.behavior.cardPersistsAfterCreation, true);
     assert.equal(first.assetImportTaskCard.detail.dataSources.rawValuesIncluded, false);
