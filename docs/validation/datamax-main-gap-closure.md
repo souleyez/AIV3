@@ -319,6 +319,31 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - Task 9 is `PASS` with independent commit, CI, feature-off deployment, database gate, live evidence, rollback, and retained no-delete manifest;
   - Task 10 is `READY` for its independent asset-evidence migration and release slice.
 
+## 2026-07-11 Task 10 Asset Evidence, Unified Retrieval, Live Canary, and PASS
+
+- Implementation and local gates:
+  - isolated worktree `ai-data-platform-v3-task10` implemented append-only migration `0018_asset_retrieval_evidences.sql`, direct asset/profile evidence identities, membership-guarded append-only storage, accepted-profile materialization, safe evidence references, unified document/asset ranking, compact assistant supply, and default-off `ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED`;
+  - implementation intentionally did not fabricate document/chunk rows, add a parser service, copy raw provider JSON, or persist asset locator values; `crates/platform-api/src/lib.rs` was included because the real runtime query/materialization path lives in platform-api rather than retrieval-worker;
+  - the initial migration test failed before `0018` was added, preserving the red phase; storage migrations 6/6, storage asset retrieval 2/2, platform asset-profile supply 14/14, assistant model supply 20/20, contracts unified-hit/no-asset compatibility, retrieval-worker gate registration, workspace check, fmt, main streaming self-test, and diff check then passed;
+  - implementation commit `08b37723ace5d14a8a5c1b8aeba7490f3db47f3c` was fast-forward pushed to `origin/main`; GitHub Actions run `29155355921` passed Rust Minimal and No-Credential Smoke.
+- Disposable database and feature-off release:
+  - a PostgreSQL 18.4 disposable database applied the real migration and passed `asset_retrieval_database_gate_proves_scope_idempotency_and_search`, covering repeat idempotency, multiple memberships, cross-dataset/tenant denial, and permission-safe search; it was dropped and `/srv/aiv3/backups/task10-disposable-db-08b37723-20260711T140524Z/report.json` retained the safe receipt;
+  - preflight showed a clean server at `8bc4fe059719bfce54e1e0593582fcae9b9ea3b5`, target `08b37723...`, 34 GB free, active API/ingest/retrieval/Web, health/ready 200, all related flags off, no evidence table, and zero Task 10 disposable databases;
+  - the first backup command correctly stopped because default `/usr/bin/pg_dump` was 13.23 against server 18.4; no release mutation had occurred. Retrying with `/usr/pgsql-18/bin/pg_dump` produced a 57,306,878-byte custom dump and 515-line restore list under `/srv/aiv3/backups/task10-feature-off-08b37723-20260711T141257Z`;
+  - the server fast-forwarded exactly to `08b37723...`, `cargo fmt --check` and release platform-api build passed, evidence-write was explicitly set false, and only platform-api restarted. Migration `0018` applied with 0 initial rows; ingest/retrieval/Web PIDs remained unchanged, health/ready returned 200, and priority-error lines were 0;
+  - feature-off regression passed storage migrations 6/6, storage asset retrieval 2/2, retrieval-worker asset gate registration, platform asset-profile supply 14/14, assistant supply 20/20, public contract guard, main streaming self-test, and static-page self-test. The real runtime delta required only platform-api; retrieval-worker source changed only to carry the disposable-DB gate, so it was not restarted without a runtime reason.
+- Controlled live canary:
+  - the retained Task 9 private user/dataset/library scope had one active asset membership and one exact workflow-version-matched accepted profile; a fresh one-time local-key bootstrap plus a same-user private document-control dataset were created through product APIs;
+  - the control Markdown was registered and ingested through the existing API/worker path; the document question returned one document retrieval-evidence item and zero asset-profile hints, proving ordinary document supply before asset evidence enablement;
+  - early guarded attempts found and corrected two canary-shape issues without leaving the flag enabled: `intent=question_answering` expanded the request to all visible datasets, and the natural-language query did not overlap the sparse pilot profile's safe search terms. Each failure window automatically restored evidence-write false, restarted only API, revoked the session, and retained its no-delete objects;
+  - one recovered write-on window materialized the single eligible asset evidence row; the successful final window used exact selected-dataset scope and a safe `asset_kind` query term. Write-on and write-off responses each contained one `asset-evidence://` reference, evidence rows stayed `1 -> 1 -> 1`, and the safety query found zero invalid metadata/hash/object-key leakage rows;
+  - final safe receipt is `/srv/aiv3/backups/task10-live-08b37723-20260711T144614Z/report.txt`; it records document evidence 1, document asset hints 0, asset refs 1/1, session revoked, final flag false, health/ready 200, and no automatic cleanup;
+  - final rollback regression again passed public contract, main streaming, static-page, asset-profile supply 14/14, and assistant supply 20/20. Final API/ingest/retrieval/Web PIDs are `922486`/`872657`/`601686`/`712419`; priority-error lines are 0 and the remote worktree is clean at `08b37723...`.
+- Retention and status:
+  - mode-0600 `all-attempts-cleanup-manifest.private.json` under the successful live directory consolidates 8 attempt backup directories, 7 test datasets, 4 control documents, 8 assistant runs, 4 revoked sessions, and 1 asset evidence row; unrevoked session count is 0, `no_delete=true`, and no cleanup was executed;
+  - no credential, Cookie, local key, database URL, provider payload, raw object key, customer data, automatic delete, 10-server action, or 120-server action was recorded in shared receipts;
+  - Task 10 is `PASS`; `ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED=false`; Task 11 is `READY` for its independent private third-party asset-import slice.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
