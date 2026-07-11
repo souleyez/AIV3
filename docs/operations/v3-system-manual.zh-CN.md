@@ -112,6 +112,26 @@ ASSET_PARSE_PROVIDER_TIMEOUT_MS=120000
 
 发布时必须先以 `ASSET_PARSE_ENABLED=false` 部署并回归普通文档 ingest；只有在独立审批窗口内才可对单一测试租户和单张测试图片开启解析。窗口结束后重新关闭开关并重启 `platform-api` 与 `ingest-worker`。
 
+单图 pilot 必须使用 `smoke:fashion-design-asset-import` 的 `parser-pilot` 模式，不得复用会上传 PNG+ZIP 的普通 `execute` 模式。执行前先确认批准的 dataset 已经挂载到批准的 asset library、parser 队列没有遗留任务，并把新鲜测试会话、scope 和 approval 只放在 0600 私有 operator note 或当前进程环境中。推荐在 PowerShell 当前进程设置以下变量，禁止把真实值写进命令历史或共享回执：
+
+```powershell
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BASE_URL='<approved V3 base>'
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_COOKIE='<fresh test session; private process only>'
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_DATASET_ID='<approved dataset uuid>'
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_ASSET_LIBRARY_ID='<approved asset library uuid>'
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_APPROVAL_ID='<reviewed Task 9 live approval id>'
+$env:FASHION_DESIGN_ASSET_PARSER_PILOT='true'
+$env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_ACK_LIVE_WRITE='true'
+$env:FASHION_DESIGN_ASSET_PARSER_PILOT_ACK_PROVIDER_CALL='true'
+$env:FASHION_DESIGN_ASSET_PARSER_PILOT_TIMEOUT_MS='180000'
+$env:FASHION_DESIGN_ASSET_PARSER_PILOT_ALLOWED_HOSTS='v3.elepcloud.com'
+npm run smoke:fashion-design-asset-import -- --pretty
+```
+
+该模式只上传一个 PNG、只调用单条资产导入、禁止 ZIP/batch，并用资产库 scope 的状态增量轮询终态。为避免把 session 发往错误主机，公网 base 必须使用标准 HTTPS 端口且主机名必须出现在 `FASHION_DESIGN_ASSET_PARSER_PILOT_ALLOWED_HOSTS`（默认仅 `v3.elepcloud.com`）；只有 `127.0.0.1`、`::1` 或 `localhost` loopback 可使用 HTTP，且 base URL 不得包含用户名、密码、query、fragment 或额外路径。共享回执只记录资产身份哈希、状态增量、poll 次数、队列等待、终态耗时和 dry-run cleanup manifest；不得包含原始 asset/dataset/library id、对象定位信息、session、approval 原值或 provider payload，cleanup manifest 也不得自动执行删除。终态允许 `completed`、`partial` 或带脱敏错误码的 `failed`；180 秒未到终态、队列等待超过五分钟、状态增量无法归因到唯一任务或普通 ingest 回归失败都必须停止。
+
+pilot 结束后先恢复 `ASSET_PARSE_ENABLED=false`，再恢复 `MAIN_SITE_ASSET_IMPORT_ENABLED=false` 并清空租户 allowlist，只重启 `platform-api` 与 `ingest-worker`。随后验证新进程中的开关为 false、没有新 parser task、普通 ingest/health/ready 正常，并复核 runner 已生成的 cleanup manifest，不自动删除测试资产。最后清空当前进程中的 session、scope、approval 和两项 ack 变量。
+
 ## 5. 文档知识库
 
 ### 5.1 支持内容

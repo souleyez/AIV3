@@ -2,11 +2,13 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 
 import {
+  assetLibraryContainsDataset,
   assetProfileKindOptions,
   buildFashionDesignImageAssetImportBatchPayload,
   buildFashionDesignImageAssetImportPayload,
@@ -21,6 +23,8 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3000';
 const DEFAULT_OUTPUT_DIR = 'target/fashion-design-asset-import-smoke';
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_PARSER_PILOT_TIMEOUT_MS = 180_000;
+const PARSER_PILOT_POLL_INTERVAL_MS = 2_000;
 const PNG_FIXTURE_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 const ZIP_FIXTURE_BASE64 =
@@ -37,10 +41,21 @@ function parseArgs(argv) {
     localThreadId: process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_LOCAL_THREAD_ID || '',
     approvalId: process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_APPROVAL_ID || '',
     timeoutMs: Number(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
+    parserPilotTimeoutMs: Number(
+      process.env.FASHION_DESIGN_ASSET_PARSER_PILOT_TIMEOUT_MS
+        || DEFAULT_PARSER_PILOT_TIMEOUT_MS,
+    ),
+    parserPilotAllowedHosts: normalizeParserPilotAllowedHosts(
+      process.env.FASHION_DESIGN_ASSET_PARSER_PILOT_ALLOWED_HOSTS,
+    ),
     selfTest: parseBoolean(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_SELF_TEST),
     preflight: parseBoolean(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_PREFLIGHT),
     execute: parseBoolean(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_EXECUTE),
+    parserPilot: parseBoolean(process.env.FASHION_DESIGN_ASSET_PARSER_PILOT),
     ackLiveWrite: parseBoolean(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_ACK_LIVE_WRITE),
+    ackProviderCall: parseBoolean(
+      process.env.FASHION_DESIGN_ASSET_PARSER_PILOT_ACK_PROVIDER_CALL,
+    ),
     pretty: parseBoolean(process.env.FASHION_DESIGN_ASSET_IMPORT_SMOKE_PRETTY),
   };
 
@@ -74,14 +89,21 @@ function parseArgs(argv) {
     } else if (arg === '--timeout-ms') {
       args.timeoutMs = Number(requireValue(arg, next));
       index += 1;
+    } else if (arg === '--parser-pilot-timeout-ms') {
+      args.parserPilotTimeoutMs = Number(requireValue(arg, next));
+      index += 1;
     } else if (arg === '--self-test') {
       args.selfTest = true;
     } else if (arg === '--preflight') {
       args.preflight = true;
     } else if (arg === '--execute') {
       args.execute = true;
+    } else if (arg === '--parser-pilot') {
+      args.parserPilot = true;
     } else if (arg === '--ack-live-write') {
       args.ackLiveWrite = true;
+    } else if (arg === '--ack-provider-call') {
+      args.ackProviderCall = true;
     } else if (arg === '--pretty') {
       args.pretty = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -92,29 +114,47 @@ function parseArgs(argv) {
     }
   }
 
-  const modes = [args.selfTest, args.preflight, args.execute].filter(Boolean).length;
+  const modes = [args.selfTest, args.preflight, args.execute, args.parserPilot]
+    .filter(Boolean).length;
   if (modes !== 1) {
-    throw new Error('choose exactly one mode: --self-test, --preflight, or --execute');
+    throw new Error(
+      'choose exactly one mode: --self-test, --preflight, --execute, or --parser-pilot',
+    );
   }
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 10_000) {
     throw new Error('--timeout-ms must be at least 10000');
   }
-  if (args.execute && !args.ackLiveWrite) {
-    throw new Error('--execute requires --ack-live-write');
+  if (!Number.isInteger(args.parserPilotTimeoutMs)
+    || args.parserPilotTimeoutMs < 10_000
+    || args.parserPilotTimeoutMs > DEFAULT_PARSER_PILOT_TIMEOUT_MS) {
+    throw new Error('--parser-pilot-timeout-ms must be between 10000 and 180000');
   }
-  if (args.execute && !args.approvalId) {
-    throw new Error('--execute requires --approval-id for auditability');
+  const liveMode = args.execute || args.parserPilot;
+  if (liveMode && !args.ackLiveWrite) {
+    throw new Error('live mode requires --ack-live-write');
   }
-  if (args.execute && !args.datasetId) {
-    throw new Error('--execute requires --dataset-id for an existing writable V3 dataset');
+  if (args.parserPilot && !args.ackProviderCall) {
+    throw new Error('--parser-pilot requires --ack-provider-call');
   }
-  if (args.execute && !args.assetLibraryId) {
-    throw new Error('--execute requires --asset-library-id for an existing V3 asset library');
+  if (liveMode && !args.approvalId) {
+    throw new Error('live mode requires --approval-id for auditability');
   }
-  if (args.execute && !args.cookie && !args.bearer) {
-    throw new Error('--execute requires --cookie or --bearer for a V3 user session');
+  if (liveMode && !args.datasetId) {
+    throw new Error('live mode requires --dataset-id for an existing writable V3 dataset');
+  }
+  if (liveMode && !args.assetLibraryId) {
+    throw new Error('live mode requires --asset-library-id for an existing V3 asset library');
+  }
+  if (liveMode && !args.cookie && !args.bearer) {
+    throw new Error('live mode requires --cookie or --bearer for a V3 user session');
   }
   args.baseUrl = normalizeBaseUrl(args.baseUrl);
+  if (args.parserPilot
+    && !parserPilotBaseUrlAllowed(args.baseUrl, args.parserPilotAllowedHosts)) {
+    throw new Error(
+      '--parser-pilot base URL must use an allowed HTTPS host or loopback HTTP, without credentials, query, fragment, or extra path',
+    );
+  }
 
   return args;
 }
@@ -145,12 +185,23 @@ Usage:
     --dataset-id "<existing dataset uuid>" \\
     --asset-library-id "<existing asset library uuid>"
 
+  npm run smoke:fashion-design-asset-import -- --parser-pilot \\
+    --ack-live-write --ack-provider-call \\
+    --approval-id "<reviewed parser pilot id>" \\
+    --base-url https://v3.elepcloud.com \\
+    --cookie "<fresh V3 test session cookie>" \\
+    --dataset-id "<approved dataset uuid>" \\
+    --asset-library-id "<approved asset library uuid>" \\
+    --parser-pilot-timeout-ms 180000
+
 Checks:
   - writes local-only PNG and ZIP fixtures under target/
   - builds single and batch fashion-design image import payloads
   - validates ZIP package payload shape without network calls
   - validates normalized import responses and asset-library profile hints
   - execute mode uploads fixtures, imports one image plus one ZIP, then checks scope-summary
+  - parser-pilot mode requires a pre-attached scope, uploads exactly one PNG, imports one asset,
+    and polls only aggregate scope deltas for a terminal parser status within 180 seconds
   - reports only counts, booleans, and hashes; no object keys, URLs, cookies, or tokens
 `);
 }
@@ -165,6 +216,33 @@ function resolveOutputDir(args) {
 
 function normalizeBaseUrl(value) {
   return String(value || '').replace(/\/+$/, '');
+}
+
+function normalizeParserPilotAllowedHosts(value) {
+  const configured = String(value || '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(configured.length ? configured : ['v3.elepcloud.com'])];
+}
+
+function parserPilotBaseUrlAllowed(value, allowedHosts = ['v3.elepcloud.com']) {
+  try {
+    const url = new URL(value);
+    const loopback = ['127.0.0.1', '::1', 'localhost'].includes(url.hostname.toLowerCase());
+    const publicHostAllowed = url.protocol === 'https:'
+      && allowedHosts.includes(url.hostname.toLowerCase())
+      && (url.port === '' || url.port === '443');
+    const transportAllowed = publicHostAllowed || (loopback && url.protocol === 'http:');
+    return transportAllowed
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash
+      && (url.pathname === '' || url.pathname === '/');
+  } catch {
+    return false;
+  }
 }
 
 function sha256(bytes) {
@@ -215,7 +293,7 @@ async function requestJson(args, route, options = {}) {
     method: options.method || 'GET',
     headers: options.headers || jsonHeaders(args),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  }, args.timeoutMs);
+  }, options.timeoutMs || args.timeoutMs);
   const text = await response.text();
   let body = null;
   if (text) {
@@ -6708,6 +6786,163 @@ function buildPreflightReport(
   return attachMachineSummary(report);
 }
 
+function parserPilotCountMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).map(([status, count]) => [
+      String(status || '').trim().toLowerCase(),
+      Math.max(0, Number(count) || 0),
+    ]),
+  );
+}
+
+function summarizeParserPilotObservation({
+  baselineStatusCounts,
+  currentStatusCounts,
+  assetId,
+  assets,
+  elapsedMs,
+}) {
+  const baseline = parserPilotCountMap(baselineStatusCounts);
+  const current = parserPilotCountMap(currentStatusCounts);
+  const trackedStatuses = [
+    'pending',
+    'processing',
+    'retrying',
+    'completed',
+    'partial',
+    'failed',
+  ];
+  const statusDeltas = Object.fromEntries(trackedStatuses.map((status) => [
+    status,
+    Math.max(0, (current[status] || 0) - (baseline[status] || 0)),
+  ]));
+  const attributableStatusCount = Object.values(statusDeltas)
+    .reduce((total, count) => total + count, 0);
+  const terminalStatus = ['completed', 'partial', 'failed']
+    .find((status) => statusDeltas[status] === 1) || '';
+  const queueStarted = ['processing', 'retrying', 'completed', 'partial', 'failed']
+    .some((status) => statusDeltas[status] === 1);
+  const normalizedAssetId = String(assetId || '').trim();
+  const asset = (Array.isArray(assets) ? assets : [])
+    .find((item) => String(item?.id || '').trim() === normalizedAssetId) || null;
+  const assetProfileCount = Number(asset?.profileCount || 0) || 0;
+  const assetPresent = Boolean(asset && normalizedAssetId);
+  return {
+    statusDeltas,
+    attributableStatusCount,
+    pendingCreated: statusDeltas.pending === 1,
+    queueStarted,
+    terminal: Boolean(terminalStatus && attributableStatusCount === 1 && assetPresent),
+    terminalStatus,
+    assetPresent,
+    assetProfileCount,
+    elapsedMs: Math.max(0, Number(elapsedMs) || 0),
+  };
+}
+
+function parserPilotSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollParserPilotTerminal(args, baselineScope, assetId, startedAtMs) {
+  const deadlineAtMs = startedAtMs + args.parserPilotTimeoutMs;
+  const pollIntervalMs = Math.max(
+    1,
+    Math.min(
+      PARSER_PILOT_POLL_INTERVAL_MS,
+      Number(args.parserPilotPollIntervalMs || PARSER_PILOT_POLL_INTERVAL_MS) || 1,
+    ),
+  );
+  let queueWaitMs = null;
+  let pollCount = 0;
+  let pollErrorCount = 0;
+  let observation = summarizeParserPilotObservation({
+    baselineStatusCounts: baselineScope.assetParseStatusCounts,
+    currentStatusCounts: baselineScope.assetParseStatusCounts,
+    assetId,
+    assets: baselineScope.assets,
+    elapsedMs: 0,
+  });
+
+  while (Date.now() <= deadlineAtMs) {
+    const requestBudgetMs = deadlineAtMs - Date.now();
+    if (requestBudgetMs <= 0) break;
+    let scopeResponse;
+    try {
+      scopeResponse = await requestJson(
+        args,
+        `/api/v3/asset-libraries/${encodeURIComponent(args.assetLibraryId)}/scope-summary`,
+        { timeoutMs: Math.min(args.timeoutMs, requestBudgetMs) },
+      );
+    } catch {
+      pollErrorCount += 1;
+      const remainingMs = deadlineAtMs - Date.now();
+      if (remainingMs <= 0) break;
+      await parserPilotSleep(Math.min(pollIntervalMs, remainingMs));
+      continue;
+    }
+    const scope = normalizeAssetLibraryScope(scopeResponse);
+    const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+    observation = summarizeParserPilotObservation({
+      baselineStatusCounts: baselineScope.assetParseStatusCounts,
+      currentStatusCounts: scope.assetParseStatusCounts,
+      assetId,
+      assets: scope.assets,
+      elapsedMs,
+    });
+    pollCount += 1;
+    if (queueWaitMs === null && observation.queueStarted) {
+      queueWaitMs = elapsedMs;
+    }
+    if (observation.terminal) {
+      return {
+        ...observation,
+        scope,
+        pollCount,
+        pollErrorCount,
+        queueWaitMs: queueWaitMs ?? elapsedMs,
+        terminalLatencyMs: elapsedMs,
+        timedOut: false,
+      };
+    }
+    const remainingMs = deadlineAtMs - Date.now();
+    if (remainingMs <= 0) break;
+    await parserPilotSleep(Math.min(pollIntervalMs, remainingMs));
+  }
+
+  return {
+    ...observation,
+    scope: null,
+    pollCount,
+    pollErrorCount,
+    queueWaitMs,
+    terminalLatencyMs: null,
+    timedOut: true,
+  };
+}
+
+async function uploadParserPilotFixture(args, fixtures) {
+  const formData = new FormData();
+  formData.append('files', new Blob([fixtures.pngBuffer], { type: 'image/png' }), 'parser-pilot.png');
+  const response = await requestForm(args, '/api/v3/local-document-uploads', formData);
+  const files = Array.isArray(response?.files) ? response.files : [];
+  const pngFile = files[0] || null;
+  if (files.length !== 1 || !pngFile?.object_key) {
+    throw new Error('parser pilot upload must return exactly one saved PNG reference');
+  }
+  return {
+    pngFile,
+    summary: {
+      savedFileCount: files.length,
+      pngSaved: true,
+      zipSaved: false,
+      pngSize: Number(pngFile.size || fixtures.pngBytes) || 0,
+      pngContentType: pngFile.content_type || 'image/png',
+    },
+  };
+}
+
 async function uploadLiveFixtures(args, fixtures) {
   const formData = new FormData();
   formData.append('files', new Blob([fixtures.pngBuffer], { type: 'image/png' }), 'spring-dress.png');
@@ -6766,6 +7001,413 @@ function buildLiveBatchPayload(args, fixtures, upload) {
   assert.equal(batch.payload.assets.length, 1);
   assert.equal(batch.payload.packages.length, 1);
   return batch;
+}
+
+async function executeParserPilot(args) {
+  const fixtures = await writeFixtureFiles(args);
+  const baselineScopeResponse = await requestJson(
+    args,
+    `/api/v3/asset-libraries/${encodeURIComponent(args.assetLibraryId)}/scope-summary`,
+  );
+  const baselineScope = normalizeAssetLibraryScope(baselineScopeResponse);
+  const scopePreAttached = assetLibraryContainsDataset(baselineScope, args.datasetId);
+  if (!scopePreAttached) {
+    throw new Error('parser pilot requires the approved dataset to be pre-attached to the asset library');
+  }
+
+  const upload = await uploadParserPilotFixture(args, fixtures);
+  const approvalHash = sha256(Buffer.from(args.approvalId));
+  const single = buildFashionDesignImageAssetImportPayload({
+    datasetId: args.datasetId,
+    assetLibraryId: args.assetLibraryId,
+    externalId: `task9-parser-pilot-${fixtures.runId}`,
+    title: `Task 9 parser pilot ${fixtures.runId.slice(0, 12)}`,
+    objectKey: upload.pngFile.object_key,
+    contentType: upload.pngFile.content_type || 'image/png',
+    profilePayload: {},
+    metadata: {
+      smoke: 'task9_asset_parser_pilot',
+      run_id: fixtures.runId,
+      approval_hash: approvalHash,
+    },
+  });
+  assert.deepEqual(single.errors, []);
+
+  const importStartedAtMs = Date.now();
+  const importResponse = await requestJson(
+    args,
+    '/api/v3/asset-imports/fashion-design-images',
+    { method: 'POST', body: single.payload },
+  );
+  const normalizedImport = normalizeFashionDesignImageAssetImportResponse(importResponse);
+  if (!normalizedImport.assetId || !normalizedImport.parseRunStatus) {
+    throw new Error('parser pilot import response is missing the asset or parse-run state');
+  }
+  const observation = await pollParserPilotTerminal(
+    args,
+    baselineScope,
+    normalizedImport.assetId,
+    importStartedAtMs,
+  );
+  const finalScope = observation.scope || baselineScope;
+  const assetIdentityHash = sha256(Buffer.from(normalizedImport.assetId));
+  const terminalStatusAllowed = ['completed', 'partial', 'failed']
+    .includes(observation.terminalStatus);
+  const terminalProfileStateConsistent = observation.terminalStatus === 'failed'
+    ? observation.assetProfileCount >= 1
+    : observation.assetProfileCount >= 2;
+  const cleanupManifest = buildPostExecuteCleanupManifestDryRun({
+    approvalHashSupplied: Boolean(args.approvalId),
+    liveReceiptSupplied: true,
+    assetCount: 1,
+    datasetMembershipCount: 1,
+    parseRunCount: 1,
+    profileCount: Math.max(1, observation.assetProfileCount),
+  });
+  const cleanupManifestSummary = summarizePostExecuteCleanupManifest(cleanupManifest);
+
+  const report = {
+    smoke: 'fashion-design-asset-import',
+    mode: 'parser_pilot',
+    parser_pilot: true,
+    execute: true,
+    generated_at: new Date().toISOString(),
+    target: {
+      base: redactedUrlSummary(args.baseUrl),
+      datasetIdPresent: true,
+      assetLibraryIdPresent: true,
+      authSupplied: true,
+      approvalSupplied: true,
+      providerCallAcknowledged: true,
+    },
+    fixture_summary: {
+      png_fixture_available: fixtures.pngBytes > 0,
+      zip_fixture_available: false,
+      png_bytes: fixtures.pngBytes,
+      zip_bytes: 0,
+      png_sha256: fixtures.pngSha256,
+    },
+    upload_summary: upload.summary,
+    import_summary: {
+      accepted: true,
+      assetCount: 1,
+      packageCount: 0,
+      expandedAssetCount: 0,
+      initialParseRunStatus: normalizedImport.parseRunStatus,
+      assetIdentityHash,
+    },
+    scope_summary: {
+      scopeHintCount: finalScope.assetProfileHintCount,
+      parseRunCount: finalScope.assetParseRunCount,
+      baselineParseRunCount: baselineScope.assetParseRunCount,
+      scopePreAttached,
+    },
+    parser_pilot_summary: {
+      singleAssetOnly: true,
+      terminal: observation.terminal,
+      terminalStatus: observation.terminalStatus || 'timeout',
+      timedOut: observation.timedOut,
+      pollCount: observation.pollCount,
+      pollErrorCount: observation.pollErrorCount,
+      queueWaitMs: observation.queueWaitMs,
+      terminalLatencyMs: observation.terminalLatencyMs,
+      timeoutLimitMs: args.parserPilotTimeoutMs,
+      assetProfileCount: observation.assetProfileCount,
+      attributableStatusCount: observation.attributableStatusCount,
+      statusDeltas: observation.statusDeltas,
+      assetIdentityHash,
+    },
+    cleanup_manifest: cleanupManifest,
+    cleanup_manifest_summary: cleanupManifestSummary,
+    redaction: {
+      rawBaseUrlIncluded: false,
+      rawSessionIncluded: false,
+      rawDatasetIdIncluded: false,
+      rawAssetLibraryIdIncluded: false,
+      rawAssetIdIncluded: false,
+      rawApprovalIdIncluded: false,
+      rawUploadReferenceIncluded: false,
+      rawProviderPayloadIncluded: false,
+    },
+    checks: {
+      liveWriteApprovalSatisfied: args.ackLiveWrite && Boolean(args.approvalId),
+      providerCallApprovalSatisfied: args.ackProviderCall && Boolean(args.approvalId),
+      scopeWasPreAttached: scopePreAttached,
+      exactlyOnePngUploaded: upload.summary.savedFileCount === 1
+        && upload.summary.pngSaved
+        && upload.summary.zipSaved === false,
+      exactlyOneAssetImported: Boolean(normalizedImport.assetId)
+        && normalizedImport.datasetId === args.datasetId,
+      parseRunCreated: Boolean(normalizedImport.parseRunStatus),
+      parserQueueStarted: observation.queueWaitMs !== null,
+      parserQueueWaitUnderFiveMinutes: observation.queueWaitMs !== null
+        && observation.queueWaitMs < 300_000,
+      parserReachedTerminalWithin180Seconds: observation.terminal
+        && observation.terminalLatencyMs !== null
+        && observation.terminalLatencyMs <= DEFAULT_PARSER_PILOT_TIMEOUT_MS,
+      parserTerminalStatusAllowed: terminalStatusAllowed,
+      parserTerminalProfileStateConsistent: terminalProfileStateConsistent,
+      parserStatusAttributableToSingleRun: observation.attributableStatusCount === 1,
+      parserScopePollingReliable: observation.pollErrorCount === 0,
+      parserPilotDidNotUseBatchOrZip: upload.summary.savedFileCount === 1
+        && upload.summary.zipSaved === false,
+      parserPilotReceiptUsesHashedIdentity: assetIdentityHash.length === 64,
+      parserPilotReceiptExcludesProviderPayload: true,
+      parserPilotCleanupManifestReady:
+        cleanupManifest.cleanup_manifest_ready === true
+        && cleanupManifest.no_write === true
+        && cleanupManifest.no_delete === true
+        && cleanupManifest.execution_controls?.automatic_cleanup_allowed === false,
+      parserPilotCleanupManifestRedacted: cleanupManifestRedacted(cleanupManifest, args),
+    },
+  };
+  return {
+    report: attachMachineSummary(report),
+    runId: fixtures.runId,
+    suffix: 'parser-pilot',
+  };
+}
+
+async function readParserPilotMockBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+function writeParserPilotMockJson(response, statusCode, body) {
+  const bytes = Buffer.from(JSON.stringify(body));
+  response.writeHead(statusCode, {
+    'content-type': 'application/json',
+    'content-length': String(bytes.length),
+  });
+  response.end(bytes);
+}
+
+function parserPilotMockScopeResponse(scopeRequestCount, terminalMode = 'completed') {
+  const baseline = scopeRequestCount === 1;
+  const processing = scopeRequestCount === 2;
+  const assets = baseline
+    ? []
+    : [{
+      id: 'private-asset-fixture',
+      title: 'Parser pilot fixture',
+      asset_kind: 'image',
+      source_kind: 'fashion_design_image_import',
+      content_type: 'image/png',
+      profile_count: terminalMode === 'timeout' || processing ? 1 : 2,
+    }];
+  return {
+    summary: {
+      dataset_ids: ['private-dataset-fixture'],
+      datasets: [{ id: 'private-dataset-fixture', title: 'Approved fixture dataset' }],
+      memberships: [],
+      assets,
+      asset_count: assets.length,
+      asset_profile_hints: [],
+      asset_profile_hint_count: 0,
+      asset_parse_run_count: baseline ? 3 : 4,
+      asset_parse_status_counts: baseline
+        ? { pending: 3 }
+        : terminalMode === 'timeout'
+          ? { pending: 4 }
+        : processing
+          ? { pending: 3, processing: 1 }
+          : { pending: 3, completed: 1 },
+      scope_policy: 'authorized_dataset_membership_only',
+    },
+  };
+}
+
+async function handleParserPilotMockRequest(request, response, stats) {
+  const url = new URL(request.url || '/', 'http://127.0.0.1');
+  if (request.headers.cookie) stats.authenticatedRequestCount += 1;
+
+  if (request.method === 'GET'
+    && url.pathname === '/api/v3/asset-libraries/private-library-fixture/scope-summary') {
+    stats.scopeRequestCount += 1;
+    writeParserPilotMockJson(
+      response,
+      200,
+      parserPilotMockScopeResponse(stats.scopeRequestCount, stats.terminalMode),
+    );
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/v3/local-document-uploads') {
+    const body = await readParserPilotMockBody(request);
+    stats.uploadRequestCount += 1;
+    stats.uploadBodyBytes = body.length;
+    stats.uploadWasMultipart = String(request.headers['content-type'] || '')
+      .toLowerCase().startsWith('multipart/form-data;');
+    writeParserPilotMockJson(response, 200, {
+      files: [{
+        object_key: 'storage/uploads/private-parser-pilot.png',
+        content_type: 'image/png',
+        size: 70,
+      }],
+    });
+    return;
+  }
+
+  if (request.method === 'POST'
+    && url.pathname === '/api/v3/asset-imports/fashion-design-images') {
+    const body = JSON.parse((await readParserPilotMockBody(request)).toString('utf8'));
+    stats.importRequestCount += 1;
+    stats.singleImportShape = Boolean(
+      body.object_key
+      && !body.image_url
+      && !Object.hasOwn(body, 'assets')
+      && !Object.hasOwn(body, 'packages')
+      && body.dataset_id === 'private-dataset-fixture'
+      && body.asset_library_id === 'private-library-fixture',
+    );
+    writeParserPilotMockJson(response, 201, {
+      asset: {
+        id: 'private-asset-fixture',
+        title: 'Parser pilot fixture',
+        asset_kind: 'image',
+        source_kind: 'fashion_design_image_import',
+        content_type: 'image/png',
+        profile_count: 1,
+      },
+      dataset_membership: {
+        dataset_id: 'private-dataset-fixture',
+        asset_id: 'private-asset-fixture',
+        membership_kind: 'imported',
+      },
+      parse_run: {
+        id: 'private-parse-run-fixture',
+        asset_id: 'private-asset-fixture',
+        parser_name: 'datamax-fashion-image-parser',
+        parser_version: '2026-06-17',
+        status: 'pending',
+      },
+      profile: {
+        id: 'private-profile-fixture',
+        asset_id: 'private-asset-fixture',
+        profile_kind: 'fashion_design_image_v1',
+        profile_version: 'v1',
+        attributes: {},
+      },
+    });
+    return;
+  }
+
+  stats.unexpectedRequestCount += 1;
+  writeParserPilotMockJson(response, 404, { error: { code: 'mock_route_not_found' } });
+}
+
+async function runParserPilotLoopbackSelfTest(args, terminalMode = 'completed') {
+  const stats = {
+    terminalMode,
+    scopeRequestCount: 0,
+    uploadRequestCount: 0,
+    importRequestCount: 0,
+    authenticatedRequestCount: 0,
+    unexpectedRequestCount: 0,
+    uploadBodyBytes: 0,
+    uploadWasMultipart: false,
+    singleImportShape: false,
+  };
+  const server = createServer((request, response) => {
+    handleParserPilotMockRequest(request, response, stats).catch(() => {
+      if (!response.headersSent) {
+        writeParserPilotMockJson(response, 500, { error: { code: 'mock_handler_failed' } });
+      } else {
+        response.destroy();
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+  const loopbackArgs = {
+    ...args,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    cookie: 'private-session-fixture',
+    bearer: '',
+    datasetId: 'private-dataset-fixture',
+    assetLibraryId: 'private-library-fixture',
+    approvalId: 'private-approval-fixture',
+    localThreadId: '',
+    timeoutMs: 2_000,
+    parserPilotTimeoutMs: terminalMode === 'timeout' ? 25 : 10_000,
+    parserPilotPollIntervalMs: 1,
+    ackLiveWrite: true,
+    ackProviderCall: true,
+    pretty: false,
+  };
+
+  let result;
+  try {
+    result = await executeParserPilot(loopbackArgs);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  assertReportSafe(result.report);
+  const serialized = JSON.stringify(result.report);
+  const privateValuesExcluded = [
+    'private-session-fixture',
+    'private-dataset-fixture',
+    'private-library-fixture',
+    'private-asset-fixture',
+    'private-parse-run-fixture',
+    'private-profile-fixture',
+    'private-approval-fixture',
+    'storage/uploads/private-parser-pilot.png',
+  ].every((value) => !serialized.includes(value));
+  const commonReady = stats.uploadRequestCount === 1
+    && stats.importRequestCount === 1
+    && stats.uploadWasMultipart
+    && stats.uploadBodyBytes > 0
+    && stats.singleImportShape
+    && stats.authenticatedRequestCount >= 4
+    && stats.unexpectedRequestCount === 0
+    && privateValuesExcluded;
+  const checks = terminalMode === 'timeout'
+    ? {
+      parserPilotLoopbackTimeoutReceiptReady:
+        commonReady
+        && result.report.ok === false
+        && result.report.mode === 'parser_pilot'
+        && result.report.parser_pilot_summary?.terminal === false
+        && result.report.parser_pilot_summary?.timedOut === true
+        && result.report.parser_pilot_summary?.terminalStatus === 'timeout'
+        && result.report.parser_pilot_summary?.pollCount > 0,
+      parserPilotLoopbackTimeoutReceiptRedacted: privateValuesExcluded,
+      parserPilotLoopbackTimeoutCleanupManifestReady:
+        result.report.checks?.parserPilotCleanupManifestReady === true
+        && result.report.checks?.parserPilotCleanupManifestRedacted === true,
+    }
+    : {
+      parserPilotLoopbackReportReady:
+        commonReady
+        && result.report.ok
+        && result.report.mode === 'parser_pilot'
+        && result.report.parser_pilot_summary?.terminalStatus === 'completed',
+      parserPilotLoopbackSingleUploadAndImport:
+        stats.uploadRequestCount === 1
+        && stats.importRequestCount === 1
+        && stats.uploadWasMultipart
+        && stats.uploadBodyBytes > 0
+        && stats.singleImportShape,
+      parserPilotLoopbackPollsProcessingThenTerminal:
+        stats.scopeRequestCount === 3
+        && result.report.parser_pilot_summary?.pollCount === 2
+        && result.report.parser_pilot_summary?.pollErrorCount === 0,
+      parserPilotLoopbackAuthUsedOnlyInRequests:
+        stats.authenticatedRequestCount === 5
+        && privateValuesExcluded,
+      parserPilotLoopbackNoUnexpectedRoutes: stats.unexpectedRequestCount === 0,
+      parserPilotLoopbackCleanupManifestReady:
+        result.report.checks?.parserPilotCleanupManifestReady === true
+        && result.report.checks?.parserPilotCleanupManifestRedacted === true,
+    };
+  assert.equal(Object.values(checks).every(Boolean), true);
+  return { report: result.report, stats, checks };
 }
 
 async function executeLive(args) {
@@ -7226,7 +7868,7 @@ function attachMachineSummary(report) {
   report.ok = ok;
   report.summary = {
     ok,
-    ready: ok && mode === 'execute',
+    ready: ok && ['execute', 'parser_pilot'].includes(mode),
     pending: ok && mode === 'preflight',
     failed: !ok,
     mode,
@@ -7254,6 +7896,11 @@ function buildMarkdown(report) {
     `- normalized_expanded_asset_count: ${report.response_summary?.normalizedExpandedAssetCount ?? report.import_summary.expandedAssetCount ?? 0}`,
     `- scope_hint_count: ${report.scope_summary.scopeHintCount}`,
     `- scope_parse_run_count: ${report.scope_summary.parseRunCount ?? report.planning_summary?.planningParseRunCount ?? 0}`,
+    `- parser_pilot_terminal_status: ${report.parser_pilot_summary?.terminalStatus || 'not_run'}`,
+    `- parser_pilot_queue_wait_ms: ${report.parser_pilot_summary?.queueWaitMs ?? 0}`,
+    `- parser_pilot_terminal_latency_ms: ${report.parser_pilot_summary?.terminalLatencyMs ?? 0}`,
+    `- parser_pilot_poll_count: ${report.parser_pilot_summary?.pollCount ?? 0}`,
+    `- parser_pilot_poll_error_count: ${report.parser_pilot_summary?.pollErrorCount ?? 0}`,
     `- planning_parse_status_visible: ${Boolean(report.planning_summary?.staticPageEvidenceParseStatusVisible || report.checks?.scopeParseStatusVisible)}`,
     `- parse_queue_dry_run_ready: ${Boolean(report.followup_summary?.parseQueueDryRunReady)}`,
     `- parse_status_transition_dry_run_ready: ${Boolean(report.followup_summary?.parseStatusTransitionDryRunReady)}`,
@@ -7384,6 +8031,65 @@ function buildMarkdown(report) {
 
 async function runSelfTest(args) {
   const fixtures = await writeFixtureFiles(args);
+  const parserPilotBaseUrlGuardReady = parserPilotBaseUrlAllowed('https://v3.elepcloud.com')
+    && parserPilotBaseUrlAllowed('https://v3.example.test', ['v3.example.test'])
+    && parserPilotBaseUrlAllowed('http://127.0.0.1:3000')
+    && !parserPilotBaseUrlAllowed('http://public.example.test')
+    && !parserPilotBaseUrlAllowed('https://unapproved.example.test')
+    && !parserPilotBaseUrlAllowed('https://v3.elepcloud.com:8443')
+    && !parserPilotBaseUrlAllowed('https://user:pass@v3.elepcloud.com')
+    && !parserPilotBaseUrlAllowed('https://v3.elepcloud.com/unreviewed-path')
+    && !parserPilotBaseUrlAllowed('https://v3.elepcloud.com?redirect=1');
+  assert.equal(parserPilotBaseUrlGuardReady, true);
+  const parserPilotProcessingObservation = summarizeParserPilotObservation({
+    baselineStatusCounts: { pending: 3 },
+    currentStatusCounts: { pending: 3, processing: 1 },
+    assetId: 'private-asset-fixture',
+    assets: [{ id: 'private-asset-fixture', profileCount: 1 }],
+    elapsedMs: 2_100,
+  });
+  assert.equal(parserPilotProcessingObservation.queueStarted, true);
+  assert.equal(parserPilotProcessingObservation.terminal, false);
+  const parserPilotCompletedObservation = summarizeParserPilotObservation({
+    baselineStatusCounts: { pending: 3 },
+    currentStatusCounts: { pending: 3, completed: 1 },
+    assetId: 'private-asset-fixture',
+    assets: [{ id: 'private-asset-fixture', profileCount: 2 }],
+    elapsedMs: 6_200,
+  });
+  assert.equal(parserPilotCompletedObservation.terminal, true);
+  assert.equal(parserPilotCompletedObservation.terminalStatus, 'completed');
+  assert.equal(parserPilotCompletedObservation.assetProfileCount, 2);
+  const parserPilotPartialObservation = summarizeParserPilotObservation({
+    baselineStatusCounts: { pending: 3 },
+    currentStatusCounts: { pending: 3, partial: 1 },
+    assetId: 'private-asset-fixture',
+    assets: [{ id: 'private-asset-fixture', profileCount: 2 }],
+    elapsedMs: 5_300,
+  });
+  assert.equal(parserPilotPartialObservation.terminal, true);
+  assert.equal(parserPilotPartialObservation.terminalStatus, 'partial');
+  const parserPilotFailedObservation = summarizeParserPilotObservation({
+    baselineStatusCounts: { pending: 3 },
+    currentStatusCounts: { pending: 3, failed: 1 },
+    assetId: 'private-asset-fixture',
+    assets: [{ id: 'private-asset-fixture', profileCount: 1 }],
+    elapsedMs: 4_500,
+  });
+  assert.equal(parserPilotFailedObservation.terminal, true);
+  assert.equal(parserPilotFailedObservation.terminalStatus, 'failed');
+  const parserPilotObservationsRedacted = !JSON.stringify([
+    parserPilotProcessingObservation,
+    parserPilotCompletedObservation,
+    parserPilotPartialObservation,
+    parserPilotFailedObservation,
+  ]).includes('private-asset-fixture');
+  assert.equal(parserPilotObservationsRedacted, true);
+  const parserPilotLoopbackEvidence = await runParserPilotLoopbackSelfTest(args);
+  const parserPilotLoopbackTimeoutEvidence = await runParserPilotLoopbackSelfTest(
+    args,
+    'timeout',
+  );
   const payloadEvidence = buildPayloadEvidence(fixtures);
   const responseEvidence = buildMockImportResponse(payloadEvidence);
   const scopeEvidence = buildScopeEvidence();
@@ -7560,6 +8266,26 @@ async function runSelfTest(args) {
         assetParserWorkerRuntimeEvidence.summary.remoteSourcePolicy === 'remote_source_disabled',
       assetParserTaskPayloadRedacted:
         assetParserWorkerRuntimeEvidence.summary.taskPayloadRedacted,
+      parserPilotProcessingObservationReady:
+        parserPilotProcessingObservation.queueStarted
+        && !parserPilotProcessingObservation.terminal
+        && parserPilotProcessingObservation.attributableStatusCount === 1,
+      parserPilotCompletedObservationReady:
+        parserPilotCompletedObservation.terminal
+        && parserPilotCompletedObservation.terminalStatus === 'completed'
+        && parserPilotCompletedObservation.assetProfileCount === 2,
+      parserPilotPartialObservationReady:
+        parserPilotPartialObservation.terminal
+        && parserPilotPartialObservation.terminalStatus === 'partial'
+        && parserPilotPartialObservation.assetProfileCount === 2,
+      parserPilotFailedObservationReady:
+        parserPilotFailedObservation.terminal
+        && parserPilotFailedObservation.terminalStatus === 'failed'
+        && parserPilotFailedObservation.assetProfileCount === 1,
+      parserPilotObservationsRedacted,
+      parserPilotBaseUrlGuardReady,
+      ...parserPilotLoopbackEvidence.checks,
+      ...parserPilotLoopbackTimeoutEvidence.checks,
       retrievalEvidenceDryRunReady: followupEvidence.summary.retrievalEvidenceDryRunReady
         && followupEvidence.summary.retrievalEvidencePreviewCount === 2,
       retrievalEvidenceTextMaterialized:
@@ -7933,6 +8659,8 @@ async function main() {
     result = await runSelfTest(args);
   } else if (args.preflight) {
     result = await runPreflight(args);
+  } else if (args.parserPilot) {
+    result = await executeParserPilot(args);
   } else {
     result = await executeLive(args);
   }
@@ -7945,6 +8673,7 @@ async function main() {
     selfTest: Boolean(report.self_test),
     preflight: Boolean(report.preflight),
     execute: Boolean(report.execute),
+    parserPilot: Boolean(report.parser_pilot),
     runId,
     reportPath,
     markdownPath,

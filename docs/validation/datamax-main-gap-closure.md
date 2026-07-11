@@ -223,6 +223,45 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - Task 9 remains `AUTH_REQUIRED` only for the separately approved single-tenant, single-concurrency, single-image real-provider pilot and final flag-off rollback receipt;
   - Task 10 remains blocked until that Task 9 live pilot is complete and the parser flag is confirmed off again.
 
+## 2026-07-11 Task 9 Single-Image Parser Pilot Runner Local Candidate
+
+- Proven gap:
+  - the existing asset-import `execute` mode uploads one PNG plus one ZIP, imports at least three assets, and only checks that parse runs are visible/pending;
+  - it does not satisfy Task 9's single-image boundary, does not acknowledge a real provider call separately, and does not poll for an attributable terminal state within 180 seconds;
+  - therefore the Task 8 batch smoke must not be reused as Task 9 live evidence.
+- Candidate behavior:
+  - `smoke:fashion-design-asset-import` now has a separate `--parser-pilot` mode guarded by both `--ack-live-write` and `--ack-provider-call`, a reviewed approval id, fresh session material, approved dataset, approved asset library, and a hard timeout no greater than 180,000 ms;
+  - before any upload, the mode requires the approved dataset to be already attached to the approved asset library; it does not create or change that membership;
+  - the parser pilot refuses public HTTP, nonstandard public HTTPS ports, unallowlisted HTTPS hosts, and credential-bearing/query/fragment/extra-path bases before sending session material; the default public allowlist contains only `v3.elepcloud.com`, while loopback HTTP remains available for deterministic local tests;
+  - it uploads exactly one PNG, calls only the single-asset import route, uses an empty seeded profile, and never invokes the ZIP/batch path;
+  - it compares the approved scope's aggregate parse-status counts against a pre-import baseline, requires exactly one attributable status delta, tracks first processing/terminal observation as an upper bound for queue wait, and accepts only `completed`, `partial`, or `failed` as terminal;
+  - completed/partial requires the imported asset to expose the additional parser-versioned profile, while failed remains an attributable safe terminal state for separate operator error-code aggregation;
+  - the shared report stores only counts, booleans, timings, status deltas, fixture digest, and hashed asset identity; raw asset/dataset/library ids, session, approval value, upload reference, provider response, and local locator are excluded.
+  - every terminal or timed-out parser-pilot receipt also carries the existing dry-run cleanup-manifest contract with one asset, one membership, one parse run, and the observed profile count; it requires operator review and never authorizes automatic deletion.
+- Local verification:
+  - the initial self-test failed with `ReferenceError: summarizeParserPilotObservation is not defined`, preserving the red phase for the proven gap;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - asset smoke self-test and preflight: passed;
+  - deterministic observations cover processing, completed, partial, failed, single-run attribution, profile-count consistency, and raw asset-id exclusion;
+  - deterministic base-URL guards accept allowlisted HTTPS and loopback HTTP while rejecting public HTTP, unallowlisted HTTPS, embedded credentials, query, fragment, and extra path;
+  - a loopback HTTP integration self-test executes the real parser-pilot control flow: one multipart PNG upload, one single-asset import, processing then completed scope polls, terminal report construction, and report-safety enforcement;
+  - the loopback test observed exactly one upload, one import, two post-import polls, five authenticated mock requests, and zero unexpected routes; its report excluded the mock session, dataset/library/asset/parse/profile ids, approval value, and upload locator;
+  - a second loopback case kept the parse run pending until the hard deadline and proved the runner still returns a failed, timed-out, redacted receipt instead of silently treating the pilot as successful;
+  - parser-pilot mode rejects a missing live-write acknowledgment before network access, rejects a missing provider-call acknowledgment separately, and rejects timeout values above 180,000 ms;
+  - public third-party contract guard, main-assistant streaming self-test, static-page self-test, and Web tests passed; Web tests were 402/402;
+  - `cargo fmt --check` and `cargo check --workspace` passed;
+  - plain `next build` could not use the dependency junction because Turbopack rejects a symlink outside the worktree filesystem root; the repository's validated worktree path `npm --prefix apps/web run build -- --webpack` passed, including compile, TypeScript, page generation, and trace collection;
+  - `git diff --check`: passed with expected Windows line-ending warnings only.
+- Read-only server readiness:
+  - server HEAD is `cb455a51efa8f03bdbf726c8030231040c8fb4ca`, worktree is clean, API/worker are active, health/ready pass, parser and all six dark-release flags remain off;
+  - the worker process has provider base/key/model variable classes and an approved local-root class without printing values;
+  - production currently has three pending local-image parse runs and zero parser tasks, but there is no fresh Task 9 private scope note;
+  - no env change, restart, task enqueue, image upload, provider call, live write, or Task 10 action occurred during this readiness work.
+- Status:
+  - the single-image runner is a local uncommitted Task 9 candidate and still requires review plus separate commit/push/deploy approval if it is to be used on the server;
+  - live execution remains `AUTH_REQUIRED` for a fresh test session, explicit scope, window, approval id, temporary parser/import flag changes, one provider call, and final rollback;
+  - Task 10 remains blocked.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
