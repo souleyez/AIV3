@@ -209,6 +209,14 @@ function findProfile(profiles, profileId) {
   return profiles.find((profile) => profile.profile_id === profileId) || null;
 }
 
+function profileProvider(profile) {
+  return profile?.provider_id || profile?.provider || null;
+}
+
+function profileModel(profile) {
+  return profile?.model_id || profile?.model || null;
+}
+
 function findStatusSource(status, profileId) {
   const lanes = Array.isArray(status?.lanes) ? status.lanes : [];
   for (const lane of lanes) {
@@ -222,6 +230,10 @@ function findStatusSource(status, profileId) {
   }
   const providers = Array.isArray(status?.providers) ? status.providers : [];
   for (const provider of providers) {
+    if (provider.profile_id === profileId) {
+      const lane = lanes.find((item) => item.lane === provider.lane) || null;
+      return { lane, source: provider };
+    }
     const sources = Array.isArray(provider.sources) ? provider.sources : [];
     const match = sources.find((source) => source.profile_id === profileId);
     if (match) return { lane: null, source: match };
@@ -230,16 +242,31 @@ function findStatusSource(status, profileId) {
 }
 
 function forbiddenSecretSignal(value) {
-  const text = JSON.stringify(value || {});
-  const lower = text.toLowerCase();
-  return (
-    /sk-[a-z0-9_-]{8,}/i.test(text) ||
-    lower.includes('api_key') ||
-    lower.includes('apikey') ||
-    lower.includes('auth_env_key_name') ||
-    lower.includes('right_code_key') ||
-    lower.includes('minimax_api_key')
-  );
+  if (typeof value === 'string') {
+    return /sk-[a-z0-9_-]{8,}/i.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(forbiddenSecretSignal);
+  }
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  return Object.entries(value).some(([key, child]) => {
+    const normalized = key.toLowerCase().replaceAll('-', '_');
+    const secretValueField = [
+      'api_key',
+      'apikey',
+      'right_code_key',
+      'minimax_api_key',
+      'authorization',
+      'bearer_token',
+      'cookie',
+    ].includes(normalized);
+    if (secretValueField && typeof child === 'string' && child.trim()) {
+      return true;
+    }
+    return forbiddenSecretSignal(child);
+  });
 }
 
 function cloneJson(value) {
@@ -329,8 +356,8 @@ async function main() {
     const primaryMatches =
       primaryProfile &&
       primaryProfile.enabled === true &&
-      primaryProfile.provider === args.expectedProvider &&
-      primaryProfile.model === args.expectedModel &&
+      profileProvider(primaryProfile) === args.expectedProvider &&
+      profileModel(primaryProfile) === args.expectedModel &&
       Number(primaryProfile.max_concurrency || 0) >= args.expectedMaxConcurrency;
     profileChecksOk = Boolean(primaryMatches && statusSource);
     checks.push({
@@ -338,8 +365,8 @@ async function main() {
       status: profileChecksOk ? 'passed' : 'failed',
       profile_id: args.profileId,
       status_visible: Boolean(statusSource),
-      provider: primaryProfile?.provider || null,
-      model: primaryProfile?.model || null,
+      provider: profileProvider(primaryProfile),
+      model: profileModel(primaryProfile),
       enabled: primaryProfile?.enabled ?? null,
       max_concurrency: primaryProfile?.max_concurrency ?? null,
     });
@@ -350,8 +377,8 @@ async function main() {
           ? 'passed'
           : 'attention',
       profile_id: args.fallbackProfileId,
-      provider: fallbackProfile?.provider || null,
-      model: fallbackProfile?.model || null,
+      provider: profileProvider(fallbackProfile),
+      model: profileModel(fallbackProfile),
       enabled: fallbackProfile?.enabled ?? null,
       max_concurrency: fallbackProfile?.max_concurrency ?? null,
     });
@@ -442,8 +469,8 @@ async function main() {
             ? {
                 profile_id: primaryProfile.profile_id,
                 lane: primaryProfile.lane,
-                provider: primaryProfile.provider,
-                model: primaryProfile.model,
+                provider: profileProvider(primaryProfile),
+                model: profileModel(primaryProfile),
                 enabled: primaryProfile.enabled,
                 priority: primaryProfile.priority,
                 max_concurrency: primaryProfile.max_concurrency,
@@ -456,8 +483,8 @@ async function main() {
             ? {
                 profile_id: fallbackProfile.profile_id,
                 lane: fallbackProfile.lane,
-                provider: fallbackProfile.provider,
-                model: fallbackProfile.model,
+                provider: profileProvider(fallbackProfile),
+                model: profileModel(fallbackProfile),
                 enabled: fallbackProfile.enabled,
                 priority: fallbackProfile.priority,
                 max_concurrency: fallbackProfile.max_concurrency,
@@ -526,8 +553,8 @@ async function runSelfTest(args) {
     {
       profile_id: args.profileId,
       lane: 'primary',
-      provider: args.expectedProvider,
-      model: args.expectedModel,
+      provider_id: args.expectedProvider,
+      model_id: args.expectedModel,
       enabled: true,
       priority: 10,
       max_concurrency: Math.max(args.expectedMaxConcurrency, 20),
@@ -538,8 +565,8 @@ async function runSelfTest(args) {
     {
       profile_id: args.fallbackProfileId,
       lane: 'fallback',
-      provider: 'minimax',
-      model: 'm3',
+      provider_id: 'minimax',
+      model_id: 'm3',
       enabled: true,
       priority: 50,
       max_concurrency: 20,
@@ -554,7 +581,14 @@ async function runSelfTest(args) {
         lane: 'primary',
         active_source: args.profileId,
         active_profile_count: 1,
-        sources: [{ profile_id: args.profileId }],
+      },
+    ],
+    providers: [
+      {
+        profile_id: args.profileId,
+        lane: 'primary',
+        provider_id: args.expectedProvider,
+        model_id: args.expectedModel,
       },
     ],
     runtime: {
@@ -577,6 +611,12 @@ async function runSelfTest(args) {
   const apiKeyShapedFixture = 'sk-' + 'testfixture123456789';
   if (!forbiddenSecretSignal({ api_key: apiKeyShapedFixture })) {
     throw new Error('self-test secret detector did not catch API key-shaped data');
+  }
+  if (!forbiddenSecretSignal({ api_key: 'plain-secret-fixture-value' })) {
+    throw new Error('self-test secret detector did not catch a named secret value');
+  }
+  if (forbiddenSecretSignal({ auth_env_key_name: 'RIGHT_CODE_KEY', has_secret: true })) {
+    throw new Error('self-test secret detector rejected sanitized operator metadata');
   }
 
   const finishedAt = new Date().toISOString();
@@ -620,8 +660,8 @@ async function runSelfTest(args) {
         status: 'passed',
         profile_id: args.profileId,
         status_visible: true,
-        provider: primaryProfile.provider,
-        model: primaryProfile.model,
+        provider: profileProvider(primaryProfile),
+        model: profileModel(primaryProfile),
         enabled: primaryProfile.enabled,
         max_concurrency: primaryProfile.max_concurrency,
       },
@@ -629,8 +669,8 @@ async function runSelfTest(args) {
         name: 'fixture fallback model profile is present and bounded',
         status: 'passed',
         profile_id: args.fallbackProfileId,
-        provider: fallbackProfile?.provider || null,
-        model: fallbackProfile?.model || null,
+        provider: profileProvider(fallbackProfile),
+        model: profileModel(fallbackProfile),
         enabled: fallbackProfile?.enabled ?? null,
         max_concurrency: fallbackProfile?.max_concurrency ?? null,
       },
@@ -648,8 +688,8 @@ async function runSelfTest(args) {
       primary_profile: {
         profile_id: primaryProfile.profile_id,
         lane: primaryProfile.lane,
-        provider: primaryProfile.provider,
-        model: primaryProfile.model,
+        provider: profileProvider(primaryProfile),
+        model: profileModel(primaryProfile),
         enabled: primaryProfile.enabled,
         priority: primaryProfile.priority,
         max_concurrency: primaryProfile.max_concurrency,
@@ -661,8 +701,8 @@ async function runSelfTest(args) {
         ? {
             profile_id: fallbackProfile.profile_id,
             lane: fallbackProfile.lane,
-            provider: fallbackProfile.provider,
-            model: fallbackProfile.model,
+            provider: profileProvider(fallbackProfile),
+            model: profileModel(fallbackProfile),
             enabled: fallbackProfile.enabled,
             priority: fallbackProfile.priority,
             max_concurrency: fallbackProfile.max_concurrency,
