@@ -15,6 +15,9 @@ use crate::{
         prepare_client_artifact_file_storage,
     },
     client_artifact_view_support::load_client_artifact_view,
+    client_config_session_support::{
+        validate_client_session_manifest_scope, V3ClientSessionClaims,
+    },
     sha256_hex, ApiError, AppState,
 };
 
@@ -30,18 +33,23 @@ pub(crate) async fn validate_client_artifact_create_request(
     state: &AppState,
     headers: &HeaderMap,
     current_user_id: Option<UserId>,
+    client_session: Option<&V3ClientSessionClaims>,
     manifest: &V3ClientArtifactManifestView,
     files: &[UploadedClientArtifactFile],
 ) -> std::result::Result<(), ApiError> {
     validate_client_artifact_manifest(manifest)?;
-    validate_v3_client_scope_refs(
-        state,
-        headers,
-        current_user_id,
-        &manifest.dataset_ids,
-        &manifest.asset_library_ids,
-    )
-    .await?;
+    if let Some(claims) = client_session {
+        validate_client_session_manifest_scope(claims, manifest)?;
+    } else {
+        validate_v3_client_scope_refs(
+            state,
+            headers,
+            current_user_id,
+            &manifest.dataset_ids,
+            &manifest.asset_library_ids,
+        )
+        .await?;
+    }
     validate_client_artifact_files_match_manifest(manifest, files)
 }
 
@@ -137,11 +145,19 @@ pub(crate) async fn create_client_artifact_from_upload(
     state: &AppState,
     headers: &HeaderMap,
     current_user_id: Option<UserId>,
+    client_session: Option<&V3ClientSessionClaims>,
     manifest: &V3ClientArtifactManifestView,
     files: &[UploadedClientArtifactFile],
 ) -> std::result::Result<ClientArtifactView, ApiError> {
-    validate_client_artifact_create_request(state, headers, current_user_id, manifest, files)
-        .await?;
+    validate_client_artifact_create_request(
+        state,
+        headers,
+        current_user_id,
+        client_session,
+        manifest,
+        files,
+    )
+    .await?;
     let artifact_id = new_client_artifact_id();
     insert_client_artifact_with_files(state, &artifact_id, current_user_id, manifest, files)
         .await?;
@@ -152,12 +168,19 @@ pub(crate) async fn create_client_artifact_from_upload_response(
     state: &AppState,
     headers: &HeaderMap,
     current_user_id: Option<UserId>,
+    client_session: Option<&V3ClientSessionClaims>,
     manifest: &V3ClientArtifactManifestView,
     files: &[UploadedClientArtifactFile],
 ) -> std::result::Result<CreateClientArtifactResponse, ApiError> {
-    let artifact =
-        create_client_artifact_from_upload(state, headers, current_user_id, manifest, files)
-            .await?;
+    let artifact = create_client_artifact_from_upload(
+        state,
+        headers,
+        current_user_id,
+        client_session,
+        manifest,
+        files,
+    )
+    .await?;
     Ok(create_client_artifact_response(artifact))
 }
 

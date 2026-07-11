@@ -119,6 +119,40 @@ pub struct CreateClientConfigPackageResponse {
     pub package: ClientConfigPackageView,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveClientConfigSessionRequest {
+    pub tenant_id: String,
+    pub user_id: String,
+    pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_seconds: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedClientConfigPackageView {
+    pub schema: String,
+    pub tenant_id: String,
+    pub user_id: String,
+    pub client_id: String,
+    pub v3_base_url: String,
+    #[serde(default)]
+    pub dataset_ids: Vec<String>,
+    #[serde(default)]
+    pub asset_library_ids: Vec<String>,
+    #[serde(default)]
+    pub skill_packs: Vec<String>,
+    pub artifact_upload: V3ClientArtifactUploadConfigView,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResolveClientConfigSessionResponse {
+    pub package_id: String,
+    pub config_package: ResolvedClientConfigPackageView,
+    pub session_token: String,
+    pub session_expires_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct V3ClientArtifactManifestFileView {
     pub filename: String,

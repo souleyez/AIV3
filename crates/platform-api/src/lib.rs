@@ -40,6 +40,7 @@ use client_artifact_publish_support::*;
 use client_artifact_ref_support::*;
 use client_artifact_view_support::*;
 use client_config_package_support::*;
+use client_config_session_support::*;
 use contracts::{
     AdvanceWorkflowExecutionResponse, AggregateDatabaseSourceRequest,
     AggregateDatabaseSourceResponse, ApiErrorResponse, AppendAssistantRunEventRequest,
@@ -102,6 +103,7 @@ use contracts::{
     PublishReportResponse, PublishedReportDetailView, PublishedReportView, RegisterDocumentRequest,
     RegisterDocumentResponse, RemoveAssetLibraryDatasetMembershipResponse,
     ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
+    ResolveClientConfigSessionRequest, ResolveClientConfigSessionResponse,
     ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
     RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
     RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
@@ -292,6 +294,7 @@ mod client_artifact_scope_support;
 mod client_artifact_storage_support;
 mod client_artifact_view_support;
 mod client_config_package_support;
+mod client_config_session_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
 mod dataset_create_support;
@@ -1175,6 +1178,10 @@ pub fn router(
         .route(
             "/v1/client-config-packages/{package_id}",
             get(get_client_config_package),
+        )
+        .route(
+            "/v1/client-config-packages/{package_id}/session",
+            axum::routing::post(create_client_config_session),
         )
         .route(
             "/v1/client-artifacts",
@@ -3971,11 +3978,28 @@ async fn create_client_config_package(
 
 async fn get_client_config_package(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(package_id): Path<String>,
 ) -> std::result::Result<Json<ClientConfigPackageView>, ApiError> {
+    require_asset_library_user_session(&state, &headers).await?;
     Ok(Json(
         get_client_config_package_view_for_request(&state, &package_id).await?,
     ))
+}
+
+async fn create_client_config_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(package_id): Path<String>,
+    Json(request): Json<ResolveClientConfigSessionRequest>,
+) -> std::result::Result<Json<ResolveClientConfigSessionResponse>, ApiError> {
+    require_client_config_bridge_authorization(&headers)?;
+    let package = get_client_config_package_view_for_request(&state, &package_id).await?;
+    Ok(Json(resolve_client_config_session(
+        &package,
+        &request,
+        Utc::now(),
+    )?))
 }
 
 async fn list_client_artifacts(
@@ -3983,7 +4007,7 @@ async fn list_client_artifacts(
     headers: HeaderMap,
     Query(query): Query<ClientArtifactsQuery>,
 ) -> std::result::Result<Json<Vec<ClientArtifactView>>, ApiError> {
-    require_client_artifact_upload_authorization(&state, &headers).await?;
+    require_client_artifact_management_authorization(&state, &headers).await?;
     Ok(Json(
         list_client_artifact_views_for_query_limit(&state, query.limit).await?,
     ))
@@ -3994,7 +4018,7 @@ async fn create_client_artifact(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> std::result::Result<(StatusCode, Json<CreateClientArtifactResponse>), ApiError> {
-    let auth_user = require_client_artifact_upload_authorization(&state, &headers).await?;
+    let authorization = require_client_artifact_upload_authorization(&state, &headers).await?;
     let (manifest, files) = parse_client_artifact_multipart(multipart).await?;
 
     Ok((
@@ -4003,7 +4027,8 @@ async fn create_client_artifact(
             create_client_artifact_from_upload_response(
                 &state,
                 &headers,
-                auth_user.as_ref().map(|user| user.id),
+                authorization.user().map(|user| user.id),
+                authorization.client_session(),
                 &manifest,
                 &files,
             )
@@ -4017,7 +4042,7 @@ async fn get_client_artifact(
     headers: HeaderMap,
     Path(artifact_id): Path<String>,
 ) -> std::result::Result<Json<ClientArtifactView>, ApiError> {
-    require_client_artifact_upload_authorization(&state, &headers).await?;
+    require_client_artifact_management_authorization(&state, &headers).await?;
     Ok(Json(
         get_client_artifact_view_for_request(&state, &artifact_id).await?,
     ))
@@ -4028,7 +4053,7 @@ async fn download_client_artifact_file(
     headers: HeaderMap,
     Path((artifact_id, file_index)): Path<(String, i32)>,
 ) -> std::result::Result<Response, ApiError> {
-    require_client_artifact_upload_authorization(&state, &headers).await?;
+    require_client_artifact_management_authorization(&state, &headers).await?;
     client_artifact_download_response_for_file(&state, &artifact_id, file_index).await
 }
 
