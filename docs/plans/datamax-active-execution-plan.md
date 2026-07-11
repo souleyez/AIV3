@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — Task 7–8 已 `PASS`、P0 已关闭；Task 9 实现、GitHub CI 和 8 服务器 feature-off 部署已完成，当前仅单图真实 provider pilot 为 `AUTH_REQUIRED`。
+**Status:** ACTIVE — Task 7–8 已 `PASS`、P0 已关闭；Task 9 首次单图 live 在 provider 前因 workflow definition version 外键不匹配停止并安全回滚，当前为 `FAIL`，本地最小修复已验证但尚未提交、发布或复跑。
 
 ---
 
@@ -62,8 +62,9 @@
 | 应用 RC commit | `f9463861ced34022fb98ed959bccda015c8b7800` |
 | 收尾文档 commit | `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` |
 | GitHub Actions | `29139080938`：Task 9 部署代码 SHA 的 Rust Minimal 与 No-Credential Smoke 全部成功 |
-| tracked 工作区 | `main` 与 `origin/main` 在 Task 9 发布后同步；除两项明确排除的 untracked 外无 tracked 差异 |
+| tracked 工作区 | `main` 与 `origin/main` 已前进到 `1d7bf519baf9e10a236ff186317035650776c0d3`；Task 9 live 修复位于独立未提交 worktree |
 | Task 9 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task9`，分支 `codex/task9-asset-parser`；候选已拆分为实现/回执两笔提交并快进到 `main` |
+| Task 9 live 修复 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task9-live-fix`，分支 `codex/task9-parser-workflow-version-fix`，基线 `1d7bf519`；仅本地验证，未 commit/push/deploy |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
 已经证明：Task 8 的 `cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 402/402、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过；Task 9 的本地/CI/服务器定向测试、一次性数据库集成门禁、完整 ingest-worker 回归、release build、资产 preflight、普通 ingest runtime gate 和 feature-off 复验也已通过。
@@ -73,24 +74,25 @@
 | 项目 | 2026-07-11 只读核对状态 |
 | --- | --- |
 | 应用仓库 | `/srv/aiv3/repo` |
-| 应用部署代码 | 包含 `33ad2d3198b4da32df18bdc7ffccdddacf0bbdb8`，工作区干净；最终回执文档可在不重启服务的情况下继续快进 |
-| 与 GitHub 差距 | 无代码差距；Task 9 parser 已 feature-off 部署 |
+| 应用仓库 HEAD | `1d7bf519baf9e10a236ff186317035650776c0d3`，工作区干净；该 checkout 于首次 live 回滚后由外部 fast-forward，`13941bc6..1d7bf519` 仅变更 integration 文档 |
+| 运行服务 | API/worker 于首次 live rollback 后保持 active；fix 尚未构建或部署，parser 继续 feature-off |
 | PostgreSQL | 18.4 active/enabled，checksums on |
 | PG17 | inactive/disabled，数据目录与备份保留 |
-| `asset_parse_runs` | 已由 `0017` 创建，feature-off 部署后为 0 行 |
+| `asset_parse_runs` | 4 行：原有 3 行 pending，加首次 live 在 enqueue 失败前留下的 1 行 pending；`parse_asset_profile` task 为 0 |
 | 新能力 flags | 六项均未开启 |
 | 核心服务 | platform-api、Web、assistant/chat/static/report、ingest、retrieval 均 active |
 | API | `healthz=200`、`readyz=200` |
 
-数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9 逻辑备份、旧环境和旧二进制回退资产：`/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z`。
+数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9 逻辑备份、旧环境和旧二进制回退资产：`/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z`。首次 live 的 0600 配置备份、脱敏日志和 no-delete cleanup manifest 位于 `/srv/aiv3/backups/task9-live-13941bc6-20260711T120212Z`。
 
 ### 2.3 已完成与未完成
 
 - 已完成并冻结：原 Task 1–6、Task 14。
 - 已完成并关闭 P0：guarded RC、`0017_asset_parse_runs.sql`、六服务 feature-off 暗发布、主站 streaming live 和 `generic-chat-main` 静态页 live。
 - Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投、flag rollback、任务卡 Web 发布和认证浏览器复验；任务卡刷新稳定、字段账本可见、重复卡为 0，Task 8 `PASS`。
-- 尚未执行：Task 9 单图真实 provider pilot；asset evidence、第三方私有入口、operator 并发、客户端联合验收。
-- Task 9 已完成独立提交/push、GitHub CI、8 服务器一次性数据库验证和 feature-off 部署；当前 `AUTH_REQUIRED` 仅指启用一个测试 scope、单并发、单图片的真实 provider pilot，现有批准不得扩展解释为 live 授权。
+- 尚未完成：Task 9 单图真实 provider pilot；asset evidence、第三方私有入口、operator 并发、客户端联合验收。
+- Task 9 首次 live 使用批准 `TASK9-PARSER-PILOT-20260711-01` 在获批 `13941bc6` 基线上执行；单图导入在 enqueue 时因未注册的 `asset-profile-parse-v1` workflow version 外键失败，provider 调用和 parser task 均为 0。会话已撤销、三项开关已恢复、回归通过、对象保留且 cleanup manifest 不自动删除。
+- 本地最小修复改为复用运行时已注册的 upload-ingest workflow version，相关测试通过；commit/push、CI、feature-off fix 部署和新的 live retry approval 必须分别重新取得，Task 10 继续阻塞。
 
 ---
 
@@ -110,7 +112,7 @@ Task 7  feature-off 暗发布并关闭 P0
 | --- | --- | --- | --- | --- |
 | M1C | 7 | PASS | 8 服务器 feature-off RC、P0 关闭 | 已完成 |
 | M2 | 8 | PASS | 写入/幂等/rollback、任务卡 Web 发布和认证复验通过 | 已完成 |
-| M3 | 9–10 | Task 9 feature-off PASS、live AUTH_REQUIRED / Task 10 PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
+| M3 | 9–10 | Task 9 feature-off PASS、首次 live FAIL（本地 fix ready）/ Task 10 PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
 | M4 | 11 | PENDING | 单 connection 私有入口、公开契约不变 | 1–2 天 |
 | M5 | 12–13 | PENDING | 受控并发结论、V3/Codex 联合回执 | 1–2 天 |
 
@@ -409,7 +411,7 @@ $env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BEARER=$null
 
 ## 7. Task 9：接通 `ingest-worker` 真实 parser
 
-**Status:** AUTH_REQUIRED；独立 commit/push、CI、一次性数据库集成门禁和 feature-off 部署已完成。下一步仅为单图真实 provider pilot，必须重新取得测试身份、测试 scope、窗口和 live approval；不得复用 Task 8 测试会话或本次 feature-off 发布授权。
+**Status:** FAIL；首次单图 live 已在 provider 前停止并安全回滚。根因最小修复已在独立 worktree 本地验证，下一步先取得 fix commit/push 与 feature-off 部署批准；部署、CI 和回归通过后，再为单图 retry 取得新的测试身份、scope、窗口和 approval id。Task 10 继续阻塞。
 
 **Goal:** Move pending asset parse runs through an asynchronous worker to an accepted profile with bounded retry and safe provider handling.
 
@@ -508,6 +510,16 @@ Set the flag false, restart affected services and prove no new parse task is enq
 - `/etc/aiv3/aiv3.env` 已显式设置 `ASSET_PARSE_ENABLED=false`、`ASSET_PARSE_MAX_ATTEMPTS=2`、`ASSET_PARSE_PROVIDER_TIMEOUT_MS=120000`；仅重启 platform-api 与 ingest-worker，Web PID 保持不变。
 - 部署后 health/ready、普通 ingest runtime gate、主站 streaming self-test、静态页 self-test、资产 preflight 和公开契约 guard 通过；worker task-key filter 为 unset/all，供应商运行时配置类别存在但未调用，六项暗发布开关均关闭。
 - 连续观察 633 秒后，部署后新增 `parse_asset_profile` task 仍为 0；远端工作区干净，priority error 与 ERROR/FATAL/panic 均为 0。未启用 parser、未调用真实 provider、未上传或解析单图。
+
+**First live attempt and local fix receipt (2026-07-11):**
+
+- approval `TASK9-PARSER-PILOT-20260711-01` 在执行时重新核对通过的 `13941bc6` 上启动；一次性 local-key 身份、bootstrap/pilot dataset、私有 asset library 与 membership 均通过产品 API 创建。
+- 单图导入写入 1 asset、1 dataset membership、1 pending parse run 和 1 seeded profile；enqueue 创建 workflow execution 时使用未注册的 `asset-profile-parse-v1`，触发 `23503 foreign_key_violation`。`parse_asset_profile` task 为 0，真实 provider attempts 为 0。
+- `EXIT` rollback 恢复 `MAIN_SITE_ASSET_IMPORT_ENABLED=false`、`ASSET_PARSE_ENABLED=false`、allowlist 为空；仅 API/worker 被重启。session 已 logout/revoke，cookie jar 已销毁，health/ready 为 200，journal error markers 为 0。
+- 0600 no-delete manifest 位于 `/srv/aiv3/backups/task9-live-13941bc6-20260711T120212Z/task9-live-cleanup-manifest.private.json`；保留上述对象，不允许自动清理。
+- live 后服务器回归通过：asset runner self-test/preflight、公开契约 guard、主站/静态页 self-test、platform-api asset import 62/62、完整 ingest-worker 52+24；回归后 parser task 仍为 0。
+- 本地 fix worktree `ai-data-platform-v3-task9-live-fix` 基于 `1d7bf519`；`asset_import_support` 改为复用 workflow catalog 已注册的 upload-ingest version，并加入版本一致性和 catalog 缺失 fail-closed 回归测试。`cargo fmt --check`、asset import 64/64、parser worker 8/8、platform-api check、workspace check、runner self-test 与 `git diff --check` 均通过。
+- fix 未 commit、未 push、未部署；原 live approval 已结束且不得用于重试。
 
 **Stop:** provider call inside API request, unbounded retry, overwritten accepted profile, queue wait over five minutes or document-ingest regression.
 
@@ -815,11 +827,13 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-当前下一任务仍是 Task 9 的单图真实 provider pilot。`parse_asset_profile` 实现、
-commit/push、CI、一次性数据库验证和 8 服务器 feature-off 部署已经完成；parser
-保持关闭。先复核 Task 9 feature-off 回执，再重新取得测试身份、测试 scope、单并发
-单图窗口和 live approval；不得把本次发布批准解释为 provider/live-write 授权，
-不得复用 Task 8 Cookie 或 approval，不得提前进入 Task 10。
+当前下一步仍属于 Task 9，但不是直接复跑 live。首次 pilot 已在 provider 前因
+workflow definition version 外键不匹配失败并完成安全回滚，provider attempts=0。
+先复核验证账本中的 first live/fix receipt，审阅独立 worktree
+ai-data-platform-v3-task9-live-fix 的最小修复，再分别取得 commit/push 和 feature-off
+fix 部署批准。CI、部署和 flag-off 回归通过后，重新创建测试身份/scope，并取得新的
+单并发单图窗口与 live approval；不得复用 TASK9-PARSER-PILOT-20260711-01、旧 Cookie
+或旧 scope，不得提前进入 Task 10。
 ```
 
 ### 13.3 本计划完成条件

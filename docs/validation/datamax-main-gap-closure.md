@@ -262,6 +262,38 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - live execution remains `AUTH_REQUIRED` for a fresh test session, explicit scope, window, approval id, temporary parser/import flag changes, one provider call, and final rollback;
   - Task 10 remains blocked.
 
+## 2026-07-11 Task 9 First Live Parser Pilot Failure, Rollback, and Local Fix Candidate
+
+- Approval and frozen baseline:
+  - the user approved `TASK9-PARSER-PILOT-20260711-01` for one 15-minute, single-concurrency, single-PNG pilot with at most two real-provider attempts and explicit product-API provisioning authority;
+  - immediately before execution, server HEAD `13941bc67d0b276972a928e66b5adbf8a542876d`, clean worktree, API/worker active state, health/ready 200, feature-off flags, queue counts, provider configuration classes, local upload root, runner ancestry, and CI success were revalidated;
+  - no Task 10 action, direct authentication-row insert, direct scope-row insert, delete, automatic cleanup, 10-server action, or 120-server action was authorized or performed.
+- Controlled scope and failure:
+  - a fresh random local-key identity, bootstrap dataset, owned pilot dataset, private asset library, and dataset membership were created through existing product APIs; the raw key and session were never printed or placed in process arguments;
+  - the single-PNG runner created one asset, one dataset membership, one pending parse run, and one seeded profile, then the import API returned `400 foreign_key_violation` before a parser task could be created;
+  - database inspection proved the deployed enqueue path used `WorkflowKind::UploadIngest` with hard-coded version `asset-profile-parse-v1`, while the synchronized workflow registry contained only the active upload-ingest version `0.1.0`;
+  - attributable `parse_asset_profile` task count and runnable count remained `0|0`, so the worker made zero real-provider attempts and no provider payload was produced or stored.
+- Rollback and retained-data manifest:
+  - the operator script's `EXIT` rollback restored `MAIN_SITE_ASSET_IMPORT_ENABLED=false`, `ASSET_PARSE_ENABLED=false`, and an empty `MAIN_SITE_ASSET_IMPORT_TENANT_ALLOWLIST`, restarting only platform-api and ingest-worker;
+  - the one-time session was logged out and independently verified revoked; the 0600 cookie jar was shredded;
+  - the final 0600 no-delete manifest is `/srv/aiv3/backups/task9-live-13941bc6-20260711T120212Z/task9-live-cleanup-manifest.private.json`; it records the test identity/scope plus one asset, one membership, one parse run, and one profile, fixes `automatic_cleanup_allowed=false`, and records `cleanup_executed=false`;
+  - no retained test object was deleted or modified after the failed enqueue.
+- Post-live regression and safety observation:
+  - asset runner syntax, self-test, and no-credential preflight passed; public third-party contract guard, main-assistant streaming self-test, and static-page self-test passed;
+  - server `platform-api asset_import` passed 62/62 and full `ingest-worker` passed 52+24;
+  - after the regression window, API/worker remained active, health/ready were 200, both feature flags were false, the allowlist was empty, session revocation was `yes`, parser task counts were `0|0`, and API/worker journal error markers were 0;
+  - a concurrent external fast-forward moved the clean server checkout to `1d7bf519baf9e10a236ff186317035650776c0d3` after rollback without changing service PIDs; `13941bc6..1d7bf519` changes only `docs/integrations/v3-codex-client-boundary-contract.md`.
+- Local fix candidate:
+  - isolated worktree `ai-data-platform-v3-task9-live-fix`, branch `codex/task9-parser-workflow-version-fix`, was created from current `origin/main` `1d7bf519baf9e10a236ff186317035650776c0d3`;
+  - a red regression test first failed because `asset_parse_workflow_version` was absent;
+  - the minimal fix resolves the registered upload-ingest workflow version from `state.workflow_catalog` and uses it for asset-parser executions; the database dedupe fixture now uses the same registered version;
+  - the regression suite proves both registered-version reuse and fail-closed behavior when the upload-ingest definition is absent; `cargo fmt --check`, platform-api asset import 64/64, ingest-worker parser 8/8, `cargo check -p platform-api`, `cargo check --workspace`, asset runner self-test, and `git diff --check` passed;
+  - only `crates/platform-api/src/asset_import_support.rs`, this validation ledger, and the active R5 plan are modified; no schema, public API, runner contract, provider adapter, or Task 10 file changed.
+- Status:
+  - Task 9 is `FAIL` at the live gate and is not `PASS`;
+  - the fix is local and uncommitted; commit/push, GitHub CI, feature-off fix deployment, and any renewed live retry each require separate approval;
+  - the original approval id, session, scope, and window must not be reused; Task 10 remains blocked.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:

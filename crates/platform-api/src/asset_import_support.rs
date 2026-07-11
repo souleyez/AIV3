@@ -81,6 +81,20 @@ fn asset_parse_max_attempts() -> u32 {
         .unwrap_or(2)
 }
 
+fn asset_parse_workflow_version(
+    workflow_catalog: &workflow_engine::WorkflowCatalog,
+) -> std::result::Result<String, ApiError> {
+    workflow_catalog
+        .find_definition(WorkflowKind::UploadIngest)
+        .map(|definition| definition.version().to_string())
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "upload_ingest workflow definition is not registered".to_string(),
+            )
+        })
+}
+
 fn build_asset_parse_enqueue_task(
     enabled: bool,
     asset_id: Uuid,
@@ -161,7 +175,7 @@ async fn enqueue_asset_parse_if_enabled(
         dataset_id: Some(dataset_id),
         report_plan_id: None,
         kind: WorkflowKind::UploadIngest,
-        version: "asset-profile-parse-v1".to_string(),
+        version: asset_parse_workflow_version(&state.workflow_catalog)?,
         stage: contracts::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
         status: WorkflowStatus::Running,
         attempt: 0,
@@ -3917,6 +3931,30 @@ mod tests {
     }
 
     #[test]
+    fn asset_parse_enqueue_uses_registered_upload_ingest_workflow_version() {
+        let workflow_catalog = workflow_definitions::catalog();
+        let registered_version = workflow_catalog
+            .find_definition(WorkflowKind::UploadIngest)
+            .expect("upload ingest workflow should be registered")
+            .version()
+            .to_string();
+
+        assert_eq!(
+            asset_parse_workflow_version(&workflow_catalog)
+                .expect("asset parser should reuse a registered workflow version"),
+            registered_version
+        );
+        assert_ne!(registered_version, "asset-profile-parse-v1");
+    }
+
+    #[test]
+    fn asset_parse_enqueue_fails_closed_without_registered_upload_ingest_workflow() {
+        let workflow_catalog = workflow_engine::WorkflowCatalog::default();
+
+        assert!(asset_parse_workflow_version(&workflow_catalog).is_err());
+    }
+
+    #[test]
     fn asset_parse_enqueue_dedupe_key_is_stable_per_asset_and_parser_version() {
         let tenant_id = TenantId(Uuid::from_u128(31));
         let asset_id = Uuid::from_u128(32);
@@ -4043,7 +4081,8 @@ mod tests {
             dataset_id: Some(dataset_id),
             report_plan_id: None,
             kind: WorkflowKind::UploadIngest,
-            version: "asset-profile-parse-v1".to_string(),
+            version: asset_parse_workflow_version(&workflow_definitions::catalog())
+                .expect("upload ingest workflow should be registered"),
             stage: contracts::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
             status: WorkflowStatus::Running,
             attempt: 0,
