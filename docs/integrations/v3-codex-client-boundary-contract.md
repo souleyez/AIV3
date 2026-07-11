@@ -111,6 +111,7 @@ Current storage:
 - File records include `download_url` values under `/v1/client-artifacts/{artifact_id}/files/{file_index}`. The V3 web app accesses these through its `/api/v3/...` proxy.
 - Published HTML file records include `preview_url` values under `/v1/client-artifacts/{artifact_id}/files/{file_index}/preview`.
 - `POST /v1/client-artifacts/{artifact_id}/publish` requires a V3 user session, marks the artifact as `published`, and records `manifest.metadata.v3_publish.status=published_private`.
+- A completed follow-up edit is uploaded as a new artifact whose manifest includes `evidence_refs: [{ "kind": "revision_of", "id": "v3ca_..." }]`. Each revision is independently authorized and published; the reference is an audit link, never a bearer token, local path, or copy of the customer's instruction.
 - First publish implementation is enterprise-private: it does not produce an anonymous public URL and sets `manifest.metadata.v3_publish.public_url=null`.
 - HTML preview is an enterprise-private sandbox preview. The preview endpoint requires a V3 user session, requires the artifact to be published, strips active content and external-resource hooks, wraps the result in an empty-sandbox iframe, and does not produce a public URL.
 - `POST /v1/client-artifacts/{artifact_id}/publish-public` requires a V3 user session and requires the artifact to already be `published`.
