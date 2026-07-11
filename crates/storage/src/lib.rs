@@ -2015,12 +2015,12 @@ impl PgAssetItemRepository {
             )
             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             on conflict (tenant_id, asset_id, parser_name, parser_version) do update
-            set status = excluded.status,
-                started_at = excluded.started_at,
-                finished_at = excluded.finished_at,
-                error_code = excluded.error_code,
-                error_message = excluded.error_message,
-                metadata = excluded.metadata,
+            set status = asset_parse_runs.status,
+                started_at = asset_parse_runs.started_at,
+                finished_at = asset_parse_runs.finished_at,
+                error_code = asset_parse_runs.error_code,
+                error_message = asset_parse_runs.error_message,
+                metadata = asset_parse_runs.metadata || excluded.metadata,
                 updated_at = now()
             returning id, tenant_id, asset_id, parser_name, parser_version, status,
                       started_at, finished_at, error_code, error_message, metadata,
@@ -2037,6 +2037,76 @@ impl PgAssetItemRepository {
         .bind(new_parse_run.error_code)
         .bind(new_parse_run.error_message)
         .bind(new_parse_run.metadata)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(map_asset_parse_run_row(&row))
+    }
+
+    pub async fn get_parse_run_by_id(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+        parse_run_id: Uuid,
+    ) -> Result<Option<AssetParseRunRecord>> {
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, asset_id, parser_name, parser_version, status,
+                   started_at, finished_at, error_code, error_message, metadata,
+                   created_at, updated_at
+            from asset_parse_runs
+            where tenant_id = $1 and asset_id = $2 and id = $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .bind(parse_run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(map_asset_parse_run_row))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_parse_run_state(
+        &self,
+        tenant_id: TenantId,
+        asset_id: Uuid,
+        parse_run_id: Uuid,
+        status: &str,
+        started_at: Option<DateTime<Utc>>,
+        finished_at: Option<DateTime<Utc>>,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+        metadata_patch: &Value,
+        updated_at: DateTime<Utc>,
+    ) -> Result<AssetParseRunRecord> {
+        let row = sqlx::query(
+            r#"
+            update asset_parse_runs
+            set status = $4,
+                started_at = coalesce($5, started_at),
+                finished_at = $6,
+                error_code = $7,
+                error_message = $8,
+                metadata = metadata || $9,
+                updated_at = $10
+            where tenant_id = $1 and asset_id = $2 and id = $3
+            returning id, tenant_id, asset_id, parser_name, parser_version, status,
+                      started_at, finished_at, error_code, error_message, metadata,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_id)
+        .bind(parse_run_id)
+        .bind(status)
+        .bind(started_at)
+        .bind(finished_at)
+        .bind(error_code)
+        .bind(error_message)
+        .bind(metadata_patch)
+        .bind(updated_at)
         .fetch_one(&self.pool)
         .await?;
 
@@ -7555,6 +7625,31 @@ impl PgWorkflowExecutionRepository {
         rows.iter().map(map_workflow_execution_row).collect()
     }
 
+    pub async fn update_detached_task_state(
+        &self,
+        tenant_id: TenantId,
+        execution_id: WorkflowExecutionId,
+        status: WorkflowStatus,
+        stage: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            update workflow_executions
+            set status = $3, stage = $4, updated_at = $5
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(execution_id.0)
+        .bind(status.as_str())
+        .bind(stage)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_latest_by_report_plan_and_kind(
         &self,
         tenant_id: TenantId,
@@ -7726,6 +7821,52 @@ impl PgWorkflowTaskRepository {
         created_at: DateTime<Utc>,
     ) -> Result<WorkflowTask> {
         insert_workflow_task(&self.pool, execution, task, created_at).await
+    }
+
+    pub async fn create_asset_parse_if_absent(
+        &self,
+        execution: &WorkflowExecution,
+        initial_event: &WorkflowEventRecord,
+        task: &NewWorkflowTask,
+        dedupe_key: &str,
+        created_at: DateTime<Utc>,
+    ) -> Result<Option<WorkflowTask>> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(dedupe_key)
+            .execute(&mut *tx)
+            .await?;
+
+        let existing = sqlx::query(
+            r#"
+            select id, tenant_id, execution_id, queue, task_key, payload, status, attempt,
+                   max_attempts, available_at, claimed_at, finished_at, error, created_at, updated_at
+            from workflow_tasks
+            where tenant_id = $1
+              and queue = $2
+              and task_key = $3
+              and status in ('queued', 'claimed')
+              and payload ->> 'dedupe_key' = $4
+            order by created_at asc
+            limit 1
+            "#,
+        )
+        .bind(execution.tenant_id.0)
+        .bind(&task.queue)
+        .bind(&task.task_key)
+        .bind(dedupe_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if existing.is_some() {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
+        insert_workflow_execution(&mut *tx, execution).await?;
+        insert_workflow_event(&mut *tx, initial_event).await?;
+        let persisted = insert_workflow_task(&mut *tx, execution, task, created_at).await?;
+        tx.commit().await?;
+        Ok(Some(persisted))
     }
 
     pub async fn list_by_execution(

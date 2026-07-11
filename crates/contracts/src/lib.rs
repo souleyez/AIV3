@@ -3548,6 +3548,18 @@ pub struct AssetProfileSupplyHintView {
 }
 
 pub const FASHION_DESIGN_IMAGE_PROFILE_SCHEMA: &str = "fashion_design_image_v1";
+pub const ASSET_PROFILE_PARSE_QUEUE: &str = "ingest";
+pub const ASSET_PROFILE_PARSE_TASK_KEY: &str = "parse_asset_profile";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetProfileParseTaskPayload {
+    pub asset_id: String,
+    pub parse_run_id: String,
+    pub parser_name: String,
+    pub parser_version: String,
+    pub profile_kind: String,
+    pub dedupe_key: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FashionDesignImageProfileV1 {

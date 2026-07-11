@@ -1,10 +1,15 @@
+use chrono::{DateTime, Utc};
 use contracts::{
-    CreateFashionDesignImageAssetImportBatchRequest,
+    AssetProfileParseTaskPayload, CreateFashionDesignImageAssetImportBatchRequest,
     CreateFashionDesignImageAssetImportBatchResponse, CreateFashionDesignImageAssetImportRequest,
     CreateFashionDesignImageAssetImportResponse, FashionDesignImageAssetImportItem,
     FashionDesignImageAssetImportPackage,
 };
-use domain_model::{DatasetId, TenantId};
+use domain_model::{
+    DatasetId, TenantId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
+    WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+};
+use event_bus::{workflow_task_enqueued_subject, EventEnvelope};
 use serde_json::{json, Map, Value};
 use std::{
     fs::{self, File},
@@ -13,7 +18,7 @@ use std::{
 };
 use storage::{
     AssetItemRecord, AssetParseRunRecord, AssetProfileRecord, DatasetAssetMembershipRecord,
-    NewAssetItem, NewAssetParseRun, NewAssetProfile, NewDatasetAssetMembership,
+    NewAssetItem, NewAssetParseRun, NewAssetProfile, NewDatasetAssetMembership, NewWorkflowTask,
 };
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -66,6 +71,154 @@ pub(crate) struct SyncedFashionDesignImageAssetImport {
     pub dataset_membership: DatasetAssetMembershipRecord,
     pub parse_run: AssetParseRunRecord,
     pub profile: AssetProfileRecord,
+}
+
+fn asset_parse_max_attempts() -> u32 {
+    std::env::var("ASSET_PARSE_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (1..=5).contains(value))
+        .unwrap_or(2)
+}
+
+fn build_asset_parse_enqueue_task(
+    enabled: bool,
+    asset_id: Uuid,
+    parse_run_id: Uuid,
+    parser_name: &str,
+    parser_version: &str,
+    parse_status: &str,
+    queued_at: DateTime<Utc>,
+    max_attempts: u32,
+) -> Option<NewWorkflowTask> {
+    if !enabled || parse_status != "pending" {
+        return None;
+    }
+    let dedupe_key = asset_parse_task_dedupe_key(asset_id, parser_name, parser_version);
+    let payload = AssetProfileParseTaskPayload {
+        asset_id: asset_id.to_string(),
+        parse_run_id: parse_run_id.to_string(),
+        parser_name: parser_name.to_string(),
+        parser_version: parser_version.to_string(),
+        profile_kind: FASHION_DESIGN_IMAGE_PROFILE_KIND.to_string(),
+        dedupe_key,
+    };
+    Some(NewWorkflowTask {
+        queue: contracts::ASSET_PROFILE_PARSE_QUEUE.to_string(),
+        task_key: contracts::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
+        payload: serde_json::to_value(payload).ok()?,
+        available_at: queued_at,
+        max_attempts: max_attempts.clamp(1, 5),
+    })
+}
+
+fn asset_parse_task_dedupe_key(asset_id: Uuid, parser_name: &str, parser_version: &str) -> String {
+    let material = format!("{asset_id}:{parser_name}:{parser_version}");
+    sha256_hex([material.as_bytes()])
+}
+
+fn asset_parse_runnable_dedupe_key(
+    tenant_id: TenantId,
+    asset_id: Uuid,
+    parser_name: &str,
+    parser_version: &str,
+) -> String {
+    let material = format!("{}:{asset_id}:{parser_name}:{parser_version}", tenant_id.0);
+    sha256_hex([material.as_bytes()])
+}
+
+async fn enqueue_asset_parse_if_enabled(
+    state: &AppState,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    asset: &AssetItemRecord,
+    parse_run: &AssetParseRunRecord,
+) -> std::result::Result<(), ApiError> {
+    let queued_at = Utc::now();
+    let Some(mut task) = build_asset_parse_enqueue_task(
+        crate::env_flag("ASSET_PARSE_ENABLED", false),
+        asset.id,
+        parse_run.id,
+        &parse_run.parser_name,
+        &parse_run.parser_version,
+        &parse_run.status,
+        queued_at,
+        asset_parse_max_attempts(),
+    ) else {
+        return Ok(());
+    };
+    let dedupe_key = asset_parse_runnable_dedupe_key(
+        tenant_id,
+        asset.id,
+        &parse_run.parser_name,
+        &parse_run.parser_version,
+    );
+    task.payload["dedupe_key"] = json!(dedupe_key);
+    let execution_id = WorkflowExecutionId::new();
+    let execution = WorkflowExecution {
+        id: execution_id,
+        tenant_id,
+        dataset_id: Some(dataset_id),
+        report_plan_id: None,
+        kind: WorkflowKind::UploadIngest,
+        version: "asset-profile-parse-v1".to_string(),
+        stage: contracts::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
+        status: WorkflowStatus::Running,
+        attempt: 0,
+        context: json!({
+            "workflow_envelope": "asset_profile_parse",
+            "asset_id": asset.id,
+            "parse_run_id": parse_run.id,
+            "parser_name": parse_run.parser_name,
+            "parser_version": parse_run.parser_version,
+            "dedupe_key": dedupe_key,
+        }),
+        created_at: queued_at,
+        updated_at: queued_at,
+    };
+    let initial_event = WorkflowEventRecord {
+        id: WorkflowEventId::new(),
+        execution_id,
+        sequence_no: 1,
+        event_name: "asset_profile_parse.queued".to_string(),
+        payload: json!({
+            "asset_id": asset.id,
+            "parse_run_id": parse_run.id,
+            "parser_name": parse_run.parser_name,
+            "parser_version": parse_run.parser_version,
+            "queue": task.queue,
+            "task_key": task.task_key,
+        }),
+        created_at: queued_at,
+    };
+    let persisted = state
+        .storage
+        .workflow_tasks()
+        .create_asset_parse_if_absent(&execution, &initial_event, &task, &dedupe_key, queued_at)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if let Some(persisted) = persisted {
+        state
+            .event_bus
+            .publish(EventEnvelope {
+                subject: workflow_task_enqueued_subject(
+                    contracts::ASSET_PROFILE_PARSE_QUEUE,
+                    contracts::ASSET_PROFILE_PARSE_TASK_KEY,
+                ),
+                payload: json!({
+                    "task_id": persisted.id,
+                    "tenant_id": persisted.tenant_id,
+                    "execution_id": persisted.execution_id,
+                    "queue": persisted.queue,
+                    "task_key": persisted.task_key,
+                    "status": persisted.status.as_str(),
+                    "available_at": persisted.available_at,
+                }),
+                published_at: persisted.created_at,
+            })
+            .await;
+    }
+    Ok(())
 }
 
 pub(crate) fn fashion_design_asset_import_live_execute_operator_manifest_dry_run(
@@ -2906,6 +3059,15 @@ async fn upsert_fashion_design_image_asset_import_for_tenant(
         .await
         .map_err(ApiError::from_storage)?;
 
+    enqueue_asset_parse_if_enabled(
+        state,
+        tenant_id,
+        dataset_membership.dataset_id,
+        &asset,
+        &parse_run,
+    )
+    .await?;
+
     Ok(SyncedFashionDesignImageAssetImport {
         asset,
         dataset_membership,
@@ -3602,8 +3764,13 @@ fn trimmed(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use domain_model::DatasetId;
     use serde_json::json;
+    use storage::NewDataset;
+    use test_fixtures::{
+        local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -3681,6 +3848,222 @@ mod tests {
                     metadata: json!({"operator": "override"}),
                 },
             ],
+        }
+    }
+
+    #[test]
+    fn asset_parse_enqueue_builds_one_ingest_task_after_successful_import() {
+        let asset_id = Uuid::from_u128(11);
+        let parse_run_id = Uuid::from_u128(12);
+        let queued_at = Utc::now();
+
+        let task = build_asset_parse_enqueue_task(
+            true,
+            asset_id,
+            parse_run_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+            "pending",
+            queued_at,
+            2,
+        )
+        .expect("enabled pending import should enqueue asset parsing");
+
+        assert_eq!(task.queue, contracts::ASSET_PROFILE_PARSE_QUEUE);
+        assert_eq!(task.task_key, contracts::ASSET_PROFILE_PARSE_TASK_KEY);
+        assert_eq!(task.max_attempts, 2);
+        assert_eq!(task.payload["asset_id"], json!(asset_id.to_string()));
+        assert_eq!(
+            task.payload["parse_run_id"],
+            json!(parse_run_id.to_string())
+        );
+        assert_eq!(
+            task.payload["parser_version"],
+            json!(FASHION_DESIGN_IMAGE_PARSER_VERSION)
+        );
+        assert!(task.payload.get("object_key").is_none());
+        assert!(task.payload.get("image_url").is_none());
+    }
+
+    #[test]
+    fn asset_parse_enqueue_is_disabled_by_default_and_skips_terminal_runs() {
+        let queued_at = Utc::now();
+        let args = (
+            Uuid::from_u128(21),
+            Uuid::from_u128(22),
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+        );
+
+        assert!(build_asset_parse_enqueue_task(
+            false, args.0, args.1, args.2, args.3, "pending", queued_at, 2,
+        )
+        .is_none());
+        assert!(build_asset_parse_enqueue_task(
+            true,
+            args.0,
+            args.1,
+            args.2,
+            args.3,
+            "completed",
+            queued_at,
+            2,
+        )
+        .is_none());
+        assert!(build_asset_parse_enqueue_task(
+            true, args.0, args.1, args.2, args.3, "partial", queued_at, 2,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn asset_parse_enqueue_dedupe_key_is_stable_per_asset_and_parser_version() {
+        let tenant_id = TenantId(Uuid::from_u128(31));
+        let asset_id = Uuid::from_u128(32);
+
+        let first = asset_parse_runnable_dedupe_key(
+            tenant_id,
+            asset_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+        );
+        let repeated = asset_parse_runnable_dedupe_key(
+            tenant_id,
+            asset_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+        );
+        let next_version = asset_parse_runnable_dedupe_key(
+            tenant_id,
+            asset_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            "2026-07-11",
+        );
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, next_version);
+        assert!(!first.contains(&tenant_id.to_string()));
+        assert!(!first.contains(&asset_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn asset_parse_enqueue_allows_at_most_one_runnable_task_per_dedupe_key() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping asset parse enqueue dedupe test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("test storage should reset");
+        let tenant = storage
+            .ensure_tenant(
+                &format!("asset-parse-enqueue-{}", Uuid::new_v4()),
+                "Asset Parse Enqueue",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("asset-parse-enqueue-{}", Uuid::new_v4()),
+                    title: "Asset parse enqueue".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should exist");
+        let asset_id = Uuid::new_v4();
+        let parse_run_id = Uuid::new_v4();
+        let dedupe_key = asset_parse_runnable_dedupe_key(
+            tenant.id,
+            asset_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+        );
+        let now = Utc::now();
+        let mut task = build_asset_parse_enqueue_task(
+            true,
+            asset_id,
+            parse_run_id,
+            FASHION_DESIGN_IMAGE_PARSER_NAME,
+            FASHION_DESIGN_IMAGE_PARSER_VERSION,
+            "pending",
+            now,
+            2,
+        )
+        .expect("task should build");
+        task.payload["dedupe_key"] = json!(dedupe_key);
+
+        let first_execution = test_asset_parse_execution(tenant.id, dataset.id, now);
+        let first_event = test_asset_parse_event(&first_execution, now);
+        let first = storage
+            .workflow_tasks()
+            .create_asset_parse_if_absent(&first_execution, &first_event, &task, &dedupe_key, now)
+            .await
+            .expect("first enqueue should succeed");
+        assert!(first.is_some());
+
+        let second_execution = test_asset_parse_execution(tenant.id, dataset.id, now);
+        let second_event = test_asset_parse_event(&second_execution, now);
+        let second = storage
+            .workflow_tasks()
+            .create_asset_parse_if_absent(&second_execution, &second_event, &task, &dedupe_key, now)
+            .await
+            .expect("duplicate enqueue should be handled");
+        assert!(second.is_none());
+        assert!(storage
+            .workflow_executions()
+            .get_by_id(tenant.id, second_execution.id)
+            .await
+            .expect("execution lookup should succeed")
+            .is_none());
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(first_execution.id)
+            .await
+            .expect("tasks should load");
+        assert_eq!(tasks.len(), 1);
+    }
+
+    fn test_asset_parse_execution(
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        now: DateTime<Utc>,
+    ) -> WorkflowExecution {
+        WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id,
+            dataset_id: Some(dataset_id),
+            report_plan_id: None,
+            kind: WorkflowKind::UploadIngest,
+            version: "asset-profile-parse-v1".to_string(),
+            stage: contracts::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
+            status: WorkflowStatus::Running,
+            attempt: 0,
+            context: json!({"workflow_envelope": "asset_profile_parse"}),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn test_asset_parse_event(
+        execution: &WorkflowExecution,
+        now: DateTime<Utc>,
+    ) -> WorkflowEventRecord {
+        WorkflowEventRecord {
+            id: WorkflowEventId::new(),
+            execution_id: execution.id,
+            sequence_no: 1,
+            event_name: "asset_profile_parse.queued".to_string(),
+            payload: json!({}),
+            created_at: now,
         }
     }
 

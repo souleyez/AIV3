@@ -1,6 +1,6 @@
 # DataMax V3 企业智能体平台方案说明书
 
-**版本日期：** 2026-06-13  
+**版本日期：** 2026-07-11
 **适用范围：** DataMax V3 主站、管理台、第三方接口、文档知识库、数据库接入、报表和静态页产物、分布式 Codex 执行器阵列、行业版 Codex 客户端。  
 **文档定位：** 本说明书面向企业客户方案沟通和内部交付设计，是 DataMax V3 帮助企业规模化、安全化、可审计地使用世界顶尖智能体 Codex 的最佳实践底稿。对外发布时应删除运维、执行器调度、模型路由、观测密钥和内部排障内容。
 
@@ -89,6 +89,28 @@ DataMax V3 是面向企业资料、业务数据和第三方系统的企业级智
 ### 4.3 在线修改
 
 用户可在对话里明确提出“修改报表”。系统应把该请求识别为对已有产物的编辑，不应重新创建无关页面。修改优先级按用户最新表达处理，例如用户要求“门店取高”时，应把相关模块前置，而不是机械复用旧模板顺序。
+
+### 4.4 服装设计图片资产异步解析
+
+主站资产导入成功后，图片解析不在 API 请求内同步执行。开启解析开关时，平台会向现有 `ingest` 队列写入 `parse_asset_profile` 任务，由 `ingest-worker` 读取同租户下的资产、parse run 和已批准的本地对象定位信息，再调用现有视觉结构化 provider。默认配置如下：
+
+```text
+ASSET_PARSE_ENABLED=false
+ASSET_PARSE_MAX_ATTEMPTS=2
+ASSET_PARSE_PROVIDER_TIMEOUT_MS=120000
+```
+
+运行规则：
+
+- API 和 worker 都会校验 `ASSET_PARSE_ENABLED`；缺失或无法解析时按关闭处理。关闭时资产仍可导入，但不新增解析任务，手工或遗留任务也不得调用 provider。
+- 同一租户、资产、parser 名称和版本最多存在一个 `queued`/`claimed` 任务；重复导入不会重置已完成、部分完成或失败的 parse run。
+- 完整规范化画像写入 parser 版本隔离的 profile 后标记 `completed`；字段不完整但结果安全可用时写入独立 profile 并标记 `partial`。
+- provider 暂时不可用时标记 `retrying`，最多消费两次；永久拒绝、安全校验失败或重试耗尽后写入脱敏错误码并标记 `failed`。
+- parser 版本变化会创建新的 parse run 和 profile 版本，不覆盖旧版本已接受画像。
+- 只允许读取批准目录内的本地 PNG/JPEG/WebP，执行路径、对象定位信息、图片字节和 provider 原始响应不写入任务 payload、日志、共享回执或 profile。
+- 远程 URL 固定返回 `remote_source_disabled`，在 SSRF、重定向、DNS、MIME、大小和超时保护全部落地前不得发起网络抓取。
+
+发布时必须先以 `ASSET_PARSE_ENABLED=false` 部署并回归普通文档 ingest；只有在独立审批窗口内才可对单一测试租户和单张测试图片开启解析。窗口结束后重新关闭开关并重启 `platform-api` 与 `ingest-worker`。
 
 ## 5. 文档知识库
 
@@ -655,11 +677,12 @@ V3 生产主要运行在 8 服务器，典型服务包括：
 | `aiv3-assistant-run-worker.service` | 助手任务和异步运行。 |
 | `aiv3-chat-session-worker.service` | 会话相关后台任务。 |
 | `aiv3-static-page-worker.service` | 静态页、效果图和产物发布后台任务。 |
+| `aiv3-ingest-worker.service` | 文档 ingest 与受控资产画像异步解析。 |
 
 常用健康检查：
 
 ```bash
-systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service
+systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service aiv3-ingest-worker.service
 curl -fsS https://v3.elepcloud.com/readyz
 curl -fsS https://v3.elepcloud.com/healthz
 ```

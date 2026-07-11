@@ -8,8 +8,10 @@ use ingest_worker::{
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use storage::{
-    NewDocument, NewDocumentChunk, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
+    NewAssetProfile, NewDocument, NewDocumentChunk, NewWorkflowTask, PgStorage,
+    DEFAULT_LOCAL_DATABASE_URL,
 };
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -24,6 +26,88 @@ const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS: usize = 1;
 const CHUNK_NOUN_TERM_LIMIT: usize = 64;
 const CHUNK_STRUCTURE_TERM_LIMIT: usize = 24;
+const ASSET_PARSE_DEFAULT_PROVIDER_TIMEOUT_MS: u64 = 120_000;
+const ASSET_PARSE_MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const ASSET_PARSE_RETRY_DELAY_SECONDS: i64 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngestTaskKind {
+    UploadedDocument,
+    ExternalSource,
+    AssetProfileParse,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssetParseProfileState {
+    Completed,
+    Partial,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssetParseFailureAction {
+    Retry,
+    Fail,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssetParseWorkerError {
+    code: &'static str,
+    retryable: bool,
+}
+
+fn classify_ingest_task_key(task_key: &str) -> IngestTaskKind {
+    match task_key {
+        EXTERNAL_SOURCE_INGEST_TASK_KEY => IngestTaskKind::ExternalSource,
+        platform_api::ASSET_PROFILE_PARSE_TASK_KEY => IngestTaskKind::AssetProfileParse,
+        DEFAULT_WAKE_TASK_KEY | VIDEO_PARSE_MEDIA_TASK_KEY => IngestTaskKind::UploadedDocument,
+        _ => IngestTaskKind::Unknown,
+    }
+}
+
+fn asset_parse_profile_state(attributes: &Value) -> AssetParseProfileState {
+    let complete = attributes.as_object().is_some_and(|object| {
+        let has_category = object
+            .get("category")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_caption = object
+            .get("caption")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_facet = object.iter().any(|(key, value)| {
+            !matches!(key.as_str(), "category" | "caption" | "confidence")
+                && value.as_array().is_some_and(|values| !values.is_empty())
+        });
+        has_category && has_caption && has_facet
+    });
+    if complete {
+        AssetParseProfileState::Completed
+    } else {
+        AssetParseProfileState::Partial
+    }
+}
+
+fn asset_parse_failure_action(
+    retryable: bool,
+    attempt: u32,
+    max_attempts: u32,
+) -> AssetParseFailureAction {
+    if retryable && attempt < max_attempts.max(1) {
+        AssetParseFailureAction::Retry
+    } else {
+        AssetParseFailureAction::Fail
+    }
+}
+
+fn asset_parse_enabled_from_value(value: Option<&str>) -> bool {
+    value.and_then(parse_bool_env_value).unwrap_or(false)
+}
+
+fn asset_parse_enabled() -> bool {
+    let value = std::env::var("ASSET_PARSE_ENABLED").ok();
+    asset_parse_enabled_from_value(value.as_deref())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AutoReparseDecision {
@@ -76,7 +160,6 @@ async fn main() -> Result<()> {
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
-        %database_url,
         "ingest-worker polling started"
     );
 
@@ -111,12 +194,617 @@ async fn process_task(
     processor: &impl IngestProcessor,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
-    if task.task_key == EXTERNAL_SOURCE_INGEST_TASK_KEY {
-        return process_external_source_ingest_task(storage, workflow_catalog, event_bus, task)
+    match classify_ingest_task_key(&task.task_key) {
+        IngestTaskKind::ExternalSource => {
+            process_external_source_ingest_task(storage, workflow_catalog, event_bus, task).await
+        }
+        IngestTaskKind::AssetProfileParse => {
+            process_asset_profile_parse_task(storage, event_bus, task).await
+        }
+        IngestTaskKind::UploadedDocument => {
+            process_uploaded_document_task(storage, workflow_catalog, event_bus, processor, task)
+                .await
+        }
+        IngestTaskKind::Unknown => reject_unknown_ingest_task(storage, task).await,
+    }
+}
+
+async fn reject_unknown_ingest_task(storage: &PgStorage, task: WorkflowTask) -> Result<()> {
+    let now = Utc::now();
+    storage
+        .workflow_tasks()
+        .mark_failed(task.id, "unsupported_ingest_task_key", now)
+        .await?;
+    storage
+        .workflow_executions()
+        .update_detached_task_state(
+            task.tenant_id,
+            task.execution_id,
+            WorkflowStatus::Failed,
+            "unsupported_ingest_task_key",
+            now,
+        )
+        .await?;
+    tracing::warn!(task_id = %task.id, "unsupported ingest task rejected");
+    Ok(())
+}
+
+async fn process_asset_profile_parse_task(
+    storage: &PgStorage,
+    event_bus: &EventBus,
+    task: WorkflowTask,
+) -> Result<()> {
+    process_asset_profile_parse_task_with_provider_result(storage, event_bus, task, None).await
+}
+
+async fn process_asset_profile_parse_task_with_provider_result(
+    storage: &PgStorage,
+    event_bus: &EventBus,
+    task: WorkflowTask,
+    provider_result: Option<
+        std::result::Result<
+            platform_api::FashionDesignImageParseResult,
+            platform_api::FashionDesignImageParseError,
+        >,
+    >,
+) -> Result<()> {
+    if !asset_parse_enabled() {
+        return finish_unbound_asset_parse_failure(storage, &task, "asset_parse_disabled").await;
+    }
+    let payload = match serde_json::from_value::<platform_api::AssetProfileParseTaskPayload>(
+        task.payload.clone(),
+    ) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return finish_unbound_asset_parse_failure(
+                storage,
+                &task,
+                "invalid_asset_parse_task_payload",
+            )
             .await;
+        }
+    };
+    let asset_id = match uuid::Uuid::parse_str(&payload.asset_id) {
+        Ok(value) => value,
+        Err(_) => {
+            return finish_unbound_asset_parse_failure(
+                storage,
+                &task,
+                "invalid_asset_parse_task_payload",
+            )
+            .await;
+        }
+    };
+    let parse_run_id = match uuid::Uuid::parse_str(&payload.parse_run_id) {
+        Ok(value) => value,
+        Err(_) => {
+            return finish_unbound_asset_parse_failure(
+                storage,
+                &task,
+                "invalid_asset_parse_task_payload",
+            )
+            .await;
+        }
+    };
+    let Some(asset) = storage
+        .asset_items()
+        .get_by_id(task.tenant_id, asset_id)
+        .await?
+    else {
+        return finish_unbound_asset_parse_failure(storage, &task, "asset_parse_asset_not_found")
+            .await;
+    };
+    let Some(parse_run) = storage
+        .asset_items()
+        .get_parse_run_by_id(task.tenant_id, asset_id, parse_run_id)
+        .await?
+    else {
+        return finish_unbound_asset_parse_failure(storage, &task, "asset_parse_run_not_found")
+            .await;
+    };
+    if parse_run.parser_name != payload.parser_name
+        || parse_run.parser_version != payload.parser_version
+        || payload.profile_kind != contracts_profile_kind()
+    {
+        return finish_bound_asset_parse_failure(
+            storage,
+            &task,
+            asset_id,
+            parse_run_id,
+            "asset_parse_contract_mismatch",
+            false,
+        )
+        .await;
+    }
+    if matches!(parse_run.status.as_str(), "completed" | "partial") {
+        let now = Utc::now();
+        storage
+            .workflow_tasks()
+            .mark_succeeded(task.id, now)
+            .await?;
+        storage
+            .workflow_executions()
+            .update_detached_task_state(
+                task.tenant_id,
+                task.execution_id,
+                WorkflowStatus::Succeeded,
+                "asset_profile_parse_already_terminal",
+                now,
+            )
+            .await?;
+        return Ok(());
+    }
+    if !matches!(
+        parse_run.status.as_str(),
+        "pending" | "retrying" | "processing"
+    ) {
+        return finish_bound_asset_parse_failure(
+            storage,
+            &task,
+            asset_id,
+            parse_run_id,
+            "asset_parse_run_not_runnable",
+            false,
+        )
+        .await;
     }
 
-    process_uploaded_document_task(storage, workflow_catalog, event_bus, processor, task).await
+    let started_at = Utc::now();
+    storage
+        .asset_items()
+        .update_parse_run_state(
+            task.tenant_id,
+            asset_id,
+            parse_run_id,
+            "processing",
+            Some(started_at),
+            None,
+            None,
+            None,
+            &json!({
+                "worker": {
+                    "task_key": platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                    "attempt": task.attempt,
+                    "max_attempts": task.max_attempts,
+                    "started_at": started_at,
+                }
+            }),
+            started_at,
+        )
+        .await?;
+
+    let source = load_asset_parse_source(&asset).await;
+    let parsed = match source {
+        Ok((content_type, bytes)) => match provider_result {
+            Some(result) => result.map_err(|error| AssetParseWorkerError {
+                code: error.code,
+                retryable: error.retryable,
+            }),
+            None => platform_api::parse_fashion_design_image_profile_bytes(
+                &content_type,
+                &bytes,
+                asset_parse_provider_timeout_ms(),
+            )
+            .await
+            .map_err(|error| AssetParseWorkerError {
+                code: error.code,
+                retryable: error.retryable,
+            }),
+        },
+        Err(error) => Err(error),
+    };
+
+    match parsed {
+        Ok(parsed) => {
+            let state = if parsed.complete {
+                AssetParseProfileState::Completed
+            } else {
+                asset_parse_profile_state(&parsed.attributes)
+            };
+            let status = match state {
+                AssetParseProfileState::Completed => "completed",
+                AssetParseProfileState::Partial => "partial",
+            };
+            let now = Utc::now();
+            storage
+                .asset_items()
+                .upsert_profile(
+                    task.tenant_id,
+                    asset_id,
+                    NewAssetProfile {
+                        profile_kind: payload.profile_kind,
+                        profile_version: format!(
+                            "{}@{}",
+                            parse_run.parser_name, parse_run.parser_version
+                        ),
+                        attributes: parsed.attributes.clone(),
+                        embedding_status: "not_requested".to_string(),
+                    },
+                )
+                .await?;
+            storage
+                .asset_items()
+                .update_parse_run_state(
+                    task.tenant_id,
+                    asset_id,
+                    parse_run_id,
+                    status,
+                    Some(started_at),
+                    Some(now),
+                    None,
+                    None,
+                    &json!({
+                        "worker": {
+                            "task_key": platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                            "attempt": task.attempt,
+                            "max_attempts": task.max_attempts,
+                            "finished_at": now,
+                            "normalized_profile_field_count": parsed
+                                .attributes
+                                .as_object()
+                                .map(|object| object.len())
+                                .unwrap_or(0),
+                            "provider_raw_payload_stored": false,
+                            "source_locator_stored": false,
+                        }
+                    }),
+                    now,
+                )
+                .await?;
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, now)
+                .await?;
+            storage
+                .workflow_executions()
+                .update_detached_task_state(
+                    task.tenant_id,
+                    task.execution_id,
+                    WorkflowStatus::Succeeded,
+                    if state == AssetParseProfileState::Completed {
+                        "asset_profile_parse_completed"
+                    } else {
+                        "asset_profile_parse_partial"
+                    },
+                    now,
+                )
+                .await?;
+            tracing::info!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                parse_status = status,
+                "asset profile parse task completed"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            finish_bound_asset_parse_failure(
+                storage,
+                &task,
+                asset_id,
+                parse_run_id,
+                error.code,
+                error.retryable,
+            )
+            .await?;
+            if asset_parse_failure_action(error.retryable, task.attempt, task.max_attempts)
+                == AssetParseFailureAction::Retry
+            {
+                event_bus
+                    .publish(EventEnvelope {
+                        subject: workflow_task_enqueued_subject(
+                            platform_api::ASSET_PROFILE_PARSE_QUEUE,
+                            platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                        ),
+                        payload: json!({
+                            "task_id": task.id,
+                            "tenant_id": task.tenant_id,
+                            "execution_id": task.execution_id,
+                            "queue": platform_api::ASSET_PROFILE_PARSE_QUEUE,
+                            "task_key": platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                            "status": "queued",
+                        }),
+                        published_at: Utc::now(),
+                    })
+                    .await;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn contracts_profile_kind() -> &'static str {
+    platform_api::FASHION_DESIGN_IMAGE_PROFILE_SCHEMA
+}
+
+fn asset_parse_provider_timeout_ms() -> u64 {
+    std::env::var("ASSET_PARSE_PROVIDER_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| (1_000..=300_000).contains(value))
+        .unwrap_or(ASSET_PARSE_DEFAULT_PROVIDER_TIMEOUT_MS)
+}
+
+async fn finish_unbound_asset_parse_failure(
+    storage: &PgStorage,
+    task: &WorkflowTask,
+    code: &'static str,
+) -> Result<()> {
+    let now = Utc::now();
+    storage
+        .workflow_tasks()
+        .mark_failed(task.id, code, now)
+        .await?;
+    storage
+        .workflow_executions()
+        .update_detached_task_state(
+            task.tenant_id,
+            task.execution_id,
+            WorkflowStatus::Failed,
+            code,
+            now,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn finish_bound_asset_parse_failure(
+    storage: &PgStorage,
+    task: &WorkflowTask,
+    asset_id: uuid::Uuid,
+    parse_run_id: uuid::Uuid,
+    code: &'static str,
+    retryable: bool,
+) -> Result<()> {
+    let now = Utc::now();
+    match asset_parse_failure_action(retryable, task.attempt, task.max_attempts) {
+        AssetParseFailureAction::Retry => {
+            storage
+                .asset_items()
+                .update_parse_run_state(
+                    task.tenant_id,
+                    asset_id,
+                    parse_run_id,
+                    "retrying",
+                    None,
+                    None,
+                    Some(code),
+                    Some(code),
+                    &json!({
+                        "worker": {
+                            "task_key": platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                            "attempt": task.attempt,
+                            "max_attempts": task.max_attempts,
+                            "last_error_code": code,
+                            "provider_raw_payload_stored": false,
+                            "source_locator_stored": false,
+                        }
+                    }),
+                    now,
+                )
+                .await?;
+            storage
+                .workflow_tasks()
+                .requeue_after_transient_error(
+                    task.id,
+                    code,
+                    now + chrono::Duration::seconds(ASSET_PARSE_RETRY_DELAY_SECONDS),
+                    now,
+                )
+                .await?;
+            storage
+                .workflow_executions()
+                .update_detached_task_state(
+                    task.tenant_id,
+                    task.execution_id,
+                    WorkflowStatus::Running,
+                    "asset_profile_parse_retrying",
+                    now,
+                )
+                .await?;
+        }
+        AssetParseFailureAction::Fail => {
+            let terminal_code = if retryable {
+                "provider_retry_exhausted"
+            } else {
+                code
+            };
+            storage
+                .asset_items()
+                .update_parse_run_state(
+                    task.tenant_id,
+                    asset_id,
+                    parse_run_id,
+                    "failed",
+                    None,
+                    Some(now),
+                    Some(terminal_code),
+                    Some(terminal_code),
+                    &json!({
+                        "worker": {
+                            "task_key": platform_api::ASSET_PROFILE_PARSE_TASK_KEY,
+                            "attempt": task.attempt,
+                            "max_attempts": task.max_attempts,
+                            "last_error_code": terminal_code,
+                            "provider_raw_payload_stored": false,
+                            "source_locator_stored": false,
+                        }
+                    }),
+                    now,
+                )
+                .await?;
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, terminal_code, now)
+                .await?;
+            storage
+                .workflow_executions()
+                .update_detached_task_state(
+                    task.tenant_id,
+                    task.execution_id,
+                    WorkflowStatus::Failed,
+                    "asset_profile_parse_failed",
+                    now,
+                )
+                .await?;
+        }
+    }
+    tracing::warn!(
+        task_id = %task.id,
+        execution_id = %task.execution_id,
+        error_code = code,
+        retryable,
+        "asset profile parse task did not complete"
+    );
+    Ok(())
+}
+
+async fn load_asset_parse_source(
+    asset: &storage::AssetItemRecord,
+) -> std::result::Result<(String, Vec<u8>), AssetParseWorkerError> {
+    let content_type = normalize_asset_parse_content_type(asset.content_type.as_deref())?;
+    let object_key = asset
+        .object_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(AssetParseWorkerError {
+            code: if asset
+                .metadata
+                .pointer("/asset_import/image_url_present")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "remote_source_disabled"
+            } else {
+                "asset_source_unavailable"
+            },
+            retryable: false,
+        })?;
+    let lowercase_object_key = object_key.to_ascii_lowercase();
+    if lowercase_object_key.starts_with("http://") || lowercase_object_key.starts_with("https://") {
+        return Err(AssetParseWorkerError {
+            code: "remote_source_disabled",
+            retryable: false,
+        });
+    }
+    let path = approved_asset_parse_path(object_key).await?;
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_| AssetParseWorkerError {
+            code: "asset_source_unavailable",
+            retryable: false,
+        })?;
+    if !metadata.is_file() {
+        return Err(AssetParseWorkerError {
+            code: "asset_source_unavailable",
+            retryable: false,
+        });
+    }
+    if metadata.len() > ASSET_PARSE_MAX_IMAGE_BYTES {
+        return Err(AssetParseWorkerError {
+            code: "asset_source_too_large",
+            retryable: false,
+        });
+    }
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| AssetParseWorkerError {
+            code: "asset_source_unavailable",
+            retryable: false,
+        })?;
+    if !asset_parse_magic_matches(&content_type, &bytes) {
+        return Err(AssetParseWorkerError {
+            code: "asset_content_type_mismatch",
+            retryable: false,
+        });
+    }
+    Ok((content_type, bytes))
+}
+
+fn normalize_asset_parse_content_type(
+    content_type: Option<&str>,
+) -> std::result::Result<String, AssetParseWorkerError> {
+    let normalized = content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if matches!(
+        normalized.as_str(),
+        "image/png" | "image/jpeg" | "image/webp"
+    ) {
+        Ok(normalized)
+    } else {
+        Err(AssetParseWorkerError {
+            code: "asset_content_type_unsupported",
+            retryable: false,
+        })
+    }
+}
+
+fn asset_parse_magic_matches(content_type: &str, bytes: &[u8]) -> bool {
+    match content_type {
+        "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/webp" => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+async fn approved_asset_parse_path(
+    object_key: &str,
+) -> std::result::Result<PathBuf, AssetParseWorkerError> {
+    let candidate = PathBuf::from(object_key);
+    let candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        std::env::current_dir()
+            .map_err(|_| AssetParseWorkerError {
+                code: "asset_source_unavailable",
+                retryable: false,
+            })?
+            .join(candidate)
+    };
+    let canonical =
+        tokio::fs::canonicalize(&candidate)
+            .await
+            .map_err(|_| AssetParseWorkerError {
+                code: "asset_source_unavailable",
+                retryable: false,
+            })?;
+    let roots = asset_parse_allowed_roots();
+    for root in roots {
+        if let Ok(root) = tokio::fs::canonicalize(root).await {
+            if asset_parse_root_is_safe(&root) && canonical.starts_with(&root) {
+                return Ok(canonical);
+            }
+        }
+    }
+    Err(AssetParseWorkerError {
+        code: "asset_source_not_allowed",
+        retryable: false,
+    })
+}
+
+fn asset_parse_root_is_safe(root: &Path) -> bool {
+    root.parent().is_some() && root.components().count() >= 2
+}
+
+fn asset_parse_allowed_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for key in ["AIDP_V3_UPLOAD_DIR", "PLATFORM_LOCAL_OBJECT_ROOT"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                roots.push(PathBuf::from(value));
+            }
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir.join(Path::new("storage").join("uploads")));
+    }
+    roots
 }
 
 async fn process_uploaded_document_task(
@@ -2064,7 +2752,7 @@ mod tests {
         DatasetId, DocumentId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
         WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTaskStatus,
     };
-    use storage::{NewDataset, NewDocument};
+    use storage::{NewAssetItem, NewAssetParseRun, NewDataset, NewDocument, NewWorkflowTask};
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
@@ -2077,6 +2765,470 @@ mod tests {
     impl IngestProcessor for StaticIngestProcessor {
         fn process(&self, _job: &IngestJob) -> IngestOutcome {
             self.outcome.clone()
+        }
+    }
+
+    #[test]
+    fn parse_asset_profile_dispatch_is_explicit_and_unknown_keys_are_rejected() {
+        assert_eq!(
+            classify_ingest_task_key(platform_api::ASSET_PROFILE_PARSE_TASK_KEY),
+            IngestTaskKind::AssetProfileParse
+        );
+        assert_eq!(
+            classify_ingest_task_key(DEFAULT_WAKE_TASK_KEY),
+            IngestTaskKind::UploadedDocument
+        );
+        assert_eq!(
+            classify_ingest_task_key(VIDEO_PARSE_MEDIA_TASK_KEY),
+            IngestTaskKind::UploadedDocument
+        );
+        assert_eq!(
+            classify_ingest_task_key(EXTERNAL_SOURCE_INGEST_TASK_KEY),
+            IngestTaskKind::ExternalSource
+        );
+        assert_eq!(
+            classify_ingest_task_key("unexpected_ingest_task"),
+            IngestTaskKind::Unknown
+        );
+    }
+
+    #[test]
+    fn parse_asset_profile_accepts_complete_and_partial_normalized_outputs() {
+        assert_eq!(
+            asset_parse_profile_state(&json!({
+                "category": "dress",
+                "colors": ["green"],
+                "caption": "春夏连衣裙"
+            })),
+            AssetParseProfileState::Completed
+        );
+        assert_eq!(
+            asset_parse_profile_state(&json!({"colors": ["green"]})),
+            AssetParseProfileState::Partial
+        );
+        assert_eq!(
+            asset_parse_profile_state(&json!({})),
+            AssetParseProfileState::Partial
+        );
+    }
+
+    #[test]
+    fn parse_asset_profile_retries_at_most_twice() {
+        assert_eq!(
+            asset_parse_failure_action(true, 1, 2),
+            AssetParseFailureAction::Retry
+        );
+        assert_eq!(
+            asset_parse_failure_action(true, 2, 2),
+            AssetParseFailureAction::Fail
+        );
+        assert_eq!(
+            asset_parse_failure_action(false, 1, 2),
+            AssetParseFailureAction::Fail
+        );
+    }
+
+    #[test]
+    fn parse_asset_profile_feature_flag_is_fail_closed() {
+        assert!(!asset_parse_enabled_from_value(None));
+        assert!(!asset_parse_enabled_from_value(Some("")));
+        assert!(!asset_parse_enabled_from_value(Some("invalid")));
+        assert!(!asset_parse_enabled_from_value(Some("false")));
+        assert!(asset_parse_enabled_from_value(Some("true")));
+        assert!(asset_parse_enabled_from_value(Some("1")));
+    }
+
+    #[tokio::test]
+    async fn parse_asset_profile_remote_url_is_rejected_without_fetching() {
+        let asset = test_asset_record(
+            Some("HTTPS://private.example.test/look.png"),
+            Some("image/png"),
+            json!({"asset_import": {"image_url_present": true}}),
+        );
+
+        let error = load_asset_parse_source(&asset)
+            .await
+            .expect_err("remote source must stay disabled");
+
+        assert_eq!(error.code, "remote_source_disabled");
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn parse_asset_profile_validates_declared_mime_against_magic_bytes() {
+        assert!(asset_parse_magic_matches(
+            "image/png",
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        ));
+        assert!(asset_parse_magic_matches(
+            "image/jpeg",
+            &[0xff, 0xd8, 0xff, 0xe0]
+        ));
+        assert!(asset_parse_magic_matches("image/webp", b"RIFF0000WEBP"));
+        assert!(!asset_parse_magic_matches("image/png", b"RIFF0000WEBP"));
+    }
+
+    #[tokio::test]
+    async fn parse_asset_profile_worker_stores_only_normalized_profile_and_completes() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping asset profile parser integration test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("test storage should reset");
+        let source_root =
+            std::env::temp_dir().join(format!("aidp-v3-asset-parse-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = source_root.join("look.png");
+        std::fs::write(
+            &source_path,
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0],
+        )
+        .expect("fixture should be written");
+        let _upload_root =
+            TestEnvRestore::set("AIDP_V3_UPLOAD_DIR", source_root.to_string_lossy().as_ref());
+        let _parse_enabled = TestEnvRestore::set("ASSET_PARSE_ENABLED", "true");
+        let (tenant_id, dataset_id, asset_id, parse_run_id, execution, task) =
+            create_asset_parse_test_fixture(&storage, &source_path).await;
+        let claimed = storage
+            .workflow_tasks()
+            .claim_next_available(
+                platform_api::ASSET_PROFILE_PARSE_QUEUE,
+                Some(platform_api::ASSET_PROFILE_PARSE_TASK_KEY),
+                Utc::now(),
+            )
+            .await
+            .expect("task claim should succeed")
+            .expect("asset parse task should be claimable");
+        assert_eq!(claimed.id, task.id);
+
+        process_asset_profile_parse_task_with_provider_result(
+            &storage,
+            &EventBus::default(),
+            claimed,
+            Some(Ok(platform_api::FashionDesignImageParseResult {
+                attributes: json!({
+                    "category": "dress",
+                    "colors": ["green"],
+                    "caption": "春夏连衣裙"
+                }),
+                complete: true,
+            })),
+        )
+        .await
+        .expect("asset parse should complete");
+
+        let parse_run = storage
+            .asset_items()
+            .get_parse_run_by_id(tenant_id, asset_id, parse_run_id)
+            .await
+            .expect("parse run should load")
+            .expect("parse run should exist");
+        assert_eq!(parse_run.status, "completed");
+        assert!(parse_run.error_code.is_none());
+        let profiles = storage
+            .asset_items()
+            .list_profiles(tenant_id, asset_id)
+            .await
+            .expect("profiles should load");
+        let parsed_profile = profiles
+            .iter()
+            .find(|profile| profile.profile_version.contains('@'))
+            .expect("parser-versioned profile should exist");
+        assert_eq!(parsed_profile.attributes["category"], json!("dress"));
+        assert!(parsed_profile
+            .attributes
+            .get("raw_provider_payload")
+            .is_none());
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load");
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Succeeded);
+        let execution = storage
+            .workflow_executions()
+            .get_by_id(tenant_id, execution.id)
+            .await
+            .expect("execution should load")
+            .expect("execution should exist");
+        assert_eq!(execution.status, WorkflowStatus::Succeeded);
+        assert_eq!(execution.dataset_id, Some(dataset_id));
+        let _ = std::fs::remove_dir_all(source_root);
+    }
+
+    #[tokio::test]
+    async fn parse_asset_profile_retryable_provider_failure_stops_after_second_attempt() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping asset profile parser retry test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("test storage should reset");
+        let source_root = std::env::temp_dir().join(format!(
+            "aidp-v3-asset-parse-retry-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = source_root.join("look.png");
+        std::fs::write(
+            &source_path,
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0],
+        )
+        .expect("fixture should be written");
+        let _upload_root =
+            TestEnvRestore::set("AIDP_V3_UPLOAD_DIR", source_root.to_string_lossy().as_ref());
+        let _parse_enabled = TestEnvRestore::set("ASSET_PARSE_ENABLED", "true");
+        let (tenant_id, _, asset_id, parse_run_id, execution, _) =
+            create_asset_parse_test_fixture(&storage, &source_path).await;
+        let first = storage
+            .workflow_tasks()
+            .claim_next_available(
+                platform_api::ASSET_PROFILE_PARSE_QUEUE,
+                Some(platform_api::ASSET_PROFILE_PARSE_TASK_KEY),
+                Utc::now(),
+            )
+            .await
+            .expect("first task claim should succeed")
+            .expect("first task should be claimable");
+        process_asset_profile_parse_task_with_provider_result(
+            &storage,
+            &EventBus::default(),
+            first.clone(),
+            Some(Err(platform_api::FashionDesignImageParseError {
+                code: "provider_output_invalid",
+                retryable: true,
+            })),
+        )
+        .await
+        .expect("first provider failure should requeue safely");
+        let after_first = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load");
+        assert_eq!(after_first[0].status, WorkflowTaskStatus::Queued);
+        assert_eq!(after_first[0].attempt, 1);
+
+        let mut second = after_first[0].clone();
+        second.attempt = 2;
+        second.status = WorkflowTaskStatus::Claimed;
+        process_asset_profile_parse_task_with_provider_result(
+            &storage,
+            &EventBus::default(),
+            second,
+            Some(Err(platform_api::FashionDesignImageParseError {
+                code: "provider_output_invalid",
+                retryable: true,
+            })),
+        )
+        .await
+        .expect("second provider failure should terminate safely");
+        let parse_run = storage
+            .asset_items()
+            .get_parse_run_by_id(tenant_id, asset_id, parse_run_id)
+            .await
+            .expect("parse run should load")
+            .expect("parse run should exist");
+        assert_eq!(parse_run.status, "failed");
+        assert_eq!(
+            parse_run.error_code.as_deref(),
+            Some("provider_retry_exhausted")
+        );
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load");
+        assert_eq!(tasks[0].status, WorkflowTaskStatus::Failed);
+        assert_eq!(tasks[0].error.as_deref(), Some("provider_retry_exhausted"));
+        let _ = std::fs::remove_dir_all(source_root);
+    }
+
+    struct TestEnvRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl TestEnvRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for TestEnvRestore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_deref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    async fn create_asset_parse_test_fixture(
+        storage: &PgStorage,
+        source_path: &Path,
+    ) -> (
+        domain_model::TenantId,
+        DatasetId,
+        uuid::Uuid,
+        uuid::Uuid,
+        WorkflowExecution,
+        WorkflowTask,
+    ) {
+        let tenant = storage
+            .ensure_tenant(
+                &format!("asset-parse-test-{}", uuid::Uuid::new_v4()),
+                "Asset Parse Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("asset-parse-{}", uuid::Uuid::new_v4()),
+                    title: "Asset parse dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should exist");
+        let asset = storage
+            .asset_items()
+            .create(
+                tenant.id,
+                NewAssetItem {
+                    asset_library_id: None,
+                    collection_id: None,
+                    external_id: Some("asset-parse-fixture".to_string()),
+                    title: "Fashion look".to_string(),
+                    asset_kind: "image".to_string(),
+                    source_kind: "fashion_design_image_import".to_string(),
+                    source_id: Some(format!("asset-parse-{}", uuid::Uuid::new_v4())),
+                    content_type: Some("image/png".to_string()),
+                    object_key: Some(source_path.to_string_lossy().to_string()),
+                    metadata: json!({"asset_import": {"object_key_present": true}}),
+                },
+            )
+            .await
+            .expect("asset should exist");
+        let parse_run = storage
+            .asset_items()
+            .upsert_parse_run(
+                tenant.id,
+                asset.id,
+                NewAssetParseRun {
+                    parser_name: "datamax-fashion-image-parser".to_string(),
+                    parser_version: "2026-06-17".to_string(),
+                    status: "pending".to_string(),
+                    started_at: None,
+                    finished_at: None,
+                    error_code: None,
+                    error_message: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("parse run should exist");
+        let now = Utc::now();
+        let execution = WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id: tenant.id,
+            dataset_id: Some(dataset.id),
+            report_plan_id: None,
+            kind: WorkflowKind::UploadIngest,
+            version: "asset-profile-parse-v1".to_string(),
+            stage: platform_api::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
+            status: WorkflowStatus::Running,
+            attempt: 0,
+            context: json!({"workflow_envelope": "asset_profile_parse"}),
+            created_at: now,
+            updated_at: now,
+        };
+        let event = WorkflowEventRecord {
+            id: WorkflowEventId::new(),
+            execution_id: execution.id,
+            sequence_no: 1,
+            event_name: "asset_profile_parse.queued".to_string(),
+            payload: json!({}),
+            created_at: now,
+        };
+        storage
+            .workflow_executions()
+            .create_with_initial_event(&execution, &event)
+            .await
+            .expect("execution should exist");
+        let payload = platform_api::AssetProfileParseTaskPayload {
+            asset_id: asset.id.to_string(),
+            parse_run_id: parse_run.id.to_string(),
+            parser_name: parse_run.parser_name.clone(),
+            parser_version: parse_run.parser_version.clone(),
+            profile_kind: platform_api::FASHION_DESIGN_IMAGE_PROFILE_SCHEMA.to_string(),
+            dedupe_key: "safe-test-dedupe".to_string(),
+        };
+        let task = storage
+            .workflow_tasks()
+            .create(
+                &execution,
+                &NewWorkflowTask {
+                    queue: platform_api::ASSET_PROFILE_PARSE_QUEUE.to_string(),
+                    task_key: platform_api::ASSET_PROFILE_PARSE_TASK_KEY.to_string(),
+                    payload: serde_json::to_value(payload).expect("payload should serialize"),
+                    available_at: now,
+                    max_attempts: 2,
+                },
+                now,
+            )
+            .await
+            .expect("task should exist");
+        (
+            tenant.id,
+            dataset.id,
+            asset.id,
+            parse_run.id,
+            execution,
+            task,
+        )
+    }
+
+    fn test_asset_record(
+        object_key: Option<&str>,
+        content_type: Option<&str>,
+        metadata: Value,
+    ) -> storage::AssetItemRecord {
+        let now = Utc::now();
+        storage::AssetItemRecord {
+            id: uuid::Uuid::new_v4(),
+            tenant_id: domain_model::TenantId::new(),
+            asset_library_id: None,
+            collection_id: None,
+            external_id: None,
+            title: "Asset parse test".to_string(),
+            asset_kind: "image".to_string(),
+            source_kind: "fashion_design_image_import".to_string(),
+            source_id: None,
+            content_type: content_type.map(str::to_string),
+            object_key: object_key.map(str::to_string),
+            metadata,
+            profile_count: 0,
+            created_at: now,
+            updated_at: now,
         }
     }
 

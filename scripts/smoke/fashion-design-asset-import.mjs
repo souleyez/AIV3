@@ -1502,6 +1502,72 @@ function buildParserWorkerInputContract({
   };
 }
 
+function buildAssetParserWorkerRuntimeEvidence() {
+  const buildTask = ({
+    enabled = false,
+    status = 'pending',
+    assetId = 'asset-fixture',
+    parseRunId = 'parse-fixture',
+    parserVersion = '2026-06-17',
+  } = {}) => {
+    if (!enabled || status !== 'pending') {
+      return null;
+    }
+    const dedupeKey = sha256(Buffer.from(
+      `tenant-fixture:${assetId}:datamax-fashion-image-parser:${parserVersion}`,
+    ));
+    return {
+      queue: 'ingest',
+      task_key: 'parse_asset_profile',
+      max_attempts: 2,
+      payload: {
+        asset_id: assetId,
+        parse_run_id: parseRunId,
+        parser_name: 'datamax-fashion-image-parser',
+        parser_version: parserVersion,
+        profile_kind: 'fashion_design_image_v1',
+        dedupe_key: dedupeKey,
+      },
+    };
+  };
+  const enabledTask = buildTask({ enabled: true });
+  const repeatedTask = buildTask({ enabled: true });
+  const retryAction = (retryable, attempt, maxAttempts = 2) => (
+    retryable && attempt < maxAttempts ? 'retrying' : 'failed'
+  );
+  const sourcePolicy = (sourceKind) => (
+    sourceKind === 'image_url' ? 'remote_source_disabled' : 'local_object_only'
+  );
+
+  assert.equal(buildTask(), null);
+  assert.equal(buildTask({ enabled: true, status: 'completed' }), null);
+  assert.equal(enabledTask.queue, 'ingest');
+  assert.equal(enabledTask.task_key, 'parse_asset_profile');
+  assert.equal(enabledTask.max_attempts, 2);
+  assert.equal(enabledTask.payload.dedupe_key, repeatedTask.payload.dedupe_key);
+  assert.equal(retryAction(true, 1), 'retrying');
+  assert.equal(retryAction(true, 2), 'failed');
+  assert.equal(retryAction(false, 1), 'failed');
+  assert.equal(sourcePolicy('image_url'), 'remote_source_disabled');
+  const serialized = JSON.stringify(enabledTask);
+  assert.equal(/object[_-]?key|image[_-]?url|raw_provider_payload|https?:\/\//i.test(serialized), false);
+
+  return {
+    task: enabledTask,
+    summary: {
+      featureOffSkipsEnqueue: true,
+      pendingImportEnqueuesIngestTask: true,
+      runnableDedupeKeyStable: true,
+      maxAttempts: enabledTask.max_attempts,
+      firstRetryState: retryAction(true, 1),
+      secondRetryState: retryAction(true, 2),
+      permanentFailureState: retryAction(false, 1),
+      remoteSourcePolicy: sourcePolicy('image_url'),
+      taskPayloadRedacted: true,
+    },
+  };
+}
+
 function buildParserWorkerOutputContract({
   profileReady = true,
   retrievalReady = true,
@@ -7323,6 +7389,7 @@ async function runSelfTest(args) {
   const scopeEvidence = buildScopeEvidence();
   const planningEvidence = buildPlanningEvidence(scopeEvidence);
   const followupEvidence = buildFollowupDryRunEvidence(responseEvidence, scopeEvidence);
+  const assetParserWorkerRuntimeEvidence = buildAssetParserWorkerRuntimeEvidence();
   const scopeGuardEvidence = buildScopeGuardEvidence();
   const operatorManifestEvidence = buildOperatorManifestEvidence(args);
   const cleanupManifestEvidence = buildPostExecuteCleanupManifestEvidence(
@@ -7414,6 +7481,7 @@ async function runSelfTest(args) {
     scope_summary: scopeEvidence.summary,
     planning_summary: planningEvidence.summary,
     followup_summary: followupEvidence.summary,
+    asset_parser_worker_runtime_summary: assetParserWorkerRuntimeEvidence.summary,
     scope_guard_summary: scopeGuardEvidence.summary,
     operator_manifest: operatorManifestEvidence.manifest,
     operator_manifest_summary: operatorManifestEvidence.summary,
@@ -7478,6 +7546,20 @@ async function runSelfTest(args) {
         && followupEvidence.summary.parseQueuePendingCount === 4,
       parseStatusTransitionDryRunReady:
         followupEvidence.summary.parseStatusTransitionDryRunReady,
+      assetParserFeatureOffByDefault:
+        assetParserWorkerRuntimeEvidence.summary.featureOffSkipsEnqueue,
+      assetParserPendingImportEnqueues:
+        assetParserWorkerRuntimeEvidence.summary.pendingImportEnqueuesIngestTask,
+      assetParserRunnableTaskDeduped:
+        assetParserWorkerRuntimeEvidence.summary.runnableDedupeKeyStable,
+      assetParserBoundedRetry:
+        assetParserWorkerRuntimeEvidence.summary.maxAttempts === 2
+        && assetParserWorkerRuntimeEvidence.summary.firstRetryState === 'retrying'
+        && assetParserWorkerRuntimeEvidence.summary.secondRetryState === 'failed',
+      assetParserRemoteSourceDisabled:
+        assetParserWorkerRuntimeEvidence.summary.remoteSourcePolicy === 'remote_source_disabled',
+      assetParserTaskPayloadRedacted:
+        assetParserWorkerRuntimeEvidence.summary.taskPayloadRedacted,
       retrievalEvidenceDryRunReady: followupEvidence.summary.retrievalEvidenceDryRunReady
         && followupEvidence.summary.retrievalEvidencePreviewCount === 2,
       retrievalEvidenceTextMaterialized:

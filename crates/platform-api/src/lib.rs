@@ -395,6 +395,14 @@ pub mod external_wecom;
 pub mod fact_index;
 #[allow(dead_code)]
 mod fashion_postchain_adapter_support;
+pub use contracts::{
+    AssetProfileParseTaskPayload, ASSET_PROFILE_PARSE_QUEUE, ASSET_PROFILE_PARSE_TASK_KEY,
+    FASHION_DESIGN_IMAGE_PROFILE_SCHEMA,
+};
+pub use fashion_postchain_adapter_support::{
+    parse_fashion_design_image_profile_bytes, FashionDesignImageParseError,
+    FashionDesignImageParseResult,
+};
 mod hash_support;
 mod health_response_support;
 mod html_artifact_collection_support;

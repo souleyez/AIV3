@@ -1,6 +1,13 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use contracts::FashionDesignImageProfileV1;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::time::{Duration as StdDuration, Instant};
+
+use crate::{
+    external_image_structured_extract_provider_support::external_image_structured_extract_call_provider_with_system,
+    external_image_structured_extract_runtime_support::external_image_structured_extract_runtime_config,
+};
 
 pub(crate) const FASHION_DESIGN_IMAGE_PROFILE_KIND: &str =
     contracts::FASHION_DESIGN_IMAGE_PROFILE_SCHEMA;
@@ -8,8 +15,132 @@ pub(crate) const FASHION_DESIGN_IMAGE_PARSER_TASK_KIND: &str = "fashion_design_i
 pub(crate) const FASHION_DESIGN_IMAGE_PARSER_NAME: &str = "datamax-fashion-image-parser";
 pub(crate) const FASHION_DESIGN_IMAGE_PARSER_VERSION: &str = "2026-06-17";
 
+const FASHION_DESIGN_IMAGE_PARSER_SYSTEM_PROMPT: &str = "你是服装设计图像解析器。只输出 JSON，不要解释。只能描述图中可见且有依据的服装品类、受众、季节、风格、廓形、领型、袖型、腰型、下摆、面料、工艺、颜色、图案、场景、SKU 文字、可见文字、标签、名词和简短图注；不确定的字段省略，禁止编造。";
+const FASHION_DESIGN_IMAGE_PARSER_USER_PROMPT: &str = "按 fashion_design_image_v1 输出 JSON 对象。字段可包含 category, audience, seasons, styles, silhouettes, collars, sleeves, waists, hems, materials, crafts, colors, patterns, scenes, sku_text_marks, visible_text, tags, noun_terms, caption, confidence。";
+
 const LIST_LIMIT: usize = 24;
 const TEXT_LIMIT: usize = 160;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FashionDesignImageParseResult {
+    pub attributes: Value,
+    pub complete: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FashionDesignImageParseError {
+    pub code: &'static str,
+    pub retryable: bool,
+}
+
+pub async fn parse_fashion_design_image_profile_bytes(
+    content_type: &str,
+    bytes: &[u8],
+    timeout_ms: u64,
+) -> std::result::Result<FashionDesignImageParseResult, FashionDesignImageParseError> {
+    let mut config =
+        external_image_structured_extract_runtime_config().ok_or(FashionDesignImageParseError {
+            code: "provider_unconfigured",
+            retryable: true,
+        })?;
+    config.timeout_ms = timeout_ms.clamp(1_000, 300_000);
+    config.retry_enabled = false;
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|_| FashionDesignImageParseError {
+            code: "provider_client_failed",
+            retryable: true,
+        })?;
+    let image_data_url = format!(
+        "data:{};base64,{}",
+        content_type,
+        BASE64_STANDARD.encode(bytes)
+    );
+    let raw_payload = external_image_structured_extract_call_provider_with_system(
+        &client,
+        &config,
+        &image_data_url,
+        FASHION_DESIGN_IMAGE_PARSER_SYSTEM_PROMPT,
+        FASHION_DESIGN_IMAGE_PARSER_USER_PROMPT.to_string(),
+        Instant::now(),
+    )
+    .await
+    .map_err(|failure| fashion_design_image_parse_error(&failure.reason))?;
+
+    let attributes = fashion_postchain_profile_attributes(&raw_payload);
+    let complete = fashion_design_image_profile_is_complete(&attributes);
+    Ok(FashionDesignImageParseResult {
+        attributes,
+        complete,
+    })
+}
+
+fn fashion_design_image_parse_error(reason: &str) -> FashionDesignImageParseError {
+    let lower = reason.to_ascii_lowercase();
+    if lower.contains("provider_status:400")
+        || lower.contains("provider_status:401")
+        || lower.contains("provider_status:403")
+        || lower.contains("provider_status:404")
+    {
+        FashionDesignImageParseError {
+            code: "provider_rejected",
+            retryable: false,
+        }
+    } else if lower.contains("content_missing")
+        || lower.contains("output_json_missing")
+        || lower.contains("json_invalid")
+    {
+        FashionDesignImageParseError {
+            code: "provider_output_invalid",
+            retryable: true,
+        }
+    } else {
+        FashionDesignImageParseError {
+            code: "provider_unavailable",
+            retryable: true,
+        }
+    }
+}
+
+fn fashion_design_image_profile_is_complete(attributes: &Value) -> bool {
+    let Some(object) = attributes.as_object() else {
+        return false;
+    };
+    let has_category = object
+        .get("category")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_caption = object
+        .get("caption")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_facet = [
+        "audience",
+        "seasons",
+        "styles",
+        "silhouettes",
+        "collars",
+        "sleeves",
+        "waists",
+        "hems",
+        "materials",
+        "crafts",
+        "colors",
+        "patterns",
+        "scenes",
+        "tags",
+        "noun_terms",
+    ]
+    .into_iter()
+    .any(|key| {
+        object
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|values| !values.is_empty())
+    });
+    has_category && has_caption && has_facet
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FashionDesignImageParserWorkerInput {
@@ -469,6 +600,46 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn fashion_postchain_adapter_classifies_complete_and_partial_parser_profiles() {
+        assert!(fashion_design_image_profile_is_complete(&json!({
+            "category": "dress",
+            "colors": ["green"],
+            "caption": "春夏连衣裙"
+        })));
+        assert!(!fashion_design_image_profile_is_complete(&json!({
+            "colors": ["green"]
+        })));
+        assert!(!fashion_design_image_profile_is_complete(&json!({})));
+    }
+
+    #[test]
+    fn fashion_postchain_adapter_maps_provider_failures_to_safe_codes() {
+        assert_eq!(
+            fashion_design_image_parse_error("image_extract_provider_status:401"),
+            FashionDesignImageParseError {
+                code: "provider_rejected",
+                retryable: false,
+            }
+        );
+        assert_eq!(
+            fashion_design_image_parse_error("image_extract_output_json_missing"),
+            FashionDesignImageParseError {
+                code: "provider_output_invalid",
+                retryable: true,
+            }
+        );
+        assert_eq!(
+            fashion_design_image_parse_error(
+                "request failed for https://private.example.test/object?token=secret"
+            ),
+            FashionDesignImageParseError {
+                code: "provider_unavailable",
+                retryable: true,
+            }
+        );
+    }
 
     #[test]
     fn fashion_postchain_adapter_normalizes_worker_response_to_profile_contract() {
