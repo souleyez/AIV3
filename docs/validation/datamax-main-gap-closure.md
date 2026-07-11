@@ -371,6 +371,28 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - successful private receipt, shared safe receipt, final regression logs, and mode-0600 no-delete manifest are under `/srv/aiv3/backups/task11-live-be2ef77f-20260711T155457Z`. Both failed-attempt directories contain their own mode-0600 cleanup manifest; no retained test/pilot data or object was automatically deleted;
   - Task 11 is `PASS`; Task 12 is `READY` for no-live self-tests, credential preflight, one-request baselines, and only then staged 5/10/20 concurrency.
 
+## 2026-07-11 Task 12 Operator Contract Fix, Staged Concurrency, and PASS
+
+- Operator preflight and contract correction:
+  - all five offline self-tests passed for model-gateway operator, main-chat 20-way, external-channel 20-way, heavy-static wrapper, and Cloudflare fallback guard;
+  - the first authenticated model-gateway preflight correctly stopped before business traffic because the smoke still read legacy `provider/model` and nested `sources[]`, while current contracts expose `provider_id/model_id` and top-level `providers[]`; it also treated the sanctioned operator-only `auth_env_key_name` metadata as a secret value;
+  - red-first current-shape self-test failed with `self-test fixture did not expose the primary profile`; `f71fe4cfe4a059222bc6d4e3363fc3bec376e11a` then added current/legacy field compatibility, direct provider status discovery, and value-based secret detection while continuing to reject API-key, Authorization, bearer, and Cookie values;
+  - GitHub Actions run `29159537855` passed Rust Minimal and No-Credential Smoke; 8-server fast-forwarded the script-only commit without build, config change, or service restart.
+- Authenticated one-request baseline:
+  - an existing configured operator user was selected without exposing its email; a one-time local-key session and two isolated private no-delete datasets were created through product APIs, then the session was revoked;
+  - authenticated model-gateway status/profile load and two fallback queue guards passed; single main chat p95 was `3115 ms`, single external chat p95 was `1308 ms`, and single static-page p95 was `9280 ms` with one artifact;
+  - three stopped setup attempts exposed only operator-runner issues (absolute output path handling, fallback report `.summary` nesting, and bootstrap dataset visibility); no failed attempt was auto-deleted and each has a private cleanup manifest;
+  - final baseline receipt is `/srv/aiv3/backups/task12-baseline-f71fe4cf-20260711T162748Z/shared-validation-receipt.json`.
+- Staged load and heavy controls:
+  - main chat p95 at 5/10/20 was `3125/6212/6349 ms`; external chat p95 was `1196/1409/2339 ms`; every stage returned zero failed requests and zero residual model/profile queue entries before promotion;
+  - heavy static-page completed `5/5` artifacts with p95 `16918 ms`; fallback guard observed Codex concurrency 2 and watched queues at or below the cap;
+  - the only stopped staged attempt failed before wave traffic on a Bash local-variable expansion and revoked its session; its private no-delete manifest was retained;
+  - final platform-api, assistant-run-worker, static-page-worker, and Web PIDs were unchanged, health/ready were 200, priority-error lines were 0, and the final one-time session was revoked;
+  - safe receipt and private cleanup manifest are under `/srv/aiv3/backups/task12-staged-f71fe4cf-20260711T163911Z`; no cleanup was executed.
+- Decision:
+  - current 20-way main/external chat and 5-way heavy static-page show no provider, queue, worker, or capacity bottleneck requiring code/config/capacity change;
+  - Task 12 is `PASS`; Task 13 is `READY` for its isolated V3/Codex client joint acceptance.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:

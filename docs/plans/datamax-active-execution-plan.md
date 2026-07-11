@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — Task 7–11 已 `PASS`、P0 已关闭；asset evidence、统一检索和单 connection 私有 `asset-imports` pilot 均已完成独立发布、live 与 rollback，Task 12 为当前 `READY` Task。
+**Status:** ACTIVE — Task 7–12 已 `PASS`、P0 已关闭；私有 `asset-imports` 与 5→10→20 operator 并发门禁均已完成，Task 13 为当前 `READY` Task。
 
 ---
 
@@ -71,6 +71,8 @@
 | Task 11 实现 commit | `be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0`，提交信息 `feat: add private external asset import pilot` |
 | Task 11 GitHub Actions | `29157911807`：Rust Minimal 与 No-Credential Smoke 全部成功 |
 | Task 11 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task11`，分支 `codex/task11-private-asset-import`；实现已 fast-forward 到 `origin/main` |
+| Task 12 operator fix | `f71fe4cfe4a059222bc6d4e3363fc3bec376e11a`，修复 smoke 对当前 `provider_id/model_id` 与 status `providers[]` 契约的读取 |
+| Task 12 GitHub Actions | `29159537855`：Rust Minimal 与 No-Credential Smoke 全部成功 |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
 已经证明：Task 8 的 `cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 402/402、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过；Task 9 的本地/CI/服务器定向测试、一次性数据库集成门禁、完整 ingest-worker 回归、release build、资产 preflight、普通 ingest runtime gate 和 feature-off 复验也已通过。
@@ -89,7 +91,7 @@
 | 核心服务 | platform-api、Web、assistant/chat/static/report、ingest、retrieval 均 active |
 | API | `healthz=200`、`readyz=200` |
 
-数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9 原部署回退资产：`/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z`；workflow-version fix 回退资产：`/srv/aiv3/backups/task9-workflow-version-fix-8bc4fe05-20260711T125907Z`；renewed live 的 0600 报告和 no-delete manifest 位于 `/srv/aiv3/backups/task9-live-8bc4fe05-20260711T131030Z`。Task 10 feature-off 回退资产位于 `/srv/aiv3/backups/task10-feature-off-08b37723-20260711T141257Z`；成功 live canary、最终回归和合并 no-delete manifest 位于 `/srv/aiv3/backups/task10-live-08b37723-20260711T144614Z`。Task 11 feature-off 回退资产位于 `/srv/aiv3/backups/task11-feature-off-be2ef77f-20260711T153414Z`；成功 live、最终回归和 no-delete manifest 位于 `/srv/aiv3/backups/task11-live-be2ef77f-20260711T155457Z`，两次受控失败尝试也各自保留独立 cleanup manifest。
+数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9–11 回退与 live 资产继续按各 Task 回执保留。Task 12 单请求基线回执位于 `/srv/aiv3/backups/task12-baseline-f71fe4cf-20260711T162748Z`；成功分级并发与 heavy-static 回执位于 `/srv/aiv3/backups/task12-staged-f71fe4cf-20260711T163911Z`，所有失败尝试均有独立 no-delete manifest。
 
 ### 2.3 已完成与未完成
 
@@ -99,7 +101,8 @@
 - Task 9 已完成 workflow-version 修复、一次性数据库 enqueue FK 门禁、feature-off 部署、单图真实 provider pilot、会话注销、flag rollback 和完整回归，状态为 `PASS`。
 - Task 10 已完成独立 migration、permission-safe/幂等数据库门禁、统一 document/asset ranking、feature-off 部署、同租户文档控制、asset evidence live canary、关闭后只读复验和合并 no-delete manifest，状态为 `PASS`。
 - Task 11 已完成私有 adapter、公开契约 guard、一次性数据库门禁、feature-off 部署、单 connection live、跨连接拒绝、flag/allowlist rollback 和 no-delete manifest，状态为 `PASS`。
-- 尚未完成：operator 并发、客户端联合验收。
+- Task 12 已完成 operator smoke 契约修复、认证单请求基线、5→10→20 主站/第三方分级并发、5 路 heavy static-page、fallback/queue guard 和完整收口，状态为 `PASS`。
+- 尚未完成：客户端联合验收。
 - Task 9 首次 live 使用批准 `TASK9-PARSER-PILOT-20260711-01` 在获批 `13941bc6` 基线上执行；单图导入在 enqueue 时因未注册的 `asset-profile-parse-v1` workflow version 外键失败，provider 调用和 parser task 均为 0。会话已撤销、三项开关已恢复、回归通过、对象保留且 cleanup manifest 不自动删除。
 - 最小修复改为复用运行时已注册的 upload-ingest workflow version；修复已发布并在 8 服务器验证。renewed pilot 以一次 provider attempt 产生 2 条 profile，安全终态为 `partial`；Task 10 已解锁。
 
@@ -123,8 +126,8 @@ Task 7  feature-off 暗发布并关闭 P0
 | M2 | 8 | PASS | 写入/幂等/rollback、任务卡 Web 发布和认证复验通过 | 已完成 |
 | M3 | 9–10 | PASS | accepted profile、asset evidence、统一检索 | 已完成 |
 | M4 | 11 | PASS | 单 connection 私有入口、公开契约不变 | 已完成 |
-| M5A | 12 | READY | 受控并发结论与瓶颈归因 | 0.5–1 天 |
-| M5B | 13 | PENDING | V3/Codex 联合回执 | 0.5–1 天 |
+| M5A | 12 | PASS | 受控并发结论与瓶颈归因 | 已完成 |
+| M5B | 13 | READY | V3/Codex 联合回执 | 0.5–1 天 |
 
 禁止并行跨越 Task 7–11。Task 12 和 Task 13 只能在 Task 11 `PASS` 后进入，可在同一验收窗口串行执行但不得共用未脱敏回执。
 
@@ -732,7 +735,7 @@ Disable the flag, clear the connection allowlist, restart platform-api, record s
 
 ## 10. Task 12：生产级 operator 与受控并发门禁
 
-**Status:** READY；Task 11 已 `PASS`。8 服务器为非生产验证环境且适用 standing authorization；仍须先通过 environment-held credential 与单请求 preflight，缺失则转 `AUTH_REQUIRED`。
+**Status:** PASS；operator smoke 契约修复、CI、认证 preflight、单请求基线、5→10→20 分级 chat、5 路 heavy static-page、fallback/queue guard、会话撤销和 no-delete manifest 均已完成。
 
 **Goal:** Attribute queue/provider/worker bottlenecks without mixing load testing with feature development.
 
@@ -781,11 +784,21 @@ Record p50/p95, success/partial/failed, queue wait, provider timeout, fallback c
 
 **Done:** a sanitized operator receipt identifies the bottleneck—or proves none—and states whether configuration, capacity or code should change.
 
+**Current receipt (2026-07-11):**
+
+- `f71fe4cfe4a059222bc6d4e3363fc3bec376e11a` 修复 operator smoke 对当前 API 契约的读取与脱敏误报；CI `29159537855` 全绿，8 服务器仅 fast-forward 脚本，服务零重启。
+- 单请求基线：主站 p95 `3115 ms`、第三方 p95 `1308 ms`、静态页 p95 `9280 ms` 且产物 `1/1`；认证 model-gateway、前后 fallback guard、health/ready 和 priority-error 门禁通过。
+- 分级主站 p95 为 `3125/6212/6349 ms`，第三方 p95 为 `1196/1409/2339 ms`；5/10/20 各级失败数均为 0，assistant/profile queue residual 均为 0。
+- heavy static-page `5/5` 完成，p95 `16918 ms`；Codex concurrency guard 为 2，watched fallback queue 未超过 2。
+- platform-api、assistant-run-worker、static-page-worker、Web 均未重启，priority error 0；全部临时 session 已撤销，cleanup 未执行。
+- 单请求与分级安全回执分别位于 `/srv/aiv3/backups/task12-baseline-f71fe4cf-20260711T162748Z` 和 `/srv/aiv3/backups/task12-staged-f71fe4cf-20260711T163911Z`。
+- 结论：当前 20 路 chat 和 5 路 heavy static-page 无容量/队列/worker 瓶颈，不需要配置或容量变更；Task 13 可继续。
+
 ---
 
 ## 11. Task 13：V3 与 Codex 客户端联合验收
 
-**Status:** PENDING on Task 12; requires a test identity, controlled workspace and private/sandbox publish approval.
+**Status:** READY；Task 12 已 `PASS`，使用隔离测试身份、受控 workspace 与 private/sandbox publish 路径执行。
 
 **Goal:** Prove config package -> local execution -> upload -> attach -> task card -> publish -> continue edit without allowing the client to mutate V3 product code or deployment state.
 
@@ -870,11 +883,10 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-Task 11 已在 be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0 上完成实现、CI、一次性数据库
-门禁、feature-off 部署、单 connection private asset-imports live、跨连接拒绝、公开契约
-guard、flag/allowlist rollback 和完整回归，状态为 PASS。当前 READY Task 是 Task 12：
-生产级 operator 与受控并发门禁。先运行全部 no-live self-test 和单请求 baseline，再按
-5 -> 10 -> 20 分级放量；不得夹带 Task 13，不得删除 Task 9/10/11 的 no-delete pilot 数据。
+Task 12 已在 f71fe4cfe4a059222bc6d4e3363fc3bec376e11a 上完成 operator smoke 修复、CI、
+认证单请求 baseline、5 -> 10 -> 20 分级主站/第三方 chat、5 路 heavy static-page、
+fallback/queue guard、会话撤销和 no-delete manifest，状态为 PASS。当前 READY Task 是
+Task 13：V3 与 Codex 客户端联合验收。不得删除 Task 9/10/11/12 的 no-delete pilot 数据。
 ```
 
 ### 13.3 本计划完成条件
