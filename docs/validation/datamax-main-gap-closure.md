@@ -178,6 +178,51 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - Task 9 local candidate is ready for review and is `AUTH_REQUIRED` for its independent commit/push and feature-off deployment approval;
   - Task 9 is not `PASS`, `ASSET_PARSE_ENABLED` remains off, and Task 10 remains blocked.
 
+## 2026-07-11 Task 9 Async Asset Parser Feature-Off Release
+
+- Authorization boundary:
+  - the user explicitly approved Task 9 commit/push and feature-off deployment;
+  - the approved scope included one disposable database for DB-backed integration tests and an 8-server deployment with `ASSET_PARSE_ENABLED=false`;
+  - the approval did not include enabling the parser, reusing the Task 8 session, uploading a live image, calling a real provider, writing a real parsed profile, or starting Task 10.
+- Git and CI:
+  - implementation commit `948d04e1` contains exactly the eight reviewed implementation/manual files;
+  - candidate-receipt commit `33ad2d31` contains only the active plan and this validation ledger;
+  - both commits were fast-forwarded to local `main` and pushed without force; deployment code SHA is `33ad2d3198b4da32df18bdc7ffccdddacf0bbdb8`;
+  - GitHub Actions DataMax CI run `29139080938` completed successfully: No-Credential Smoke and Rust Minimal both passed.
+- 8-server preflight and backup:
+  - before fetch, `/srv/aiv3/repo` was clean at `5f2b22e4f16657aedee9339126e2391abe1fbde1`; PostgreSQL 18.4, platform-api, Web, and ingest-worker were active; health/ready passed; all six dark-release flags were off;
+  - fetch resolved `origin/main` to the exact approved SHA, and the server worktree fast-forwarded without merge or force;
+  - logical backup `/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z` passed restore-list and SHA-256 validation; dump size was 57,299,772 bytes and restore list had 515 lines;
+  - the same protected backup directory retains the pre-release 0600 environment file plus executable copies of the running pre-Task-9 API and ingest-worker binaries for immediate rollback.
+- Disposable database integration gates:
+  - one generated `aiv3_task9_test_*` database was created on PostgreSQL 18.4 and used only through a URL derived in process without printing or persisting credentials;
+  - API enqueue dedupe, worker normalized-profile persistence, and worker second-attempt retry exhaustion tests all passed against that disposable database;
+  - the database was dropped after the tests; an independent database-list check found zero remaining `aiv3_task9_test_*` databases;
+  - protected validation logs are stored under `/srv/aiv3/backups/task9-validation-33ad2d31-20260711T041628Z` and were not copied into Git.
+- Server build gates:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 62/62;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 10/10;
+  - `cargo test -q -p ingest-worker parse_asset_profile`: passed, 8/8;
+  - full `cargo test -q -p ingest-worker`: passed, 52/52 library tests and 24/24 binary tests, including ordinary uploaded-document ingest behavior;
+  - `cargo check -q -p ingest-worker`, asset smoke self-test, public contract guard, and release builds for platform-api and ingest-worker passed.
+- Feature-off deployment:
+  - `/etc/aiv3/aiv3.env` now contains exactly one `ASSET_PARSE_ENABLED=false`, `ASSET_PARSE_MAX_ATTEMPTS=2`, and `ASSET_PARSE_PROVIDER_TIMEOUT_MS=120000`; no value from any credential variable was printed;
+  - only `aiv3-platform-api.service` and `aiv3-ingest-worker.service` were restarted; API PID changed `649091 -> 764425`, worker PID changed `601665 -> 764426`, and Web PID remained `712419`;
+  - both new processes contain `ASSET_PARSE_ENABLED=false`; worker task-key filtering is unset/all, so ordinary document ingest remains claimable and no separate parser service was introduced;
+  - the provider runtime configuration class is present through the existing reviewed fallback, but no provider request was made.
+- Post-deploy verification:
+  - PostgreSQL 18.4, platform-api, ingest-worker, and Web are active; API health/ready pass;
+  - ingest runtime dependency gate, main-assistant streaming self-test, static-page self-test, asset-import preflight, and public third-party contract guard passed;
+  - all six dark-release flags remain off, new `parse_asset_profile` tasks created since deployment equal 0, and the remote Git worktree is clean at the approved code SHA;
+  - after a continuous 633-second observation window, journal priority error count and case-insensitive `ERROR|FATAL|panic` count for the restarted services are both 0, health/ready still pass, and the post-deploy parser-task count remains 0;
+  - the initial health polling saw one expected connection refusal while platform-api restarted and then passed; a separate `/v3/` reverse-proxy probe used an incorrect path and returned 404, so it is excluded from Web evidence rather than reported as a Web failure;
+  - no parser enablement, image upload, provider call, live parsed-profile write, evidence write, third-party private route, delete, 10-server action, or 120-server action occurred.
+- Status:
+  - Task 9 implementation and feature-off release are verified;
+  - Task 9 remains `AUTH_REQUIRED` only for the separately approved single-tenant, single-concurrency, single-image real-provider pilot and final flag-off rollback receipt;
+  - Task 10 remains blocked until that Task 9 live pilot is complete and the parser flag is confirmed off again.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
