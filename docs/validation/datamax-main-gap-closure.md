@@ -46805,3 +46805,50 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, full document body, or raw Authorization value was recorded;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, production prewarm enablement, or production data mutation was performed during 8-server deployment;
   - 120 server was not touched.
+
+## 2026-07-12 R5 Task 13 V3/Codex Client Joint Acceptance
+
+- Scope and commits:
+  - V3 implementation commit: `d593605545e392fa17f181d195b4537d9b75f978`;
+  - `codex-web` boundary-mirror commit: `a40d3a2`;
+  - no migration, authentication contract, public API, systemd unit, provider configuration, feature flag, or product runtime code was changed by the client flow.
+- Deterministic and boundary gates:
+  - `node --check scripts/smoke/v3-client-artifact-joint-smoke.mjs`: passed;
+  - `npm run smoke:v3-client-artifact-joint -- --self-test`: passed after a red-first receipt test proved the original script lacked hash, attachment, and report-continuation gates;
+  - `npm run smoke:v3-codex-client-boundary-sync -- --self-test`: passed;
+  - real boundary check passed after the exact mirror sync; canonical and mirror sizes were both `19365` bytes and SHA-256 was `0e41b06835321ea5364c37275047a50ce457d043d25ad19a4e858998b0f40d26`;
+  - existing unrelated uncommitted `codex-web` files were neither staged nor modified by the mirror commit.
+- Exact-base preflight:
+  - `http://127.0.0.1:3000` returned platform-api `health=ok` and `ready=ready`, so the preflight passed;
+  - `http://127.0.0.1:3002` returned frontend HTML with HTTP 200 and was correctly rejected with `healthOk=false`, `readyOk=false`, exit 1;
+  - no credentials were supplied to either preflight.
+- GitHub Actions:
+  - DataMax CI run `29160764770` passed for `d5936055`;
+  - `No-Credential Smoke` completed in `24s`;
+  - `Rust Minimal` completed in `4m48s`.
+- 8-server synchronization:
+  - baseline receipt: `/srv/aiv3/backups/task13-baseline-d5936055-20260711T170444Z`;
+  - `/srv/aiv3/repo` clean-fast-forwarded from `4d796799b969b8eb7721c1031da89e8a91c603f3` to exact `d593605545e392fa17f181d195b4537d9b75f978`;
+  - only the smoke script changed; no build, migration, env edit, feature-flag change, or service restart occurred;
+  - platform-api/Web/ingest-worker PIDs stayed `954732`/`712419`/`872657`, with health/ready passing before and after.
+- Controlled joint acceptance:
+  - retained private run directory: `/srv/aiv3/backups/task13-live-d5936055-20260711T170522Z`;
+  - a fresh one-time local-key identity, one bootstrap dataset, one owned private pilot dataset, one private asset library, and one membership were created through existing product APIs;
+  - one config package was created and read back with exact scoped dataset/library references and without an activation token, cookie, database URL, or unauthorized reference;
+  - the first artifact uploaded two files; both server SHA-256 values matched local content, dataset/library attachments matched, private publish passed, task-card normalization passed, and a unique public sandbox link was returned;
+  - the public page check proved the sandbox wrapper was present and script tags were absent;
+  - the follow-up report edit uploaded a second two-file artifact with an explicit `revision_of` reference to the first artifact, then independently private-published it and verified its task card;
+  - total controlled scope was one config package, two client artifacts, four files, two datasets, one private asset library, and one membership;
+  - no stable URL was overwritten and the revision was not public-published.
+- Safe terminal state:
+  - logout returned `revoked=true`, the session endpoint then returned no user/session, and the Cookie file count was 0;
+  - no test identity, dataset, library, membership, config package, artifact, or published sandbox was automatically deleted;
+  - the private cleanup manifest records `automatic_cleanup_allowed=false`, `cleanup_executed=false`, and `no_delete=true`;
+  - all six R5 dark-release flags were closed, both reviewed allowlists were empty, platform-api/Web stayed active, health/ready passed, public Web returned HTTP 200, and post-run priority-error count was 0;
+  - the final 8-server worktree was clean at exact `d5936055`;
+  - final joint and boundary self-tests passed on the server.
+- Receipt safety:
+  - the shared receipt records only versions, placeholder scope classes, counts, booleans, and the retained private backup path;
+  - final credential-pattern scan passed;
+  - no raw local key, Cookie, bearer token, activation token, database URL, provider payload, file contents, raw dataset/library IDs, or customer data was recorded in the shared receipt;
+  - 10 server and 120 server were not touched.
