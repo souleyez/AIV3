@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -252,18 +253,19 @@ function buildConfigPackageRequest(args) {
   };
 }
 
-function buildClientArtifactManifest(args, packageView = {}) {
+function buildClientArtifactManifest(args, packageView = {}, options = {}) {
   const createdAt = new Date().toISOString();
+  const revisionOf = String(options.revisionOf || '').trim();
   return {
     schema: MANIFEST_SCHEMA,
     source: MANIFEST_SOURCE,
     tenant_id: packageView.tenant_id || `tenant-smoke-${args.runId}`,
     user_id: packageView.user_id || `user-smoke-${args.runId}`,
     client_id: args.clientId,
-    task_id: `client-task-${args.runId}`,
+    task_id: revisionOf ? `client-task-${args.runId}-revision` : `client-task-${args.runId}`,
     asset_library_ids: [args.assetLibraryId],
     dataset_ids: [args.datasetId],
-    title: `DataMax client artifact joint smoke ${args.runId}`,
+    title: `DataMax client artifact joint smoke ${args.runId}${revisionOf ? ' revision' : ''}`,
     artifact_type: 'static_page',
     files: [
       {
@@ -280,12 +282,14 @@ function buildClientArtifactManifest(args, packageView = {}) {
     evidence_refs: [
       { kind: 'dataset', id: args.datasetId },
       { kind: 'asset_library', id: args.assetLibraryId },
+      ...(revisionOf ? [{ kind: 'revision_of', id: revisionOf }] : []),
     ],
     created_at: createdAt,
     metadata: {
       smoke: true,
       run_id: args.runId,
       config_package_id: packageView.package_id || null,
+      continuation: Boolean(revisionOf),
     },
   };
 }
@@ -311,14 +315,42 @@ function buildIndexHtml(args) {
 </html>`;
 }
 
-function buildReportMarkdown(args) {
+function buildReportMarkdown(args, revisionOf = '') {
+  const continuation = revisionOf
+    ? `\n- revision_of: ${revisionOf}\n- change: verified follow-up report edit\n`
+    : '';
   return `# DataMax Client Artifact Joint Smoke
 
 - run_id: ${args.runId}
 - dataset_id: ${args.datasetId}
 - asset_library_id: ${args.assetLibraryId}
 - expected: V3 receives, publishes, and exposes the HTML artifact through task cards.
+${continuation}
 `;
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function verifyArtifactUpload(artifact, args, manifest, files) {
+  assert.ok(artifact?.artifact_id);
+  assert.deepEqual(artifact.dataset_ids, manifest.dataset_ids);
+  assert.deepEqual(artifact.asset_library_ids, manifest.asset_library_ids);
+  assert.equal(artifact.files?.length, files.length);
+  for (const [index, file] of files.entries()) {
+    const uploadedFile = artifact.files[index];
+    assert.equal(uploadedFile.filename, file.filename);
+    assert.equal(uploadedFile.sha256, sha256Text(file.content));
+  }
+  assert.ok(artifact.dataset_ids.includes(args.datasetId));
+  assert.ok(artifact.asset_library_ids.includes(args.assetLibraryId));
+  return {
+    uploadedFileCount: files.length,
+    verifiedFileHashCount: files.length,
+    datasetAttachmentVerified: true,
+    assetLibraryAttachmentVerified: true,
+  };
 }
 
 function validateManifest(manifest, files) {
@@ -395,6 +427,17 @@ function buildReceiptSummary(receipt) {
         : Boolean(receipt.public_url);
     checks.publicUrlCheckRespected =
       receipt.public_url_check === null || receipt.public_url_check?.ok === true;
+    checks.uploadedFileHashesVerified =
+      Number(receipt.uploaded_file_count || 0) >= 2 &&
+      Number(receipt.verified_file_hash_count || 0) === Number(receipt.uploaded_file_count || 0);
+    checks.attachmentsVerified =
+      receipt.dataset_attachment_verified === true &&
+      receipt.asset_library_attachment_verified === true;
+    checks.reportContinuationPublished =
+      Boolean(receipt.revision_artifact_id) &&
+      receipt.revision_publish_status === 'published';
+    checks.reportContinuationLinked =
+      receipt.revision_of_verified === true;
   }
 
   const ok = Object.values(checks).every(Boolean);
@@ -502,7 +545,7 @@ function selfTest(args) {
         content_type: 'text/html',
         role: 'primary_html',
         size_bytes: files[0].content.length,
-        sha256: 'self-test',
+        sha256: sha256Text(files[0].content),
         download_url: `/v1/client-artifacts/v3ca_${args.runId}/files/0`,
         preview_url: `/v1/client-artifacts/v3ca_${args.runId}/files/0/preview`,
         public_url: `/generated-artifacts/client-artifacts/v3ca_${args.runId}/html-0/index.html`,
@@ -513,13 +556,20 @@ function selfTest(args) {
         content_type: 'text/markdown',
         role: 'source_summary',
         size_bytes: files[1].content.length,
-        sha256: 'self-test-md',
+        sha256: sha256Text(files[1].content),
         download_url: `/v1/client-artifacts/v3ca_${args.runId}/files/1`,
       },
     ],
     manifest,
     created_at: new Date().toISOString(),
   };
+  const uploadVerification = verifyArtifactUpload(simulatedArtifact, args, manifest, files);
+  const revisionManifest = buildClientArtifactManifest(args, packageView, {
+    revisionOf: simulatedArtifact.artifact_id,
+  });
+  assert.ok(revisionManifest.evidence_refs.some(
+    (reference) => reference.kind === 'revision_of' && reference.id === simulatedArtifact.artifact_id,
+  ));
   const card = validateClientArtifactTaskCard(simulatedArtifact);
   assert.equal(card.html_url, simulatedArtifact.files[0].public_url);
   const receipt = {
@@ -588,6 +638,29 @@ function selfTest(args) {
   missingTaskCardReceipt.task_card = null;
   assertReceiptSummaryFailure('execute without task card', missingTaskCardReceipt, 'taskCardCanOpenHtml');
 
+  const executeReceipt = structuredClone(missingTaskCardReceipt);
+  executeReceipt.task_card = card;
+  executeReceipt.uploaded_file_count = uploadVerification.uploadedFileCount;
+  executeReceipt.verified_file_hash_count = uploadVerification.verifiedFileHashCount;
+  executeReceipt.dataset_attachment_verified = uploadVerification.datasetAttachmentVerified;
+  executeReceipt.asset_library_attachment_verified = uploadVerification.assetLibraryAttachmentVerified;
+  executeReceipt.revision_artifact_id = `v3ca_${args.runId}_revision`;
+  executeReceipt.revision_publish_status = 'published';
+  executeReceipt.revision_of_verified = true;
+  assert.equal(
+    buildReceiptSummary(executeReceipt).ok,
+    true,
+    'complete execute fixture should pass receipt summary',
+  );
+
+  const unlinkedRevisionReceipt = structuredClone(executeReceipt);
+  unlinkedRevisionReceipt.revision_of_verified = false;
+  assertReceiptSummaryFailure(
+    'execute with unlinked continuation',
+    unlinkedRevisionReceipt,
+    'reportContinuationLinked',
+  );
+
   return receipt;
 }
 
@@ -631,10 +704,12 @@ async function executeLive(args) {
 
   const fetchedPackage = await fetchJson(
     `${args.baseUrl}/v1/client-config-packages/${encodeURIComponent(packageView.package_id)}`,
-    {},
+    { headers: authHeaders(args) },
     args.timeoutMs,
   );
   assert.equal(fetchedPackage.package_id, packageView.package_id);
+  assert.deepEqual(fetchedPackage.dataset_ids, packageView.dataset_ids);
+  assert.deepEqual(fetchedPackage.asset_library_ids, packageView.asset_library_ids);
 
   const manifest = buildClientArtifactManifest(args, packageView);
   const files = [
@@ -655,6 +730,7 @@ async function executeLive(args) {
   const uploadedArtifact = uploadResponse.artifact;
   assert.ok(uploadedArtifact?.artifact_id);
   assert.ok(uploadedArtifact.files?.some((file) => file.filename === 'index.html'));
+  const uploadVerification = verifyArtifactUpload(uploadedArtifact, args, manifest, files);
 
   const privatePublishResponse = await fetchJson(
     `${args.baseUrl}/v1/client-artifacts/${encodeURIComponent(uploadedArtifact.artifact_id)}/publish`,
@@ -697,6 +773,50 @@ async function executeLive(args) {
   }
 
   const card = validateClientArtifactTaskCard(finalArtifact);
+  const revisionManifest = buildClientArtifactManifest(args, packageView, {
+    revisionOf: uploadedArtifact.artifact_id,
+  });
+  const revisionFiles = [
+    { filename: 'index.html', contentType: 'text/html', content: buildIndexHtml(args) },
+    {
+      filename: 'report.md',
+      contentType: 'text/markdown',
+      content: buildReportMarkdown(args, uploadedArtifact.artifact_id),
+    },
+  ];
+  validateManifest(revisionManifest, revisionFiles);
+  const revisionUploadResponse = await fetchJson(
+    `${args.baseUrl}/v1/client-artifacts`,
+    {
+      method: 'POST',
+      headers: authHeaders(args),
+      body: buildMultipart(revisionManifest, revisionFiles),
+    },
+    args.timeoutMs,
+  );
+  const revisionArtifact = revisionUploadResponse.artifact;
+  const revisionUploadVerification = verifyArtifactUpload(
+    revisionArtifact,
+    args,
+    revisionManifest,
+    revisionFiles,
+  );
+  const revisionOfVerified = revisionArtifact.manifest?.evidence_refs?.some(
+    (reference) =>
+      reference.kind === 'revision_of' && reference.id === uploadedArtifact.artifact_id,
+  ) === true;
+  assert.equal(revisionOfVerified, true);
+  const revisionPublishResponse = await fetchJson(
+    `${args.baseUrl}/v1/client-artifacts/${encodeURIComponent(revisionArtifact.artifact_id)}/publish`,
+    {
+      method: 'POST',
+      headers: authHeaders(args),
+    },
+    args.timeoutMs,
+  );
+  const publishedRevision = revisionPublishResponse.artifact;
+  assert.equal(publishedRevision.status, 'published');
+  const revisionCard = validateClientArtifactTaskCard(publishedRevision);
   return {
     mode: 'execute',
     ok: true,
@@ -708,6 +828,16 @@ async function executeLive(args) {
     public_url: publicPublish?.public_url || null,
     html_artifact_id: publicPublish?.html_artifact?.id || null,
     task_card: card,
+    uploaded_file_count: uploadVerification.uploadedFileCount,
+    verified_file_hash_count: uploadVerification.verifiedFileHashCount,
+    dataset_attachment_verified: uploadVerification.datasetAttachmentVerified,
+    asset_library_attachment_verified: uploadVerification.assetLibraryAttachmentVerified,
+    revision_artifact_id: revisionArtifact.artifact_id,
+    revision_publish_status: publishedRevision.status,
+    revision_of_verified: revisionOfVerified,
+    revision_uploaded_file_count: revisionUploadVerification.uploadedFileCount,
+    revision_verified_file_hash_count: revisionUploadVerification.verifiedFileHashCount,
+    revision_task_card: revisionCard,
     public_url_check: publicUrlCheck,
     skipped_public_publish: args.skipPublicPublish,
   };
