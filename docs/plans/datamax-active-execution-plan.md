@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — Task 7–10 已 `PASS`、P0 已关闭；asset evidence migration、统一检索、feature-off 部署、单 dataset live canary 和最终 rollback 回归均已完成，Task 11 为当前 `READY` Task。
+**Status:** ACTIVE — Task 7–11 已 `PASS`、P0 已关闭；asset evidence、统一检索和单 connection 私有 `asset-imports` pilot 均已完成独立发布、live 与 rollback，Task 12 为当前 `READY` Task。
 
 ---
 
@@ -68,6 +68,9 @@
 | Task 10 实现 commit | `08b37723ace5d14a8a5c1b8aeba7490f3db47f3c`，提交信息 `feat: retrieve accepted asset evidence` |
 | Task 10 GitHub Actions | `29155355921`：Rust Minimal 与 No-Credential Smoke 全部成功 |
 | Task 10 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task10`，分支 `codex/task10-asset-evidence`；实现已 fast-forward 到 `origin/main` |
+| Task 11 实现 commit | `be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0`，提交信息 `feat: add private external asset import pilot` |
+| Task 11 GitHub Actions | `29157911807`：Rust Minimal 与 No-Credential Smoke 全部成功 |
+| Task 11 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task11`，分支 `codex/task11-private-asset-import`；实现已 fast-forward 到 `origin/main` |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
 已经证明：Task 8 的 `cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 402/402、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过；Task 9 的本地/CI/服务器定向测试、一次性数据库集成门禁、完整 ingest-worker 回归、release build、资产 preflight、普通 ingest runtime gate 和 feature-off 复验也已通过。
@@ -77,16 +80,16 @@
 | 项目 | 2026-07-11 只读核对状态 |
 | --- | --- |
 | 应用仓库 | `/srv/aiv3/repo` |
-| 应用仓库 HEAD | `08b37723ace5d14a8a5c1b8aeba7490f3db47f3c`，`main` 与 `origin/main` 一致，工作区干净 |
-| 运行服务 | platform-api、ingest-worker、retrieval-worker、Web 均 active；最终 PID 分别为 `922486`、`872657`、`601686`、`712419` |
+| 应用仓库 HEAD | `be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0`，`main` 与 `origin/main` 一致，工作区干净 |
+| 运行服务 | platform-api、ingest-worker、retrieval-worker、Web 均 active；最终 PID 分别为 `954732`、`872657`、`601686`、`712419` |
 | PostgreSQL | 18.4 active/enabled，checksums on |
 | PG17 | inactive/disabled，数据目录与备份保留 |
-| `asset_parse_runs` | 5 行、4 行 pending；renewed pilot 对应 parser task 1 行且已终态，无 runnable 或 over-max task |
-| 新能力 flags | `ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED=false` 且其余 R5 新能力 flags 均未开启 |
+| `asset_parse_runs` | 15 行、14 行 pending；Task 11 未开启 parser 或调用 provider |
+| 新能力 flags | `ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED=false`、`EXTERNAL_ASSET_IMPORT_ENABLED=false`，第三方 allowlist 为空且其余 R5 新能力 flags 均未开启 |
 | 核心服务 | platform-api、Web、assistant/chat/static/report、ingest、retrieval 均 active |
 | API | `healthz=200`、`readyz=200` |
 
-数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9 原部署回退资产：`/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z`；workflow-version fix 回退资产：`/srv/aiv3/backups/task9-workflow-version-fix-8bc4fe05-20260711T125907Z`；renewed live 的 0600 报告和 no-delete manifest 位于 `/srv/aiv3/backups/task9-live-8bc4fe05-20260711T131030Z`。Task 10 feature-off 回退资产位于 `/srv/aiv3/backups/task10-feature-off-08b37723-20260711T141257Z`；成功 live canary、最终回归和合并 no-delete manifest 位于 `/srv/aiv3/backups/task10-live-08b37723-20260711T144614Z`。
+数据库升级回滚资产：`/srv/aiv3/backups/postgresql-17-to-18-20260710T071104Z`。Task 7 应用 pre-deploy 逻辑备份：`/srv/aiv3/backups/feature-off-bf602a6f-20260710T101458Z`。Task 9 原部署回退资产：`/srv/aiv3/backups/task9-feature-off-33ad2d31-20260711T041335Z`；workflow-version fix 回退资产：`/srv/aiv3/backups/task9-workflow-version-fix-8bc4fe05-20260711T125907Z`；renewed live 的 0600 报告和 no-delete manifest 位于 `/srv/aiv3/backups/task9-live-8bc4fe05-20260711T131030Z`。Task 10 feature-off 回退资产位于 `/srv/aiv3/backups/task10-feature-off-08b37723-20260711T141257Z`；成功 live canary、最终回归和合并 no-delete manifest 位于 `/srv/aiv3/backups/task10-live-08b37723-20260711T144614Z`。Task 11 feature-off 回退资产位于 `/srv/aiv3/backups/task11-feature-off-be2ef77f-20260711T153414Z`；成功 live、最终回归和 no-delete manifest 位于 `/srv/aiv3/backups/task11-live-be2ef77f-20260711T155457Z`，两次受控失败尝试也各自保留独立 cleanup manifest。
 
 ### 2.3 已完成与未完成
 
@@ -95,7 +98,8 @@
 - Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投、flag rollback、任务卡 Web 发布和认证浏览器复验；任务卡刷新稳定、字段账本可见、重复卡为 0，Task 8 `PASS`。
 - Task 9 已完成 workflow-version 修复、一次性数据库 enqueue FK 门禁、feature-off 部署、单图真实 provider pilot、会话注销、flag rollback 和完整回归，状态为 `PASS`。
 - Task 10 已完成独立 migration、permission-safe/幂等数据库门禁、统一 document/asset ranking、feature-off 部署、同租户文档控制、asset evidence live canary、关闭后只读复验和合并 no-delete manifest，状态为 `PASS`。
-- 尚未完成：第三方私有入口、operator 并发、客户端联合验收。
+- Task 11 已完成私有 adapter、公开契约 guard、一次性数据库门禁、feature-off 部署、单 connection live、跨连接拒绝、flag/allowlist rollback 和 no-delete manifest，状态为 `PASS`。
+- 尚未完成：operator 并发、客户端联合验收。
 - Task 9 首次 live 使用批准 `TASK9-PARSER-PILOT-20260711-01` 在获批 `13941bc6` 基线上执行；单图导入在 enqueue 时因未注册的 `asset-profile-parse-v1` workflow version 外键失败，provider 调用和 parser task 均为 0。会话已撤销、三项开关已恢复、回归通过、对象保留且 cleanup manifest 不自动删除。
 - 最小修复改为复用运行时已注册的 upload-ingest workflow version；修复已发布并在 8 服务器验证。renewed pilot 以一次 provider attempt 产生 2 条 profile，安全终态为 `partial`；Task 10 已解锁。
 
@@ -118,8 +122,9 @@ Task 7  feature-off 暗发布并关闭 P0
 | M1C | 7 | PASS | 8 服务器 feature-off RC、P0 关闭 | 已完成 |
 | M2 | 8 | PASS | 写入/幂等/rollback、任务卡 Web 发布和认证复验通过 | 已完成 |
 | M3 | 9–10 | PASS | accepted profile、asset evidence、统一检索 | 已完成 |
-| M4 | 11 | READY | 单 connection 私有入口、公开契约不变 | 1–2 天 |
-| M5 | 12–13 | PENDING | 受控并发结论、V3/Codex 联合回执 | 1–2 天 |
+| M4 | 11 | PASS | 单 connection 私有入口、公开契约不变 | 已完成 |
+| M5A | 12 | READY | 受控并发结论与瓶颈归因 | 0.5–1 天 |
+| M5B | 13 | PENDING | V3/Codex 联合回执 | 0.5–1 天 |
 
 禁止并行跨越 Task 7–11。Task 12 和 Task 13 只能在 Task 11 `PASS` 后进入，可在同一验收窗口串行执行但不得共用未脱敏回执。
 
@@ -416,7 +421,7 @@ $env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BEARER=$null
 
 ## 7. Task 9：接通 `ingest-worker` 真实 parser
 
-**Status:** PASS；workflow-version 根因修复已 commit/push、CI 全绿并 feature-off 部署；renewed 单图 live 以一次真实 provider attempt 到达安全 `partial` 终态，随后会话注销、三项开关恢复、完整回归和最终现场审计均通过。Task 10 已于后续独立切片中 `PASS`，当前进入 Task 11。
+**Status:** PASS；workflow-version 根因修复已 commit/push、CI 全绿并 feature-off 部署；renewed 单图 live 以一次真实 provider attempt 到达安全 `partial` 终态，随后会话注销、三项开关恢复、完整回归和最终现场审计均通过。Task 10–11 已于后续独立切片中 `PASS`，当前进入 Task 12。
 
 **Goal:** Move pending asset parse runs through an asynchronous worker to an accepted profile with bounded retry and safe provider handling.
 
@@ -642,7 +647,7 @@ Disable evidence writes and prove new rows stop while previously materialized ev
 
 ## 9. Task 11：第三方私有 `asset-imports` pilot
 
-**Status:** READY；Task 10 已 `PASS`，public third-party contract 必须保持不变。
+**Status:** PASS；实现、CI、一次性数据库门禁、feature-off 部署、单 connection live、跨连接拒绝、公开契约 guard、rollback 和 retained cleanup manifest 均已完成。
 
 **Goal:** Open a private asset-import route to one reviewed connection without adding it to the public integration contract.
 
@@ -713,11 +718,21 @@ Disable the flag, clear the connection allowlist, restart platform-api, record s
 
 **Done:** single-connection pilot passes, public contract remains byte/semantic compatible, feature and allowlist are closed again.
 
+**Current receipt (2026-07-11):**
+
+- 实现提交 `be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0` 已推送；GitHub Actions `29157911807` 的 Rust Minimal 与 No-Credential Smoke 全绿。
+- PostgreSQL 18.4 一次性数据库门禁证明 request replay、replacement、historical replay 不回滚、request conflict、library/dataset/connection owner isolation；测试库已 drop，报告位于 `/srv/aiv3/backups/task11-disposable-db-be2ef77f-20260711T152830Z`。
+- feature-off 部署备份为 `/srv/aiv3/backups/task11-feature-off-be2ef77f-20260711T153414Z`；57,385,780-byte custom dump 与 528-line restore list 已验证，只重启 platform-api，ingest/retrieval/Web PID 未变。
+- live 仅 allowlist 一个临时连接，完成 single、exact replay、idempotency conflict、batch、ZIP、replacement、historical replay no rollback 和第二连接拒绝；安全聚合为 asset 5、dataset membership 5、parse run 5、request history entry 6，provider call 0。
+- public contract guard 在开启窗口与关闭后均通过；响应只含 request id、opaque task ref、parse status 与安全 asset summary，没有 tenant/dataset/library/collection/object locator/internal metadata 泄漏。
+- 结束后 `EXTERNAL_ASSET_IMPORT_ENABLED=false`、allowlist 为空、两个临时连接 disabled；health/ready 200、priority error 0，ingest/retrieval/Web PID 保持 `872657`/`601686`/`712419`。
+- 成功 live、安全回归和 mode-0600 no-delete manifest 位于 `/srv/aiv3/backups/task11-live-be2ef77f-20260711T155457Z`；两次 operator PATH 失败尝试分别保留 mode-0600 cleanup manifest，未自动删除任何对象。
+
 ---
 
 ## 10. Task 12：生产级 operator 与受控并发门禁
 
-**Status:** PENDING on Task 11; requires operator credentials and an approved production window.
+**Status:** READY；Task 11 已 `PASS`。8 服务器为非生产验证环境且适用 standing authorization；仍须先通过 environment-held credential 与单请求 preflight，缺失则转 `AUTH_REQUIRED`。
 
 **Goal:** Attribute queue/provider/worker bottlenecks without mixing load testing with feature development.
 
@@ -855,11 +870,11 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-Task 10 已在 08b37723ace5d14a8a5c1b8aeba7490f3db47f3c 上完成 migration、CI、
-一次性数据库权限/幂等门禁、feature-off 部署、同租户 document control、asset evidence
-live canary、会话注销、flag rollback 和完整回归，状态为 PASS。当前 READY Task 是
-Task 11：第三方私有 asset-imports pilot。先复核本文 Task 11 的 Files、Stop 和 Done，
-使用独立 worktree；不得夹带 Task 12，不得删除 Task 9/10 的 no-delete pilot 数据。
+Task 11 已在 be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0 上完成实现、CI、一次性数据库
+门禁、feature-off 部署、单 connection private asset-imports live、跨连接拒绝、公开契约
+guard、flag/allowlist rollback 和完整回归，状态为 PASS。当前 READY Task 是 Task 12：
+生产级 operator 与受控并发门禁。先运行全部 no-live self-test 和单请求 baseline，再按
+5 -> 10 -> 20 分级放量；不得夹带 Task 13，不得删除 Task 9/10/11 的 no-delete pilot 数据。
 ```
 
 ### 13.3 本计划完成条件

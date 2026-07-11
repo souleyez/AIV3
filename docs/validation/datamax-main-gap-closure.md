@@ -344,6 +344,33 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no credential, Cookie, local key, database URL, provider payload, raw object key, customer data, automatic delete, 10-server action, or 120-server action was recorded in shared receipts;
   - Task 10 is `PASS`; `ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED=false`; Task 11 is `READY` for its independent private third-party asset-import slice.
 
+## 2026-07-11 Task 11 Private Third-Party Asset Imports, Live Pilot, and PASS
+
+- Implementation, release, and database gate:
+  - isolated worktree `ai-data-platform-v3-task11` added the private `POST /v1/external/channels/{connection_id}/asset-imports` adapter with bearer authentication, default-off flag, exact connection allowlist, no tenant selector, source/dataset owner checks, private library binding, collection scope, single/batch/ZIP reuse, connection-namespaced stable identities, bounded request history, replacement, and historical replay without object rollback;
+  - response fields are restricted to request id, opaque task ref, parse status, and safe asset summaries; the public contract guard excludes only the private integration document and continues forbidding asset-import terms in public docs;
+  - implementation commit `be2ef77f8ffc266edc863e5ad7980b4bea3b5ce0` was pushed to `origin/main`; GitHub Actions run `29157911807` passed No-Credential Smoke and Rust Minimal;
+  - local gates passed platform-api asset import 70/70 plus one ignored disposable-DB test, external image idempotency 6/6, workspace check, public contract 2/2, asset self-test/preflight, fmt, and diff checks;
+  - a PostgreSQL 18.4 disposable database passed `external_asset_import_database_gate_proves_idempotency_replacement_and_scope`, covering exact replay, replacement, historical replay no rollback, request conflict, library/dataset mismatch, library connection/source binding, and connection owner isolation; the test database was dropped and its safe receipt/source archive is `/srv/aiv3/backups/task11-disposable-db-be2ef77f-20260711T152830Z`.
+- Feature-off deployment:
+  - preflight proved exact clean baseline `e95042a7061c8817b8d326f29a2c16727f8de900`, target `be2ef77f...`, active API/ingest/retrieval/Web, health/ready 200, feature false, empty allowlist, and 27 GB free;
+  - `/srv/aiv3/backups/task11-feature-off-be2ef77f-20260711T153414Z` contains the previous API/env plus a PostgreSQL 18 custom dump of 57,385,780 bytes and a 528-line restore list;
+  - the server fast-forwarded exactly to `be2ef77f...`; release platform-api build passed, both external asset-import settings were explicitly closed, and only platform-api restarted. Ingest/retrieval/Web PIDs remained `872657`/`601686`/`712419`, health/ready returned 200, and priority-error lines were 0;
+  - feature-off regression passed asset-import tests, image-idempotency tests, public contract guard, asset self-test/preflight, main streaming self-test, and static-page self-test.
+- Controlled single-connection live:
+  - two temporary product-API channel connections were created: one reviewed pilot connection and one isolation control; only the pilot connection was allowlisted. A pending-secret fixture source was created through the existing channel API without storing raw credentials or contacting a provider;
+  - isolated external-owner dataset, private library binding, membership, collection, PNG fixtures, and ZIP fixture were created only for this non-production pilot; all raw identifiers and bearer material remain in the mode-0600 private receipt;
+  - with the feature off, a valid bearer request returned `external_asset_import_feature_disabled`. During the one-connection window, single PNG, exact duplicate replay, changed-payload idempotency conflict, two-item batch, two-image ZIP expansion, same-identity replacement, historical replay without object rollback, and second-connection rejection all passed;
+  - exact replay and historical replay returned the original opaque task ref; replacement retained the same asset identity and changed only the current object reference; shared response checks found no tenant, dataset, library, collection, source, object locator, profile payload, or internal metadata field;
+  - safe retained aggregates are 5 assets, 5 dataset memberships, 5 parse runs, and 6 request-history entries. `ASSET_PARSE_ENABLED` stayed false, ingest-worker was not restarted, and provider-call count was 0;
+  - the public third-party contract guard passed while the private route was enabled and again after closure.
+- Operator corrections, rollback, and retention:
+  - the first live wrapper completed business cases but `sudo` secure PATH could not resolve `npm` for the public guard; its trap restored both settings and disabled both temporary connections. A second attempt stopped before scope creation because `runuser` was absent from the narrowed PATH; both connections were disabled and the feature was never enabled;
+  - the successful attempt completed live and rollback, then its initial aggregate query used unsupported `jsonb_object_length`; a read-only finalizer replaced it with `jsonb_object_keys`, revalidated every stored response and database invariant, ran all regressions, and generated the receipts without repeating live writes;
+  - final state is exact clean `be2ef77f...`; `EXTERNAL_ASSET_IMPORT_ENABLED=false`, allowlist empty, both successful-attempt temporary connections disabled, platform-api/ingest/retrieval/Web active at `954732`/`872657`/`601686`/`712419`, health/ready 200, and platform-api priority-error lines 0;
+  - successful private receipt, shared safe receipt, final regression logs, and mode-0600 no-delete manifest are under `/srv/aiv3/backups/task11-live-be2ef77f-20260711T155457Z`. Both failed-attempt directories contain their own mode-0600 cleanup manifest; no retained test/pilot data or object was automatically deleted;
+  - Task 11 is `PASS`; Task 12 is `READY` for no-live self-tests, credential preflight, one-request baselines, and only then staged 5/10/20 concurrency.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
