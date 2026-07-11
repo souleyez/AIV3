@@ -294,6 +294,31 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - the fix is local and uncommitted; commit/push, GitHub CI, feature-off fix deployment, and any renewed live retry each require separate approval;
   - the original approval id, session, scope, and window must not be reused; Task 10 remains blocked.
 
+## 2026-07-11 Task 9 Workflow-Version Fix Release, Renewed Live Pilot, and PASS
+
+- Fix publication and CI:
+  - the minimal registered-workflow-version fix was committed as `8bc4fe059719bfce54e1e0593582fcae9b9ea3b5` and fast-forward pushed to `origin/main` with exactly the platform-api fix, active plan, and this ledger;
+  - GitHub Actions run `29153150946` passed Rust Minimal and No-Credential Smoke;
+  - the local pre-publication suite passed platform-api asset import 64/64, ingest-worker parser 8/8, platform-api/workspace checks, runner self-test, fmt, and diff checks.
+- Feature-off deployment and disposable-database gate:
+  - 8-server preflight proved a clean `main`, exact approved origin SHA, flags off, active services, health/ready 200, and no runnable parser task;
+  - rollback assets are `/srv/aiv3/backups/task9-workflow-version-fix-8bc4fe05-20260711T125907Z`; the new release platform-api was built and only platform-api was restarted, while worker and Web PIDs remained unchanged during this deployment step;
+  - a disposable `aiv3_task9_fix_test_*` database and loopback-only candidate API created one queued parser task whose execution used registered `UploadIngest 0.1.0`; the asset, membership, pending parse run, seeded profile, and workflow definition integrity gates all passed;
+  - no provider, live NATS, test worker, business database, or retained pilot object was touched by that gate; the disposable database was dropped, and its 0600 report is `disposable-db-gate.json` under the fix backup.
+- Renewed controlled live pilot:
+  - `TASK9-PARSER-PILOT-RETRY-20260711-02` used a fresh one-time local-key identity, bootstrap/pilot datasets, private asset library, membership, and one PNG; the first approval, session, Cookie, and scope were not reused;
+  - queue wait was `2089 ms` and terminal latency was `12171 ms`; one attributable workflow task made exactly one real-provider attempt, finished successfully, and produced two profiles while the runner classified the safe business terminal as `partial`;
+  - there was no batch/ZIP, remote URL, second provider attempt, public contract change, automatic cleanup, or Task 10 write;
+  - the 0600 safe report is `/srv/aiv3/backups/task9-live-8bc4fe05-20260711T131030Z/smoke/20260711T131032467Z-872589-parser-pilot.json`; the 0600 private no-delete manifest is `/srv/aiv3/backups/task9-live-8bc4fe05-20260711T131030Z/scope-cleanup-manifest.private.json`, with `automaticCleanupAllowed=false`.
+- Rollback, regression, and final audit:
+  - the one-time session was revoked and the Cookie jar was removed; `MAIN_SITE_ASSET_IMPORT_ENABLED=false`, `ASSET_PARSE_ENABLED=false`, and the tenant allowlist is empty;
+  - post-live regression passed platform-api asset import 64/64, ingest-worker 52/52 + 24/24, asset runner self-test/preflight, public-contract guard, main streaming self-test, and static-page self-test;
+  - final server HEAD is exact clean `8bc4fe059719bfce54e1e0593582fcae9b9ea3b5`; platform-api/ingest-worker/Web are active with PIDs `872656`/`872657`/`712419`, health/ready are 200, parser tasks are `total|runnable|over-max=1|0|0`, disposable test databases are 0, and API/worker fatal markers since live start are 0;
+  - PowerShell piping appended a standalone CR after the remote script had emitted all successful gates, causing the wrapper to report `exit 127`; independent state verification and the full regression passed, so the pilot was not rerun and the provider was not called again. Future operator transport uses LF-normalized base64 input.
+- Status:
+  - Task 9 is `PASS` with independent commit, CI, feature-off deployment, database gate, live evidence, rollback, and retained no-delete manifest;
+  - Task 10 is `READY` for its independent asset-evidence migration and release slice.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
