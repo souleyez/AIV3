@@ -24,6 +24,7 @@ const DEFAULT_CLIENT_SESSION_TTL_SECONDS: i64 = 60 * 60;
 const MIN_CLIENT_SESSION_TTL_SECONDS: i64 = 5 * 60;
 const MAX_CLIENT_SESSION_TTL_SECONDS: i64 = 60 * 60;
 const CLIENT_SESSION_TOKEN_PREFIX: &str = "v3cs_";
+const MAX_CLIENT_SESSION_TOKEN_BYTES: usize = 4 * 1024;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -107,6 +108,12 @@ fn resolve_client_config_session_with_secret(
         nonce: Uuid::new_v4().simple().to_string(),
     };
     let session_token = issue_client_session_token(&claims, signing_key)?;
+    if session_token.len() > MAX_CLIENT_SESSION_TOKEN_BYTES {
+        return Err(ApiError::bad_request(
+            "client_config_scope_too_large",
+            "client config scope is too large for a native client session".to_string(),
+        ));
+    }
     Ok(ResolveClientConfigSessionResponse {
         package_id: package.package_id.clone(),
         config_package: ResolvedClientConfigPackageView {
@@ -450,5 +457,43 @@ mod tests {
         assert!(encoded.get("codex_control").is_none());
         assert!(encoded.get("provider_key").is_none());
         assert_eq!(encoded["client_id"], "terminal-1");
+    }
+
+    #[test]
+    fn client_session_rejects_scope_that_exceeds_native_credential_limit() {
+        let mut package = ClientConfigPackageView {
+            package_id: "v3cp_large".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            user_id: "user-1".to_string(),
+            client_id: "template-client".to_string(),
+            v3_base_url: "https://v3.elepcloud.com".to_string(),
+            asset_library_ids: Vec::new(),
+            dataset_ids: Vec::new(),
+            skill_packs: Vec::new(),
+            artifact_upload: V3ClientArtifactUploadConfigView {
+                mode: "session_token".to_string(),
+                endpoint: "/v1/client-artifacts".to_string(),
+            },
+            codex_control: None,
+            expires_at: None,
+            created_at: now(),
+            config_package: serde_json::json!({}),
+        };
+        package.dataset_ids = (0..128)
+            .map(|index| format!("dataset-{index:03}-{}", "x".repeat(80)))
+            .collect();
+        let error = resolve_client_config_session_with_secret(
+            &package,
+            &ResolveClientConfigSessionRequest {
+                tenant_id: "tenant-1".to_string(),
+                user_id: "user-1".to_string(),
+                client_id: "terminal-1".to_string(),
+                expires_in_seconds: Some(3600),
+            },
+            now(),
+            "test-client-session-signing-key-32-bytes",
+        )
+        .expect_err("oversized scoped session must fail before delivery");
+        assert_eq!(error.payload.code, "client_config_scope_too_large");
     }
 }
