@@ -48,6 +48,7 @@ pub(crate) struct FashionDesignImageAssetImportInput {
     pub dataset_id: DatasetId,
     pub asset_library_id: Option<Uuid>,
     pub collection_id: Option<Uuid>,
+    pub stable_source_id_override: Option<String>,
     pub external_id: Option<String>,
     pub title: String,
     pub image_url: Option<String>,
@@ -2650,17 +2651,16 @@ pub(crate) fn fashion_design_third_party_asset_import_private_endpoint_guard_dry
         },
         "request_contract": {
             "required_fields": [
+                "request_id",
                 "asset_library_external_id",
                 "dataset_external_ids",
                 "assets"
             ],
             "optional_fields": [
+                "source_external_id",
                 "asset_collection_external_id",
-                "asset_domain",
-                "profile_schema",
-                "asset_external_id",
-                "filename",
-                "content_type"
+                "packages",
+                "metadata"
             ],
             "asset_input_modes": [
                 "url",
@@ -2674,18 +2674,17 @@ pub(crate) fn fashion_design_third_party_asset_import_private_endpoint_guard_dry
         "response_contract": {
             "reply_shape": "structured_json",
             "required_fields": [
-                "accepted",
-                "import_id",
-                "asset_count",
+                "request_id",
+                "task_ref",
                 "parse_status",
                 "assets"
             ],
             "asset_fields": [
                 "asset_external_id",
+                "title",
+                "content_type",
                 "status",
-                "profile_schema",
-                "parse_run_id",
-                "structured_profile"
+                "profile_schema"
             ],
             "statuses": [
                 "accepted",
@@ -2977,7 +2976,7 @@ pub(crate) async fn create_fashion_design_image_asset_import_batch_response(
     })
 }
 
-async fn validate_fashion_design_image_asset_import_scope_refs(
+pub(crate) async fn validate_fashion_design_image_asset_import_scope_refs(
     state: &AppState,
     asset_library_id: Option<Uuid>,
     collection_id: Option<Uuid>,
@@ -3042,7 +3041,7 @@ fn validate_fashion_design_image_asset_import_collection_scope(
     Ok(())
 }
 
-async fn upsert_fashion_design_image_asset_import_for_tenant(
+pub(crate) async fn upsert_fashion_design_image_asset_import_for_tenant(
     state: &AppState,
     tenant_id: TenantId,
     input: FashionDesignImageAssetImportInput,
@@ -3100,6 +3099,7 @@ pub(crate) fn fashion_design_image_asset_import_input_from_request(
             request.asset_library_id.as_deref(),
         )?,
         collection_id: parse_optional_uuid_ref("collection_id", request.collection_id.as_deref())?,
+        stable_source_id_override: None,
         external_id: request.external_id,
         title: request.title,
         image_url: request.image_url,
@@ -3158,6 +3158,7 @@ fn fashion_design_image_asset_import_input_from_batch_item(
         dataset_id,
         asset_library_id,
         collection_id,
+        stable_source_id_override: None,
         external_id: item.external_id,
         title: item.title,
         image_url: item.image_url,
@@ -3514,6 +3515,7 @@ fn fashion_design_image_source_id(
     input: &FashionDesignImageAssetImportInput,
 ) -> std::result::Result<String, ApiError> {
     for value in [
+        input.stable_source_id_override.as_deref(),
         input.external_id.as_deref(),
         input.object_key.as_deref(),
         input.image_url.as_deref(),
@@ -3794,6 +3796,7 @@ mod tests {
             dataset_id: DatasetId(Uuid::from_u128(1)),
             asset_library_id: Some(Uuid::from_u128(2)),
             collection_id: Some(Uuid::from_u128(3)),
+            stable_source_id_override: None,
             external_id: Some("img-001".to_string()),
             title: "春夏连衣裙灵感图".to_string(),
             image_url: Some("https://example.com/img-001.png".to_string()),

@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::fmt::Write as _;
 
 use crate::sha256_hex;
 
@@ -72,6 +73,67 @@ pub(crate) fn external_channel_image_variant_fingerprint(
         .collect::<Vec<_>>();
     let serialized = serde_json::to_string(&parts).ok()?;
     Some(sha256_hex([serialized.as_bytes()]))
+}
+
+pub(crate) fn external_asset_import_request_fingerprint(payload: &Value) -> String {
+    let mut canonical = String::new();
+    write_canonical_json(payload, &mut canonical);
+    sha256_hex([canonical.as_bytes()])
+}
+
+pub(crate) fn external_asset_import_source_id(
+    connection_id: &str,
+    source_id: &str,
+    external_id: Option<&str>,
+    object_key: Option<&str>,
+    image_url: Option<&str>,
+) -> Option<String> {
+    let identity = [external_id, object_key, image_url]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())?;
+    let digest = sha256_hex([
+        connection_id.trim().as_bytes(),
+        b"\0",
+        source_id.trim().as_bytes(),
+        b"\0",
+        identity.as_bytes(),
+    ]);
+    Some(format!("external-asset:{digest}"))
+}
+
+fn write_canonical_json(value: &Value, output: &mut String) {
+    match value {
+        Value::Object(object) => {
+            output.push('{');
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                let _ = write!(
+                    output,
+                    "{}:",
+                    serde_json::to_string(key).unwrap_or_default()
+                );
+                write_canonical_json(&object[key], output);
+            }
+            output.push('}');
+        }
+        Value::Array(items) => {
+            output.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_canonical_json(item, output);
+            }
+            output.push(']');
+        }
+        _ => output.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -162,5 +224,48 @@ mod tests {
         assert!(key.starts_with("idem-1:image:"));
         assert_eq!(key.len(), "idem-1:image:".len() + 16);
         assert!(external_channel_image_variant_idempotency_key("idem-1", &json!({})).is_none());
+    }
+
+    #[test]
+    fn external_asset_import_fingerprint_is_object_order_independent() {
+        let left = json!({"request_id": "req-1", "metadata": {"b": 2, "a": 1}});
+        let right: Value =
+            serde_json::from_str(r#"{"metadata":{"a":1,"b":2},"request_id":"req-1"}"#).unwrap();
+        assert_eq!(
+            external_asset_import_request_fingerprint(&left),
+            external_asset_import_request_fingerprint(&right)
+        );
+    }
+
+    #[test]
+    fn external_asset_source_id_is_stable_and_connection_isolated() {
+        let first = external_asset_import_source_id(
+            "connection-a",
+            "source-main",
+            Some("asset-1"),
+            Some("objects/first.png"),
+            None,
+        )
+        .unwrap();
+        let replacement = external_asset_import_source_id(
+            "connection-a",
+            "source-main",
+            Some("asset-1"),
+            Some("objects/replacement.png"),
+            None,
+        )
+        .unwrap();
+        let other_connection = external_asset_import_source_id(
+            "connection-b",
+            "source-main",
+            Some("asset-1"),
+            Some("objects/first.png"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(first, replacement);
+        assert_ne!(first, other_connection);
+        assert!(first.starts_with("external-asset:"));
     }
 }

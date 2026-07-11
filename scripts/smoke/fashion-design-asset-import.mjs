@@ -2149,17 +2149,16 @@ function buildThirdPartyPrivateAssetImportEndpointGuardDryRun({
     },
     request_contract: {
       required_fields: [
+        'request_id',
         'asset_library_external_id',
         'dataset_external_ids',
         'assets',
       ],
       optional_fields: [
+        'source_external_id',
         'asset_collection_external_id',
-        'asset_domain',
-        'profile_schema',
-        'asset_external_id',
-        'filename',
-        'content_type',
+        'packages',
+        'metadata',
       ],
       asset_input_modes: [
         'url',
@@ -2173,18 +2172,17 @@ function buildThirdPartyPrivateAssetImportEndpointGuardDryRun({
     response_contract: {
       reply_shape: 'structured_json',
       required_fields: [
-        'accepted',
-        'import_id',
-        'asset_count',
+        'request_id',
+        'task_ref',
         'parse_status',
         'assets',
       ],
       asset_fields: [
         'asset_external_id',
+        'title',
+        'content_type',
         'status',
         'profile_schema',
-        'parse_run_id',
-        'structured_profile',
       ],
       statuses: [
         'accepted',

@@ -335,6 +335,7 @@ mod external_action_result_callback_support;
 mod external_aigolf_skill_support;
 mod external_answer_policy_support;
 mod external_artifact_request_support;
+mod external_asset_import_support;
 mod external_bot_message_parse_support;
 mod external_bot_message_payload_support;
 mod external_channel_action_prompt_support;
@@ -660,6 +661,7 @@ use external_action_result_callback_support::*;
 use external_aigolf_skill_support::*;
 use external_answer_policy_support::*;
 use external_artifact_request_support::*;
+use external_asset_import_support::*;
 use external_bot_message_parse_support::*;
 use external_bot_message_payload_support::*;
 use external_channel_action_prompt_support::*;
@@ -1360,6 +1362,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/documents/parse",
             axum::routing::post(create_external_document_parse),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/asset-imports",
+            axum::routing::post(create_external_asset_import),
         )
         .route(
             "/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail",
@@ -10285,6 +10291,44 @@ async fn create_external_document_parse(
             workflow_execution: started.execution,
         }),
     ))
+}
+
+async fn create_external_asset_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Json(request): Json<CreateExternalAssetImportRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateExternalAssetImportResponse>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    if external_channel_inbound_bearer_token_from_config(&connection.config_redacted).is_none() {
+        return Err(ApiError::unauthorized(
+            "external_asset_import_auth_not_configured",
+            "private external asset import requires configured inbound bearer auth".to_string(),
+        ));
+    }
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    ensure_external_asset_import_access(&connection_id)?;
+    let source_id = resolve_external_asset_import_source_id(&request, &connection.config_redacted)?;
+    let source_id = validate_external_database_source_id(&source_id)?;
+    let source = load_external_source_connection(&state, &source_id).await?;
+    if source.disabled_at.is_some() {
+        return Err(ApiError::forbidden(
+            "external_source_disabled",
+            "external source connection is disabled".to_string(),
+        ));
+    }
+    let external_system_user = ensure_external_channel_system_user(&state, &connection_id).await?;
+    let response = create_external_asset_import_response(
+        &state,
+        &connection_id,
+        &source_id,
+        external_system_user.id,
+        request,
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
 #[derive(Clone, Debug)]

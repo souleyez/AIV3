@@ -11,6 +11,10 @@ const PUBLIC_CONTRACT_DIRS = [
   'apps/web/public/external-integrations',
 ];
 
+const PRIVATE_PILOT_CONTRACT_FILES = new Set([
+  'docs/integrations/v3-third-party-asset-imports-private.md',
+]);
+
 const FORBIDDEN_UNREVIEWED_ASSET_CONTRACTS = [
   /\basset-imports\b/i,
   /\bfashion-design-images\b/i,
@@ -36,7 +40,10 @@ function listPublicContractFiles() {
         continue;
       }
       if (/\.(md|html)$/i.test(name)) {
-        files.push(absolutePath);
+        const relativePath = path.relative(ROOT_DIR, absolutePath).replaceAll('\\', '/');
+        if (!PRIVATE_PILOT_CONTRACT_FILES.has(relativePath)) {
+          files.push(absolutePath);
+        }
       }
     }
   }
@@ -61,4 +68,18 @@ test('public third-party docs do not expose unreviewed asset import contracts', 
   }
 
   assert.deepEqual(violations, []);
+});
+
+test('private asset import pilot contract is isolated from public contract files', () => {
+  assert.deepEqual(
+    [...PRIVATE_PILOT_CONTRACT_FILES],
+    ['docs/integrations/v3-third-party-asset-imports-private.md'],
+  );
+  for (const relativePath of PRIVATE_PILOT_CONTRACT_FILES) {
+    const absolutePath = path.join(ROOT_DIR, relativePath);
+    assert.equal(fs.existsSync(absolutePath), true, `${relativePath} must exist`);
+    const text = fs.readFileSync(absolutePath, 'utf8');
+    assert.match(text, /PRIVATE PILOT/i);
+    assert.match(text, /not part of the public integration contract/i);
+  }
 });
