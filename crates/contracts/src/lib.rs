@@ -3891,6 +3891,29 @@ pub struct RetrievalSearchHitView {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RetrievalSearchResponse {
     pub hits: Vec<RetrievalSearchHitView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unified_hits: Vec<UnifiedRetrievalSearchHitView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UnifiedRetrievalSearchHitView {
+    pub source_kind: String,
+    pub evidence_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<DocumentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub score: f64,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetRetrievalEvidenceReferenceView {
+    pub evidence_ref: String,
+    pub source_kind: String,
+    pub asset_id: String,
+    pub profile_kind: String,
+    pub profile_version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -7731,5 +7754,50 @@ mod tests {
         .expect("rotate key request should deserialize");
         assert_eq!(rotate.new_local_key, "next-local-key");
         assert_eq!(rotate.device_fingerprint.as_deref(), Some("browser-device"));
+    }
+
+    #[test]
+    fn retrieval_search_omits_unified_hits_without_asset_evidence() {
+        let response = RetrievalSearchResponse {
+            hits: vec![RetrievalSearchHitView {
+                retrieval_evidence_id: RetrievalEvidenceId::new(),
+                document_id: DocumentId::new(),
+                score: 0.8,
+                summary: "document evidence".to_string(),
+                source_locator: "documents/demo.md#chunk=0".to_string(),
+            }],
+            unified_hits: vec![],
+        };
+
+        let encoded = serde_json::to_value(response).expect("retrieval response");
+        assert_eq!(encoded["hits"].as_array().map(Vec::len), Some(1));
+        assert!(encoded.get("unified_hits").is_none());
+    }
+
+    #[test]
+    fn unified_retrieval_hit_exposes_safe_asset_reference_without_locator() {
+        let response = RetrievalSearchResponse {
+            hits: vec![],
+            unified_hits: vec![UnifiedRetrievalSearchHitView {
+                source_kind: "asset_profile".to_string(),
+                evidence_ref: "asset-evidence://evidence-1".to_string(),
+                document_id: None,
+                asset_id: Some("asset-1".to_string()),
+                score: 0.9,
+                summary: "春夏连衣裙".to_string(),
+            }],
+        };
+
+        let encoded = serde_json::to_value(response).expect("unified retrieval response");
+        assert_eq!(
+            encoded["unified_hits"][0]["source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            encoded["unified_hits"][0]["evidence_ref"],
+            json!("asset-evidence://evidence-1")
+        );
+        assert!(encoded["unified_hits"][0].get("document_id").is_none());
+        assert!(encoded["unified_hits"][0].get("source_locator").is_none());
     }
 }

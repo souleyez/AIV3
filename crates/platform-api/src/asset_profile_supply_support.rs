@@ -5,6 +5,11 @@ const SUMMARY_LIMIT: usize = 240;
 const TERMS_LIMIT: usize = 24;
 const FACETS_LIMIT: usize = 12;
 const RETRIEVAL_TEXT_LIMIT: usize = 1600;
+const ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED_ENV: &str = "ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED";
+
+pub(crate) fn asset_retrieval_evidence_write_enabled() -> bool {
+    crate::platform_env_flag(ASSET_RETRIEVAL_EVIDENCE_WRITE_ENABLED_ENV, false)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AssetProfileSupplyInput {
@@ -26,6 +31,41 @@ pub(crate) struct AssetProfileSupplyHint {
     pub summary: String,
     pub noun_terms: Vec<String>,
     pub facets: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MaterializedAssetRetrievalEvidence {
+    pub materialized_text: String,
+    pub summary: String,
+    pub safe_metadata: Value,
+    pub content_hash: String,
+    pub search_terms: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct UnifiedRetrievalCandidate {
+    pub source_kind: String,
+    pub evidence_ref: String,
+    pub document_id: Option<String>,
+    pub asset_id: Option<String>,
+    pub score: f64,
+    pub summary: String,
+}
+
+pub(crate) fn merge_unified_retrieval_candidates(
+    mut candidates: Vec<UnifiedRetrievalCandidate>,
+    limit: usize,
+) -> Vec<UnifiedRetrievalCandidate> {
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.source_kind.cmp(&right.source_kind))
+            .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
+    });
+    candidates.truncate(limit.min(100));
+    candidates
 }
 
 pub(crate) fn build_asset_profile_supply_hints(
@@ -88,6 +128,48 @@ pub(crate) fn materialize_asset_profile_retrieval_evidence_text(
         .chars()
         .take(RETRIEVAL_TEXT_LIMIT)
         .collect()
+}
+
+pub(crate) fn materialize_asset_profile_retrieval_evidence(
+    hint: &AssetProfileSupplyHint,
+    profile_version: &str,
+) -> Option<MaterializedAssetRetrievalEvidence> {
+    let profile_version = normalize_text(profile_version);
+    let materialized_text = materialize_asset_profile_retrieval_evidence_text(hint);
+    if profile_version.is_empty() || materialized_text.is_empty() {
+        return None;
+    }
+    let mut search_terms = BTreeSet::new();
+    for value in hint
+        .noun_terms
+        .iter()
+        .chain([&hint.title, &hint.asset_kind, &hint.profile_kind])
+    {
+        let value = normalize_text(value);
+        if !value.is_empty() {
+            search_terms.insert(value);
+        }
+    }
+    let search_terms = search_terms.into_iter().take(32).collect::<Vec<_>>();
+    let safe_metadata = json!({
+        "schema_version": "asset_retrieval_evidence_v1",
+        "source_kind": "asset_profile",
+        "title": hint.title,
+        "asset_kind": hint.asset_kind,
+        "profile_kind": hint.profile_kind,
+        "profile_version": profile_version,
+        "summary": hint.summary,
+        "noun_terms": hint.noun_terms.iter().take(8).cloned().collect::<Vec<_>>(),
+        "facets": hint.facets.iter().take(4).cloned().collect::<Vec<_>>(),
+    });
+    let content_hash = crate::sha256_hex([materialized_text.as_bytes()]);
+    Some(MaterializedAssetRetrievalEvidence {
+        materialized_text,
+        summary: hint.summary.clone(),
+        safe_metadata,
+        content_hash,
+        search_terms,
+    })
 }
 
 pub(crate) fn build_asset_profile_retrieval_evidence_write_plan(
@@ -1063,6 +1145,96 @@ mod tests {
         assert!(!text.contains("objects/private"));
         assert!(!text.contains("raw_provider_payload"));
         assert!(text.chars().count() <= RETRIEVAL_TEXT_LIMIT);
+    }
+
+    #[test]
+    fn asset_profile_supply_materializes_hashed_safe_evidence_only() {
+        let hints = build_asset_profile_supply_hints(
+            &[AssetProfileSupplyInput {
+                asset_id: "asset-private-id".to_string(),
+                title: "春夏连衣裙灵感图".to_string(),
+                asset_kind: "image".to_string(),
+                source_kind: "fashion_design_image_import".to_string(),
+                profile_kind: "fashion_design_image_v1".to_string(),
+                attributes: json!({
+                    "caption": "春夏通勤连衣裙设计图",
+                    "noun_terms": ["连衣裙", "泡泡袖"],
+                    "object_key": "objects/private/look.png",
+                    "raw_provider_payload": {"should_not_surface": true}
+                }),
+            }],
+            1,
+        );
+
+        let materialized = materialize_asset_profile_retrieval_evidence(
+            &hints[0],
+            "datamax-fashion-image-parser@2026-07-11",
+        )
+        .expect("safe evidence");
+        let serialized = materialized.safe_metadata.to_string();
+
+        assert_eq!(materialized.content_hash.len(), 64);
+        assert_eq!(
+            materialized.safe_metadata["source_kind"],
+            json!("asset_profile")
+        );
+        assert_eq!(
+            materialized.safe_metadata["profile_version"],
+            json!("datamax-fashion-image-parser@2026-07-11")
+        );
+        assert!(materialized.search_terms.contains(&"泡泡袖".to_string()));
+        assert!(!serialized.contains("asset-private-id"));
+        assert!(!serialized.contains("objects/private"));
+        assert!(!serialized.contains("raw_provider_payload"));
+        assert!(!materialized.materialized_text.contains("objects/private"));
+    }
+
+    #[test]
+    fn unified_retrieval_merge_ranks_document_and_asset_candidates_together() {
+        let merged = merge_unified_retrieval_candidates(
+            vec![
+                UnifiedRetrievalCandidate {
+                    source_kind: "document_chunk".to_string(),
+                    evidence_ref: "retrieval-evidence://document-1".to_string(),
+                    document_id: Some("document-1".to_string()),
+                    asset_id: None,
+                    score: 0.72,
+                    summary: "document evidence".to_string(),
+                },
+                UnifiedRetrievalCandidate {
+                    source_kind: "asset_profile".to_string(),
+                    evidence_ref: "asset-evidence://asset-1".to_string(),
+                    document_id: None,
+                    asset_id: Some("asset-1".to_string()),
+                    score: 0.88,
+                    summary: "asset evidence".to_string(),
+                },
+            ],
+            8,
+        );
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].source_kind, "asset_profile");
+        assert_eq!(merged[1].source_kind, "document_chunk");
+        assert!(merged[0].document_id.is_none());
+        assert!(merged[1].asset_id.is_none());
+    }
+
+    #[test]
+    fn unified_retrieval_merge_preserves_document_only_regression() {
+        let candidates = vec![UnifiedRetrievalCandidate {
+            source_kind: "document_chunk".to_string(),
+            evidence_ref: "retrieval-evidence://document-1".to_string(),
+            document_id: Some("document-1".to_string()),
+            asset_id: None,
+            score: 0.72,
+            summary: "document evidence".to_string(),
+        }];
+
+        assert_eq!(
+            merge_unified_retrieval_candidates(candidates.clone(), 8),
+            candidates
+        );
     }
 
     #[test]

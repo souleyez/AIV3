@@ -54,11 +54,22 @@ pub(crate) fn assistant_run_model_budgeted_supply_items(
         .filter_map(|index| items.get(*index))
         .map(assistant_run_model_supply_item_for_context)
         .collect::<Vec<_>>();
+    let asset_profile_evidence_ref_count = compacted_items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("asset_profile_hint")
+                && item
+                    .get("evidence_ref")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+        .count();
     let budget = json!({
         "policy": "model_input_balanced_supply_buckets",
         "original_supplied_item_count": items.len(),
         "model_supplied_item_count": compacted_items.len(),
         "omitted_supplied_item_count": items.len().saturating_sub(compacted_items.len()),
+        "asset_profile_evidence_ref_count": asset_profile_evidence_ref_count,
         "global_item_limit": ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT,
         "bucket_limits": {
             "document_status": ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT,
@@ -643,6 +654,25 @@ mod tests {
             budget["bucket_limits"]["asset_profile"],
             json!(ASSISTANT_RUN_MODEL_CONTEXT_ASSET_PROFILE_LIMIT)
         );
+    }
+
+    #[test]
+    fn budget_counts_attributable_asset_evidence_refs() {
+        let items = vec![json!({
+            "type": "asset_profile_hint",
+            "source": "asset_retrieval_evidence",
+            "source_kind": "asset_profile",
+            "evidence_ref": "asset-evidence://evidence-1",
+            "summary": "春夏连衣裙"
+        })];
+
+        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+
+        assert_eq!(
+            model_items[0]["evidence_ref"],
+            json!("asset-evidence://evidence-1")
+        );
+        assert_eq!(budget["asset_profile_evidence_ref_count"], json!(1));
     }
 
     #[test]

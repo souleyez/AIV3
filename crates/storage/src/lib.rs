@@ -131,6 +131,12 @@ pub const ASSET_PARSE_RUNS_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0017_asset_parse_runs.sql"),
 };
 
+pub const ASSET_RETRIEVAL_EVIDENCES_SCHEMA: Migration = Migration {
+    version: "0018",
+    description: "asset retrieval evidences",
+    sql: include_str!("../migrations/0018_asset_retrieval_evidences.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -148,6 +154,7 @@ pub const MIGRATIONS: &[Migration] = &[
     ASSET_LIBRARIES_SCHEMA,
     V3_CLIENT_ARTIFACTS_SCHEMA,
     ASSET_PARSE_RUNS_SCHEMA,
+    ASSET_RETRIEVAL_EVIDENCES_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -213,6 +220,7 @@ pub const TABLES: &[&str] = &[
     "asset_parse_runs",
     "dataset_asset_memberships",
     "asset_profiles",
+    "asset_retrieval_evidences",
     "v3_client_config_packages",
     "v3_client_artifacts",
     "v3_client_artifact_files",
@@ -883,6 +891,45 @@ pub struct LexicalRetrievalQuery {
 }
 
 #[derive(Clone, Debug)]
+pub struct AssetRetrievalEvidenceRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub asset_id: Uuid,
+    pub asset_profile_id: Uuid,
+    pub profile_kind: String,
+    pub profile_version: String,
+    pub materialized_text: String,
+    pub safe_metadata: Value,
+    pub content_hash: String,
+    pub search_terms: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewAssetRetrievalEvidence {
+    pub dataset_id: DatasetId,
+    pub asset_id: Uuid,
+    pub asset_profile_id: Uuid,
+    pub profile_kind: String,
+    pub profile_version: String,
+    pub materialized_text: String,
+    pub safe_metadata: Value,
+    pub content_hash: String,
+    pub search_terms: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetRetrievalEvidenceSearchQuery {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub query: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewChatSession {
     pub id: ChatSessionId,
     pub execution_id: WorkflowExecutionId,
@@ -1188,6 +1235,12 @@ impl PgStorage {
 
     pub fn retrieval_evidences(&self) -> PgRetrievalEvidenceRepository {
         PgRetrievalEvidenceRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn asset_retrieval_evidences(&self) -> PgAssetRetrievalEvidenceRepository {
+        PgAssetRetrievalEvidenceRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2212,6 +2265,46 @@ impl PgAssetItemRepository {
             where tenant_id = $1
               and asset_id = any($2)
             order by asset_id asc, updated_at desc, profile_kind asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(asset_ids)
+        .bind(limit.max(asset_ids.len()).min(2000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_profile_row).collect())
+    }
+
+    pub async fn list_accepted_profiles_by_asset_ids(
+        &self,
+        tenant_id: TenantId,
+        asset_ids: &[Uuid],
+        limit: usize,
+    ) -> Result<Vec<AssetProfileRecord>> {
+        if asset_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = sqlx::query(
+            r#"
+            select profile.id, profile.tenant_id, profile.asset_id, profile.profile_kind,
+                   profile.profile_version, profile.attributes, profile.embedding_status,
+                   profile.created_at, profile.updated_at
+            from asset_profiles profile
+            where profile.tenant_id = $1
+              and profile.asset_id = any($2)
+              and exists (
+                  select 1
+                  from asset_parse_runs parse_run
+                  where parse_run.tenant_id = profile.tenant_id
+                    and parse_run.asset_id = profile.asset_id
+                    and parse_run.status in ('completed', 'partial')
+                    and concat(parse_run.parser_name, '@', parse_run.parser_version)
+                        = profile.profile_version
+              )
+            order by profile.asset_id asc, profile.updated_at desc,
+                     profile.profile_kind asc, profile.profile_version desc
             limit $3
             "#,
         )
@@ -5100,6 +5193,177 @@ impl PgMemoryDirectoryRepository {
         .await?;
 
         row.as_ref().map(map_memory_directory_row).transpose()
+    }
+}
+
+#[derive(Clone)]
+pub struct PgAssetRetrievalEvidenceRepository {
+    pool: PgPool,
+}
+
+const ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL: &str = r#"
+insert into asset_retrieval_evidences (
+    id,
+    tenant_id,
+    dataset_id,
+    asset_id,
+    asset_profile_id,
+    profile_kind,
+    profile_version,
+    materialized_text,
+    safe_metadata,
+    content_hash,
+    search_terms,
+    created_at,
+    updated_at
+)
+select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12
+from asset_profiles profile
+join asset_items asset
+  on asset.id = profile.asset_id
+ and asset.tenant_id = profile.tenant_id
+join dataset_asset_memberships membership
+  on membership.tenant_id = profile.tenant_id
+ and membership.dataset_id = $3
+ and membership.asset_id = profile.asset_id
+where profile.id = $5
+  and profile.tenant_id = $2
+  and profile.asset_id = $4
+  and profile.profile_kind = $6
+  and profile.profile_version = $7
+  and (membership.expires_at is null or membership.expires_at > $12)
+  and exists (
+      select 1
+      from asset_parse_runs parse_run
+      where parse_run.tenant_id = profile.tenant_id
+        and parse_run.asset_id = profile.asset_id
+        and parse_run.status in ('completed', 'partial')
+        and concat(parse_run.parser_name, '@', parse_run.parser_version) = profile.profile_version
+  )
+on conflict (
+    tenant_id,
+    dataset_id,
+    asset_id,
+    profile_kind,
+    profile_version,
+    content_hash
+) do nothing
+returning id, tenant_id, dataset_id, asset_id, asset_profile_id, profile_kind,
+          profile_version, materialized_text, safe_metadata, content_hash, search_terms,
+          created_at, updated_at
+"#;
+
+impl PgAssetRetrievalEvidenceRepository {
+    pub async fn create_if_eligible(
+        &self,
+        tenant_id: TenantId,
+        evidence: NewAssetRetrievalEvidence,
+    ) -> Result<Option<AssetRetrievalEvidenceRecord>> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL)
+            .bind(Uuid::new_v4())
+            .bind(tenant_id.0)
+            .bind(evidence.dataset_id.0)
+            .bind(evidence.asset_id)
+            .bind(evidence.asset_profile_id)
+            .bind(&evidence.profile_kind)
+            .bind(&evidence.profile_version)
+            .bind(&evidence.materialized_text)
+            .bind(&evidence.safe_metadata)
+            .bind(&evidence.content_hash)
+            .bind(&evidence.search_terms)
+            .bind(evidence.created_at)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let row = match row {
+            Some(row) => Some(row),
+            None => {
+                sqlx::query(
+                    r#"
+                    select evidence.id, evidence.tenant_id, evidence.dataset_id,
+                           evidence.asset_id, evidence.asset_profile_id,
+                           evidence.profile_kind, evidence.profile_version,
+                           evidence.materialized_text, evidence.safe_metadata,
+                           evidence.content_hash, evidence.search_terms,
+                           evidence.created_at, evidence.updated_at
+                    from asset_retrieval_evidences evidence
+                    join dataset_asset_memberships membership
+                      on membership.tenant_id = evidence.tenant_id
+                     and membership.dataset_id = evidence.dataset_id
+                     and membership.asset_id = evidence.asset_id
+                    where evidence.tenant_id = $1
+                      and evidence.dataset_id = $2
+                      and evidence.asset_id = $3
+                      and evidence.profile_kind = $4
+                      and evidence.profile_version = $5
+                      and evidence.content_hash = $6
+                      and (membership.expires_at is null or membership.expires_at > $7)
+                    "#,
+                )
+                .bind(tenant_id.0)
+                .bind(evidence.dataset_id.0)
+                .bind(evidence.asset_id)
+                .bind(&evidence.profile_kind)
+                .bind(&evidence.profile_version)
+                .bind(&evidence.content_hash)
+                .bind(evidence.created_at)
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+        };
+        tx.commit().await?;
+        Ok(row.as_ref().map(map_asset_retrieval_evidence_row))
+    }
+
+    pub async fn search(
+        &self,
+        query: AssetRetrievalEvidenceSearchQuery,
+    ) -> Result<Vec<AssetRetrievalEvidenceRecord>> {
+        let query_text = query.query.trim();
+        if query_text.is_empty() || query.limit == 0 {
+            return Ok(Vec::new());
+        }
+        let terms = retrieval_lexical_query_terms(query_text);
+        let rows = sqlx::query(
+            r#"
+            select evidence.id, evidence.tenant_id, evidence.dataset_id,
+                   evidence.asset_id, evidence.asset_profile_id,
+                   evidence.profile_kind, evidence.profile_version,
+                   evidence.materialized_text, evidence.safe_metadata,
+                   evidence.content_hash, evidence.search_terms,
+                   evidence.created_at, evidence.updated_at
+            from asset_retrieval_evidences evidence
+            join dataset_asset_memberships membership
+              on membership.tenant_id = evidence.tenant_id
+             and membership.dataset_id = evidence.dataset_id
+             and membership.asset_id = evidence.asset_id
+            where evidence.tenant_id = $1
+              and evidence.dataset_id = $2
+              and (membership.expires_at is null or membership.expires_at > now())
+              and (
+                  evidence.search_tsv @@ plainto_tsquery('simple', $3)
+                  or evidence.search_terms && $4::text[]
+                  or position(lower($3) in lower(evidence.materialized_text)) > 0
+              )
+            order by
+              case when position(lower($3) in lower(evidence.materialized_text)) > 0 then 1 else 0 end desc,
+              cardinality(array(select unnest(evidence.search_terms) intersect select unnest($4::text[]))) desc,
+              ts_rank_cd(evidence.search_tsv, plainto_tsquery('simple', $3)) desc,
+              evidence.updated_at desc,
+              evidence.asset_id asc,
+              evidence.profile_kind asc
+            limit $5
+            "#,
+        )
+        .bind(query.tenant_id.0)
+        .bind(query.dataset_id.0)
+        .bind(query_text)
+        .bind(terms)
+        .bind(query.limit.min(100) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_retrieval_evidence_row).collect())
     }
 }
 
@@ -9433,6 +9697,24 @@ fn map_retrieval_evidence_row(row: &sqlx::postgres::PgRow) -> Result<RetrievalEv
     })
 }
 
+fn map_asset_retrieval_evidence_row(row: &sqlx::postgres::PgRow) -> AssetRetrievalEvidenceRecord {
+    AssetRetrievalEvidenceRecord {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get("tenant_id")),
+        dataset_id: DatasetId(row.get("dataset_id")),
+        asset_id: row.get("asset_id"),
+        asset_profile_id: row.get("asset_profile_id"),
+        profile_kind: row.get("profile_kind"),
+        profile_version: row.get("profile_version"),
+        materialized_text: row.get("materialized_text"),
+        safe_metadata: row.get("safe_metadata"),
+        content_hash: row.get("content_hash"),
+        search_terms: row.get("search_terms"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
 fn map_dataset_output_row(row: &sqlx::postgres::PgRow) -> Result<DatasetOutput> {
     Ok(DatasetOutput {
         id: DatasetOutputId(row.get::<Uuid, _>("id")),
@@ -10547,10 +10829,15 @@ mod tests {
 
     #[test]
     fn migrations_include_asset_parse_runs_schema() {
-        assert_eq!(
-            MIGRATIONS.last().map(|migration| migration.version),
-            Some("0017")
-        );
+        let parse_runs_position = MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == "0017")
+            .expect("asset parse runs migration");
+        let asset_evidence_position = MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == "0018")
+            .expect("asset retrieval evidence migration");
+        assert!(parse_runs_position < asset_evidence_position);
         assert!(TABLES.contains(&"asset_parse_runs"));
         assert!(ASSET_PARSE_RUNS_SCHEMA
             .sql
@@ -10561,6 +10848,38 @@ mod tests {
         assert!(ASSET_PARSE_RUNS_SCHEMA
             .sql
             .contains("asset_parse_runs_status_idx"));
+    }
+
+    #[test]
+    fn migrations_include_asset_retrieval_evidence_schema() {
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some("0018")
+        );
+        assert!(TABLES.contains(&"asset_retrieval_evidences"));
+        assert!(ASSET_RETRIEVAL_EVIDENCES_SCHEMA
+            .sql
+            .contains("create table if not exists asset_retrieval_evidences"));
+        for required_column in [
+            "asset_id uuid not null references asset_items",
+            "asset_profile_id uuid not null references asset_profiles",
+            "profile_kind text not null",
+            "profile_version text not null",
+            "materialized_text text not null",
+            "safe_metadata jsonb not null",
+            "content_hash text not null",
+        ] {
+            assert!(ASSET_RETRIEVAL_EVIDENCES_SCHEMA
+                .sql
+                .contains(required_column));
+        }
+        assert!(ASSET_RETRIEVAL_EVIDENCES_SCHEMA.sql.contains(
+            "unique (tenant_id, dataset_id, asset_id, profile_kind, profile_version, content_hash)"
+        ));
+        assert!(!ASSET_RETRIEVAL_EVIDENCES_SCHEMA.sql.contains("document_id"));
+        assert!(!ASSET_RETRIEVAL_EVIDENCES_SCHEMA
+            .sql
+            .contains("document_chunk_id"));
     }
 
     #[test]
@@ -10797,6 +11116,18 @@ mod tests {
     }
 
     #[test]
+    fn asset_retrieval_evidence_insert_is_membership_and_terminal_profile_guarded() {
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("join dataset_asset_memberships"));
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("membership.expires_at"));
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("from asset_parse_runs"));
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("'completed', 'partial'"));
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("on conflict"));
+        assert!(ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("do nothing"));
+        assert!(!ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("document_id"));
+        assert!(!ASSET_RETRIEVAL_EVIDENCE_INSERT_SQL.contains("document_chunk_id"));
+    }
+
+    #[test]
     fn retrieval_lexical_query_terms_include_cjk_ngrams_and_ascii() {
         let terms = retrieval_lexical_query_terms("订单AI延期 风险 up 最大");
 
@@ -10815,7 +11146,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013", "0014", "0015", "0016", "0017"
+                "0012", "0013", "0014", "0015", "0016", "0017", "0018"
             ]
         );
         assert!(MIGRATIONS

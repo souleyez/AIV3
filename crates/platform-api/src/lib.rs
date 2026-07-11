@@ -49,19 +49,20 @@ use contracts::{
     ApplyDatabaseSourceProfileRequest, ApplyDatabaseSourceProfileResponse,
     ApplyStaticPageDraftIntentRequest, ApplyStaticPageDraftIntentResponse,
     AssetLibraryDatasetMembershipResponse, AssetLibraryScopeSummaryResponse,
-    AssistantRunDetailView, AssistantRunExecutorTransportView, AssistantRunMessageView,
-    AttachClientArtifactToAssetLibraryRequest, AttachClientArtifactToAssetLibraryResponse,
-    AttachClientArtifactToDatasetRequest, AttachClientArtifactToDatasetResponse,
-    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
-    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse, ClientArtifactView,
-    ClientConfigPackageView, CodexHostFixedTaskHumanReviewPolicyView,
-    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
-    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
-    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
-    ConversationMemoryItemView, CreateAssetLibraryRequest, CreateAssetLibraryResponse,
-    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateClientArtifactResponse, CreateClientConfigPackageRequest,
+    AssetRetrievalEvidenceReferenceView, AssistantRunDetailView, AssistantRunExecutorTransportView,
+    AssistantRunMessageView, AttachClientArtifactToAssetLibraryRequest,
+    AttachClientArtifactToAssetLibraryResponse, AttachClientArtifactToDatasetRequest,
+    AttachClientArtifactToDatasetResponse, AuthAuditEventView, AuthSessionResponse,
+    BindEmailRequest, BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
+    ClaimLocalDataResponse, ClientArtifactView, ClientConfigPackageView,
+    CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
+    CodexHostFixedTaskTemplateIdView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
+    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
+    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
+    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
+    CreateAssetLibraryRequest, CreateAssetLibraryResponse, CreateAssistantRunRequest,
+    CreateAssistantRunResponse, CreateChatSessionRequest, CreateChatSessionResponse,
+    CreateClientArtifactResponse, CreateClientConfigPackageRequest,
     CreateClientConfigPackageResponse, CreateConversationMemoryItemRequest,
     CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
     CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
@@ -110,9 +111,9 @@ use contracts::{
     StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     TestDatabaseSourceConnectionRequest, TestDatabaseSourceConnectionResponse, ToolDefinitionView,
-    ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
-    UpdateChatSessionRequest, UpdateChatSessionResponse, UpdateDatasetRequest,
-    UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
+    ToolExecutionView, UnifiedRetrievalSearchHitView, UpdateChatSessionReportEntryRequest,
+    UpdateChatSessionReportEntryResponse, UpdateChatSessionRequest, UpdateChatSessionResponse,
+    UpdateDatasetRequest, UpdateDocumentRequest, UpdateExternalDocumentDatasetRequest,
     UpdateExternalDocumentDatasetResponse, UpdateStaticPageDraftRequest,
     UpdateStaticPageDraftResponse, UpsertAssetLibraryDatasetMembershipRequest,
     VerifyEmailAuthRequest, VerifyEmailAuthResponse, WorkflowDefinitionView, WorkflowEventView,
@@ -172,7 +173,8 @@ use std::{
 #[cfg(test)]
 use storage::NewModelGatewayProfile;
 use storage::{
-    LexicalRetrievalQuery, ModelGatewayProfile, ModelGatewayProfileUsageSummary, NewAssistantRun,
+    AssetRetrievalEvidenceSearchQuery, LexicalRetrievalQuery, ModelGatewayProfile,
+    ModelGatewayProfileUsageSummary, NewAssetRetrievalEvidence, NewAssistantRun,
     NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
     NewHtmlArtifact, NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion,
@@ -4319,9 +4321,75 @@ async fn search_dataset_retrieval_with_state(
     )
     .await?;
 
-    Ok(RetrievalSearchResponse {
-        hits: search_retrieval_hits(&evidences, query, limit),
-    })
+    let hits = search_retrieval_hits(&evidences, query, limit);
+    let asset_evidences = state
+        .storage
+        .asset_retrieval_evidences()
+        .search(AssetRetrievalEvidenceSearchQuery {
+            tenant_id: state.tenant_id,
+            dataset_id,
+            query: query.to_string(),
+            limit,
+        })
+        .await
+        .map_err(ApiError::from_storage)?;
+    let unified_hits = if asset_evidences.is_empty() {
+        Vec::new()
+    } else {
+        let query_weights = lexical_query_term_weights(query);
+        let query_norm = retrieval_evidence_ranking_support::vector_norm(&query_weights);
+        let mut candidates = hits
+            .iter()
+            .map(
+                |hit| asset_profile_supply_support::UnifiedRetrievalCandidate {
+                    source_kind: "document_chunk".to_string(),
+                    evidence_ref: format!("retrieval-evidence://{}", hit.retrieval_evidence_id),
+                    document_id: Some(hit.document_id.to_string()),
+                    asset_id: None,
+                    score: hit.score,
+                    summary: hit.summary.clone(),
+                },
+            )
+            .collect::<Vec<_>>();
+        candidates.extend(asset_evidences.into_iter().map(|evidence| {
+            let summary = evidence
+                .safe_metadata
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            asset_profile_supply_support::UnifiedRetrievalCandidate {
+                source_kind: "asset_profile".to_string(),
+                evidence_ref: format!("asset-evidence://{}", evidence.id),
+                document_id: None,
+                asset_id: Some(evidence.asset_id.to_string()),
+                score: retrieval_evidence_ranking_support::lexical_text_score(
+                    &evidence.materialized_text,
+                    &query_weights,
+                    query_norm,
+                ),
+                summary,
+            }
+        }));
+        asset_profile_supply_support::merge_unified_retrieval_candidates(candidates, limit)
+            .into_iter()
+            .map(|candidate| UnifiedRetrievalSearchHitView {
+                source_kind: candidate.source_kind,
+                evidence_ref: candidate.evidence_ref,
+                document_id: candidate
+                    .document_id
+                    .and_then(|value| Uuid::parse_str(&value).ok())
+                    .map(DocumentId),
+                asset_id: candidate.asset_id,
+                score: candidate.score,
+                summary: candidate.summary,
+            })
+            .collect()
+    };
+
+    Ok(RetrievalSearchResponse { hits, unified_hits })
 }
 
 async fn create_memory_directory_refresh(
@@ -40151,25 +40219,130 @@ async fn build_assistant_run_asset_profile_hint_supply(
     dataset: &Dataset,
     prompt: &str,
 ) -> std::result::Result<Vec<Value>, ApiError> {
-    if !asset_profile_supply_enabled() {
-        return Ok(Vec::new());
+    let direct_profile_supply_enabled = asset_profile_supply_enabled();
+    let evidence_write_enabled =
+        asset_profile_supply_support::asset_retrieval_evidence_write_enabled();
+    let mut assets = Vec::new();
+    if direct_profile_supply_enabled || evidence_write_enabled {
+        assets = state
+            .storage
+            .asset_items()
+            .list_by_dataset_ids(
+                state.tenant_id,
+                &[dataset.id],
+                ASSISTANT_RUN_ASSET_PROFILE_HINT_CANDIDATE_LIMIT,
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
     }
-    let assets = state
-        .storage
-        .asset_items()
-        .list_by_dataset_ids(
-            state.tenant_id,
-            &[dataset.id],
-            ASSISTANT_RUN_ASSET_PROFILE_HINT_CANDIDATE_LIMIT,
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
-    if assets.is_empty() {
-        return Ok(Vec::new());
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+
+    if evidence_write_enabled && !asset_ids.is_empty() {
+        let assets_by_id = assets
+            .iter()
+            .map(|asset| (asset.id, asset))
+            .collect::<BTreeMap<_, _>>();
+        let accepted_profiles = state
+            .storage
+            .asset_items()
+            .list_accepted_profiles_by_asset_ids(
+                state.tenant_id,
+                &asset_ids,
+                asset_ids.len().saturating_mul(4),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        for profile in accepted_profiles {
+            let Some(asset) = assets_by_id.get(&profile.asset_id) else {
+                continue;
+            };
+            let inputs = asset_profile_supply_inputs(asset, std::slice::from_ref(&profile));
+            let Some(hint) =
+                asset_profile_supply_support::build_asset_profile_supply_hints(&inputs, 1)
+                    .into_iter()
+                    .next()
+            else {
+                continue;
+            };
+            let Some(materialized) =
+                asset_profile_supply_support::materialize_asset_profile_retrieval_evidence(
+                    &hint,
+                    &profile.profile_version,
+                )
+            else {
+                continue;
+            };
+            state
+                .storage
+                .asset_retrieval_evidences()
+                .create_if_eligible(
+                    state.tenant_id,
+                    NewAssetRetrievalEvidence {
+                        dataset_id: dataset.id,
+                        asset_id: profile.asset_id,
+                        asset_profile_id: profile.id,
+                        profile_kind: profile.profile_kind,
+                        profile_version: profile.profile_version,
+                        materialized_text: materialized.materialized_text,
+                        safe_metadata: materialized.safe_metadata,
+                        content_hash: materialized.content_hash,
+                        search_terms: materialized.search_terms,
+                        created_at: Utc::now(),
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+        }
     }
 
-    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
-    let mut profiles_by_asset_id = std::collections::BTreeMap::new();
+    let evidence_items = state
+        .storage
+        .asset_retrieval_evidences()
+        .search(AssetRetrievalEvidenceSearchQuery {
+            tenant_id: state.tenant_id,
+            dataset_id: dataset.id,
+            query: prompt.to_string(),
+            limit: ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
+        })
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .map(|evidence| {
+            let reference = AssetRetrievalEvidenceReferenceView {
+                evidence_ref: format!("asset-evidence://{}", evidence.id),
+                source_kind: "asset_profile".to_string(),
+                asset_id: evidence.asset_id.to_string(),
+                profile_kind: evidence.profile_kind.clone(),
+                profile_version: evidence.profile_version.clone(),
+            };
+            json!({
+                "type": "asset_profile_hint",
+                "source": "asset_retrieval_evidence",
+                "dataset_id": dataset.id,
+                "dataset_key": dataset.key.clone(),
+                "asset_id": reference.asset_id,
+                "title": evidence.safe_metadata.get("title").cloned().unwrap_or(Value::Null),
+                "asset_kind": evidence.safe_metadata.get("asset_kind").cloned().unwrap_or(Value::Null),
+                "source_kind": reference.source_kind,
+                "profile_kind": reference.profile_kind,
+                "profile_version": reference.profile_version,
+                "evidence_ref": reference.evidence_ref,
+                "summary": evidence.safe_metadata.get("summary").cloned().unwrap_or(Value::Null),
+                "noun_terms": evidence.safe_metadata.get("noun_terms").cloned().unwrap_or(Value::Null),
+                "facets": evidence.safe_metadata.get("facets").cloned().unwrap_or(Value::Null),
+                "model_guidance": [
+                    "This is compact, permission-checked asset profile evidence from the selected dataset.",
+                    "Use evidence_ref to attribute asset-level understanding.",
+                    "Do not treat it as an exact document quotation; use document, database, or media evidence for exact claims."
+                ],
+            })
+        })
+        .collect::<Vec<_>>();
+    if !evidence_items.is_empty() || !direct_profile_supply_enabled {
+        return Ok(evidence_items);
+    }
+
+    let mut profiles_by_asset_id = BTreeMap::new();
     for profile in state
         .storage
         .asset_items()
@@ -40186,7 +40359,6 @@ async fn build_assistant_run_asset_profile_hint_supply(
             .or_insert_with(Vec::new)
             .push(profile);
     }
-
     let mut profile_inputs = Vec::new();
     for asset in assets {
         let profiles = profiles_by_asset_id
@@ -40195,37 +40367,34 @@ async fn build_assistant_run_asset_profile_hint_supply(
             .unwrap_or(&[]);
         profile_inputs.extend(asset_profile_supply_inputs(&asset, profiles));
     }
-
-    Ok(
-        asset_profile_supply_support::build_asset_profile_supply_hints_for_query(
-            &profile_inputs,
-            prompt,
-            ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
-        )
-        .into_iter()
-        .map(|hint| {
-            json!({
-                "type": "asset_profile_hint",
-                "source": "asset_profile",
-                "dataset_id": dataset.id,
-                "dataset_key": dataset.key.clone(),
-                "asset_id": hint.asset_id,
-                "title": hint.title,
-                "asset_kind": hint.asset_kind,
-                "source_kind": hint.source_kind,
-                "profile_kind": hint.profile_kind,
-                "summary": hint.summary,
-                "noun_terms": hint.noun_terms,
-                "facets": hint.facets,
-                "model_guidance": [
-                    "This is a compact asset profile hint generated from parsed assets in the selected dataset.",
-                    "Use it to choose likely relevant documents, images, slides, videos, or terms.",
-                    "Do not treat it as a direct quote or final source evidence; cite retrieval evidence, detail reads, database rows, or source documents for exact claims."
-                ],
-            })
-        })
-        .collect(),
+    Ok(asset_profile_supply_support::build_asset_profile_supply_hints_for_query(
+        &profile_inputs,
+        prompt,
+        ASSISTANT_RUN_ASSET_PROFILE_HINT_LIMIT,
     )
+    .into_iter()
+    .map(|hint| {
+        json!({
+            "type": "asset_profile_hint",
+            "source": "asset_profile",
+            "dataset_id": dataset.id,
+            "dataset_key": dataset.key.clone(),
+            "asset_id": hint.asset_id,
+            "title": hint.title,
+            "asset_kind": hint.asset_kind,
+            "source_kind": hint.source_kind,
+            "profile_kind": hint.profile_kind,
+            "summary": hint.summary,
+            "noun_terms": hint.noun_terms,
+            "facets": hint.facets,
+            "model_guidance": [
+                "This is a compact asset profile hint generated from parsed assets in the selected dataset.",
+                "Use it to choose likely relevant documents, images, slides, videos, or terms.",
+                "Do not treat it as a direct quote or final source evidence; cite retrieval evidence, detail reads, database rows, or source documents for exact claims."
+            ],
+        })
+    })
+    .collect())
 }
 
 async fn build_assistant_run_asset_parse_status_supply(

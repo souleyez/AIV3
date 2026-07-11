@@ -1770,4 +1770,156 @@ mod tests {
 
         assert_eq!(ids, vec![first, second]);
     }
+
+    #[tokio::test]
+    #[ignore = "requires ASSET_RETRIEVAL_TEST_DATABASE_URL pointing to a disposable database"]
+    async fn asset_retrieval_database_gate_proves_scope_idempotency_and_search() {
+        let database_url = std::env::var("ASSET_RETRIEVAL_TEST_DATABASE_URL")
+            .expect("ASSET_RETRIEVAL_TEST_DATABASE_URL is required");
+        assert!(
+            database_url.contains("/aiv3_task10_"),
+            "refusing non-disposable database"
+        );
+        let storage = storage::PgStorage::connect(&database_url)
+            .await
+            .expect("connect disposable database");
+        storage
+            .migrate()
+            .await
+            .expect("migrate disposable database");
+
+        let tenant_id = uuid::Uuid::new_v4();
+        let other_tenant_id = uuid::Uuid::new_v4();
+        let dataset_id = uuid::Uuid::new_v4();
+        let second_dataset_id = uuid::Uuid::new_v4();
+        let denied_dataset_id = uuid::Uuid::new_v4();
+        let asset_id = uuid::Uuid::new_v4();
+        let profile_id = uuid::Uuid::new_v4();
+        for (id, key) in [(tenant_id, "tenant-a"), (other_tenant_id, "tenant-b")] {
+            sqlx::query("insert into tenants (id, key, name) values ($1, $2, $2)")
+                .bind(id)
+                .bind(key)
+                .execute(storage.pool())
+                .await
+                .expect("insert tenant");
+        }
+        for (id, key) in [
+            (dataset_id, "dataset-a"),
+            (second_dataset_id, "dataset-b"),
+            (denied_dataset_id, "dataset-denied"),
+        ] {
+            sqlx::query(
+                "insert into datasets (id, tenant_id, key, title, lifecycle) values ($1, $2, $3, $3, 'active')",
+            )
+            .bind(id)
+            .bind(tenant_id)
+            .bind(key)
+            .execute(storage.pool())
+            .await
+            .expect("insert dataset");
+        }
+        sqlx::query(
+            "insert into asset_items (id, tenant_id, title, asset_kind, source_kind) values ($1, $2, 'spring dress', 'image', 'upload')",
+        )
+        .bind(asset_id)
+        .bind(tenant_id)
+        .execute(storage.pool())
+        .await
+        .expect("insert asset");
+        sqlx::query(
+            "insert into asset_profiles (id, tenant_id, asset_id, profile_kind, profile_version, attributes) values ($1, $2, $3, 'fashion_design_image_v1', 'parser@v1', '{}'::jsonb)",
+        )
+        .bind(profile_id)
+        .bind(tenant_id)
+        .bind(asset_id)
+        .execute(storage.pool())
+        .await
+        .expect("insert profile");
+        sqlx::query(
+            "insert into asset_parse_runs (tenant_id, asset_id, parser_name, parser_version, status) values ($1, $2, 'parser', 'v1', 'partial')",
+        )
+        .bind(tenant_id)
+        .bind(asset_id)
+        .execute(storage.pool())
+        .await
+        .expect("insert terminal parse run");
+        for dataset in [dataset_id, second_dataset_id] {
+            sqlx::query(
+                "insert into dataset_asset_memberships (tenant_id, dataset_id, asset_id) values ($1, $2, $3)",
+            )
+            .bind(tenant_id)
+            .bind(dataset)
+            .bind(asset_id)
+            .execute(storage.pool())
+            .await
+            .expect("insert asset membership");
+        }
+
+        let new_evidence = |dataset_id| storage::NewAssetRetrievalEvidence {
+            dataset_id: DatasetId(dataset_id),
+            asset_id,
+            asset_profile_id: profile_id,
+            profile_kind: "fashion_design_image_v1".to_string(),
+            profile_version: "parser@v1".to_string(),
+            materialized_text: "春夏 连衣裙 泡泡袖".to_string(),
+            safe_metadata: json!({
+                "source_kind": "asset_profile",
+                "summary": "春夏连衣裙",
+                "noun_terms": ["春夏", "连衣裙", "泡泡袖"]
+            }),
+            content_hash: "a".repeat(64),
+            search_terms: vec![
+                "春夏".to_string(),
+                "连衣裙".to_string(),
+                "泡泡袖".to_string(),
+            ],
+            created_at: Utc::now(),
+        };
+        let first = storage
+            .asset_retrieval_evidences()
+            .create_if_eligible(TenantId(tenant_id), new_evidence(dataset_id))
+            .await
+            .expect("first evidence")
+            .expect("eligible evidence");
+        let duplicate = storage
+            .asset_retrieval_evidences()
+            .create_if_eligible(TenantId(tenant_id), new_evidence(dataset_id))
+            .await
+            .expect("duplicate evidence")
+            .expect("existing eligible evidence");
+        assert_eq!(first.id, duplicate.id);
+
+        let second_membership = storage
+            .asset_retrieval_evidences()
+            .create_if_eligible(TenantId(tenant_id), new_evidence(second_dataset_id))
+            .await
+            .expect("second membership evidence");
+        assert!(second_membership.is_some());
+        let cross_dataset = storage
+            .asset_retrieval_evidences()
+            .create_if_eligible(TenantId(tenant_id), new_evidence(denied_dataset_id))
+            .await
+            .expect("cross dataset guard");
+        assert!(cross_dataset.is_none());
+        let cross_tenant = storage
+            .asset_retrieval_evidences()
+            .create_if_eligible(TenantId(other_tenant_id), new_evidence(dataset_id))
+            .await
+            .expect("cross tenant guard");
+        assert!(cross_tenant.is_none());
+
+        let hits = storage
+            .asset_retrieval_evidences()
+            .search(storage::AssetRetrievalEvidenceSearchQuery {
+                tenant_id: TenantId(tenant_id),
+                dataset_id: DatasetId(dataset_id),
+                query: "春夏连衣裙".to_string(),
+                limit: 8,
+            })
+            .await
+            .expect("asset evidence search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, first.id);
+        assert_eq!(hits[0].safe_metadata["source_kind"], json!("asset_profile"));
+    }
 }

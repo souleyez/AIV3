@@ -522,6 +522,8 @@ fn assistant_run_model_asset_profile_hint_item(item: &Value) -> Value {
         "asset_kind": item.get("asset_kind").cloned().unwrap_or(Value::Null),
         "source_kind": item.get("source_kind").cloned().unwrap_or(Value::Null),
         "profile_kind": item.get("profile_kind").cloned().unwrap_or(Value::Null),
+        "profile_version": item.get("profile_version").cloned().unwrap_or(Value::Null),
+        "evidence_ref": item.get("evidence_ref").cloned().unwrap_or(Value::Null),
         "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
         "noun_terms": item.get("noun_terms").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 24)).unwrap_or(Value::Null),
         "facets": item.get("facets").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 12)).unwrap_or(Value::Null),
@@ -762,6 +764,8 @@ mod tests {
             "title": "门店陈列视频",
             "asset_kind": "video",
             "profile_kind": "video_summary",
+            "profile_version": "parser@v1",
+            "evidence_ref": "asset-evidence://evidence-1",
             "summary": "夏季女装陈列和导购讲解",
             "noun_terms": ["女装", "陈列", "导购"],
             "facets": ["场景: 门店"],
@@ -776,6 +780,11 @@ mod tests {
         assert_eq!(model_item["type"], json!("asset_profile_hint"));
         assert_eq!(model_item["summary"], json!("夏季女装陈列和导购讲解"));
         assert_eq!(model_item["noun_terms"][0], json!("女装"));
+        assert_eq!(model_item["profile_version"], json!("parser@v1"));
+        assert_eq!(
+            model_item["evidence_ref"],
+            json!("asset-evidence://evidence-1")
+        );
         assert!(!serialized.contains("raw_provider_payload"));
         assert!(!serialized.contains("must not enter model context"));
     }
