@@ -12,7 +12,7 @@
 
 **Revision:** R5
 
-**Status:** ACTIVE — Task 7–8 已 `PASS`、P0 已关闭；Task 9 真实 parser 为下一 READY 任务，尚未开始实现、提交或部署。
+**Status:** ACTIVE — Task 7–8 已 `PASS`、P0 已关闭；Task 9 本地 parser candidate 和门禁已完成，当前为 `AUTH_REQUIRED`，尚未提交、推送或部署。
 
 ---
 
@@ -54,25 +54,26 @@
 
 ### 2.1 本地与 GitHub
 
-| 项目 | 2026-07-10 已验证状态 |
+| 项目 | 2026-07-11 已验证状态 |
 | --- | --- |
 | 仓库 | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3` |
 | 分支 | `main` |
-| 本地 / `origin/main` | `a59faaca8509d56b1d84bb0a4ad2bf83cd2cfb23` |
+| 本地 / `origin/main` | `5f2b22e4f16657aedee9339126e2391abe1fbde1` |
 | 应用 RC commit | `f9463861ced34022fb98ed959bccda015c8b7800` |
 | 收尾文档 commit | `b02008ab6b26276c5d4ca89d64b5bbe0f28d89d8` |
-| GitHub Actions | `29130645814`：Task 8 最终 SHA 的 Rust Minimal 与 No-Credential Smoke 全部成功 |
+| GitHub Actions | `29131301909`：Task 8 PASS 回执 SHA 的 Rust Minimal 与 No-Credential Smoke 全部成功 |
 | tracked 工作区 | `main` 与 `origin/main` 已同步；除两项明确排除的 untracked 外无 Task 8 tracked 差异 |
+| Task 9 worktree | `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task9`，分支 `codex/task9-asset-parser`；本地 candidate 未提交 |
 | 明确排除的 untracked | `decks/`、`docs/plans/2026-07-07-server10-aiv3-deployment-plan.md` |
 
-已经证明：`cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 400/400、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过。
+已经证明：Task 8 的 `cargo fmt --check`、`cargo check --workspace`、受影响 Rust tests、Web 402/402、Web build、资产 self-test/preflight、公开契约 guard、主站和静态页 self-test 均通过；Task 9 本地 candidate 的定向 tests、storage tests、workspace check、资产 self-test 和 diff check 也已通过。
 
 ### 2.2 8 服务器
 
-| 项目 | 2026-07-10 只读核对状态 |
+| 项目 | 2026-07-11 只读核对状态 |
 | --- | --- |
 | 应用仓库 | `/srv/aiv3/repo` |
-| 应用 HEAD / `origin/main` | `a59faaca8509d56b1d84bb0a4ad2bf83cd2cfb23`，工作区干净 |
+| 应用 HEAD / `origin/main` | `5f2b22e4f16657aedee9339126e2391abe1fbde1`，工作区干净 |
 | 与 GitHub 差距 | 无；guarded RC 与 R5 已 feature-off 部署 |
 | PostgreSQL | 18.4 active/enabled，checksums on |
 | PG17 | inactive/disabled，数据目录与备份保留 |
@@ -88,8 +89,8 @@
 - 已完成并冻结：原 Task 1–6、Task 14。
 - 已完成并关闭 P0：guarded RC、`0017_asset_parse_runs.sql`、六服务 feature-off 暗发布、主站 streaming live 和 `generic-chat-main` 静态页 live。
 - Task 8 已完成隔离测试 scope 的 PNG+ZIP 写入、scope readback、同批幂等复投、flag rollback、任务卡 Web 发布和认证浏览器复验；任务卡刷新稳定、字段账本可见、重复卡为 0，Task 8 `PASS`。
-- 尚未执行：真实 parser、asset evidence、第三方私有入口、operator 并发、客户端联合验收。
-- Task 9 已解除前置阻塞并进入 `READY`；本地实现可在独立 worktree 开始，commit/push、8 服务器部署、flag/env 和单图 live 仍需 Task 9 独立授权。
+- 尚未执行：Task 9 commit/push、8 服务器部署和单图真实 provider pilot；asset evidence、第三方私有入口、operator 并发、客户端联合验收。
+- Task 9 已在独立 worktree 完成失败测试、最小实现和本地门禁，状态为 `AUTH_REQUIRED`；commit/push、8 服务器部署、flag/env 和单图 live 仍需 Task 9 独立授权。
 
 ---
 
@@ -109,7 +110,7 @@ Task 7  feature-off 暗发布并关闭 P0
 | --- | --- | --- | --- | --- |
 | M1C | 7 | PASS | 8 服务器 feature-off RC、P0 关闭 | 已完成 |
 | M2 | 8 | PASS | 写入/幂等/rollback、任务卡 Web 发布和认证复验通过 | 已完成 |
-| M3 | 9–10 | Task 9 READY / Task 10 PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
+| M3 | 9–10 | Task 9 AUTH_REQUIRED / Task 10 PENDING | accepted profile、asset evidence、统一检索 | 3–5 天 |
 | M4 | 11 | PENDING | 单 connection 私有入口、公开契约不变 | 1–2 天 |
 | M5 | 12–13 | PENDING | 受控并发结论、V3/Codex 联合回执 | 1–2 天 |
 
@@ -408,7 +409,7 @@ $env:FASHION_DESIGN_ASSET_IMPORT_SMOKE_BEARER=$null
 
 ## 7. Task 9：接通 `ingest-worker` 真实 parser
 
-**Status:** READY；Task 8 已 PASS。下一步在新的独立 worktree 实现，不得复用 Task 8 测试会话或发布授权。
+**Status:** AUTH_REQUIRED；Task 8 已 PASS，Task 9 本地 candidate 已完成并通过门禁。下一步先审批独立 commit/push 和 feature-off 部署；不得复用 Task 8 测试会话或发布授权。
 
 **Goal:** Move pending asset parse runs through an asynchronous worker to an accepted profile with bounded retry and safe provider handling.
 
@@ -804,10 +805,12 @@ Task 7 通过后，工程治理另开计划：migration ledger/checksum、全量
 先运行 git status --short --branch；不得 stage 或修改 decks/ 和
 docs/plans/2026-07-07-server10-aiv3-deployment-plan.md。
 
-当前下一任务是 Task 9。先从 `origin/main` 新建独立 worktree，按失败测试开始
-`parse_asset_profile` enqueue/worker 状态机；不得复用 Task 8 测试身份、Cookie、
-live-write approval 或 deployment window。Task 9 commit/push、8 服务器部署、
-flag/env 修改和单图 live 分别取得独立授权；不得提前进入 Task 10。
+当前下一任务是 Task 9。独立 worktree
+`C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3-task9` 已完成
+`parse_asset_profile` enqueue/worker 本地 candidate 和门禁，尚未提交。先复核该
+worktree 与验证账本，再分别取得 Task 9 commit/push、8 服务器 feature-off 部署、
+flag/env 修改和单图 live 授权；不得复用 Task 8 测试身份、Cookie、live-write
+approval 或 deployment window，不得提前进入 Task 10。
 ```
 
 ### 13.3 本计划完成条件

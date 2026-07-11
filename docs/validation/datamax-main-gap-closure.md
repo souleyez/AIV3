@@ -134,6 +134,50 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - the root-only test session is not printed or committed and will be revoked after final post-deploy verification;
   - no credential, cookie, raw UUID scope, database URL, raw object locator, provider payload, customer row, source sync, delete, cleanup, parser execution, evidence write, 10-server action, or 120-server action was recorded or performed outside the explicitly listed test writes.
 
+## 2026-07-11 Task 9 Async Asset Parser Local Candidate Verification
+
+- Scope and authorization:
+  - isolated worktree `ai-data-platform-v3-task9` and branch `codex/task9-asset-parser` were created from `origin/main` baseline `5f2b22e4f16657aedee9339126e2391abe1fbde1`;
+  - Task 9 local implementation is authorized by R5, but commit, push, 8-server deployment, env/flag mutation, provider execution, single-image live write, and cleanup are not authorized by the Task 8 approval;
+  - no Task 10 file, migration, evidence writer, retrieval path, third-party private route, `decks/`, or server10 plan was touched.
+- Failing tests first:
+  - `cargo test -q -p platform-api asset_parse_enqueue --lib` initially failed because the enqueue builder, default-off policy, stable dedupe key, and task constants did not exist;
+  - `cargo test -q -p ingest-worker parse_asset_profile` initially failed because `parse_asset_profile` dispatch, terminal-state classification, and bounded retry decisions did not exist;
+  - the red phase was preserved before the minimal implementation was added.
+- Implemented candidate:
+  - successful pending imports enqueue `queue=ingest`, `task_key=parse_asset_profile` only when `ASSET_PARSE_ENABLED=true`; API and worker both fail closed when the flag is missing, false, or invalid;
+  - a transaction-scoped advisory lock plus runnable-task query enforces at most one queued/claimed task for tenant + asset + parser name/version;
+  - repeated imports preserve the existing parse-run state; a parser-version change creates a distinct run and parser-versioned profile instead of overwriting an accepted profile;
+  - `ingest-worker::process_task` now explicitly dispatches external ingest, uploaded-document ingest, asset-profile parse, and unknown task keys; unknown keys are failed with a safe code and never enter document ingest;
+  - the parser loads only the tenant-bound asset and parse run, then validates approved local root, file existence, 20 MiB limit, PNG/JPEG/WebP declaration, and magic bytes before invoking the existing vision provider adapter;
+  - remote URL input returns `remote_source_disabled` before any request; no redirect, DNS, or URL fetch path was added;
+  - normalized complete output writes a parser-versioned profile and `completed`; safe incomplete output writes an independent profile and `partial`; retryable provider failures move to `retrying` once and terminate as `provider_retry_exhausted` on the second consumed attempt; permanent/security failures terminate with a safe code;
+  - missing asset/parse-run records terminate the claimed task with a safe code instead of leaving it stuck; task payloads, worker metadata, logs, profiles, smoke receipts, and shared ledger exclude image bytes, raw locator values, raw provider responses, credentials, provider error bodies, and database URLs.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -q -p platform-api asset_parse_enqueue --lib`: passed, 4/4;
+  - `cargo test -q -p platform-api asset_import --lib`: passed, 62/62;
+  - `cargo test -q -p platform-api fashion_postchain_adapter --lib`: passed, 10/10;
+  - `cargo test -q -p ingest-worker parse_asset_profile`: passed, 8/8;
+  - `cargo test -q -p storage --lib`: passed, 35/35;
+  - `cargo check -q -p ingest-worker`: passed;
+  - `cargo check --workspace`: passed;
+  - `node --check scripts/smoke/fashion-design-asset-import.mjs`: passed;
+  - `npm run smoke:fashion-design-asset-import -- --self-test --pretty`: passed; the new feature-off, enqueue, dedupe, bounded-retry, remote-source-disabled, and task-payload-redaction checks were all true;
+  - `npm run test:third-party-public-contract-guard`: passed, 1/1;
+  - `npm run smoke:main-assistant-streaming -- --self-test`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `git diff --check`: passed with expected Windows LF/CRLF conversion warnings only;
+  - database-backed enqueue/worker cases are present but the local test harness correctly refused to reset the non-disposable default database; those cases remain mandatory in the approved isolated server test scope before Task 9 can pass.
+- Read-only 8-server readiness check:
+  - `aiv3-ingest-worker.service` declares an `/etc/aiv3` environment file;
+  - ingest task-key filtering is unset/all, so the existing worker can claim `parse_asset_profile` without a new service;
+  - the existing vision provider base, credential, and model variable classes are present for the service environment; no value was read or printed;
+  - no 8-server fetch, fast-forward, build, database change, restart, flag change, task creation, provider call, or live write occurred.
+- Status:
+  - Task 9 local candidate is ready for review and is `AUTH_REQUIRED` for its independent commit/push and feature-off deployment approval;
+  - Task 9 is not `PASS`, `ASSET_PARSE_ENABLED` remains off, and Task 10 remains blocked.
+
 ## 2026-07-09 P5 Third-Party Private Asset Imports Endpoint Guard Dry-Run Local Verification
 
 - Scope:
