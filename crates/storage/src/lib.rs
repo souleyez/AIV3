@@ -2067,6 +2067,7 @@ impl PgAssetItemRepository {
              and m.asset_id = a.id
             where a.tenant_id = $1
               and m.dataset_id = any($2)
+              and (m.expires_at is null or m.expires_at > now())
             order by a.id, a.created_at desc, a.title asc
             limit $3
             "#,
@@ -2074,6 +2075,42 @@ impl PgAssetItemRepository {
         .bind(tenant_id.0)
         .bind(dataset_ids)
         .bind(limit.min(500) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_asset_item_row).collect()
+    }
+
+    pub async fn list_by_dataset_scope(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        limit: usize,
+    ) -> Result<Vec<AssetItemRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select a.id, a.tenant_id, a.asset_library_id, a.collection_id,
+                   a.external_id, a.title, a.asset_kind, a.source_kind, a.source_id,
+                   a.content_type, a.object_key, a.metadata,
+                   (
+                       select count(*)
+                       from asset_profiles p
+                       where p.tenant_id = a.tenant_id and p.asset_id = a.id
+                   )::bigint as profile_count,
+                   a.created_at, a.updated_at
+            from asset_items a
+            join dataset_asset_memberships m
+              on m.tenant_id = a.tenant_id and m.asset_id = a.id
+            where a.tenant_id = $1
+              and m.dataset_id = $2
+              and (m.expires_at is null or m.expires_at > now())
+            order by a.updated_at desc, a.id asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(limit.clamp(1, 10_000) as i64)
         .fetch_all(&self.pool)
         .await?;
 
@@ -3026,6 +3063,22 @@ impl PgDocumentRepository {
         rows.iter().map(map_document_row).collect()
     }
 
+    pub async fn list_by_dataset_scope_bounded(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        limit: usize,
+    ) -> Result<Vec<Document>> {
+        let rows = sqlx::query(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .bind(limit.clamp(1, 10_000) as i64)
+            .fetch_all(&self.pool)
+            .await?;
+
+        rows.iter().map(map_document_row).collect()
+    }
+
     pub async fn get_by_id(
         &self,
         tenant_id: TenantId,
@@ -3221,6 +3274,33 @@ impl PgDocumentRepository {
         map_document_row(&row)
     }
 }
+
+pub const DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL: &str = r#"
+    select distinct on (scoped.id)
+           scoped.id, scoped.tenant_id, scoped.dataset_id, scoped.owner_user_id,
+           scoped.title, scoped.object_key, scoped.content_type, scoped.lifecycle,
+           scoped.metadata, scoped.created_at, scoped.updated_at
+    from (
+        select d.id, d.tenant_id, d.dataset_id, d.owner_user_id, d.title,
+               d.object_key, d.content_type, d.lifecycle, d.metadata,
+               d.created_at, d.updated_at
+        from documents d
+        where d.tenant_id = $1 and d.dataset_id = $2
+        union all
+        select d.id, d.tenant_id, d.dataset_id, d.owner_user_id, d.title,
+               d.object_key, d.content_type, d.lifecycle, d.metadata,
+               d.created_at, d.updated_at
+        from dataset_document_memberships m
+        join documents d
+          on d.tenant_id = m.tenant_id
+         and d.id = m.document_id
+        where m.tenant_id = $1
+          and m.dataset_id = $2
+          and (m.expires_at is null or m.expires_at > now())
+    ) scoped
+    order by scoped.id, scoped.updated_at desc
+    limit $3
+"#;
 
 async fn resolve_canonical_document_id(
     pool: &PgPool,
@@ -4024,6 +4104,35 @@ impl PgDocumentChunkRepository {
             .await
     }
 
+    pub async fn list_by_documents_bounded(
+        &self,
+        tenant_id: TenantId,
+        document_ids: &[DocumentId],
+        limit: usize,
+    ) -> Result<Vec<DocumentChunk>> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let document_ids = document_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, document_id, chunk_index, content,
+                   token_count, state, metadata, created_at, updated_at
+            from document_chunks
+            where tenant_id = $1 and document_id = any($2)
+            order by document_id asc, chunk_index asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_ids)
+        .bind(limit.clamp(1, 50_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_document_chunk_row).collect()
+    }
+
     pub async fn mark_indexed(
         &self,
         tenant_id: TenantId,
@@ -4403,6 +4512,32 @@ impl PgDatasetFactSnapshotRepository {
         .bind(dataset_id.0)
         .bind(snapshot_kind)
         .bind(snapshot_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| map_dataset_fact_snapshot_row(&row))
+            .transpose()
+    }
+
+    pub async fn load_latest_dataset_fact_snapshot(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_kind: &str,
+    ) -> Result<Option<DatasetFactSnapshot>> {
+        let row = sqlx::query(
+            r#"
+            select tenant_id, dataset_id, snapshot_kind, snapshot_key, snapshot_manifest,
+                   source_fact_count, source_document_count, created_at
+            from dataset_fact_snapshots
+            where tenant_id = $1 and dataset_id = $2 and snapshot_kind = $3
+            order by created_at desc, snapshot_key desc
+            limit 1
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(snapshot_kind)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -5670,6 +5805,42 @@ impl PgAssetRetrievalEvidenceRepository {
         Ok(row.as_ref().map(map_asset_retrieval_evidence_row))
     }
 
+    pub async fn list_latest_by_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        limit: usize,
+    ) -> Result<Vec<AssetRetrievalEvidenceRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select evidence.id, evidence.tenant_id, evidence.dataset_id,
+                   evidence.asset_id, evidence.asset_profile_id,
+                   evidence.profile_kind, evidence.profile_version,
+                   evidence.materialized_text, evidence.safe_metadata,
+                   evidence.content_hash, evidence.search_terms,
+                   evidence.created_at, evidence.updated_at
+            from asset_retrieval_evidences evidence
+            join dataset_asset_memberships membership
+              on membership.tenant_id = evidence.tenant_id
+             and membership.dataset_id = evidence.dataset_id
+             and membership.asset_id = evidence.asset_id
+            where evidence.tenant_id = $1
+              and evidence.dataset_id = $2
+              and (membership.expires_at is null or membership.expires_at > now())
+            order by evidence.updated_at desc, evidence.asset_id asc,
+                     evidence.profile_kind asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(limit.clamp(1, 10_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(map_asset_retrieval_evidence_row).collect())
+    }
+
     pub async fn search(
         &self,
         query: AssetRetrievalEvidenceSearchQuery,
@@ -5860,6 +6031,43 @@ impl PgRetrievalEvidenceRepository {
             resolve_canonical_document_id(&self.pool, tenant_id, document_id).await?;
         self.list_by_document(tenant_id, effective_document_id)
             .await
+    }
+
+    pub async fn list_latest_by_document_ids(
+        &self,
+        tenant_id: TenantId,
+        document_ids: &[DocumentId],
+        limit: usize,
+    ) -> Result<Vec<RetrievalEvidence>> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let document_ids = document_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                   chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                   embedding_model, recall_score, evidence_manifest, created_at
+            from (
+                select distinct on (document_chunk_id)
+                       id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                       chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                       embedding_model, recall_score, evidence_manifest, created_at
+                from retrieval_evidences
+                where tenant_id = $1 and document_id = any($2)
+                order by document_chunk_id, created_at desc
+            ) latest
+            order by created_at desc, document_id asc, chunk_index asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_ids)
+        .bind(limit.clamp(1, 50_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_retrieval_evidence_row).collect()
     }
 
     pub async fn list_latest_by_dataset(
@@ -11734,6 +11942,27 @@ mod tests {
         assert!(DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA
             .sql
             .contains("dataset_document_memberships_expiry_idx"));
+    }
+
+    #[test]
+    fn dataset_membership_semantic_scope_unifies_direct_and_membership_documents() {
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("from documents d"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("from dataset_document_memberships m"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("union all"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("distinct on (scoped.id)"));
+        assert_eq!(
+            DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL
+                .matches("tenant_id = $1")
+                .count(),
+            2
+        );
+        assert_eq!(
+            DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL
+                .matches("dataset_id = $2")
+                .count(),
+            2
+        );
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("limit $3"));
     }
 
     #[test]

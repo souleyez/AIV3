@@ -307,6 +307,7 @@ mod dataset_output_model_facing;
 mod dataset_output_view_support;
 mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
+pub mod dataset_semantic_source_support;
 mod dataset_summary_support;
 mod dataset_update_support;
 mod default_public_dataset_support;
