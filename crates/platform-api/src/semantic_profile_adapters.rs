@@ -60,8 +60,8 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         "database_table",
         &table,
         &table,
-        Some(table.clone()),
-        "source_metadata",
+        Some(input.title.clone()),
+        "source_title",
         SemanticStatus::Observed,
         0.95,
         json_subset(parse, &["schema", "table_comment"]),
@@ -417,6 +417,11 @@ fn add_field_observation(
     observed_value: Option<&Value>,
     attributes: Map<String, Value>,
 ) {
+    let label_source = if label_hint.is_some() {
+        "source_comment"
+    } else {
+        "parsed_structure"
+    };
     let mut item = observation(
         input,
         "field",
@@ -424,7 +429,7 @@ fn add_field_observation(
         object_key,
         technical_name,
         label_hint,
-        "parsed_structure",
+        label_source,
         SemanticStatus::Observed,
         0.85,
         Value::Object(attributes),

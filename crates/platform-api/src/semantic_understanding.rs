@@ -195,7 +195,7 @@ pub fn build_semantic_summary_headline(objects: &[SemanticObject], source_count:
             )
         })
         .map(|object| object.label.trim())
-        .filter(|label| !label.is_empty())
+        .filter(|label| !label.is_empty() && label.chars().any(is_cjk))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .take(4)
@@ -208,6 +208,13 @@ pub fn build_semantic_summary_headline(objects: &[SemanticObject], source_count:
     format!(
         "系统识别到 {source_count} 类业务数据，覆盖{}。",
         labels.join("、")
+    )
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
     )
 }
 
