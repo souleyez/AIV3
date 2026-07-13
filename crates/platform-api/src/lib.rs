@@ -404,6 +404,7 @@ pub mod fact_index;
 mod fashion_postchain_adapter_support;
 pub mod semantic_label_resolver;
 pub mod semantic_profile_adapters;
+pub mod semantic_relation_builder;
 pub mod semantic_understanding;
 pub use contracts::{
     AssetProfileParseTaskPayload, ASSET_PROFILE_PARSE_QUEUE, ASSET_PROFILE_PARSE_TASK_KEY,
