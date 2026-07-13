@@ -5,6 +5,7 @@ use std::fmt::Write;
 use chrono::{DateTime, Utc};
 use domain_model::DatasetId;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const DATASET_SEMANTIC_SCHEMA_VERSION: &str = "1.0.0";
@@ -103,6 +104,26 @@ pub struct SemanticRelation {
     pub evidence_class: SemanticEvidenceClass,
     pub confidence: f64,
     pub reason: String,
+    pub evidence_refs: Vec<SemanticEvidenceRef>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SemanticObservation {
+    pub id: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub observation_kind: String,
+    pub object_kind: String,
+    pub object_key: String,
+    pub technical_name: String,
+    pub label_hint: Option<String>,
+    pub label_source: String,
+    pub value_type: Option<String>,
+    pub semantic_role_hint: Option<String>,
+    pub observed_values: Vec<String>,
+    pub attributes: Value,
+    pub status: SemanticStatus,
+    pub confidence: f64,
     pub evidence_refs: Vec<SemanticEvidenceRef>,
 }
 
