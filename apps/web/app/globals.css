@@ -5465,9 +5465,28 @@ body {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   padding: 10px;
+  border: 1px solid transparent;
   border-radius: 15px;
   background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.09);
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.dataset-understanding-stage:hover,
+.dataset-understanding-stage.active {
+  border-color: rgba(94, 234, 212, 0.38);
+  background: linear-gradient(145deg, rgba(20, 184, 166, 0.15), rgba(255, 255, 255, 0.055));
+  transform: translateY(-1px);
+}
+
+.dataset-understanding-stage.active {
+  box-shadow:
+    inset 0 0 0 1px rgba(94, 234, 212, 0.16),
+    0 10px 28px rgba(2, 8, 18, 0.2);
 }
 
 .dataset-understanding-stage > div:nth-child(2) {
@@ -5526,6 +5545,51 @@ body {
 .dataset-understanding-stage.attention .dataset-understanding-stage-index {
   color: #fbbf24;
   background: rgba(251, 191, 36, 0.1);
+}
+
+.dataset-understanding-semantic-brief {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dataset-understanding-semantic-brief button {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 15px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.08), transparent 58%),
+    rgba(2, 8, 18, 0.38);
+  color: #dce6f4;
+  text-align: left;
+}
+
+.dataset-understanding-semantic-brief button:hover {
+  border-color: rgba(94, 234, 212, 0.28);
+  background-color: rgba(20, 184, 166, 0.08);
+}
+
+.dataset-understanding-semantic-brief span {
+  color: #5eead4;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dataset-understanding-semantic-brief strong {
+  white-space: nowrap;
+  overflow: hidden;
+  color: #f8fbff;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.dataset-understanding-semantic-brief small {
+  color: #708099;
+  font-size: 9px;
 }
 
 .dataset-understanding-filter {
@@ -5648,7 +5712,7 @@ body {
 
 .dataset-understanding-canvas-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 268px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 12px;
 }
 
@@ -5702,6 +5766,180 @@ body {
   border-radius: 17px;
   background: rgba(255, 255, 255, 0.045);
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.1);
+}
+
+.dataset-understanding-inspector {
+  max-height: 560px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(94, 234, 212, 0.28) transparent;
+}
+
+.dataset-understanding-node-kind.overview {
+  color: #99f6e4;
+}
+
+.dataset-understanding-node-kind.overview i {
+  background: #5eead4;
+}
+
+.dataset-understanding-stage-badge {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.08);
+  color: #94a3b8;
+  font-size: 9px;
+}
+
+.dataset-understanding-stage-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.dataset-understanding-stage-badge.complete {
+  color: #99f6e4;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.dataset-understanding-stage-badge.complete i {
+  background: #5eead4;
+}
+
+.dataset-understanding-stage-badge.attention {
+  color: #fde68a;
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.dataset-understanding-stage-badge.attention i {
+  background: #fbbf24;
+}
+
+.dataset-understanding-insight-group {
+  display: grid;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.dataset-understanding-insight-group > strong {
+  color: #94a3b8;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.dataset-understanding-insight-group.muted p {
+  color: #708099;
+}
+
+.dataset-understanding-insight-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dataset-understanding-insight-tags span {
+  padding: 4px 7px;
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  font-size: 9px;
+}
+
+.dataset-understanding-inspector-list,
+.dataset-understanding-connection-list {
+  display: grid;
+  gap: 6px;
+}
+
+.dataset-understanding-inspector-list > button,
+.dataset-understanding-connection-list > button {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #dce6f4;
+  text-align: left;
+}
+
+.dataset-understanding-inspector-list > button:hover,
+.dataset-understanding-connection-list > button:hover {
+  border-color: rgba(94, 234, 212, 0.25);
+  background: rgba(20, 184, 166, 0.07);
+}
+
+.dataset-understanding-inspector-list button > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dataset-understanding-inspector-list strong,
+.dataset-understanding-connection-list strong {
+  min-width: 0;
+  color: #e5edf8;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.dataset-understanding-inspector-list em {
+  flex: none;
+  color: #5eead4;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.dataset-understanding-inspector-list small,
+.dataset-understanding-connection-list small {
+  color: #7c8ba3;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.dataset-understanding-inspector-list small.source {
+  color: #59677c;
+}
+
+.dataset-understanding-inspector-empty {
+  padding: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  color: #708099;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.dataset-understanding-connection-list > button {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.dataset-understanding-connection-list button > i {
+  width: 18px;
+  height: 0;
+  margin-top: 7px;
+  border-top: 2px solid #5eead4;
+}
+
+.dataset-understanding-connection-list button > i.inferred {
+  border-top-color: #fbbf24;
+  border-top-style: dashed;
+}
+
+.dataset-understanding-connection-list button > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
 }
 
 .dataset-understanding-evidence > span {
@@ -5920,6 +6158,10 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .dataset-understanding-semantic-brief {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .dataset-understanding-stage > i {
     display: none;
   }
@@ -5947,6 +6189,20 @@ body {
   .dataset-understanding-evidence p {
     grid-row: 1 / span 2;
   }
+
+  .dataset-understanding-inspector,
+  .dataset-understanding-inspector > *,
+  .dataset-understanding-inspector p,
+  .dataset-understanding-inspector dl,
+  .dataset-understanding-inspector .dataset-understanding-honesty-note {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .dataset-understanding-inspector {
+    max-height: none;
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -5961,6 +6217,10 @@ body {
   .dataset-understanding-metrics,
   .dataset-understanding-pipeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dataset-understanding-semantic-brief {
+    grid-template-columns: 1fr;
   }
 
   .dataset-understanding-relation-filter,

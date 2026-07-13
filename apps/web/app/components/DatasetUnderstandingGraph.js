@@ -66,9 +66,11 @@ function optionForModel(model, activeCategory, activeRelationType) {
           show: true,
           fontSize: node.kind === 'dataset' ? 11 : 9,
           fontWeight: node.kind === 'dataset' ? 800 : 650,
+          color: node.signal === 'identifier' ? '#8794a8' : '#dce6f4',
         },
         itemStyle: {
           color: graphCategory(model, node.kind).color,
+          opacity: node.signal === 'identifier' ? 0.62 : 1,
           borderColor: node.kind === 'dataset' ? '#ffffff' : 'rgba(255,255,255,0.52)',
           borderWidth: node.kind === 'dataset' ? 2 : 1,
           shadowBlur: node.kind === 'dataset' ? 28 : 12,
@@ -108,19 +110,35 @@ function optionForModel(model, activeCategory, activeRelationType) {
         },
       },
       labelLayout: { hideOverlap: false },
-      edgeLabel: { show: false },
+      edgeLabel: {
+        show: false,
+        color: '#e5edf8',
+        fontSize: 9,
+        backgroundColor: 'rgba(2, 8, 18, 0.88)',
+        padding: [3, 5],
+        borderRadius: 6,
+        formatter(params) {
+          return params.data?.relation || '关联';
+        },
+      },
       emphasis: {
         focus: 'adjacency',
         lineStyle: { width: 3, opacity: 1 },
         label: { color: '#ffffff', fontWeight: 800 },
+        edgeLabel: { show: true },
       },
     }],
   };
 }
 
-function PipelineStage({ stage, index, last }) {
+function PipelineStage({ stage, index, last, active, onSelect }) {
   return (
-    <article className={`dataset-understanding-stage ${stage.status}`.trim()}>
+    <button
+      type="button"
+      className={`dataset-understanding-stage ${stage.status} ${active ? 'active' : ''}`.trim()}
+      aria-pressed={active}
+      onClick={onSelect}
+    >
       <div className="dataset-understanding-stage-index">{String(index + 1).padStart(2, '0')}</div>
       <div>
         <span>{stage.label}</span>
@@ -128,7 +146,69 @@ function PipelineStage({ stage, index, last }) {
         <small>{stage.detail}</small>
       </div>
       {!last ? <i aria-hidden="true">→</i> : null}
-    </article>
+    </button>
+  );
+}
+
+function UnderstandingOverview({ model }) {
+  const { understanding } = model;
+  return (
+    <>
+      <span>系统理解摘要</span>
+      <div className="dataset-understanding-node-kind overview">
+        <i />基于现有字段
+      </div>
+      <h4>系统已经理解到什么</h4>
+      <p>{understanding.summary}</p>
+      <div className="dataset-understanding-insight-group">
+        <strong>核心概念</strong>
+        <div className="dataset-understanding-insight-tags">
+          {understanding.keyConcepts.length
+            ? understanding.keyConcepts.slice(0, 10).map((term) => <span key={term}>{term}</span>)
+            : <small>接口暂无包含明确中文语义的知识词。</small>}
+        </div>
+      </div>
+      <div className="dataset-understanding-insight-group">
+        <strong>结构主线</strong>
+        <p>{understanding.structurePath.length ? understanding.structurePath.join(' → ') : '接口暂无章节或结构线索。'}</p>
+      </div>
+      {understanding.technicalIdentifiers.length ? (
+        <div className="dataset-understanding-insight-group muted">
+          <strong>技术标识</strong>
+          <p>{understanding.technicalIdentifiers.join(' · ')}</p>
+        </div>
+      ) : null}
+      <small className="dataset-understanding-honesty-note">摘要只归纳接口已返回的知识词、结构线索和检索状态，不补写业务结论。</small>
+    </>
+  );
+}
+
+function StageInspector({ stage, onSelectNode }) {
+  return (
+    <>
+      <span>处理阶段详情</span>
+      <div className={`dataset-understanding-stage-badge ${stage.status}`.trim()}>
+        <i />{stage.status === 'complete' ? '已完成' : stage.status === 'attention' ? '需要关注' : '暂无明细'}
+      </div>
+      <h4>{stage.label}</h4>
+      <p>{stage.summary}</p>
+      <dl>
+        <div><dt>阶段结果</dt><dd>{stage.value}</dd></div>
+        <div><dt>字段来源</dt><dd>{stage.source}</dd></div>
+        <div><dt>明细数量</dt><dd>{stage.items.length}</dd></div>
+      </dl>
+      <div className="dataset-understanding-inspector-list">
+        {stage.items.length ? stage.items.map((item) => (
+          <button key={item.id} type="button" onClick={() => item.nodeId && onSelectNode(item.nodeId)}>
+            <span><strong>{item.label}</strong><em>{item.meta}</em></span>
+            <small>{item.detail}</small>
+            <small className="source">{item.evidence}</small>
+          </button>
+        )) : (
+          <div className="dataset-understanding-inspector-empty">当前接口没有返回这个阶段的逐条明细。</div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -142,6 +222,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
   const [activeRelationType, setActiveRelationType] = useState('all');
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [selectedLinkId, setSelectedLinkId] = useState('');
+  const [selectedStageKey, setSelectedStageKey] = useState('overview');
   const [chartState, setChartState] = useState('loading');
   const selectedNode = model.nodes.find((node) => node.id === selectedNodeId) || model.nodes[0] || null;
   const selectedLink = model.links.find((link) => link.id === selectedLinkId) || null;
@@ -151,6 +232,22 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
   const selectedLinkTarget = selectedLink
     ? model.nodes.find((node) => node.id === selectedLink.target) || null
     : null;
+  const selectedStage = model.pipeline.find((stage) => stage.key === selectedStageKey) || null;
+  const selectedNodeConnections = useMemo(() => {
+    if (!selectedNode) return [];
+    return model.links
+      .filter((link) => link.source === selectedNode.id || link.target === selectedNode.id)
+      .map((link) => {
+        const connectedId = link.source === selectedNode.id ? link.target : link.source;
+        return { link, node: model.nodes.find((node) => node.id === connectedId) || null };
+      })
+      .sort((left, right) => (
+        Number(left.link.rootRelation) - Number(right.link.rootRelation)
+        || Number(left.link.type === 'inferred') - Number(right.link.type === 'inferred')
+        || right.link.confidence - left.link.confidence
+      ))
+      .slice(0, 12);
+  }, [model.links, model.nodes, selectedNode]);
   const categoryCounts = useMemo(() => Object.fromEntries(
     DATASET_GRAPH_CATEGORIES.map((category) => [
       category.key,
@@ -171,6 +268,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
   useEffect(() => {
     setSelectedNodeId(model.nodes[0]?.id || '');
     setSelectedLinkId('');
+    setSelectedStageKey('overview');
     setActiveCategory('all');
     setActiveRelationType('all');
   }, [model.datasetId]);
@@ -199,9 +297,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
         if (params.dataType === 'node' && params.data?.id) {
           setSelectedNodeId(params.data.id);
           setSelectedLinkId('');
+          setSelectedStageKey('');
         }
         if (params.dataType === 'edge' && params.data?.id) {
           setSelectedLinkId(params.data.id);
+          setSelectedStageKey('');
         }
       });
       observer = typeof ResizeObserver === 'undefined'
@@ -258,8 +358,41 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
 
       <div className="dataset-understanding-pipeline" aria-label="数据处理链路">
         {model.pipeline.map((stage, index) => (
-          <PipelineStage key={stage.key} stage={stage} index={index} last={index === model.pipeline.length - 1} />
+          <PipelineStage
+            key={stage.key}
+            stage={stage}
+            index={index}
+            last={index === model.pipeline.length - 1}
+            active={selectedStageKey === stage.key}
+            onSelect={() => {
+              setSelectedStageKey(stage.key);
+              setSelectedLinkId('');
+            }}
+          />
         ))}
+      </div>
+
+      <div className="dataset-understanding-semantic-brief" aria-label="系统理解概览">
+        <button type="button" onClick={() => setSelectedStageKey('knowledge')}>
+          <span>核心概念</span>
+          <strong>{model.understanding.keyConcepts.slice(0, 4).join(' · ') || '待识别'}</strong>
+          <small>{model.understanding.keyConcepts.length} 个业务语义词</small>
+        </button>
+        <button type="button" onClick={() => setSelectedStageKey('structure')}>
+          <span>结构主线</span>
+          <strong>{model.understanding.structurePath.slice(0, 4).join(' → ') || '待识别'}</strong>
+          <small>{model.understanding.structurePath.length} 个结构线索</small>
+        </button>
+        <button type="button" onClick={() => setSelectedStageKey('ready')}>
+          <span>检索覆盖</span>
+          <strong>{model.understanding.retrievalCoverage.ready} / {model.understanding.retrievalCoverage.total}</strong>
+          <small>明确进入检索的资料</small>
+        </button>
+        <button type="button" onClick={() => setSelectedStageKey('overview')}>
+          <span>关系理解</span>
+          <strong>{model.metrics.observedRelationCount} 实 · {model.metrics.inferredRelationCount} 推</strong>
+          <small>点击图中节点查看关联依据</small>
+        </button>
       </div>
 
       <div className="dataset-understanding-filter" aria-label="图谱类型筛选">
@@ -316,8 +449,19 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
           <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据</div>
         </div>
 
-        <aside className="dataset-understanding-evidence" aria-live="polite">
-          {selectedLink ? (
+        <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">
+          {selectedStageKey === 'overview' ? (
+            <UnderstandingOverview model={model} />
+          ) : selectedStage ? (
+            <StageInspector
+              stage={selectedStage}
+              onSelectNode={(nodeId) => {
+                setSelectedNodeId(nodeId);
+                setSelectedLinkId('');
+                setSelectedStageKey('');
+              }}
+            />
+          ) : selectedLink ? (
             <>
               <span>当前关系依据</span>
               <div className={`dataset-understanding-node-kind relation ${selectedLink.type}`.trim()}>
@@ -349,6 +493,20 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
                 <div><dt>处理状态</dt><dd>{selectedNode?.status || '已返回'}</dd></div>
                 <div><dt>估算字数</dt><dd>{model.metrics.estimatedWordCount ? compactNumber(model.metrics.estimatedWordCount) : '接口未返回'}</dd></div>
               </dl>
+              <div className="dataset-understanding-insight-group connections">
+                <strong>直接关联</strong>
+                <div className="dataset-understanding-connection-list">
+                  {selectedNodeConnections.length ? selectedNodeConnections.map(({ link, node }) => (
+                    <button key={link.id} type="button" onClick={() => setSelectedLinkId(link.id)}>
+                      <i className={link.type} />
+                      <span>
+                        <strong>{link.relation} · {node?.name || '关联节点'}</strong>
+                        <small>{link.type === 'inferred' ? `推断 ${Math.round(link.confidence * 100)}%` : '事实关系'} · {link.evidence}</small>
+                      </span>
+                    </button>
+                  )) : <small>当前节点没有接口可证实或前端标注的直接关系。</small>}
+                </div>
+              </div>
               {model.emptyKnowledgeMessage ? <small className="dataset-understanding-honesty-note">{model.emptyKnowledgeMessage}</small> : null}
             </>
           )}
@@ -368,6 +526,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
                   onClick={() => {
                     setSelectedNodeId(node.id);
                     setSelectedLinkId('');
+                    setSelectedStageKey('');
                   }}
                 >
                   <i style={{ background: graphCategory(model, node.kind).color }} />
@@ -383,7 +542,10 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
                 const source = model.nodes.find((node) => node.id === link.source);
                 const target = model.nodes.find((node) => node.id === link.target);
                 return (
-                  <button key={link.id} type="button" onClick={() => setSelectedLinkId(link.id)}>
+                  <button key={link.id} type="button" onClick={() => {
+                    setSelectedLinkId(link.id);
+                    setSelectedStageKey('');
+                  }}>
                     <i className={`relation ${link.type}`.trim()} />
                     <span>
                       <strong>{source?.name || '节点'} · {link.relation} · {target?.name || '节点'}</strong>

@@ -9,7 +9,7 @@ export const DATASET_GRAPH_CATEGORIES = [
 
 const LIMITS = {
   document: 18,
-  knowledge: 14,
+  knowledge: 20,
   section: 10,
   material: 8,
   strategy: 6,
@@ -90,6 +90,26 @@ function readyDocument(document) {
 function attentionDocument(document) {
   const combined = `${documentParseStatus(document)} ${documentQualityStatus(document)}`;
   return ['attention', 'failed', 'failure', 'warning', 'error'].some((signal) => combined.includes(signal));
+}
+
+function knowledgeSignal(value) {
+  return /\p{Script=Han}/u.test(cleanText(value)) ? 'concept' : 'identifier';
+}
+
+function readableStatus(value, fallback = '状态未返回') {
+  const status = cleanText(value).toLocaleLowerCase();
+  const labels = {
+    completed: '已完成',
+    complete: '已完成',
+    parsed: '已解析',
+    indexed: '可检索',
+    ready: '可检索',
+    received: '已接收',
+    pending: '处理中',
+    attention_required: '需要关注',
+    ok: '质量正常',
+  };
+  return labels[status] || cleanText(value) || fallback;
 }
 
 function documentTypeLabel(contentType) {
@@ -176,7 +196,7 @@ function nodeShortLabel(value) {
   return Array.from(normalized || '节点').slice(0, 5).join('');
 }
 
-function graphNode({ id, name, kind, detail, evidence, status = '', symbolSize = 30 }) {
+function graphNode({ id, name, kind, detail, evidence, status = '', signal = '', symbolSize = 30 }) {
   return {
     id,
     name,
@@ -187,6 +207,7 @@ function graphNode({ id, name, kind, detail, evidence, status = '', symbolSize =
     detail,
     evidence,
     status,
+    signal,
     symbolSize,
     value: 1,
   };
@@ -210,6 +231,14 @@ function selectionModel() {
       crossNodeRelationCount: 0,
     },
     pipeline: [],
+    understanding: {
+      summary: '',
+      keyConcepts: [],
+      technicalIdentifiers: [],
+      structurePath: [],
+      strategies: [],
+      retrievalCoverage: { ready: 0, total: 0 },
+    },
     nodes: [],
     links: [],
     emptyKnowledgeMessage: '',
@@ -338,9 +367,12 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     id: nodeId('knowledge', term, index),
     name: term,
     kind: 'knowledge',
-    detail: '系统在数据集摘要中保留的名词或业务知识线索。',
+    detail: knowledgeSignal(term) === 'concept'
+      ? '系统从数据集摘要中识别到的业务概念或知识要点。'
+      : '系统从数据集摘要中保留的代码式名称或技术标识。',
     evidence: '数据集 noun_term_hints',
-    symbolSize: 26,
+    signal: knowledgeSignal(term),
+    symbolSize: knowledgeSignal(term) === 'concept' ? 28 : 16,
   }));
   const createdSectionNodes = addConnectedNodes(sectionTitles, 'section', (title, index) => graphNode({
     id: nodeId('section', title, index),
@@ -464,6 +496,74 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     inferredRelationCount: links.filter((link) => link.type === 'inferred').length,
     crossNodeRelationCount: links.filter((link) => !link.rootRelation).length,
   };
+  const documentItems = scopedDocuments.map((document, index) => ({
+    id: document.id ? `document:${document.id}` : `document-stage:${index}`,
+    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
+    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
+    meta: documentTypeLabel(document.content_type || document.contentType) || '格式未返回',
+    detail: readableStatus(document.lifecycle),
+    evidence: '当前数据集文档列表',
+    status: 'complete',
+  }));
+  const parseItems = scopedDocuments.map((document, index) => ({
+    id: document.id ? `parse:${document.id}` : `parse-stage:${index}`,
+    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
+    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
+    meta: parsedDocument(document) ? '已解析' : '待解析',
+    detail: attentionDocument(document)
+      ? `质量状态：${readableStatus(documentQualityStatus(document), '需要关注')}`
+      : `解析状态：${readableStatus(documentParseStatus(document) || documentLifecycle(document))}`,
+    evidence: '文档 parse_status / parse_quality_status / lifecycle',
+    status: attentionDocument(document) ? 'attention' : parsedDocument(document) ? 'complete' : 'empty',
+  }));
+  const structureItems = [
+    ...sectionTitles.map((title, index) => ({
+      id: `section-stage:${index}`,
+      nodeId: nodeId('section', title, index),
+      label: title,
+      meta: '结构线索',
+      detail: '解析摘要返回的章节或结构标题',
+      evidence: '数据集 section_title_hints',
+      status: 'complete',
+    })),
+    ...understandingStrategies.map((strategy, index) => ({
+      id: `strategy-stage:${index}`,
+      nodeId: nodeId('strategy', strategy, index),
+      label: strategy,
+      meta: '理解策略',
+      detail: '解析摘要记录的文档理解策略',
+      evidence: '数据集 document_understanding_strategies',
+      status: 'complete',
+    })),
+  ];
+  const knowledgeItems = knowledgeTerms.map((term, index) => ({
+    id: `knowledge-stage:${index}`,
+    nodeId: nodeId('knowledge', term, index),
+    label: term,
+    meta: knowledgeSignal(term) === 'concept' ? '核心概念' : '技术标识',
+    detail: knowledgeSignal(term) === 'concept'
+      ? '接口返回的业务知识词'
+      : '接口返回的代码式或英文标识',
+    evidence: '数据集 noun_term_hints',
+    status: 'complete',
+  }));
+  const readyItems = scopedDocuments.filter(readyDocument).map((document, index) => ({
+    id: document.id ? `ready:${document.id}` : `ready-stage:${index}`,
+    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
+    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
+    meta: '可检索',
+    detail: `生命周期：${readableStatus(document.lifecycle)} · 解析：${readableStatus(documentParseStatus(document))}`,
+    evidence: '文档 lifecycle / parse_status',
+    status: 'complete',
+  }));
+  const understanding = {
+    summary: `系统基于现有接口字段，在 ${documentCount} 份资料中识别出 ${knowledgeTerms.length} 个知识词和 ${sectionTitles.length} 个结构线索；${readyCount}/${documentCount || 0} 份已进入检索。`,
+    keyConcepts: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'concept'),
+    technicalIdentifiers: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'identifier'),
+    structurePath: sectionTitles,
+    strategies: understandingStrategies,
+    retrievalCoverage: { ready: readyCount, total: documentCount },
+  };
   const pipeline = [
     {
       key: 'ingest',
@@ -471,6 +571,11 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
       value: `${documentCount} 份`,
       detail: actualDocumentCount ? '来自当前文档列表' : '来自数据集文档数摘要',
       status: documentCount ? 'complete' : 'empty',
+      source: actualDocumentCount ? '文档列表 dataset_id / dataset_ids' : '数据集 document_count 摘要',
+      summary: actualDocumentCount
+        ? `当前可见文档列表返回 ${actualDocumentCount} 份资料。`
+        : `数据集摘要记录 ${documentCount} 份资料，接口未返回文档级清单。`,
+      items: documentItems,
     },
     {
       key: 'clean',
@@ -478,6 +583,13 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
       value: parsedCount ? `${parsedCount} 已解析` : parseSummary || '待解析',
       detail: attentionCount ? `${attentionCount} 份需要关注` : '未发现质量告警',
       status: attentionCount ? 'attention' : parsedCount ? 'complete' : 'empty',
+      source: actualDocumentCount
+        ? '文档 parse_status / parse_quality_status / lifecycle'
+        : '数据集 parse_status_summary',
+      summary: actualDocumentCount
+        ? `${parsedCount}/${documentCount} 份已解析，${attentionCount} 份需要关注。`
+        : `解析摘要：${parseSummary || '接口未返回'}。`,
+      items: parseItems,
     },
     {
       key: 'structure',
@@ -489,6 +601,9 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
           : '待识别',
       detail: sectionTitles.length ? `已返回 ${sectionTitles.length} 个章节线索` : '接口暂无章节线索',
       status: understandingStrategies.length || sectionTitles.length ? 'complete' : 'empty',
+      source: '数据集 section_title_hints / document_understanding_strategies',
+      summary: `接口返回 ${sectionTitles.length} 个结构线索和 ${understandingStrategies.length} 种理解策略。`,
+      items: structureItems,
     },
     {
       key: 'knowledge',
@@ -496,6 +611,9 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
       value: knowledgeTerms.length ? `${knowledgeTerms.length} 个知识词` : '待抽取',
       detail: knowledgeTerms.length ? '来自数据集名词线索' : '接口暂无知识词',
       status: knowledgeTerms.length ? 'complete' : 'empty',
+      source: '数据集 noun_term_hints',
+      summary: `接口返回 ${knowledgeTerms.length} 个知识词，其中 ${understanding.keyConcepts.length} 个包含明确中文语义，${understanding.technicalIdentifiers.length} 个为技术标识。`,
+      items: knowledgeItems,
     },
     {
       key: 'ready',
@@ -503,6 +621,9 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
       value: `${readyCount} 可检索`,
       detail: documentCount ? `${Math.max(0, documentCount - readyCount)} 份仍在处理或未返回就绪状态` : '暂无文档',
       status: readyCount && readyCount >= documentCount ? 'complete' : readyCount ? 'attention' : 'empty',
+      source: actualDocumentCount ? '文档 lifecycle / parse_status' : '数据集 parse_status_summary',
+      summary: `${readyCount}/${documentCount || 0} 份资料已进入检索；只展示接口明确返回为 indexed 或 ready 的文档。`,
+      items: readyItems,
     },
   ];
 
@@ -513,6 +634,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     categories: DATASET_GRAPH_CATEGORIES,
     metrics,
     pipeline,
+    understanding,
     nodes,
     links,
     emptyKnowledgeMessage: knowledgeTerms.length || sectionTitles.length || understandingStrategies.length

@@ -80,6 +80,38 @@ test('buildDatasetUnderstandingGraph gives every node a main label capped at fiv
   assert.equal(model.nodes.find((node) => node.name === '季度复盘.xlsx')?.shortLabel, '季度复盘');
 });
 
+test('buildDatasetUnderstandingGraph exposes evidence-backed details for every processing stage', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents);
+  const stages = Object.fromEntries(model.pipeline.map((stage) => [stage.key, stage]));
+
+  assert.deepEqual(model.pipeline.map((stage) => stage.key), ['ingest', 'clean', 'structure', 'knowledge', 'ready']);
+  assert.ok(model.pipeline.every((stage) => stage.source));
+  assert.ok(model.pipeline.every((stage) => stage.summary));
+  assert.ok(model.pipeline.every((stage) => Array.isArray(stage.items)));
+  assert.deepEqual(stages.ingest.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
+  assert.deepEqual(stages.clean.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
+  assert.deepEqual(stages.structure.items.map((item) => item.label), ['经营概览', '风险跟进', 'heading', 'table']);
+  assert.deepEqual(stages.knowledge.items.map((item) => item.label), ['客户分层', '流失风险']);
+  assert.deepEqual(stages.ready.items.map((item) => item.label), ['客户清单.pdf']);
+  assert.match(stages.structure.source, /section_title_hints/);
+  assert.match(stages.knowledge.source, /noun_term_hints/);
+});
+
+test('buildDatasetUnderstandingGraph separates core concepts from technical identifiers without inventing topics', () => {
+  const model = buildDatasetUnderstandingGraph({
+    ...dataset,
+    noun_term_hints: ['k11', 'lcrm', '客户分层', '流失风险', '代码'],
+  }, documents);
+
+  assert.deepEqual(model.understanding.keyConcepts, ['客户分层', '流失风险', '代码']);
+  assert.deepEqual(model.understanding.technicalIdentifiers, ['k11', 'lcrm']);
+  assert.deepEqual(model.understanding.structurePath, ['经营概览', '风险跟进']);
+  assert.deepEqual(model.understanding.retrievalCoverage, { ready: 1, total: 2 });
+  assert.ok(model.understanding.summary.includes('5 个知识词'));
+  assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'concept').every((node) => node.symbolSize > 20));
+  assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'identifier').every((node) => node.symbolSize < 20));
+});
+
 test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and keeps evidence labels', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
   const knowledgeNodes = model.nodes.filter((node) => node.kind === 'knowledge');
