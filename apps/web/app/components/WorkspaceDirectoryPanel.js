@@ -19,6 +19,7 @@ import {
 } from '../lib/asset-library-view-model';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import DatasetUnderstandingGraph from './DatasetUnderstandingGraph';
 import ModelPoolPanel from './ModelPoolPanel';
 
 const PAGE_COPY = {
@@ -1025,6 +1026,7 @@ function DatasetsPage({
       </div>
 
       <section className="directory-card">
+        <DatasetUnderstandingGraph dataset={selectedDataset} documents={documents} />
         <div className="directory-section-head">
           <div>
             <h3>文档列表</h3>
