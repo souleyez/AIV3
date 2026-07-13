@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use domain_model::{DatasetId, DocumentId, TenantId};
+use serde_json::{json, Map, Value};
+use storage::{NewDatasetSemanticSnapshot, PgStorage};
 
 use crate::semantic_label_resolver::{resolve_semantic_label, LabelCandidate, SemanticLabelInput};
 use crate::semantic_relation_builder::{
@@ -52,6 +56,328 @@ pub struct ReadySemanticSnapshotIdentity {
 pub enum SemanticSnapshotBuildAction {
     UseExisting,
     Rebuild,
+}
+
+#[derive(Clone, Debug)]
+pub struct DatasetSemanticRebuildOutcome {
+    pub status: String,
+    pub source_fingerprint: String,
+    pub snapshot: Option<DatasetSemanticUnderstanding>,
+    pub failure_code: Option<String>,
+}
+
+pub async fn rebuild_dataset_semantic_snapshot_from_storage(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    generated_at: DateTime<Utc>,
+) -> Result<DatasetSemanticRebuildOutcome> {
+    let dataset = storage
+        .datasets()
+        .get_by_id(tenant_id, dataset_id)
+        .await?
+        .ok_or_else(|| anyhow!("dataset {dataset_id} not found"))?;
+    let documents = storage
+        .documents()
+        .list_by_dataset_scope_bounded(tenant_id, dataset_id, 10_000)
+        .await?;
+    let document_ids = documents.iter().map(|item| item.id).collect::<Vec<_>>();
+    let chunks = storage
+        .document_chunks()
+        .list_by_documents_bounded(tenant_id, &document_ids, 50_000)
+        .await?;
+    let facts = storage
+        .document_facts()
+        .list_by_document_ids_bounded(tenant_id, &document_ids, 50_000)
+        .await?;
+    let retrieval_evidences = storage
+        .retrieval_evidences()
+        .list_latest_by_document_ids(tenant_id, &document_ids, 50_000)
+        .await?;
+    let assets = storage
+        .asset_items()
+        .list_by_dataset_scope(tenant_id, dataset_id, 10_000)
+        .await?;
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let profiles = storage
+        .asset_items()
+        .list_accepted_profiles_by_asset_ids(tenant_id, &asset_ids, 20_000)
+        .await?;
+    let dictionary = storage
+        .semantic_dictionary_entries()
+        .list_for_resolution(tenant_id, 10_000)
+        .await?;
+    let fact_snapshot = storage
+        .dataset_fact_snapshots()
+        .load_latest_dataset_fact_snapshot(tenant_id, dataset_id, "entity_rows_by_type")
+        .await?;
+
+    let chunks_by_document = chunks.iter().fold(
+        BTreeMap::<DocumentId, Vec<&domain_model::DocumentChunk>>::new(),
+        |mut grouped, chunk| {
+            grouped.entry(chunk.document_id).or_default().push(chunk);
+            grouped
+        },
+    );
+    let facts_by_document = facts.iter().fold(
+        BTreeMap::<DocumentId, Vec<&storage::DocumentFact>>::new(),
+        |mut grouped, fact| {
+            grouped.entry(fact.document_id).or_default().push(fact);
+            grouped
+        },
+    );
+    let mut observations = Vec::new();
+    let mut source_keys = BTreeSet::new();
+    let mut document_versions = Vec::new();
+    let mut record_count = 0u64;
+    for document in &documents {
+        let document_chunks = chunks_by_document
+            .get(&document.id)
+            .cloned()
+            .unwrap_or_default();
+        let parse_versions = document_chunks
+            .iter()
+            .filter_map(|chunk| metadata_string(&chunk.metadata, "parse_version"))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let fact_versions = facts_by_document
+            .get(&document.id)
+            .into_iter()
+            .flatten()
+            .filter_map(|fact| fact.parse_version.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        document_versions.push(
+            crate::dataset_semantic_source_support::SemanticDocumentSourceVersion {
+                document_id: document.id,
+                updated_at: document.updated_at,
+                parse_versions,
+                fact_snapshot_versions: fact_versions,
+            },
+        );
+        let source_kind = semantic_document_source_kind(document, &document_chunks);
+        let source_metadata = document_chunks
+            .first()
+            .map(|chunk| map_to_value(&chunk.metadata))
+            .unwrap_or_else(|| map_to_value(&document.metadata));
+        let source_key = source_metadata
+            .pointer("/parse_metadata/source_table")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| document.id.to_string());
+        if source_kind == "database" {
+            record_count += 1;
+        }
+        source_keys.insert(format!("{source_kind}:{source_key}"));
+        let fact_values = facts_by_document
+            .get(&document.id)
+            .into_iter()
+            .flatten()
+            .map(|fact| {
+                json!({
+                    "name": fact.name,
+                    "fact_type": fact.fact_type,
+                    "value_type": document_fact_value_type(fact),
+                    "parse_version": fact.parse_version,
+                })
+            })
+            .collect();
+        observations.extend(crate::semantic_profile_adapters::adapt_semantic_profile(
+            &crate::semantic_profile_adapters::SemanticProfileInput {
+                source_id: document.id.to_string(),
+                source_kind,
+                title: document.title.clone(),
+                metadata: source_metadata,
+                facts: fact_values,
+                evidence_labels: document_chunks
+                    .iter()
+                    .take(5)
+                    .map(|chunk| format!("document_chunk:{}", chunk.id))
+                    .collect(),
+            },
+        ));
+    }
+
+    let profiles_by_asset = profiles.iter().fold(
+        BTreeMap::<uuid::Uuid, Vec<&storage::AssetProfileRecord>>::new(),
+        |mut grouped, profile| {
+            grouped.entry(profile.asset_id).or_default().push(profile);
+            grouped
+        },
+    );
+    let mut asset_versions = Vec::new();
+    for asset in &assets {
+        let asset_profiles = profiles_by_asset
+            .get(&asset.id)
+            .cloned()
+            .unwrap_or_default();
+        asset_versions.push(
+            crate::dataset_semantic_source_support::SemanticAssetSourceVersion {
+                asset_id: asset.id,
+                updated_at: asset.updated_at,
+                profile_versions: asset_profiles
+                    .iter()
+                    .map(|profile| profile.profile_version.clone())
+                    .collect(),
+            },
+        );
+        source_keys.insert(format!("asset:{}", asset.id));
+        for profile in asset_profiles {
+            observations.extend(crate::semantic_profile_adapters::adapt_semantic_profile(
+                &crate::semantic_profile_adapters::SemanticProfileInput {
+                    source_id: asset.id.to_string(),
+                    source_kind: "asset".to_string(),
+                    title: asset.title.clone(),
+                    metadata: json!({
+                        "profile_kind": profile.profile_kind,
+                        "safe_profile": profile.attributes,
+                        "collection": asset.metadata.get("collection_name"),
+                    }),
+                    facts: Vec::new(),
+                    evidence_labels: vec![format!("asset_profile:{}", profile.id)],
+                },
+            ));
+        }
+    }
+
+    let fact_snapshot_version = fact_snapshot.as_ref().map(|item| item.snapshot_key.clone());
+    let source_fingerprint = crate::dataset_semantic_source_support::source_fingerprint(
+        &crate::dataset_semantic_source_support::SemanticSourceFingerprintInput {
+            documents: document_versions,
+            assets: asset_versions,
+            dataset_fact_snapshot_version: fact_snapshot_version.clone(),
+        },
+    );
+    let latest_ready = storage
+        .dataset_semantic_snapshots()
+        .load_latest_ready(tenant_id, dataset_id)
+        .await?;
+    if latest_ready.as_ref().is_some_and(|snapshot| {
+        snapshot.source_fingerprint == source_fingerprint
+            && snapshot.generation_version == DATASET_SEMANTIC_GENERATION_VERSION
+    }) {
+        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
+        return Ok(DatasetSemanticRebuildOutcome {
+            status: "skipped".to_string(),
+            source_fingerprint,
+            snapshot,
+            failure_code: None,
+        });
+    }
+
+    let new_snapshot = NewDatasetSemanticSnapshot {
+        dataset_id,
+        schema_version: DATASET_SEMANTIC_SCHEMA_VERSION.to_string(),
+        generation_version: DATASET_SEMANTIC_GENERATION_VERSION.to_string(),
+        source_fingerprint: source_fingerprint.clone(),
+        manifest: json!({}),
+        source_document_count: documents.len() as i64,
+        source_asset_count: assets.len() as i64,
+        source_record_count: record_count as i64,
+    };
+    let Some(build_record) = storage
+        .dataset_semantic_snapshots()
+        .try_begin_build(tenant_id, &new_snapshot, generated_at)
+        .await?
+    else {
+        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
+        return Ok(DatasetSemanticRebuildOutcome {
+            status: "skipped".to_string(),
+            source_fingerprint,
+            snapshot,
+            failure_code: Some("build_in_progress_or_complete".to_string()),
+        });
+    };
+
+    let dictionary_entries = dictionary
+        .into_iter()
+        .map(|entry| SnapshotDictionaryEntry {
+            source_kind: entry.source_kind,
+            source_object_key: entry.source_object_key,
+            raw_field_key: entry.raw_field_key,
+            candidate: LabelCandidate {
+                label: entry.display_name,
+                description: entry.description,
+                status: entry.status,
+                confidence: entry.confidence,
+            },
+        })
+        .collect();
+    let fact_snapshot_refs = fact_snapshot
+        .map(|item| DatasetFactSnapshotRef {
+            snapshot_kind: item.snapshot_kind,
+            snapshot_key: item.snapshot_key,
+            source_fact_count: item.source_fact_count.max(0) as u64,
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    let semantic_snapshot = build_dataset_semantic_snapshot(&DatasetSemanticSnapshotBuildInput {
+        dataset: DatasetSemanticIdentity {
+            id: dataset.id,
+            title: dataset.title,
+        },
+        source_fingerprint: source_fingerprint.clone(),
+        generated_at,
+        coverage: SemanticCoverage {
+            source_count: source_keys.len() as u64,
+            document_count: documents.len() as u64,
+            record_count,
+            asset_count: assets.len() as u64,
+            retrieval_evidence_count: retrieval_evidences.len() as u64,
+            confirmed_fact_count: facts.len() as u64,
+            unresolved_field_count: 0,
+        },
+        observations,
+        dictionary_entries,
+        explicit_relations: Vec::new(),
+        fact_snapshot_refs,
+        limitations: Vec::new(),
+    });
+    let manifest = serde_json::to_value(&semantic_snapshot)?;
+    let manifest_bytes = serde_json::to_vec(&manifest)?.len();
+    if manifest_bytes > 2 * 1024 * 1024 {
+        storage
+            .dataset_semantic_snapshots()
+            .mark_failed(
+                tenant_id,
+                dataset_id,
+                build_record.id,
+                "manifest_too_large",
+                generated_at,
+            )
+            .await?;
+        return Ok(DatasetSemanticRebuildOutcome {
+            status: "failed".to_string(),
+            source_fingerprint,
+            snapshot: latest_ready
+                .and_then(|item| serde_json::from_value(item.manifest).ok())
+                .and_then(|item| {
+                    semantic_snapshot_failure_fallback(Some(item), "manifest_too_large")
+                }),
+            failure_code: Some("manifest_too_large".to_string()),
+        });
+    }
+    storage
+        .dataset_semantic_snapshots()
+        .mark_ready(
+            tenant_id,
+            dataset_id,
+            build_record.id,
+            &manifest,
+            (semantic_snapshot.objects.len() + semantic_snapshot.fields.len()) as i32,
+            semantic_snapshot.relations.len() as i32,
+            generated_at,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("semantic snapshot build record is no longer claimable"))?;
+    Ok(DatasetSemanticRebuildOutcome {
+        status: "ready".to_string(),
+        source_fingerprint,
+        snapshot: Some(semantic_snapshot),
+        failure_code: None,
+    })
 }
 
 pub fn semantic_snapshot_build_action(
@@ -348,6 +674,75 @@ fn pipeline_stage(id: &str, label: &str, evidence_count: u64) -> SemanticPipelin
         status: "completed".to_string(),
         detail: format!("处理 {evidence_count} 条可追溯信号。"),
         evidence_count,
+    }
+}
+
+fn map_to_value(values: &BTreeMap<String, Value>) -> Value {
+    Value::Object(
+        values
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Map<_, _>>(),
+    )
+}
+
+fn metadata_string(values: &BTreeMap<String, Value>, key: &str) -> Option<String> {
+    values
+        .get(key)
+        .or_else(|| {
+            values
+                .get("parse_metadata")
+                .and_then(|value| value.get(key))
+        })
+        .or_else(|| values.get("ingest").and_then(|value| value.get(key)))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn semantic_document_source_kind(
+    document: &domain_model::Document,
+    chunks: &[&domain_model::DocumentChunk],
+) -> String {
+    if chunks.iter().any(|chunk| {
+        chunk
+            .metadata
+            .get("parse_metadata")
+            .and_then(|value| value.get("source_table"))
+            .and_then(Value::as_str)
+            .is_some()
+    }) {
+        return "database".to_string();
+    }
+    let content_type = document.content_type.to_ascii_lowercase();
+    if content_type.contains("spreadsheet")
+        || content_type.contains("excel")
+        || content_type.contains("csv")
+    {
+        "spreadsheet".to_string()
+    } else if content_type.starts_with("audio/")
+        || content_type.starts_with("video/")
+        || content_type.contains("presentation")
+        || content_type.contains("powerpoint")
+    {
+        "media".to_string()
+    } else if content_type.contains("html") || content_type.contains("json") {
+        "web_api".to_string()
+    } else {
+        "document".to_string()
+    }
+}
+
+fn document_fact_value_type(fact: &storage::DocumentFact) -> &'static str {
+    if fact.value_number.is_some() {
+        "number"
+    } else if fact.value_date.is_some() {
+        "date"
+    } else if fact.value_text.is_some() {
+        "text"
+    } else {
+        "unknown"
     }
 }
 

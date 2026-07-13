@@ -4439,6 +4439,36 @@ impl PgDocumentFactRepository {
             })
             .collect())
     }
+
+    pub async fn list_by_document_ids_bounded(
+        &self,
+        tenant_id: TenantId,
+        document_ids: &[DocumentId],
+        limit: usize,
+    ) -> Result<Vec<DocumentFact>> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let document_ids = document_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, document_id, fact_type, name,
+                   normalized_name, value_text, value_number, value_date, attributes,
+                   confidence, source_kind, source_locator, source_chunk_id,
+                   parse_version, created_at
+            from document_facts
+            where tenant_id = $1 and document_id = any($2)
+            order by document_id asc, fact_type asc, normalized_name asc, id asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_ids)
+        .bind(limit.clamp(1, 50_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_document_fact_row).collect()
+    }
 }
 
 #[derive(Clone)]
@@ -4614,6 +4644,50 @@ pub struct PgDatasetSemanticSnapshotRepository {
 }
 
 impl PgDatasetSemanticSnapshotRepository {
+    pub async fn try_begin_build(
+        &self,
+        tenant_id: TenantId,
+        snapshot: &NewDatasetSemanticSnapshot,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let row = sqlx::query(
+            r#"
+            insert into dataset_semantic_snapshots (
+                tenant_id, dataset_id, schema_version, generation_version,
+                source_fingerprint, status, manifest, source_document_count,
+                source_asset_count, source_record_count, created_at, updated_at
+            )
+            values ($1, $2, $3, $4, $5, 'building', $6, $7, $8, $9, $10, $10)
+            on conflict (tenant_id, dataset_id, generation_version, source_fingerprint)
+            do update set status = 'building', manifest = excluded.manifest,
+                source_document_count = excluded.source_document_count,
+                source_asset_count = excluded.source_asset_count,
+                source_record_count = excluded.source_record_count,
+                node_count = 0, edge_count = 0, failure_code = null,
+                generated_at = null, updated_at = excluded.updated_at
+            where dataset_semantic_snapshots.status in ('failed', 'superseded')
+            returning id, tenant_id, dataset_id, schema_version, generation_version,
+                      source_fingerprint, status, manifest, source_document_count,
+                      source_asset_count, source_record_count, node_count, edge_count,
+                      failure_code, generated_at, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(snapshot.dataset_id.0)
+        .bind(&snapshot.schema_version)
+        .bind(&snapshot.generation_version)
+        .bind(&snapshot.source_fingerprint)
+        .bind(&snapshot.manifest)
+        .bind(snapshot.source_document_count)
+        .bind(snapshot.source_asset_count)
+        .bind(snapshot.source_record_count)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
+
     pub async fn begin_build(
         &self,
         tenant_id: TenantId,
@@ -4756,6 +4830,30 @@ pub struct PgSemanticDictionaryRepository {
 }
 
 impl PgSemanticDictionaryRepository {
+    pub async fn list_for_resolution(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+    ) -> Result<Vec<SemanticDictionaryEntry>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, source_kind, source_system_key, source_object_key,
+                   raw_field_key, display_name, description, semantic_role, value_type,
+                   status, confidence, created_by_user_id, created_at, updated_at
+            from semantic_dictionary_entries
+            where tenant_id = $1 and status in ('confirmed', 'suggested')
+            order by case status when 'confirmed' then 0 else 1 end,
+                     updated_at desc, id asc
+            limit $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(limit.clamp(1, 10_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_semantic_dictionary_entry_row).collect()
+    }
+
     pub async fn upsert(
         &self,
         tenant_id: TenantId,

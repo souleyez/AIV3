@@ -162,6 +162,9 @@ async fn process_claimed_run(
         "fact_index_v2" => {
             run_fact_index_enrichment(storage, tenant_id, &document, &chunks, generated_at).await?
         }
+        "semantic_profile_v1" => {
+            run_semantic_profile_enrichment(storage, tenant_id, &document, generated_at).await?
+        }
         other => return Err(anyhow!("unsupported document enrichment kind {other}")),
     };
 
@@ -177,6 +180,62 @@ async fn process_claimed_run(
     );
 
     Ok(summary)
+}
+
+async fn run_semantic_profile_enrichment(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    document: &Document,
+    generated_at: chrono::DateTime<Utc>,
+) -> Result<Value> {
+    if !env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false) {
+        return Ok(json!({
+            "schema_version": "0.1.0",
+            "enrichment_kind": "semantic_profile_v1",
+            "status": "skipped",
+            "skipped_reason": "feature_disabled",
+            "dataset_count": 0,
+            "generated_at": generated_at.to_rfc3339(),
+        }));
+    }
+    let mut dataset_ids = storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(tenant_id, document.id)
+        .await?;
+    dataset_ids.push(document.dataset_id);
+    dataset_ids.sort_by_key(|id| id.0);
+    dataset_ids.dedup();
+
+    let mut ready_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut failed_count = 0usize;
+    let mut fingerprints = Vec::new();
+    for dataset_id in &dataset_ids {
+        let outcome = platform_api::dataset_semantic_snapshot::rebuild_dataset_semantic_snapshot_from_storage(
+            storage,
+            tenant_id,
+            *dataset_id,
+            generated_at,
+        )
+        .await?;
+        match outcome.status.as_str() {
+            "ready" => ready_count += 1,
+            "skipped" => skipped_count += 1,
+            _ => failed_count += 1,
+        }
+        fingerprints.push(outcome.source_fingerprint);
+    }
+    Ok(json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "semantic_profile_v1",
+        "status": if failed_count > 0 { "partial" } else { "completed" },
+        "dataset_count": dataset_ids.len(),
+        "ready_count": ready_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+        "fingerprints": fingerprints,
+        "generated_at": generated_at.to_rfc3339(),
+    }))
 }
 
 async fn run_fact_index_enrichment(
@@ -1295,6 +1354,11 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn semantic_profile_feature_flag_defaults_off() {
+        assert!(!env_flag("DATAMAX_TEST_MISSING_SEMANTIC_FLAG", false));
+    }
 
     #[test]
     fn structure_outline_summary_extracts_section_hints() {

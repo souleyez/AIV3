@@ -28,6 +28,7 @@ const DEFAULT_DOCUMENT_ENRICHMENT_KINDS: &[&str] = &[
     "procedure_steps_v1",
     "resume_profile_v1",
     "spreadsheet_metrics_v1",
+    "semantic_profile_v1",
 ];
 
 #[tokio::main]
@@ -626,9 +627,23 @@ fn document_enrichment_max_attempts() -> i32 {
 }
 
 fn document_enrichment_kinds() -> Vec<&'static str> {
-    optional_env("DOCUMENT_ENRICHMENT_KINDS")
+    let kinds = optional_env("DOCUMENT_ENRICHMENT_KINDS")
         .map(|value| document_enrichment_kinds_from_csv(&value))
-        .unwrap_or_else(|| DEFAULT_DOCUMENT_ENRICHMENT_KINDS.to_vec())
+        .unwrap_or_else(|| DEFAULT_DOCUMENT_ENRICHMENT_KINDS.to_vec());
+    filter_semantic_profile_kind(
+        kinds,
+        env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false),
+    )
+}
+
+fn filter_semantic_profile_kind(
+    kinds: Vec<&'static str>,
+    semantic_enabled: bool,
+) -> Vec<&'static str> {
+    kinds
+        .into_iter()
+        .filter(|kind| *kind != "semantic_profile_v1" || semantic_enabled)
+        .collect()
 }
 
 fn document_enrichment_kinds_from_csv(value: &str) -> Vec<&'static str> {
@@ -646,7 +661,7 @@ fn document_enrichment_kinds_from_csv(value: &str) -> Vec<&'static str> {
 
 fn normalize_document_enrichment_kind(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "structure_outline_v1" | "section_outline_v1" | "section_outline" => {
+        "structure_outline_v1" | "structure_outline" | "section_outline_v1" | "section_outline" => {
             Some("structure_outline_v1")
         }
         "fact_index_v2" => Some("fact_index_v2"),
@@ -657,6 +672,7 @@ fn normalize_document_enrichment_kind(raw: &str) -> Option<&'static str> {
         "procedure_steps_v1" | "procedure_steps" => Some("procedure_steps_v1"),
         "resume_profile_v1" | "resume_profile" => Some("resume_profile_v1"),
         "spreadsheet_metrics_v1" | "spreadsheet_metrics" => Some("spreadsheet_metrics_v1"),
+        "semantic_profile_v1" | "semantic_profile" => Some("semantic_profile_v1"),
         _ => None,
     }
 }
@@ -1706,6 +1722,16 @@ mod tests {
 
         assert_eq!(kinds, vec!["entity_terms_v1", "structure_outline_v1"]);
         assert!(document_enrichment_kinds_from_csv("unknown_kind").is_empty());
+    }
+
+    #[test]
+    fn semantic_profile_kind_is_registered_but_feature_off_by_default_policy() {
+        let kinds = document_enrichment_kinds_from_csv("structure_outline,semantic_profile");
+        assert_eq!(
+            filter_semantic_profile_kind(kinds.clone(), false),
+            vec!["structure_outline_v1"]
+        );
+        assert_eq!(filter_semantic_profile_kind(kinds, true).len(), 2);
     }
 
     #[test]
