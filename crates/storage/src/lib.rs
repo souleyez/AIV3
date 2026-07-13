@@ -137,6 +137,12 @@ pub const ASSET_RETRIEVAL_EVIDENCES_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0018_asset_retrieval_evidences.sql"),
 };
 
+pub const DATASET_SEMANTIC_UNDERSTANDING_SCHEMA: Migration = Migration {
+    version: "0019",
+    description: "dataset semantic understanding snapshots and dictionary",
+    sql: include_str!("../migrations/0019_dataset_semantic_understanding.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -155,6 +161,7 @@ pub const MIGRATIONS: &[Migration] = &[
     V3_CLIENT_ARTIFACTS_SCHEMA,
     ASSET_PARSE_RUNS_SCHEMA,
     ASSET_RETRIEVAL_EVIDENCES_SCHEMA,
+    DATASET_SEMANTIC_UNDERSTANDING_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -170,6 +177,8 @@ pub const TABLES: &[&str] = &[
     "document_facts",
     "document_fact_sources",
     "dataset_fact_snapshots",
+    "dataset_semantic_snapshots",
+    "semantic_dictionary_entries",
     "document_content_fingerprints",
     "document_enrichment_runs",
     "secret_bindings",
@@ -686,6 +695,73 @@ pub struct DatasetFactSnapshot {
 }
 
 #[derive(Clone, Debug)]
+pub struct NewDatasetSemanticSnapshot {
+    pub dataset_id: DatasetId,
+    pub schema_version: String,
+    pub generation_version: String,
+    pub source_fingerprint: String,
+    pub manifest: Value,
+    pub source_document_count: i64,
+    pub source_asset_count: i64,
+    pub source_record_count: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct DatasetSemanticSnapshot {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub schema_version: String,
+    pub generation_version: String,
+    pub source_fingerprint: String,
+    pub status: String,
+    pub manifest: Value,
+    pub source_document_count: i64,
+    pub source_asset_count: i64,
+    pub source_record_count: i64,
+    pub node_count: i32,
+    pub edge_count: i32,
+    pub failure_code: Option<String>,
+    pub generated_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewSemanticDictionaryEntry {
+    pub source_kind: String,
+    pub source_system_key: String,
+    pub source_object_key: String,
+    pub raw_field_key: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub semantic_role: String,
+    pub value_type: String,
+    pub status: String,
+    pub confidence: f64,
+    pub created_by_user_id: Option<UserId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SemanticDictionaryEntry {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub source_kind: String,
+    pub source_system_key: String,
+    pub source_object_key: String,
+    pub raw_field_key: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub semantic_role: String,
+    pub value_type: String,
+    pub status: String,
+    pub confidence: f64,
+    pub created_by_user_id: Option<UserId>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewReportPlan {
     pub dataset_id: DatasetId,
     pub title: String,
@@ -1187,6 +1263,18 @@ impl PgStorage {
 
     pub fn dataset_fact_snapshots(&self) -> PgDatasetFactSnapshotRepository {
         PgDatasetFactSnapshotRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn dataset_semantic_snapshots(&self) -> PgDatasetSemanticSnapshotRepository {
+        PgDatasetSemanticSnapshotRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn semantic_dictionary_entries(&self) -> PgSemanticDictionaryRepository {
+        PgSemanticDictionaryRepository {
             pool: self.pool.clone(),
         }
     }
@@ -4320,6 +4408,273 @@ impl PgDatasetFactSnapshotRepository {
 
         row.map(|row| map_dataset_fact_snapshot_row(&row))
             .transpose()
+    }
+}
+
+const DATASET_SEMANTIC_SNAPSHOT_COLUMNS: &str = r#"
+    id, tenant_id, dataset_id, schema_version, generation_version,
+    source_fingerprint, status, manifest, source_document_count,
+    source_asset_count, source_record_count, node_count, edge_count,
+    failure_code, generated_at, created_at, updated_at
+"#;
+
+const DATASET_SEMANTIC_BEGIN_BUILD_SQL: &str = r#"
+    insert into dataset_semantic_snapshots (
+        tenant_id, dataset_id, schema_version, generation_version,
+        source_fingerprint, status, manifest, source_document_count,
+        source_asset_count, source_record_count, created_at, updated_at
+    )
+    values ($1, $2, $3, $4, $5, 'building', $6, $7, $8, $9, $10, $10)
+    on conflict (tenant_id, dataset_id, generation_version, source_fingerprint)
+    do update set
+        schema_version = excluded.schema_version,
+        status = 'building',
+        manifest = excluded.manifest,
+        source_document_count = excluded.source_document_count,
+        source_asset_count = excluded.source_asset_count,
+        source_record_count = excluded.source_record_count,
+        node_count = 0,
+        edge_count = 0,
+        failure_code = null,
+        generated_at = null,
+        updated_at = excluded.updated_at
+    where dataset_semantic_snapshots.status in ('failed', 'superseded')
+"#;
+
+pub const DATASET_SEMANTIC_LATEST_READY_SQL: &str = r#"
+    select id, tenant_id, dataset_id, schema_version, generation_version,
+           source_fingerprint, status, manifest, source_document_count,
+           source_asset_count, source_record_count, node_count, edge_count,
+           failure_code, generated_at, created_at, updated_at
+    from dataset_semantic_snapshots
+    where tenant_id = $1 and dataset_id = $2 and status = 'ready'
+    order by generated_at desc, created_at desc
+    limit 1
+"#;
+
+const DATASET_SEMANTIC_MARK_READY_SQL: &str = r#"
+    update dataset_semantic_snapshots
+    set status = 'ready', manifest = $4, node_count = $5, edge_count = $6,
+        failure_code = null, generated_at = $7, updated_at = $7
+    where tenant_id = $1 and dataset_id = $2 and id = $3 and status = 'building'
+    returning id, tenant_id, dataset_id, schema_version, generation_version,
+              source_fingerprint, status, manifest, source_document_count,
+              source_asset_count, source_record_count, node_count, edge_count,
+              failure_code, generated_at, created_at, updated_at
+"#;
+
+pub const DATASET_SEMANTIC_MARK_FAILED_SQL: &str = r#"
+    update dataset_semantic_snapshots
+    set status = 'failed', failure_code = $4, updated_at = $5
+    where tenant_id = $1 and dataset_id = $2 and id = $3 and status = 'building'
+    returning id, tenant_id, dataset_id, schema_version, generation_version,
+              source_fingerprint, status, manifest, source_document_count,
+              source_asset_count, source_record_count, node_count, edge_count,
+              failure_code, generated_at, created_at, updated_at
+"#;
+
+#[derive(Clone)]
+pub struct PgDatasetSemanticSnapshotRepository {
+    pool: PgPool,
+}
+
+impl PgDatasetSemanticSnapshotRepository {
+    pub async fn begin_build(
+        &self,
+        tenant_id: TenantId,
+        snapshot: NewDatasetSemanticSnapshot,
+        now: DateTime<Utc>,
+    ) -> Result<DatasetSemanticSnapshot> {
+        sqlx::query(DATASET_SEMANTIC_BEGIN_BUILD_SQL)
+            .bind(tenant_id.0)
+            .bind(snapshot.dataset_id.0)
+            .bind(&snapshot.schema_version)
+            .bind(&snapshot.generation_version)
+            .bind(&snapshot.source_fingerprint)
+            .bind(&snapshot.manifest)
+            .bind(snapshot.source_document_count)
+            .bind(snapshot.source_asset_count)
+            .bind(snapshot.source_record_count)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+
+        let sql = format!(
+            "select {DATASET_SEMANTIC_SNAPSHOT_COLUMNS} from dataset_semantic_snapshots \
+             where tenant_id = $1 and dataset_id = $2 and generation_version = $3 \
+             and source_fingerprint = $4"
+        );
+        let row = sqlx::query(AssertSqlSafe(sql))
+            .bind(tenant_id.0)
+            .bind(snapshot.dataset_id.0)
+            .bind(snapshot.generation_version)
+            .bind(snapshot.source_fingerprint)
+            .fetch_one(&self.pool)
+            .await?;
+        map_dataset_semantic_snapshot_row(&row)
+    }
+
+    pub async fn mark_ready(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_id: Uuid,
+        manifest: &Value,
+        node_count: i32,
+        edge_count: i32,
+        generated_at: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let row = sqlx::query(DATASET_SEMANTIC_MARK_READY_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .bind(snapshot_id)
+            .bind(manifest)
+            .bind(node_count)
+            .bind(edge_count)
+            .bind(generated_at)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
+
+    pub async fn mark_failed(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_id: Uuid,
+        failure_code: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let row = sqlx::query(DATASET_SEMANTIC_MARK_FAILED_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .bind(snapshot_id)
+            .bind(failure_code)
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
+
+    pub async fn load_latest_ready(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let row = sqlx::query(DATASET_SEMANTIC_LATEST_READY_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
+}
+
+const SEMANTIC_DICTIONARY_UPSERT_SQL: &str = r#"
+    insert into semantic_dictionary_entries (
+        tenant_id, source_kind, source_system_key, source_object_key,
+        raw_field_key, display_name, description, semantic_role, value_type,
+        status, confidence, created_by_user_id, created_at, updated_at
+    )
+    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+    on conflict (tenant_id, source_kind, source_system_key, source_object_key, raw_field_key)
+    do update set
+        display_name = excluded.display_name,
+        description = excluded.description,
+        semantic_role = excluded.semantic_role,
+        value_type = excluded.value_type,
+        status = excluded.status,
+        confidence = excluded.confidence,
+        created_by_user_id = coalesce(excluded.created_by_user_id, semantic_dictionary_entries.created_by_user_id),
+        updated_at = excluded.updated_at
+    returning id, tenant_id, source_kind, source_system_key, source_object_key,
+              raw_field_key, display_name, description, semantic_role, value_type,
+              status, confidence, created_by_user_id, created_at, updated_at
+"#;
+
+pub const SEMANTIC_DICTIONARY_RESOLVE_SQL: &str = r#"
+    select id, tenant_id, source_kind, source_system_key, source_object_key,
+           raw_field_key, display_name, description, semantic_role, value_type,
+           status, confidence, created_by_user_id, created_at, updated_at
+    from semantic_dictionary_entries
+    where tenant_id = $1
+      and source_kind = $2
+      and raw_field_key = $5
+      and source_system_key in ($3, '*')
+      and source_object_key in ($4, '*')
+      and status in ('confirmed', 'suggested')
+    order by
+      case status when 'confirmed' then 0 else 1 end,
+      case when source_system_key = $3 then 0 else 1 end,
+      case when source_object_key = $4 then 0 else 1 end,
+      confidence desc,
+      updated_at desc
+    limit 1
+"#;
+
+#[derive(Clone)]
+pub struct PgSemanticDictionaryRepository {
+    pool: PgPool,
+}
+
+impl PgSemanticDictionaryRepository {
+    pub async fn upsert(
+        &self,
+        tenant_id: TenantId,
+        mut entry: NewSemanticDictionaryEntry,
+        now: DateTime<Utc>,
+    ) -> Result<SemanticDictionaryEntry> {
+        entry.source_system_key = normalized_dictionary_scope_key(&entry.source_system_key);
+        entry.source_object_key = normalized_dictionary_scope_key(&entry.source_object_key);
+        let row = sqlx::query(SEMANTIC_DICTIONARY_UPSERT_SQL)
+            .bind(tenant_id.0)
+            .bind(entry.source_kind.trim())
+            .bind(entry.source_system_key)
+            .bind(entry.source_object_key)
+            .bind(entry.raw_field_key.trim())
+            .bind(entry.display_name.trim())
+            .bind(entry.description)
+            .bind(entry.semantic_role.trim())
+            .bind(entry.value_type.trim())
+            .bind(entry.status.trim())
+            .bind(entry.confidence.clamp(0.0, 1.0))
+            .bind(entry.created_by_user_id.map(|id| id.0))
+            .bind(now)
+            .fetch_one(&self.pool)
+            .await?;
+        map_semantic_dictionary_entry_row(&row)
+    }
+
+    pub async fn resolve(
+        &self,
+        tenant_id: TenantId,
+        source_kind: &str,
+        source_system_key: &str,
+        source_object_key: &str,
+        raw_field_key: &str,
+    ) -> Result<Option<SemanticDictionaryEntry>> {
+        let row = sqlx::query(SEMANTIC_DICTIONARY_RESOLVE_SQL)
+            .bind(tenant_id.0)
+            .bind(source_kind.trim())
+            .bind(normalized_dictionary_scope_key(source_system_key))
+            .bind(normalized_dictionary_scope_key(source_object_key))
+            .bind(raw_field_key.trim())
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_semantic_dictionary_entry_row(&row))
+            .transpose()
+    }
+}
+
+fn normalized_dictionary_scope_key(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        "*".to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -9544,6 +9899,52 @@ fn map_dataset_fact_snapshot_row(row: &sqlx::postgres::PgRow) -> Result<DatasetF
     })
 }
 
+fn map_dataset_semantic_snapshot_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<DatasetSemanticSnapshot> {
+    Ok(DatasetSemanticSnapshot {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        schema_version: row.get("schema_version"),
+        generation_version: row.get("generation_version"),
+        source_fingerprint: row.get("source_fingerprint"),
+        status: row.get("status"),
+        manifest: row.get("manifest"),
+        source_document_count: row.get("source_document_count"),
+        source_asset_count: row.get("source_asset_count"),
+        source_record_count: row.get("source_record_count"),
+        node_count: row.get("node_count"),
+        edge_count: row.get("edge_count"),
+        failure_code: row.get("failure_code"),
+        generated_at: row.get("generated_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_semantic_dictionary_entry_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<SemanticDictionaryEntry> {
+    Ok(SemanticDictionaryEntry {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        source_kind: row.get("source_kind"),
+        source_system_key: row.get("source_system_key"),
+        source_object_key: row.get("source_object_key"),
+        raw_field_key: row.get("raw_field_key"),
+        display_name: row.get("display_name"),
+        description: row.get("description"),
+        semantic_role: row.get("semantic_role"),
+        value_type: row.get("value_type"),
+        status: row.get("status"),
+        confidence: row.get("confidence"),
+        created_by_user_id: row.get::<Option<Uuid>, _>("created_by_user_id").map(UserId),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
 fn map_report_plan_row(row: &sqlx::postgres::PgRow) -> Result<ReportPlan> {
     let status = row.get::<String, _>("status");
 
@@ -10852,10 +11253,9 @@ mod tests {
 
     #[test]
     fn migrations_include_asset_retrieval_evidence_schema() {
-        assert_eq!(
-            MIGRATIONS.last().map(|migration| migration.version),
-            Some("0018")
-        );
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.version == "0018"));
         assert!(TABLES.contains(&"asset_retrieval_evidences"));
         assert!(ASSET_RETRIEVAL_EVIDENCES_SCHEMA
             .sql
@@ -10880,6 +11280,57 @@ mod tests {
         assert!(!ASSET_RETRIEVAL_EVIDENCES_SCHEMA
             .sql
             .contains("document_chunk_id"));
+    }
+
+    #[test]
+    fn migrations_include_dataset_semantic_understanding_schema() {
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some("0019")
+        );
+        for table in ["dataset_semantic_snapshots", "semantic_dictionary_entries"] {
+            assert!(TABLES.contains(&table));
+            assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+                .sql
+                .contains(&format!("create table if not exists {table}")));
+        }
+        assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("unique (tenant_id, dataset_id, generation_version, source_fingerprint)"));
+        assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("where status = 'ready'"));
+        assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("check (status in ('building', 'ready', 'failed', 'superseded'))"));
+        assert!(!DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("manifest_gin"));
+    }
+
+    #[test]
+    fn dataset_semantic_repository_queries_are_tenant_scoped_and_ready_safe() {
+        assert!(DATASET_SEMANTIC_LATEST_READY_SQL.contains("tenant_id = $1"));
+        assert!(DATASET_SEMANTIC_LATEST_READY_SQL.contains("dataset_id = $2"));
+        assert!(DATASET_SEMANTIC_LATEST_READY_SQL.contains("status = 'ready'"));
+        assert!(DATASET_SEMANTIC_BEGIN_BUILD_SQL.contains("on conflict"));
+        assert!(DATASET_SEMANTIC_BEGIN_BUILD_SQL.contains("status in ('failed', 'superseded')"));
+        assert!(DATASET_SEMANTIC_MARK_READY_SQL.contains("status = 'building'"));
+        assert!(DATASET_SEMANTIC_MARK_FAILED_SQL.contains("status = 'building'"));
+        assert!(SEMANTIC_DICTIONARY_RESOLVE_SQL.contains("tenant_id = $1"));
+    }
+
+    #[test]
+    fn dataset_semantic_dictionary_normalizes_empty_scope_without_nulls() {
+        assert_eq!(normalized_dictionary_scope_key(""), "*");
+        assert_eq!(normalized_dictionary_scope_key("  "), "*");
+        assert_eq!(normalized_dictionary_scope_key("erp"), "erp");
+        assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("source_system_key text not null default '*'"));
+        assert!(DATASET_SEMANTIC_UNDERSTANDING_SCHEMA
+            .sql
+            .contains("source_object_key text not null default '*'"));
     }
 
     #[test]
@@ -11146,7 +11597,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013", "0014", "0015", "0016", "0017", "0018"
+                "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019"
             ]
         );
         assert!(MIGRATIONS
