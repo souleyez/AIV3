@@ -402,6 +402,7 @@ pub mod external_wecom;
 pub mod fact_index;
 #[allow(dead_code)]
 mod fashion_postchain_adapter_support;
+pub mod semantic_label_resolver;
 pub mod semantic_profile_adapters;
 pub mod semantic_understanding;
 pub use contracts::{
