@@ -25,7 +25,7 @@ import ModelPoolPanel from './ModelPoolPanel';
 const PAGE_COPY = {
   datasets: {
     title: '数据集',
-    subtitle: '数据集列表、文档列表和基础批量管理；点击文档名称进入原文与解析详情。',
+    subtitle: '选择左侧数据集查看解析关系图谱，并在下方进入文档原文与解析详情。',
   },
   'document-detail': {
     title: '文档详情',
@@ -830,34 +830,8 @@ function DatabaseSourcePanel({ datasets }) {
 
 function DatasetsPage({
   datasets,
-  assetLibraries,
-  selectedAssetLibraryId,
-  selectedAssetLibrary,
-  assetLibraryScope,
-  assetLibraryDraft,
-  assetImageImportDraft,
-  assetImportEnabled = false,
-  creatingAssetLibrary,
-  importingAssetImage,
-  assetLibraryLoading,
-  assetLibraryActionBusy,
-  onSelectAssetLibrary,
-  onAssetLibraryDraftChange,
-  onApplyAssetLibraryPreset,
-  onCreateAssetLibrary,
-  onAssetImageImportDraftChange,
-  onImportFashionDesignImageAsset,
-  onImportFashionDesignImageAssetFiles,
-  onToggleAssetLibraryDataset,
-  onRefreshAssetLibraries,
   selectedDatasetId,
   selectedDatasetIds = [],
-  onSelectDataset,
-  onClearDatasetSelection,
-  datasetDraft,
-  onDatasetDraftChange,
-  onCreateDataset,
-  creatingDataset,
   documents,
   documentsLoading,
   documentSearch,
@@ -867,9 +841,6 @@ function DatasetsPage({
   onClearDocumentSelection,
   onOpenDocumentPage,
   onRefreshDocuments,
-  onUpdateDataset,
-  onArchiveDataset,
-  datasetActionBusy,
   onArchiveDocuments,
   documentActionBusy,
   onToggleDocumentDatasetMembership,
@@ -886,12 +857,7 @@ function DatasetsPage({
     return inDataset && matches;
   });
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
-  const [datasetTitleDraft, setDatasetTitleDraft] = useState('');
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId) || null;
-
-  useEffect(() => {
-    setDatasetTitleDraft(selectedDataset?.title || '');
-  }, [selectedDataset?.id, selectedDataset?.title]);
 
   useEffect(() => {
     const visibleIds = new Set(filteredDocuments.map((document) => document.id));
@@ -919,114 +885,10 @@ function DatasetsPage({
   };
 
   return (
-    <div className="directory-two-column">
-      <div className="directory-column-stack">
-        <AssetLibraryManager
-          datasets={datasets}
-          assetLibraries={assetLibraries}
-          selectedAssetLibraryId={selectedAssetLibraryId}
-          selectedAssetLibrary={selectedAssetLibrary}
-          assetLibraryScope={assetLibraryScope}
-          assetLibraryDraft={assetLibraryDraft}
-          assetImageImportDraft={assetImageImportDraft}
-          assetImportEnabled={assetImportEnabled}
-          creatingAssetLibrary={creatingAssetLibrary}
-          importingAssetImage={importingAssetImage}
-          assetLibraryLoading={assetLibraryLoading}
-          assetLibraryActionBusy={assetLibraryActionBusy}
-          selectedDatasetId={selectedDatasetId}
-          selectedDatasetIds={selectedDatasetIds}
-          onSelectAssetLibrary={onSelectAssetLibrary}
-          onAssetLibraryDraftChange={onAssetLibraryDraftChange}
-          onApplyAssetLibraryPreset={onApplyAssetLibraryPreset}
-          onCreateAssetLibrary={onCreateAssetLibrary}
-          onAssetImageImportDraftChange={onAssetImageImportDraftChange}
-          onImportFashionDesignImageAsset={onImportFashionDesignImageAsset}
-          onImportFashionDesignImageAssetFiles={onImportFashionDesignImageAssetFiles}
-          onToggleAssetLibraryDataset={onToggleAssetLibraryDataset}
-          onRefreshAssetLibraries={onRefreshAssetLibraries}
-        />
-        <section className="directory-card">
-          <div className="directory-section-head">
-            <div>
-              <h3>数据集列表</h3>
-              <p>左侧只负责选择供料范围；完整管理集中在这里。</p>
-            </div>
-            <button type="button" className="ghost-btn compact-action-btn" onClick={onClearDatasetSelection}>
-              普通聊天
-            </button>
-          </div>
-          <form
-            className="directory-create-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onCreateDataset?.();
-            }}
-          >
-            <input
-              value={datasetDraft.key}
-              onChange={(event) => onDatasetDraftChange?.('key', event.target.value)}
-              placeholder="数据集 key"
-              disabled={creatingDataset}
-            />
-            <input
-              value={datasetDraft.title}
-              onChange={(event) => onDatasetDraftChange?.('title', event.target.value)}
-              placeholder="数据集标题"
-              disabled={creatingDataset}
-            />
-            <button className="primary-btn" type="submit" disabled={creatingDataset}>
-              {creatingDataset ? '创建中' : '新建'}
-            </button>
-          </form>
-          <div className="directory-list">
-            {datasets.map((dataset) => (
-              <button
-                type="button"
-                key={dataset.id}
-                className={`directory-list-item ${selectedIdSet.has(dataset.id) ? 'active' : ''}`.trim()}
-                onClick={() => onSelectDataset?.(dataset.id)}
-              >
-                <strong>{dataset.title}</strong>
-                <span>{dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}</span>
-              </button>
-            ))}
-          </div>
-          <form
-            className="directory-edit-box"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (selectedDataset) {
-                onUpdateDataset?.(selectedDataset.id, { title: datasetTitleDraft });
-              }
-            }}
-          >
-            <strong>{selectedDataset ? '当前数据集设置' : '未选择数据集'}</strong>
-            <input
-              value={datasetTitleDraft}
-              onChange={(event) => setDatasetTitleDraft(event.target.value)}
-              placeholder="选择数据集后可改名"
-              disabled={!selectedDataset || Boolean(datasetActionBusy)}
-            />
-            <div className="directory-edit-actions">
-              <button className="primary-btn compact-action-btn" type="submit" disabled={!selectedDataset || Boolean(datasetActionBusy)}>
-                保存
-              </button>
-              <button
-                className="ghost-btn compact-action-btn danger-action"
-                type="button"
-                disabled={!selectedDataset || Boolean(datasetActionBusy)}
-                onClick={() => selectedDataset && onArchiveDataset?.(selectedDataset.id)}
-              >
-                归档
-              </button>
-            </div>
-          </form>
-        </section>
-      </div>
+    <div className="dataset-page-stack">
+      <DatasetUnderstandingGraph dataset={selectedDataset} documents={documents} />
 
-      <section className="directory-card">
-        <DatasetUnderstandingGraph dataset={selectedDataset} documents={documents} />
+      <section className="directory-card dataset-page-documents-card">
         <div className="directory-section-head">
           <div>
             <h3>文档列表</h3>

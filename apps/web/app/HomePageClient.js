@@ -4716,7 +4716,7 @@ export default function HomePageClient() {
         />
 
         <section
-          className={`workspace-grid homepage-workspace ${activePage === 'home' ? '' : 'page-directory-workspace'} mobile-panel-${mobilePanel}`.trim()}
+          className={`workspace-grid homepage-workspace ${activePage === 'home' ? '' : 'page-directory-workspace'} ${activePage === 'datasets' ? 'dataset-directory-workspace' : ''} mobile-panel-${mobilePanel}`.trim()}
         >
           {activePage === 'home' ? (
             <>

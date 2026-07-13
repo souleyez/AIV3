@@ -69,6 +69,17 @@ test('buildDatasetUnderstandingGraph scopes documents and exposes honest pipelin
   assert.equal(model.pipeline.find((stage) => stage.key === 'ready').value, '1 可检索');
 });
 
+test('buildDatasetUnderstandingGraph gives every node a main label capped at five characters', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents);
+
+  assert.ok(model.nodes.length > 0);
+  assert.ok(model.nodes.every((node) => node.shortLabel));
+  assert.ok(model.nodes.every((node) => Array.from(node.shortLabel).length <= 5));
+  assert.equal(model.nodes.find((node) => node.kind === 'dataset')?.shortLabel, '客户经营资');
+  assert.equal(model.nodes.find((node) => node.name === '客户清单.pdf')?.shortLabel, '客户清单');
+  assert.equal(model.nodes.find((node) => node.name === '季度复盘.xlsx')?.shortLabel, '季度复盘');
+});
+
 test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and keeps evidence labels', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
   const knowledgeNodes = model.nodes.filter((node) => node.kind === 'knowledge');

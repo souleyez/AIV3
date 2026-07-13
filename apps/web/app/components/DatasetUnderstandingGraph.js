@@ -63,7 +63,9 @@ function optionForModel(model, activeCategory, activeRelationType) {
       data: visibleNodes.map((node) => ({
         ...node,
         label: {
-          show: node.kind === 'dataset' || (activeCategory !== 'all' && node.kind === activeCategory),
+          show: true,
+          fontSize: node.kind === 'dataset' ? 11 : 9,
+          fontWeight: node.kind === 'dataset' ? 800 : 650,
         },
         itemStyle: {
           color: graphCategory(model, node.kind).color,
@@ -94,16 +96,18 @@ function optionForModel(model, activeCategory, activeRelationType) {
         friction: 0.24,
       },
       label: {
-        show: false,
+        show: true,
         position: 'right',
-        distance: 6,
+        distance: 5,
         color: '#dce6f4',
-        fontSize: 11,
+        fontSize: 9,
+        textBorderColor: 'rgba(2, 8, 18, 0.92)',
+        textBorderWidth: 3,
         formatter(params) {
-          const label = String(params.data?.name || '');
-          return label.length > 14 ? `${label.slice(0, 13)}…` : label;
+          return String(params.data?.shortLabel || '').slice(0, 5);
         },
       },
+      labelLayout: { hideOverlap: false },
       edgeLabel: { show: false },
       emphasis: {
         focus: 'adjacency',

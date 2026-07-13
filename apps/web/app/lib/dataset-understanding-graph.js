@@ -169,10 +169,18 @@ function nodeId(kind, value, index = 0) {
   return `${kind}:${normalized || index}`;
 }
 
+function nodeShortLabel(value) {
+  const normalized = cleanText(value)
+    .replace(/\.[a-z0-9]{1,8}$/i, '')
+    .replace(/\s+/g, '');
+  return Array.from(normalized || '节点').slice(0, 5).join('');
+}
+
 function graphNode({ id, name, kind, detail, evidence, status = '', symbolSize = 30 }) {
   return {
     id,
     name,
+    shortLabel: nodeShortLabel(name),
     kind,
     categoryKey: kind,
     category: categoryIndex(kind),
