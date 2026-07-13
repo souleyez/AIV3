@@ -4780,6 +4780,25 @@ impl PgDatasetSemanticSnapshotRepository {
         row.map(|row| map_dataset_semantic_snapshot_row(&row))
             .transpose()
     }
+
+    pub async fn load_latest_attempt(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let sql = format!(
+            "select {DATASET_SEMANTIC_SNAPSHOT_COLUMNS} from dataset_semantic_snapshots \
+             where tenant_id = $1 and dataset_id = $2 \
+             order by updated_at desc, created_at desc limit 1"
+        );
+        let row = sqlx::query(AssertSqlSafe(sql))
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
 }
 
 const SEMANTIC_DICTIONARY_UPSERT_SQL: &str = r#"

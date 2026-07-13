@@ -309,6 +309,7 @@ mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
 pub mod dataset_semantic_snapshot;
 pub mod dataset_semantic_source_support;
+mod dataset_semantic_understanding_support;
 mod dataset_summary_support;
 mod dataset_update_support;
 mod default_public_dataset_support;
@@ -1237,6 +1238,10 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}",
             axum::routing::patch(update_dataset),
+        )
+        .route(
+            "/v1/datasets/{dataset_id}/understanding",
+            get(dataset_semantic_understanding_support::get_dataset_semantic_understanding),
         )
         .route(
             "/v1/dataset-secret-bindings",
