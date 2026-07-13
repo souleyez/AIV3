@@ -5397,12 +5397,12 @@ body {
 .dataset-understanding-metrics {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(4, minmax(58px, 1fr));
+  grid-template-columns: repeat(5, minmax(52px, 1fr));
   gap: 7px;
 }
 
 .dataset-understanding-metrics span {
-  min-width: 62px;
+  min-width: 54px;
   display: grid;
   gap: 2px;
   padding: 8px 9px;
@@ -5428,6 +5428,14 @@ body {
 
 .dataset-understanding-metrics span.attention strong {
   color: #fde68a;
+}
+
+.dataset-understanding-metrics span.relations {
+  background: linear-gradient(145deg, rgba(59, 130, 246, 0.13), rgba(251, 191, 36, 0.08));
+}
+
+.dataset-understanding-metrics span.relations strong {
+  color: #bfdbfe;
 }
 
 .dataset-understanding-pipeline {
@@ -5550,6 +5558,80 @@ body {
   cursor: not-allowed;
 }
 
+.dataset-understanding-relationship-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 13px;
+  background: rgba(2, 8, 18, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.dataset-understanding-relation-filter,
+.dataset-understanding-relation-legend,
+.dataset-understanding-relation-legend span {
+  display: flex;
+  align-items: center;
+}
+
+.dataset-understanding-relation-filter {
+  gap: 6px;
+}
+
+.dataset-understanding-relation-filter > span {
+  margin-right: 3px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dataset-understanding-relation-filter button {
+  min-height: 25px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #7c8ba3;
+  font-size: 10px;
+}
+
+.dataset-understanding-relation-filter button small {
+  margin-left: 4px;
+  color: #64748b;
+  font-size: 9px;
+}
+
+.dataset-understanding-relation-filter button.active {
+  border-color: rgba(94, 234, 212, 0.32);
+  background: rgba(20, 184, 166, 0.11);
+  color: #d5fff8;
+}
+
+.dataset-understanding-relation-legend {
+  gap: 11px;
+  color: #7c8ba3;
+  font-size: 9px;
+}
+
+.dataset-understanding-relation-legend span {
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.dataset-understanding-relation-legend i {
+  width: 20px;
+  height: 0;
+  border-top: 2px solid #5eead4;
+}
+
+.dataset-understanding-relation-legend i.inferred {
+  border-top-color: #fbbf24;
+  border-top-style: dashed;
+}
+
 .dataset-understanding-canvas-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 218px;
@@ -5559,7 +5641,7 @@ body {
 .dataset-understanding-chart-shell {
   position: relative;
   min-width: 0;
-  min-height: 390px;
+  min-height: 430px;
   border-radius: 17px;
   overflow: hidden;
   background:
@@ -5570,7 +5652,7 @@ body {
 
 .dataset-understanding-chart {
   width: 100%;
-  height: 390px;
+  height: 430px;
 }
 
 .dataset-understanding-chart-state {
@@ -5641,6 +5723,39 @@ body {
   overflow-wrap: anywhere;
 }
 
+.dataset-understanding-evidence h4 em {
+  display: inline-block;
+  margin: 0 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+  font-size: 9px;
+  font-style: normal;
+  vertical-align: 2px;
+}
+
+.dataset-understanding-node-kind.relation i {
+  width: 20px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2px solid #5eead4;
+  box-shadow: none;
+}
+
+.dataset-understanding-node-kind.relation.inferred i {
+  border-top-color: #fbbf24;
+  border-top-style: dashed;
+}
+
+.dataset-understanding-node-kind.relation.observed {
+  color: #99f6e4;
+}
+
+.dataset-understanding-node-kind.relation.inferred {
+  color: #fde68a;
+}
+
 .dataset-understanding-evidence p {
   margin: 0;
   color: #9aa7b9;
@@ -5696,11 +5811,27 @@ body {
   cursor: pointer;
 }
 
-.dataset-understanding-ledger > div {
+.dataset-understanding-ledger-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 9px;
+}
+
+.dataset-understanding-ledger-groups section {
+  min-width: 0;
+}
+
+.dataset-understanding-ledger-groups h5 {
+  margin: 0 0 6px;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.dataset-understanding-ledger-groups section > div {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 6px;
-  margin-top: 9px;
 }
 
 .dataset-understanding-ledger button {
@@ -5718,6 +5849,20 @@ body {
 
 .dataset-understanding-ledger button i {
   margin-top: 4px;
+}
+
+.dataset-understanding-ledger button i.relation {
+  width: 19px;
+  height: 0;
+  margin-top: 7px;
+  border-radius: 0;
+  border-top: 2px solid #5eead4;
+  box-shadow: none;
+}
+
+.dataset-understanding-ledger button i.relation.inferred {
+  border-top-color: #fbbf24;
+  border-top-style: dashed;
 }
 
 .dataset-understanding-ledger button span {
@@ -5750,6 +5895,11 @@ body {
 
   .dataset-understanding-metrics {
     width: 100%;
+  }
+
+  .dataset-understanding-relationship-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .dataset-understanding-pipeline {
@@ -5797,6 +5947,15 @@ body {
   .dataset-understanding-metrics,
   .dataset-understanding-pipeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dataset-understanding-relation-filter,
+  .dataset-understanding-relation-legend {
+    flex-wrap: wrap;
+  }
+
+  .dataset-understanding-ledger-groups {
+    grid-template-columns: 1fr;
   }
 
   .dataset-understanding-chart-shell,

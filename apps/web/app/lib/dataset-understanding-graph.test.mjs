@@ -78,6 +78,63 @@ test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and k
   assert.ok(model.links.some((link) => link.source === 'dataset:dataset-main' && link.target === knowledgeNodes[0].id));
 });
 
+test('buildDatasetUnderstandingGraph adds factual document-to-material relationships', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents);
+  const pdfNode = model.nodes.find((node) => node.kind === 'material' && node.name === 'PDF');
+  const spreadsheetNode = model.nodes.find((node) => node.kind === 'material' && node.name === '表格');
+
+  assert.ok(pdfNode);
+  assert.ok(spreadsheetNode);
+  assert.ok(model.links.some((link) => (
+    link.source === 'document:document-a'
+      && link.target === pdfNode.id
+      && link.type === 'observed'
+      && link.relation === '资料格式'
+      && link.confidence === 1
+      && link.evidence === '文档 content_type'
+  )));
+  assert.ok(model.links.some((link) => (
+    link.source === 'document:document-b'
+      && link.target === spreadsheetNode.id
+      && link.type === 'observed'
+  )));
+});
+
+test('buildDatasetUnderstandingGraph creates sparse inferred knowledge and lexical relationships with evidence', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents);
+  const knowledgeGroupLink = model.links.find((link) => (
+    link.source === 'knowledge:客户分层'
+      && link.target === 'knowledge:流失风险'
+      && link.relation === '同组线索'
+  ));
+  const lexicalLink = model.links.find((link) => (
+    link.source === 'document:document-a'
+      && link.target === 'knowledge:客户分层'
+      && link.relation === '词义线索'
+  ));
+
+  assert.equal(knowledgeGroupLink?.type, 'inferred');
+  assert.ok(knowledgeGroupLink.confidence > 0 && knowledgeGroupLink.confidence < 1);
+  assert.match(knowledgeGroupLink.evidence, /noun_term_hints/);
+  assert.equal(lexicalLink?.type, 'inferred');
+  assert.ok(lexicalLink.confidence >= 0.5 && lexicalLink.confidence < 1);
+  assert.match(lexicalLink.evidence, /文本片段/);
+  assert.ok(model.metrics.observedRelationCount > 0);
+  assert.ok(model.metrics.inferredRelationCount > 0);
+  assert.ok(model.metrics.crossNodeRelationCount > 0);
+});
+
+test('buildDatasetUnderstandingGraph deduplicates relation pairs and gives every link an inspectable contract', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents);
+  const pairKeys = model.links.map((link) => [link.source, link.target].sort().join('|'));
+
+  assert.equal(new Set(pairKeys).size, pairKeys.length);
+  assert.ok(model.links.every((link) => link.id));
+  assert.ok(model.links.every((link) => ['observed', 'inferred'].includes(link.type)));
+  assert.ok(model.links.every((link) => typeof link.confidence === 'number'));
+  assert.ok(model.links.every((link) => link.evidence));
+});
+
 test('buildDatasetUnderstandingGraph does not fabricate knowledge or strategy nodes for missing fields', () => {
   const model = buildDatasetUnderstandingGraph(
     { id: 'dataset-empty', key: 'empty', title: '空白资料库' },
@@ -101,7 +158,9 @@ test('buildDatasetUnderstandingGraph returns a selection state without a dataset
   const model = buildDatasetUnderstandingGraph(null, documents);
 
   assert.equal(model.hasDataset, false);
+  assert.equal(model.metrics.observedRelationCount, 0);
+  assert.equal(model.metrics.inferredRelationCount, 0);
+  assert.equal(model.metrics.crossNodeRelationCount, 0);
   assert.deepEqual(model.nodes, []);
   assert.deepEqual(model.links, []);
 });
-

@@ -96,8 +96,10 @@ function documentTypeLabel(contentType) {
   const value = cleanText(contentType).toLocaleLowerCase();
   if (!value) return '';
   if (value.includes('pdf')) return 'PDF';
-  if (value.includes('sheet') || value.includes('excel') || value.includes('csv')) return '表格';
-  if (value.includes('word') || value.includes('document')) return 'Word 文档';
+  if (value.includes('sheet') || value.includes('excel') || value.includes('csv') || /(^|\W)xlsx?(\W|$)/.test(value)) return '表格';
+  if (value.includes('word') || value.includes('document') || /(^|\W)docx?(\W|$)/.test(value)) return 'Word 文档';
+  if (value.includes('presentation') || value.includes('powerpoint') || /(^|\W)pptx?(\W|$)/.test(value)) return '演示文稿';
+  if (value.includes('markdown') || /(^|\W)md(\W|$)/.test(value)) return 'Markdown';
   if (value.includes('html') || value.includes('web') || value.includes('url')) return '网页';
   if (value.startsWith('image/')) return '图片';
   if (value.startsWith('audio/') || value.startsWith('video/')) return '音视频';
@@ -106,7 +108,52 @@ function documentTypeLabel(contentType) {
 }
 
 function summaryItems(value) {
-  return cleanList(cleanText(value).split(/[,;|，；]+/), LIMITS.material);
+  return cleanList(
+    cleanText(value)
+      .split(/[,;|，；]+/)
+      .map((item) => cleanText(item).replace(/\s*[:=]\s*\d+\s*$/, ''))
+      .map((item) => documentTypeLabel(item) || item),
+    LIMITS.material,
+  );
+}
+
+function normalizedLabel(value) {
+  return cleanText(value)
+    .toLocaleLowerCase()
+    .replace(/\.[a-z0-9]{1,8}$/i, '')
+    .replace(/[（(][^）)]*[）)]/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function labelTokens(value) {
+  const normalized = normalizedLabel(value);
+  const tokens = new Set();
+  normalized.match(/[a-z0-9]{2,}|[\p{Script=Han}]+/gu)?.forEach((part) => {
+    if (/^[a-z0-9]+$/u.test(part)) {
+      tokens.add(part);
+      return;
+    }
+    if (part.length <= 2) {
+      tokens.add(part);
+      return;
+    }
+    for (let index = 0; index < part.length - 1; index += 1) {
+      tokens.add(part.slice(index, index + 2));
+    }
+  });
+  return tokens;
+}
+
+function labelAffinity(left, right) {
+  const leftTokens = labelTokens(left);
+  const rightTokens = labelTokens(right);
+  const sharedTokens = [...leftTokens].filter((token) => rightTokens.has(token));
+  const unionSize = new Set([...leftTokens, ...rightTokens]).size;
+  return {
+    score: unionSize ? sharedTokens.length / unionSize : 0,
+    sharedTokens,
+  };
 }
 
 function categoryIndex(key) {
@@ -150,6 +197,9 @@ function selectionModel() {
       readyDocumentCount: 0,
       attentionDocumentCount: 0,
       knowledgeCount: 0,
+      observedRelationCount: 0,
+      inferredRelationCount: 0,
+      crossNodeRelationCount: 0,
     },
     pipeline: [],
     nodes: [],
@@ -183,7 +233,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     LIMITS.material,
   );
   const materialTypes = cleanList(
-    explicitContentTypes.length ? [...explicitContentTypes, ...materialHints] : [...documentContentTypes, ...materialHints],
+    [...documentContentTypes, ...explicitContentTypes, ...materialHints],
     LIMITS.material,
   );
 
@@ -216,16 +266,40 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     symbolSize: 66,
   })];
   const links = [];
+  const linkPairs = new Set();
+
+  const addLink = ({ source, target, relation, type = 'observed', confidence = 1, evidence }) => {
+    if (!source || !target || source === target) return null;
+    const pairKey = [source, target].sort().join('|');
+    if (linkPairs.has(pairKey)) return null;
+    linkPairs.add(pairKey);
+    const link = {
+      id: `link:${links.length + 1}`,
+      source,
+      target,
+      relation,
+      type,
+      confidence: Math.max(0, Math.min(1, Number(confidence) || 0)),
+      evidence: cleanText(evidence) || '当前数据集已有字段',
+      rootRelation: source === rootId || target === rootId,
+    };
+    links.push(link);
+    return link;
+  };
 
   const addConnectedNodes = (items, kind, builder) => {
-    items.forEach((item, index) => {
+    return items.map((item, index) => {
       const node = builder(item, index);
       nodes.push(node);
-      links.push({
+      addLink({
         source: rootId,
         target: node.id,
         relation: kind === 'document' ? '包含' : kind === 'strategy' ? '采用' : '识别',
+        type: 'observed',
+        confidence: 1,
+        evidence: node.evidence,
       });
+      return node;
     });
   };
 
@@ -235,6 +309,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     detail: `${documentTypeLabel(document.content_type || document.contentType) || '未知格式'} · ${documentParseStatus(document) || documentLifecycle(document) || '状态未知'}`,
     status: documentQualityStatus(document) || documentParseStatus(document) || documentLifecycle(document),
     evidence: '当前数据集文档列表',
+    materialName: documentTypeLabel(document.content_type || document.contentType),
   }));
   if (documentNodes.length < LIMITS.document) {
     const knownTitles = new Set(documentNodes.map((item) => item.name.toLocaleLowerCase()));
@@ -247,10 +322,11 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
         detail: '数据集摘要返回的文档标题线索。',
         status: '标题线索',
         evidence: '数据集 document_title_hints',
+        materialName: '',
       }));
   }
-  addConnectedNodes(documentNodes, 'document', (item) => graphNode({ ...item, kind: 'document', symbolSize: 18 }));
-  addConnectedNodes(knowledgeTerms, 'knowledge', (term, index) => graphNode({
+  const createdDocumentNodes = addConnectedNodes(documentNodes, 'document', (item) => graphNode({ ...item, kind: 'document', symbolSize: 18 }));
+  const createdKnowledgeNodes = addConnectedNodes(knowledgeTerms, 'knowledge', (term, index) => graphNode({
     id: nodeId('knowledge', term, index),
     name: term,
     kind: 'knowledge',
@@ -258,7 +334,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     evidence: '数据集 noun_term_hints',
     symbolSize: 26,
   }));
-  addConnectedNodes(sectionTitles, 'section', (title, index) => graphNode({
+  const createdSectionNodes = addConnectedNodes(sectionTitles, 'section', (title, index) => graphNode({
     id: nodeId('section', title, index),
     name: title,
     kind: 'section',
@@ -266,7 +342,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     evidence: '数据集 section_title_hints',
     symbolSize: 21,
   }));
-  addConnectedNodes(materialTypes, 'material', (material, index) => graphNode({
+  const createdMaterialNodes = addConnectedNodes(materialTypes, 'material', (material, index) => graphNode({
     id: nodeId('material', material, index),
     name: material,
     kind: 'material',
@@ -274,7 +350,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     evidence: explicitContentTypes.length ? '数据集 content_type_summary / material_hints' : '文档 content_type / 数据集 material_hints',
     symbolSize: 18,
   }));
-  addConnectedNodes(understandingStrategies, 'strategy', (strategy, index) => graphNode({
+  const createdStrategyNodes = addConnectedNodes(understandingStrategies, 'strategy', (strategy, index) => graphNode({
     id: nodeId('strategy', strategy, index),
     name: strategy,
     kind: 'strategy',
@@ -283,6 +359,92 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     symbolSize: 23,
   }));
 
+  const materialNodeByName = new Map(createdMaterialNodes.map((node) => [normalizedLabel(node.name), node]));
+  documentNodes.forEach((documentNode, index) => {
+    const materialNode = materialNodeByName.get(normalizedLabel(documentNode.materialName));
+    if (!materialNode || !createdDocumentNodes[index]) return;
+    addLink({
+      source: createdDocumentNodes[index].id,
+      target: materialNode.id,
+      relation: '资料格式',
+      type: 'observed',
+      confidence: 1,
+      evidence: '文档 content_type',
+    });
+  });
+
+  const addSparseGroupLinks = (groupNodes, relation, evidence, confidence) => {
+    if (groupNodes.length < 2) return;
+    groupNodes.slice(0, -1).forEach((node, index) => {
+      addLink({
+        source: node.id,
+        target: groupNodes[index + 1].id,
+        relation,
+        type: 'inferred',
+        confidence,
+        evidence,
+      });
+    });
+    if (groupNodes.length > 2) {
+      addLink({
+        source: groupNodes[groupNodes.length - 1].id,
+        target: groupNodes[0].id,
+        relation,
+        type: 'inferred',
+        confidence,
+        evidence,
+      });
+    }
+  };
+
+  const addAffinityLinks = (sourceNodes, targetNodes, relation) => {
+    sourceNodes.forEach((sourceNode) => {
+      targetNodes
+        .map((targetNode) => ({ targetNode, ...labelAffinity(sourceNode.name, targetNode.name) }))
+        .filter((candidate) => candidate.score >= 0.18)
+        .sort((left, right) => right.score - left.score || left.targetNode.id.localeCompare(right.targetNode.id))
+        .slice(0, 2)
+        .forEach((candidate) => {
+          addLink({
+            source: sourceNode.id,
+            target: candidate.targetNode.id,
+            relation,
+            type: 'inferred',
+            confidence: Math.min(0.88, 0.52 + candidate.score * 0.5),
+            evidence: `名称文本片段“${candidate.sharedTokens.slice(0, 2).join('、')}”在两侧同时出现`,
+          });
+        });
+    });
+  };
+
+  addAffinityLinks(createdDocumentNodes, createdKnowledgeNodes, '词义线索');
+  addAffinityLinks(createdDocumentNodes, createdSectionNodes, '结构线索');
+  addAffinityLinks(createdKnowledgeNodes, createdSectionNodes, '概念呼应');
+  addSparseGroupLinks(
+    createdKnowledgeNodes,
+    '同组线索',
+    '同一 dataset noun_term_hints 列表中共同返回；具体语义关系待后端验证',
+    0.42,
+  );
+  addSparseGroupLinks(
+    createdSectionNodes,
+    '结构邻接',
+    '同一 dataset section_title_hints 列表的相邻线索；具体章节顺序待后端验证',
+    0.46,
+  );
+  createdStrategyNodes.forEach((strategyNode, index) => {
+    const sectionNode = createdSectionNodes[index % createdSectionNodes.length];
+    if (!sectionNode) return;
+    addLink({
+      source: strategyNode.id,
+      target: sectionNode.id,
+      relation: '参与识别',
+      type: 'inferred',
+      confidence: 0.38,
+      evidence: '数据集同时返回理解策略与章节线索；具体对应关系待后端验证',
+    });
+  });
+
   const metrics = {
     documentCount,
     estimatedWordCount,
@@ -290,6 +452,9 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
     readyDocumentCount: readyCount,
     attentionDocumentCount: attentionCount,
     knowledgeCount: knowledgeTerms.length + sectionTitles.length,
+    observedRelationCount: links.filter((link) => link.type === 'observed').length,
+    inferredRelationCount: links.filter((link) => link.type === 'inferred').length,
+    crossNodeRelationCount: links.filter((link) => !link.rootRelation).length,
   };
   const pipeline = [
     {
