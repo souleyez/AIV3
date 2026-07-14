@@ -625,10 +625,18 @@ async function measureDensityInteraction(page, chart, samples) {
     return { firstExpansion: skipped, selectionFilterInteraction: skipped };
   }
   const expanded = page.getByRole('button', { name: '展开', exact: true });
+  const allCategories = page.locator('.dataset-understanding-filter button').filter({ hasText: /^全部/u });
+  const categoryFilter = page.locator('.dataset-understanding-filter button:not(:disabled):not(.active)').first();
   const allRelations = page.locator('.dataset-understanding-relation-filter button').filter({ hasText: /^全部关系/u });
   const confirmedRelations = page.locator('.dataset-understanding-relation-filter button').filter({ hasText: /^已确认/u });
-  if (await expanded.count() === 0 || await allRelations.count() === 0 || await confirmedRelations.count() === 0) {
-    const skipped = { status: 'skipped', reason: 'density or relation controls were not present on the live page' };
+  if (
+    await expanded.count() === 0
+    || await allCategories.count() === 0
+    || await categoryFilter.count() === 0
+    || await allRelations.count() === 0
+    || await confirmedRelations.count() === 0
+  ) {
+    const skipped = { status: 'skipped', reason: 'density, category, or relation controls were not present on the live page' };
     return { firstExpansion: skipped, selectionFilterInteraction: skipped };
   }
   const standardPositions = await readScreenPositionSnapshot(chart);
@@ -642,6 +650,17 @@ async function measureDensityInteraction(page, chart, samples) {
   assert.ok(firstExpanded.elapsedMs <= 1500, `first expanded render took ${firstExpanded.elapsedMs.toFixed(2)}ms`);
   assert.ok(expansionDrift.commonCount > 0, 'standard-to-expanded screen-position sample was empty');
   assert.ok(expansionDrift.maximumPx <= 1, `standard-to-expanded screen drift was ${expansionDrift.maximumPx.toFixed(2)}px`);
+  const categoryLabel = (await categoryFilter.innerText()).trim();
+  await clickAndWaitForChartRender(page, chart, categoryFilter);
+  const categoryPositions = await readScreenPositionSnapshot(chart);
+  const categoryDrift = screenPositionDrift(expandedPositions, categoryPositions);
+  assert.ok(categoryDrift.commonCount > 0, 'expanded-to-category screen-position sample was empty');
+  assert.ok(categoryDrift.maximumPx <= 1, `expanded-to-category screen drift was ${categoryDrift.maximumPx.toFixed(2)}px`);
+  await clickAndWaitForChartRender(page, chart, allCategories.first());
+  const restoredExpandedPositions = await readScreenPositionSnapshot(chart);
+  const categoryRestoreDrift = screenPositionDrift(expandedPositions, restoredExpandedPositions);
+  assert.ok(categoryRestoreDrift.commonCount > 0, 'category-to-expanded screen-position sample was empty');
+  assert.ok(categoryRestoreDrift.maximumPx <= 1, `category-to-expanded screen drift was ${categoryRestoreDrift.maximumPx.toFixed(2)}px`);
   await clickAndWaitForChartRender(page, chart, confirmedRelations.first());
   await clickAndWaitForChartRender(page, chart, allRelations.first());
   const baselinePositions = await readScreenPositionSnapshot(chart);
@@ -686,6 +705,9 @@ async function measureDensityInteraction(page, chart, samples) {
       stableNodeCount: filterDrift.commonCount,
       maximumScreenDriftPx: rounded(filterDrift.maximumPx),
       maximumScreenDriftThresholdPx: 1,
+      categoryFilter: categoryLabel,
+      categoryStableNodeCount: categoryDrift.commonCount,
+      categoryMaximumScreenDriftPx: rounded(Math.max(categoryDrift.maximumPx, categoryRestoreDrift.maximumPx)),
     },
   };
 }

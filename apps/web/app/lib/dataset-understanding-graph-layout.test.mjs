@@ -118,6 +118,8 @@ test('nine-object expanded fields keep symbol-sized separation in narrow sectors
     }
   }
   const positioned = layoutDatasetUnderstandingGraph(nodes);
+  const firstObjectFields = positioned.filter((node) => node.objectId === 'object:0');
+  const firstObjectRings = new Set(firstObjectFields.map((node) => Math.round(Math.hypot(node.x, node.y))));
   const minimumDistance = Math.min(...Array.from({ length: 9 }, (_, objectIndex) => {
     const fields = positioned.filter((node) => node.objectId === `object:${objectIndex}`);
     return Math.min(...fields.flatMap((node, index) => (
@@ -125,7 +127,9 @@ test('nine-object expanded fields keep symbol-sized separation in narrow sectors
     )));
   }));
 
-  assert.ok(minimumDistance >= 28, `nine-object field spacing was ${minimumDistance}px`);
+  assert.equal(firstObjectRings.size, 2, 'twenty-four fields should use two fixed twelve-slot rings');
+  assert.ok(Math.min(...firstObjectRings) > 340, 'narrow sectors should dynamically increase the base ring radius');
+  assert.ok(minimumDistance >= 30, `nine-object field spacing was ${minimumDistance}px`);
 });
 
 test('force config scales repulsion from 280 to 380 and disables layout animation above 120 nodes', () => {
