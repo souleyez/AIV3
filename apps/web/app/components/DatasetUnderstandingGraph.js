@@ -100,18 +100,7 @@ function staticLayoutExtentAnchors(nodes) {
 function optionForModel(model, filters, projectedGraph = null) {
   const { nodes: visibleNodes, links: visibleLinks } = projectedGraph
     || filterDatasetUnderstandingGraph(model, filters);
-  const expandedLayoutProjection = filterDatasetUnderstandingGraph(model, {
-    activeCategory: 'all',
-    activeRelationType: 'all',
-    viewMode: filters?.viewMode || 'business',
-    focusDepth: 'all',
-    density: 'expanded',
-  });
-  const layoutInputById = new Map(expandedLayoutProjection.nodes.map((node) => [node.id, node]));
-  visibleNodes.forEach((node) => {
-    if (!layoutInputById.has(node.id)) layoutInputById.set(node.id, node);
-  });
-  const layoutInputNodes = [...layoutInputById.values()];
+  const layoutInputNodes = model.nodes;
   const layoutBaseNodes = model.mode === 'cross'
     ? layoutCrossDatasetUnderstandingGraph(layoutInputNodes, model.datasetClusters)
     : layoutDatasetUnderstandingGraph(layoutInputNodes);
@@ -833,9 +822,10 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         for (let index = 0; index < data.count(); index += 1) {
           const id = String(data.getId(index) || '');
           if (!id || id.startsWith('__dataset-layout-anchor:')) continue;
-          const layout = data.getItemLayout(index);
-          const x = Array.isArray(layout) ? Number(layout[0]) : Number(layout?.x);
-          const y = Array.isArray(layout) ? Number(layout[1]) : Number(layout?.y);
+          const graphicElement = data.getItemGraphicEl(index);
+          const globalPosition = graphicElement?.transformCoordToGlobal?.(0, 0);
+          const x = Number(globalPosition?.[0]);
+          const y = Number(globalPosition?.[1]);
           if (Number.isFinite(x) && Number.isFinite(y)) positions.push({ id, x, y });
         }
         return positions;

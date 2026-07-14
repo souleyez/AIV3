@@ -235,6 +235,7 @@ async function staticFixtureSmoke() {
   assertIncludes(component, "replaceMerge: ['series']", 'incremental series update');
   assertIncludes(component, 'lazyUpdate: true', 'lazy ECharts update');
   assertIncludes(component, "layout: staticLayout ? 'none' : 'force'", 'large and cross graph deterministic layout');
+  assertIncludes(component, 'const layoutInputNodes = model.nodes;', 'filter-independent layout universe');
   assertIncludes(component, 'staticLayoutExtentAnchors(layoutBaseNodes)', 'stable static layout extent anchors');
   assertIncludes(component, 'new ResizeObserver(scheduleChartResize)', 'resize observer');
   assertIncludes(component, 'window.requestAnimationFrame', 'resize throttling');
@@ -548,6 +549,15 @@ async function readScreenPositionSnapshot(chart) {
   return new Map(positions.map((position) => [position.id, position]));
 }
 
+function screenPositionDrift(beforePositions, afterPositions) {
+  const common = [...beforePositions.entries()].filter(([id]) => afterPositions.has(id));
+  const maximumPx = Math.max(0, ...common.map(([id, before]) => {
+    const after = afterPositions.get(id);
+    return Math.hypot(before.x - after.x, before.y - after.y);
+  }));
+  return { commonCount: common.length, maximumPx };
+}
+
 async function waitForChartIdle(page, chart) {
   await page.waitForFunction(() => {
     const element = document.querySelector('.dataset-understanding-chart');
@@ -596,12 +606,17 @@ async function measureDensityInteraction(page, chart, samples) {
     const skipped = { status: 'skipped', reason: 'density or relation controls were not present on the live page' };
     return { firstExpansion: skipped, selectionFilterInteraction: skipped };
   }
+  const standardPositions = await readScreenPositionSnapshot(chart);
   const firstExpanded = await clickAndWaitForChartRender(page, chart, expanded);
+  const expandedPositions = await readScreenPositionSnapshot(chart);
+  const expansionDrift = screenPositionDrift(standardPositions, expandedPositions);
   assert.ok(firstExpanded.state.nodeCount > 120, `expanded graph rendered only ${firstExpanded.state.nodeCount} nodes`);
   assert.ok(firstExpanded.state.nodeCount <= 160, `expanded graph rendered ${firstExpanded.state.nodeCount} nodes`);
   assert.ok(firstExpanded.state.edgeCount <= 240, `expanded graph rendered ${firstExpanded.state.edgeCount} edges`);
   assert.equal(firstExpanded.state.layout, 'none', 'expanded graph did not use deterministic static layout');
   assert.ok(firstExpanded.elapsedMs <= 1500, `first expanded render took ${firstExpanded.elapsedMs.toFixed(2)}ms`);
+  assert.ok(expansionDrift.commonCount > 0, 'standard-to-expanded screen-position sample was empty');
+  assert.ok(expansionDrift.maximumPx <= 1, `standard-to-expanded screen drift was ${expansionDrift.maximumPx.toFixed(2)}px`);
   await clickAndWaitForChartRender(page, chart, confirmedRelations.first());
   await clickAndWaitForChartRender(page, chart, allRelations.first());
   const baselinePositions = await readScreenPositionSnapshot(chart);
@@ -616,13 +631,9 @@ async function measureDensityInteraction(page, chart, samples) {
   }
   if (samples % 2 === 1) await clickAndWaitForChartRender(page, chart, allRelations.first());
   const finalPositions = await readScreenPositionSnapshot(chart);
-  const commonPositions = [...baselinePositions.entries()].filter(([id]) => finalPositions.has(id));
-  const maximumScreenDriftPx = Math.max(0, ...commonPositions.map(([id, before]) => {
-    const after = finalPositions.get(id);
-    return Math.hypot(before.x - after.x, before.y - after.y);
-  }));
-  assert.ok(commonPositions.length > 0, 'screen-position stability sample was empty');
-  assert.ok(maximumScreenDriftPx <= 1, `static graph screen drift was ${maximumScreenDriftPx.toFixed(2)}px`);
+  const filterDrift = screenPositionDrift(baselinePositions, finalPositions);
+  assert.ok(filterDrift.commonCount > 0, 'screen-position stability sample was empty');
+  assert.ok(filterDrift.maximumPx <= 1, `static graph screen drift was ${filterDrift.maximumPx.toFixed(2)}px`);
   const p95Ms = percentile(elapsed, 95);
   assert.ok(
     p95Ms <= 100,
@@ -637,6 +648,9 @@ async function measureDensityInteraction(page, chart, samples) {
       nodeCount: firstExpanded.state.nodeCount,
       edgeCount: firstExpanded.state.edgeCount,
       layout: firstExpanded.state.layout,
+      stableNodeCount: expansionDrift.commonCount,
+      maximumScreenDriftPx: rounded(expansionDrift.maximumPx),
+      maximumScreenDriftThresholdPx: 1,
     },
     selectionFilterInteraction: {
       status: 'measured',
@@ -644,8 +658,8 @@ async function measureDensityInteraction(page, chart, samples) {
       samples: elapsed.length,
       p95Ms: rounded(p95Ms),
       thresholdMs: 100,
-      stableNodeCount: commonPositions.length,
-      maximumScreenDriftPx: rounded(maximumScreenDriftPx),
+      stableNodeCount: filterDrift.commonCount,
+      maximumScreenDriftPx: rounded(filterDrift.maximumPx),
       maximumScreenDriftThresholdPx: 1,
     },
   };

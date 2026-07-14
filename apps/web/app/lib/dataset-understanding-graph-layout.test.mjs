@@ -61,8 +61,9 @@ test('objects occupy the first ring and fields fan into deterministic second and
     assert.equal(node.layoutTier, 1);
     assert.ok(node.symbolSize >= 28 && node.symbolSize <= 44);
   });
-  assert.equal(fields.filter((node) => node.layoutTier === 2).length, 36);
-  assert.equal(fields.filter((node) => node.layoutTier === 3).length, 12);
+  assert.ok(fields.filter((node) => node.layoutTier === 2).length >= 30);
+  assert.equal(fields.filter((node) => node.layoutTier === 2).length
+    + fields.filter((node) => node.layoutTier === 3).length, fields.length);
   fields.forEach((node) => {
     assert.ok(node.symbolSize >= 12 && node.symbolSize <= 22);
     assert.ok(Math.hypot(node.x, node.y) > 280);
@@ -77,7 +78,7 @@ test('layout positions do not depend on backend input order', () => {
   assert.deepEqual(positionMap(forward), positionMap(reversed));
 });
 
-test('dense fields use fixed twelve-slot rings without overlap in the expanded budget', () => {
+test('dense fields use bounded fixed-slot rings without overlap in the expanded budget', () => {
   const nodes = [
     { id: 'dataset:root', kind: 'dataset' },
     { id: 'object:only', kind: 'object', entityType: 'object' },
@@ -98,6 +99,33 @@ test('dense fields use fixed twelve-slot rings without overlap in the expanded b
   )));
 
   assert.ok(minimumDistance >= 22, `expanded field spacing was ${minimumDistance}px`);
+});
+
+test('nine-object expanded fields keep symbol-sized separation in narrow sectors', () => {
+  const nodes = [{ id: 'dataset:root', kind: 'dataset' }];
+  for (let objectIndex = 0; objectIndex < 9; objectIndex += 1) {
+    const objectId = `object:${objectIndex}`;
+    nodes.push({ id: objectId, kind: 'object', entityType: 'object' });
+    for (let fieldIndex = 0; fieldIndex < 24; fieldIndex += 1) {
+      nodes.push({
+        id: `field:${objectIndex}:${String(fieldIndex).padStart(2, '0')}`,
+        kind: 'field',
+        entityType: 'field',
+        objectId,
+        businessScore: 100 - fieldIndex,
+        symbolSize: 22,
+      });
+    }
+  }
+  const positioned = layoutDatasetUnderstandingGraph(nodes);
+  const minimumDistance = Math.min(...Array.from({ length: 9 }, (_, objectIndex) => {
+    const fields = positioned.filter((node) => node.objectId === `object:${objectIndex}`);
+    return Math.min(...fields.flatMap((node, index) => (
+      fields.slice(index + 1).map((other) => Math.hypot(node.x - other.x, node.y - other.y))
+    )));
+  }));
+
+  assert.ok(minimumDistance >= 28, `nine-object field spacing was ${minimumDistance}px`);
 });
 
 test('force config scales repulsion from 280 to 380 and disables layout animation above 120 nodes', () => {

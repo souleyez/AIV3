@@ -2,8 +2,8 @@ const ROOT_SIZE = 42;
 const OBJECT_RING_RADIUS = 210;
 const FIELD_SECOND_RING_RADIUS = 340;
 const FIELDS_PER_RING = 12;
-const FIELD_RING_STEP = 130;
-const FIELD_SLOT_ORDER = [5, 6, 4, 7, 3, 8, 2, 9, 1, 10, 0, 11];
+const FIELD_RING_STEP = 92;
+const FIELD_NODE_GAP = 8;
 
 function cleanId(value) {
   return typeof value === 'string' ? value.trim() : String(value || '').trim();
@@ -32,10 +32,23 @@ function polarPosition(radius, angle) {
   };
 }
 
-function fieldFanAngle(parentAngle, index, primaryCount) {
+function fieldSlotsPerRing(primaryCount, maximumSymbolSize) {
   const availableSector = Math.min(0.9, (Math.PI * 2 / Math.max(1, primaryCount)) * 0.72);
-  const slot = FIELD_SLOT_ORDER[index % FIELDS_PER_RING];
-  return parentAngle - availableSector / 2 + availableSector * (slot / (FIELDS_PER_RING - 1));
+  const desiredDistance = maximumSymbolSize + FIELD_NODE_GAP;
+  const minimumAngle = 2 * Math.asin(Math.min(0.99, desiredDistance / (2 * FIELD_SECOND_RING_RADIUS)));
+  return Math.max(2, Math.min(FIELDS_PER_RING, Math.floor(availableSector / minimumAngle) + 1));
+}
+
+function centerOutSlotOrder(count) {
+  const center = (count - 1) / 2;
+  return Array.from({ length: count }, (_, index) => index)
+    .sort((left, right) => Math.abs(left - center) - Math.abs(right - center) || left - right);
+}
+
+function fieldFanAngle(parentAngle, index, primaryCount, slotsPerRing) {
+  const availableSector = Math.min(0.9, (Math.PI * 2 / Math.max(1, primaryCount)) * 0.72);
+  const slot = centerOutSlotOrder(slotsPerRing)[index % slotsPerRing];
+  return parentAngle - availableSector / 2 + availableSector * (slot / (slotsPerRing - 1));
 }
 
 function nodeKindRank(node) {
@@ -120,9 +133,14 @@ export function layoutDatasetUnderstandingGraph(inputNodes) {
     .forEach(([objectId, group], groupIndex) => {
       const parentAngle = primaryAngles.get(objectId)
         ?? (-Math.PI / 2 + Math.PI * 2 * groupIndex / Math.max(1, fieldsByObject.size));
+      const maximumSymbolSize = Math.max(
+        12,
+        ...group.map((field) => clamp(field.symbolSize, 12, 22, 17)),
+      );
+      const slotsPerRing = fieldSlotsPerRing(primaryNodes.length, maximumSymbolSize);
       group.forEach((field, index) => {
-        const ring = Math.floor(index / FIELDS_PER_RING);
-        const angle = fieldFanAngle(parentAngle, index, primaryNodes.length);
+        const ring = Math.floor(index / slotsPerRing);
+        const angle = fieldFanAngle(parentAngle, index, primaryNodes.length, slotsPerRing);
         positioned.set(field.id, {
           ...field,
           ...polarPosition(FIELD_SECOND_RING_RADIUS + ring * FIELD_RING_STEP, angle),
