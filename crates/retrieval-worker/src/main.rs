@@ -3,8 +3,8 @@ use chrono::Utc;
 use domain_model::{Document, DocumentChunk, DocumentLifecycle, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use retrieval_worker::{
-    lexical_content_hash, lexical_search_terms, LocalLexicalRetrievalIndexer, RetrievalChunkInput,
-    RetrievalIndexJob, RetrievalIndexer,
+    dataset_semantic_understanding_access, lexical_content_hash, lexical_search_terms,
+    LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -547,7 +547,9 @@ async fn maybe_enqueue_document_enrichment_runs(
     let parse_version = document_enrichment_parse_version(document);
     let priority = document_enrichment_default_priority();
     let max_attempts = document_enrichment_max_attempts();
-    let enrichment_kinds = document_enrichment_kinds();
+    let semantic_profile_allowed =
+        semantic_profile_signal_allowed(storage, tenant_id, document).await?;
+    let enrichment_kinds = document_enrichment_kinds(semantic_profile_allowed);
     if enrichment_kinds.is_empty() {
         return Ok(json!({
             "status": "skipped",
@@ -626,23 +628,37 @@ fn document_enrichment_max_attempts() -> i32 {
     env_i32("DOCUMENT_ENRICHMENT_MAX_ATTEMPTS", 3).clamp(1, 10)
 }
 
-fn document_enrichment_kinds() -> Vec<&'static str> {
+async fn semantic_profile_signal_allowed(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    document: &Document,
+) -> Result<bool> {
+    let mut dataset_ids = storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(tenant_id, document.id)
+        .await?;
+    dataset_ids.push(document.dataset_id);
+    dataset_ids.sort_by_key(|id| id.0);
+    dataset_ids.dedup();
+    Ok(dataset_ids.into_iter().any(|dataset_id| {
+        dataset_semantic_understanding_access(tenant_id, dataset_id).is_allowed()
+    }))
+}
+
+fn document_enrichment_kinds(semantic_profile_allowed: bool) -> Vec<&'static str> {
     let kinds = optional_env("DOCUMENT_ENRICHMENT_KINDS")
         .map(|value| document_enrichment_kinds_from_csv(&value))
         .unwrap_or_else(|| DEFAULT_DOCUMENT_ENRICHMENT_KINDS.to_vec());
-    filter_semantic_profile_kind(
-        kinds,
-        env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false),
-    )
+    filter_semantic_profile_kind(kinds, semantic_profile_allowed)
 }
 
 fn filter_semantic_profile_kind(
     kinds: Vec<&'static str>,
-    semantic_enabled: bool,
+    semantic_profile_allowed: bool,
 ) -> Vec<&'static str> {
     kinds
         .into_iter()
-        .filter(|kind| *kind != "semantic_profile_v1" || semantic_enabled)
+        .filter(|kind| *kind != "semantic_profile_v1" || semantic_profile_allowed)
         .collect()
 }
 

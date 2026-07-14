@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{DatasetId, DocumentId, TenantId};
+use retrieval_worker::dataset_semantic_understanding_access;
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::{
@@ -70,11 +71,6 @@ async fn main() -> Result<()> {
         .next()
         .unwrap_or_else(|| "document-enrichment-backfill".to_string());
     let args = parse_args(&program, std::env::args().skip(1).collect())?;
-    if args.enrichment_kinds.contains(&"semantic_profile_v1")
-        && !env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false)
-    {
-        anyhow::bail!("semantic_profile_v1 requires DATASET_SEMANTIC_UNDERSTANDING_ENABLED=true");
-    }
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.into());
     let storage = PgStorage::connect(&database_url).await?;
@@ -85,6 +81,15 @@ async fn main() -> Result<()> {
     let tenant_name = std::env::var("PLATFORM_TENANT_NAME")
         .unwrap_or_else(|_| storage::DEFAULT_LOCAL_TENANT_NAME.to_string());
     let tenant = storage.ensure_tenant(&tenant_key, &tenant_name).await?;
+    if !args.dry_run && args.enrichment_kinds.contains(&"semantic_profile_v1") {
+        let access = dataset_semantic_understanding_access(tenant.id, args.dataset_id);
+        if !access.is_allowed() {
+            anyhow::bail!(
+                "semantic_profile_v1 denied by semantic rollout gate: {}",
+                access.safe_reason()
+            );
+        }
+    }
 
     let summary = run_document_enrichment_backfill(&storage, tenant.id, &args).await?;
     if args.pretty {
@@ -419,18 +424,6 @@ fn normalize_enrichment_kind(raw: &str) -> Option<&'static str> {
         "semantic_profile_v1" | "semantic_profile" => Some("semantic_profile_v1"),
         _ => None,
     }
-}
-
-fn env_flag(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(default)
 }
 
 fn document_enrichment_parse_version(metadata: &Value) -> Option<String> {

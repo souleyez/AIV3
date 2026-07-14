@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{DatasetId, TenantId};
 use platform_api::semantic_understanding::SemanticEvidenceClass;
+use retrieval_worker::dataset_semantic_understanding_access;
 use serde_json::json;
 use std::str::FromStr;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -25,12 +26,6 @@ async fn main() -> Result<()> {
         .next()
         .unwrap_or_else(|| "dataset-semantic-backfill".to_string());
     let args = parse_args(&program, std::env::args().skip(1).collect())?;
-    if !args.dry_run && !env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false) {
-        anyhow::bail!(
-            "real semantic backfill requires DATASET_SEMANTIC_UNDERSTANDING_ENABLED=true"
-        );
-    }
-
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| DEFAULT_LOCAL_DATABASE_URL.to_string());
     let storage = PgStorage::connect(&database_url).await?;
@@ -52,6 +47,15 @@ async fn main() -> Result<()> {
     } else {
         storage.ensure_tenant(&tenant_key, &tenant_name).await?.id
     };
+    if !args.dry_run {
+        let access = dataset_semantic_understanding_access(tenant_id, args.dataset_id);
+        if !access.is_allowed() {
+            anyhow::bail!(
+                "real semantic backfill denied by semantic rollout gate: {}",
+                access.safe_reason()
+            );
+        }
+    }
 
     let output = if args.dry_run {
         let preview = platform_api::dataset_semantic_snapshot::preview_dataset_semantic_snapshot_from_storage(
@@ -214,18 +218,6 @@ fn take_option(args: &mut Vec<String>, name: &str) -> Option<String> {
     Some(value)
 }
 
-fn env_flag(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(default)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,10 +264,5 @@ mod tests {
         .expect("confirmed bounded run");
         assert!(!args.dry_run);
         assert_eq!(args.limit, 5);
-    }
-
-    #[test]
-    fn semantic_profile_missing_feature_flag_is_false() {
-        assert!(!env_flag("DATAMAX_TEST_MISSING_SEMANTIC_FLAG", false));
     }
 }

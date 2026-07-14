@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{Duration as ChronoDuration, Utc};
 use domain_model::{Document, DocumentChunk, TenantId};
+use retrieval_worker::dataset_semantic_understanding_access;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -188,16 +189,6 @@ async fn run_semantic_profile_enrichment(
     document: &Document,
     generated_at: chrono::DateTime<Utc>,
 ) -> Result<Value> {
-    if !env_flag("DATASET_SEMANTIC_UNDERSTANDING_ENABLED", false) {
-        return Ok(json!({
-            "schema_version": "0.1.0",
-            "enrichment_kind": "semantic_profile_v1",
-            "status": "skipped",
-            "skipped_reason": "feature_disabled",
-            "dataset_count": 0,
-            "generated_at": generated_at.to_rfc3339(),
-        }));
-    }
     let mut dataset_ids = storage
         .dataset_document_memberships()
         .list_dataset_ids_by_document(tenant_id, document.id)
@@ -205,6 +196,20 @@ async fn run_semantic_profile_enrichment(
     dataset_ids.push(document.dataset_id);
     dataset_ids.sort_by_key(|id| id.0);
     dataset_ids.dedup();
+    let primary_access = dataset_semantic_understanding_access(tenant_id, document.dataset_id);
+    dataset_ids.retain(|dataset_id| {
+        dataset_semantic_understanding_access(tenant_id, *dataset_id).is_allowed()
+    });
+    if dataset_ids.is_empty() {
+        return Ok(json!({
+            "schema_version": "0.1.0",
+            "enrichment_kind": "semantic_profile_v1",
+            "status": "skipped",
+            "skipped_reason": primary_access.safe_reason(),
+            "dataset_count": 0,
+            "generated_at": generated_at.to_rfc3339(),
+        }));
+    }
 
     let mut ready_count = 0usize;
     let mut skipped_count = 0usize;

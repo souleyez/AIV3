@@ -1,10 +1,95 @@
-use domain_model::{DatasetId, DocumentId};
+use domain_model::{DatasetId, DocumentId, TenantId};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SIGNATURE_TERM_LIMIT: usize = 12;
 const TERM_WEIGHT_LIMIT: usize = 16;
 const CJK_NGRAM_MAX: usize = 6;
+
+pub const DATASET_SEMANTIC_UNDERSTANDING_ENABLED_ENV: &str =
+    "DATASET_SEMANTIC_UNDERSTANDING_ENABLED";
+pub const DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST_ENV: &str =
+    "DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST";
+pub const DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST_ENV: &str =
+    "DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatasetSemanticUnderstandingAccess {
+    Allowed,
+    FeatureDisabled,
+    TenantNotAllowlisted,
+    DatasetNotAllowlisted,
+}
+
+impl DatasetSemanticUnderstandingAccess {
+    pub fn is_allowed(self) -> bool {
+        self == Self::Allowed
+    }
+
+    pub fn safe_reason(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::FeatureDisabled => "feature_disabled",
+            Self::TenantNotAllowlisted => "tenant_not_allowlisted",
+            Self::DatasetNotAllowlisted => "dataset_not_allowlisted",
+        }
+    }
+}
+
+pub fn dataset_semantic_understanding_access(
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+) -> DatasetSemanticUnderstandingAccess {
+    dataset_semantic_understanding_access_from_values(
+        env_flag_value(DATASET_SEMANTIC_UNDERSTANDING_ENABLED_ENV, false),
+        std::env::var(DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        tenant_id,
+        dataset_id,
+    )
+}
+
+pub fn dataset_semantic_understanding_access_from_values(
+    enabled: bool,
+    tenant_allowlist: Option<&str>,
+    dataset_allowlist: Option<&str>,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+) -> DatasetSemanticUnderstandingAccess {
+    if !enabled {
+        return DatasetSemanticUnderstandingAccess::FeatureDisabled;
+    }
+    if !uuid_csv_contains(tenant_allowlist, tenant_id.0) {
+        return DatasetSemanticUnderstandingAccess::TenantNotAllowlisted;
+    }
+    if !uuid_csv_contains(dataset_allowlist, dataset_id.0) {
+        return DatasetSemanticUnderstandingAccess::DatasetNotAllowlisted;
+    }
+    DatasetSemanticUnderstandingAccess::Allowed
+}
+
+fn uuid_csv_contains(csv: Option<&str>, expected: uuid::Uuid) -> bool {
+    csv.into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().parse::<uuid::Uuid>().ok())
+        .any(|value| value == expected)
+}
+
+fn env_flag_value(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
 
 #[derive(Clone, Debug)]
 pub struct RetrievalChunkInput {
@@ -336,6 +421,74 @@ fn round_metric(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_understanding_access_is_fail_closed_and_requires_both_allowlists() {
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+
+        assert_eq!(
+            dataset_semantic_understanding_access_from_values(
+                false,
+                Some(&tenant_id.to_string()),
+                Some(&dataset_id.to_string()),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticUnderstandingAccess::FeatureDisabled
+        );
+        assert_eq!(
+            dataset_semantic_understanding_access_from_values(
+                true,
+                None,
+                Some(&dataset_id.to_string()),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticUnderstandingAccess::TenantNotAllowlisted
+        );
+        assert_eq!(
+            dataset_semantic_understanding_access_from_values(
+                true,
+                Some(&tenant_id.to_string()),
+                None,
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticUnderstandingAccess::DatasetNotAllowlisted
+        );
+    }
+
+    #[test]
+    fn semantic_understanding_access_accepts_exact_uuid_csv_entries_only() {
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let other_tenant_id = TenantId::new();
+        let other_dataset_id = DatasetId::new();
+        let tenant_allowlist = format!("invalid, {}, {}", other_tenant_id, tenant_id);
+        let dataset_allowlist = format!("{},{}", other_dataset_id, dataset_id);
+
+        assert_eq!(
+            dataset_semantic_understanding_access_from_values(
+                true,
+                Some(&tenant_allowlist),
+                Some(&dataset_allowlist),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticUnderstandingAccess::Allowed
+        );
+        assert_eq!(
+            dataset_semantic_understanding_access_from_values(
+                true,
+                Some("*"),
+                Some("*"),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticUnderstandingAccess::TenantNotAllowlisted
+        );
+    }
 
     #[test]
     fn local_lexical_retrieval_indexer_uses_chunk_content() {
