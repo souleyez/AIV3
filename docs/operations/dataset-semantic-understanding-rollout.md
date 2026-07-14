@@ -160,3 +160,7 @@ target/release/dataset-semantic-backfill \
 5. migration 表和历史 ready 快照默认保留；不要为回滚删除业务、pilot 或 canary 数据。
 
 上一版 ready 快照是故障 fallback。只有在清理清单经过单独人工确认后，才可处理 fixture、字典项或历史快照。
+
+## 与跨数据集语义图的边界
+
+单数据集语义理解和跨数据集语义图使用独立开关、allowlist、worker 与回滚边界。本文记录的单集 ready 快照不能证明 pair link、跨图权限或跨图 Web 已经发布。跨图 feature-off、首对 canary、逐项扩容、回滚和恢复必须按 `dataset-cross-semantic-graph-rollout.md` 执行；跨图关闭时继续使用本文的单集 endpoint 和上一版 ready fallback，且不得删除 pair 或单集历史快照。
