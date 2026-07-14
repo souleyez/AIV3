@@ -194,14 +194,14 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
-    let display_title = business_source_title(&input.title);
+    let display_title = document_business_title(&input.title);
     let mut output = vec![observation(
         input,
         "object",
         "document_section",
         &object_key,
-        &input.title,
-        Some(display_title),
+        &display_title,
+        Some(display_title.clone()),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -213,13 +213,16 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         ("entity", "entities"),
     ] {
         for value in string_array_at(&input.metadata, key) {
+            let Some(safe_value) = safe_semantic_business_label(&value) else {
+                continue;
+            };
             output.push(observation(
                 input,
                 kind,
                 "document_section",
                 &object_key,
-                &value,
-                Some(value.clone()),
+                &safe_value,
+                Some(safe_value.clone()),
                 "parsed_structure",
                 SemanticStatus::Observed,
                 0.85,
@@ -228,7 +231,10 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         }
     }
     for (index, fact) in input.facts.iter().enumerate() {
-        let name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let raw_name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let Some(name) = safe_semantic_business_label(&raw_name) else {
+            continue;
+        };
         output.push(observation(
             input,
             "fact",
@@ -373,6 +379,11 @@ fn business_source_title(title: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+fn document_business_title(title: &str) -> String {
+    let title = business_source_title(title);
+    safe_semantic_business_label(&title).unwrap_or_else(|| "文档资料".to_string())
 }
 
 fn spreadsheet_business_title(title: &str) -> String {
@@ -872,9 +883,43 @@ mod tests {
             .expect("document object");
 
         assert_eq!(object.label_hint.as_deref(), Some("新百项目"));
-        assert_eq!(object.technical_name, "新百项目.zip");
+        assert_eq!(object.technical_name, "新百项目");
         assert_eq!(business_source_title("周报.DOCX"), "周报");
         assert_eq!(business_source_title("无扩展名"), "无扩展名");
+    }
+
+    #[test]
+    fn document_adapter_excludes_sensitive_or_noisy_public_names() {
+        let sensitive_token = "a".repeat(64);
+        let mut fixture = input(
+            "document",
+            json!({
+                "sections": ["经营摘要", "2026"],
+                "tables": ["租金明细", sensitive_token.clone()],
+                "entities": ["新百项目", "13800138000"]
+            }),
+        );
+        fixture.title = sensitive_token.clone();
+        fixture.facts = vec![
+            json!({"name": "项目负责人", "value_type": "text"}),
+            json!({"name": sensitive_token, "value_type": "text"}),
+            json!({"name": "13800138000", "value_type": "text"}),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let technical_names = observations
+            .iter()
+            .map(|item| item.technical_name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(technical_names.contains("文档资料"));
+        assert!(technical_names.contains("经营摘要"));
+        assert!(technical_names.contains("租金明细"));
+        assert!(technical_names.contains("新百项目"));
+        assert!(technical_names.contains("项目负责人"));
+        assert!(!technical_names.contains("2026"));
+        assert!(!technical_names.contains("13800138000"));
+        assert!(!technical_names.contains(sensitive_token.as_str()));
     }
 
     #[test]
