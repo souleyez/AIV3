@@ -308,6 +308,7 @@ mod dataset_output_model_facing;
 mod dataset_output_view_support;
 mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
+mod dataset_semantic_graph_support;
 pub mod dataset_semantic_snapshot;
 pub mod dataset_semantic_source_support;
 mod dataset_semantic_understanding_support;
@@ -1243,6 +1244,10 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}/understanding",
             get(dataset_semantic_understanding_support::get_dataset_semantic_understanding),
+        )
+        .route(
+            "/v1/dataset-semantic-graphs/query",
+            axum::routing::post(dataset_semantic_graph_support::query_dataset_semantic_graph),
         )
         .route(
             "/v1/dataset-secret-bindings",
@@ -3660,14 +3665,13 @@ pub(crate) async fn load_visible_dataset_for_user_with_local_scope(
         .await
         .map_err(ApiError::from_storage)?
         .ok_or_else(|| dataset_not_found_error(dataset_id))?;
-    if !dataset_is_visible_for_request(
+    ensure_dataset_visible_for_request(
         &dataset,
+        state.tenant_id,
         active_secret_binding_ids,
         current_user_id,
         local_thread_id,
-    ) {
-        return Err(dataset_not_found_error(dataset_id));
-    }
+    )?;
     Ok(dataset)
 }
 

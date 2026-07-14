@@ -1,5 +1,5 @@
 use crate::ApiError;
-use domain_model::{Dataset, DatasetVisibility, SecretBindingId, UserId};
+use domain_model::{Dataset, DatasetVisibility, SecretBindingId, TenantId, UserId};
 use serde_json::Value;
 
 pub(crate) fn owner_user_id_is_visible(
@@ -101,6 +101,29 @@ pub(crate) fn dataset_is_visible_for_request(
     (dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
         && dataset_local_scope_is_visible(dataset, local_thread_id))
         || dataset_is_visible_by_local_thread_scope(dataset, local_thread_id)
+}
+
+pub(crate) fn ensure_dataset_visible_for_request(
+    dataset: &Dataset,
+    request_tenant_id: TenantId,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
+) -> std::result::Result<(), ApiError> {
+    if dataset.tenant_id != request_tenant_id
+        || !dataset_is_visible_for_request(
+            dataset,
+            active_secret_binding_ids,
+            current_user_id,
+            local_thread_id,
+        )
+    {
+        return Err(ApiError::not_found(
+            "dataset_not_found",
+            format!("dataset {} was not found", dataset.id),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn dataset_is_hidden_from_standard_dataset_list(dataset: &Dataset) -> bool {
@@ -299,6 +322,79 @@ mod tests {
             None,
             Some("thread-b")
         ));
+    }
+
+    #[test]
+    fn explicit_dataset_scope_matrix_is_tenant_bound_and_masked() {
+        let request_tenant_id = TenantId::new();
+
+        let mut public = test_dataset(DatasetVisibility::Public, Vec::new());
+        public.tenant_id = request_tenant_id;
+        assert!(
+            ensure_dataset_visible_for_request(&public, request_tenant_id, &[], None, None,)
+                .is_ok()
+        );
+
+        let owner_user_id = UserId::new();
+        let mut owned_private = test_dataset(DatasetVisibility::Private, Vec::new());
+        owned_private.tenant_id = request_tenant_id;
+        owned_private.owner_user_id = Some(owner_user_id);
+        assert!(ensure_dataset_visible_for_request(
+            &owned_private,
+            request_tenant_id,
+            &[],
+            Some(owner_user_id),
+            None,
+        )
+        .is_ok());
+
+        let secret_binding_id = SecretBindingId::new();
+        let mut secret_private = test_dataset(DatasetVisibility::Private, vec![secret_binding_id]);
+        secret_private.tenant_id = request_tenant_id;
+        assert!(ensure_dataset_visible_for_request(
+            &secret_private,
+            request_tenant_id,
+            &[secret_binding_id],
+            None,
+            None,
+        )
+        .is_ok());
+
+        let mut local_private = test_dataset(DatasetVisibility::Private, Vec::new());
+        local_private.tenant_id = request_tenant_id;
+        local_private
+            .metadata
+            .insert("local_only".to_string(), json!(true));
+        local_private
+            .metadata
+            .insert("local_thread_id".to_string(), json!("thread-a"));
+        assert!(ensure_dataset_visible_for_request(
+            &local_private,
+            request_tenant_id,
+            &[],
+            None,
+            Some("thread-a"),
+        )
+        .is_ok());
+
+        let mut cross_tenant = public.clone();
+        cross_tenant.tenant_id = TenantId::new();
+        let hidden =
+            ensure_dataset_visible_for_request(&cross_tenant, request_tenant_id, &[], None, None)
+                .expect_err("cross-tenant dataset must be masked");
+        assert_eq!(hidden.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(hidden.payload.code, "dataset_not_found");
+
+        let mixed = [&public, &owned_private]
+            .into_iter()
+            .map(|dataset| {
+                ensure_dataset_visible_for_request(dataset, request_tenant_id, &[], None, None)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect_err("one hidden dataset must fail the whole explicit set");
+        assert_eq!(mixed.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(mixed.payload.code, "dataset_not_found");
+        assert!(!mixed.payload.message.contains(&owned_private.title));
     }
 
     #[test]
