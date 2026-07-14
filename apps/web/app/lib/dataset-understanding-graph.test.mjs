@@ -12,6 +12,7 @@ import {
 import {
   auditDatasetUnderstandingGraph,
 } from '../../../../tools/dataset-understanding-quality-audit.mjs';
+import { canonicalDocumentTitle } from './dataset-understanding-label-quality.js';
 
 const dataset = {
   id: 'dataset-main',
@@ -61,20 +62,27 @@ const documents = [
   },
 ];
 
-test('captures the sanitized newbai project fallback noise baseline', () => {
+test('filters the sanitized newbai project fallback noise out of the main canvas', () => {
   const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
   const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);
 
   assert.equal(model.mode, 'fallback');
   assert.equal(model.snapshotStatus, 'empty');
-  assert.equal(model.nodes.length, 49);
-  assert.equal(model.nodes.filter((node) => node.kind === 'document').length, 18);
-  assert.ok(model.nodes.some((node) => node.name === '示例经营分析场景.xlsx'));
-  assert.ok(model.nodes.some((node) => node.name === '示例经营分析场景'));
-  assert.ok(model.nodes.some((node) => /^\d+$/.test(node.name)));
-  assert.ok(model.nodes.some((node) => node.name.includes('\t')));
-  assert.ok(model.nodes.some((node) => /select\s+|\/\*/i.test(node.name)));
-  assert.ok(model.nodes.some((node) => /paragraph_aware_noun_terms_v1/i.test(node.name)));
+  assert.equal(model.nodes.length, 22);
+  assert.equal(model.nodes.filter((node) => node.kind === 'document').length, 8);
+  assert.equal(model.nodes.filter((node) => node.kind === 'strategy').length, 0);
+  assert.equal(model.nodes.some((node) => node.name === '示例经营分析场景'), true);
+  assert.equal(model.nodes.some((node) => /\.(?:xlsx|zip|pdf)$/i.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => /^\d+$/.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => node.name.includes('\t')), false);
+  assert.equal(model.nodes.some((node) => /select\s+|\/\*/i.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => /paragraph_aware_noun_terms_v1/i.test(node.name)), false);
+  assert.equal(model.fallbackQuality.hiddenCount, 18);
+  assert.equal(model.fallbackQuality.deduplicatedDocumentTitles, 9);
+  assert.equal(model.fallbackQuality.hiddenItems.length, 18);
+  assert.equal(model.viewLabel, '资料来源图（语义生成中）');
+  assert.equal(model.overviewTitle, '当前资料来源包含什么');
+  assert.doesNotMatch(model.understanding.summary, /系统已经理解|系统识别/);
 });
 
 test('quality audit reports only aggregate noise counts', () => {
@@ -83,14 +91,17 @@ test('quality audit reports only aggregate noise counts', () => {
   const report = auditDatasetUnderstandingGraph(model, 'newbai-project-materials');
   const serialized = JSON.stringify(report);
 
-  assert.equal(report.totalNodes, 49);
-  assert.equal(report.categoryCounts.document, 18);
-  assert.equal(report.noise.normalizedDuplicateDocumentTitles, 9);
-  assert.ok(report.noise.numericStarted > 0);
-  assert.ok(report.noise.suspectedDataRows > 0);
-  assert.ok(report.noise.sqlOrComments > 0);
-  assert.ok(report.noise.mimeValues > 0);
-  assert.ok(report.noise.strategyIdentifiers > 0);
+  assert.equal(report.totalNodes, 22);
+  assert.equal(report.categoryCounts.document, 8);
+  assert.equal(report.noise.normalizedDuplicateDocumentTitles, 0);
+  assert.equal(report.noise.numericStarted, 0);
+  assert.equal(report.noise.asciiStarted, 0);
+  assert.equal(report.noise.punctuationStarted, 0);
+  assert.equal(report.noise.suspectedDataRows, 0);
+  assert.equal(report.noise.sqlOrComments, 0);
+  assert.equal(report.noise.mimeValues, 0);
+  assert.equal(report.noise.strategyIdentifiers, 0);
+  assert.equal(report.noise.extensionDocumentTitles, 0);
   assert.equal(report.missingEvidenceEdges, 0);
   assert.doesNotMatch(serialized, /1001|sample_table|paragraph_aware|technical_report_alpha/i);
 });
@@ -105,7 +116,7 @@ test('buildDatasetUnderstandingGraph scopes documents and exposes honest pipelin
   assert.equal(model.metrics.attentionDocumentCount, 1);
 
   const documentNodes = model.nodes.filter((node) => node.kind === 'document');
-  assert.deepEqual(documentNodes.map((node) => node.name), ['客户清单.pdf', '季度复盘.xlsx']);
+  assert.deepEqual(documentNodes.map((node) => node.name), ['客户清单', '季度复盘']);
   assert.equal(model.nodes.some((node) => node.name === '不属于当前数据集.pdf'), false);
 
   assert.equal(model.pipeline.find((stage) => stage.key === 'ingest').value, '2 份');
@@ -120,8 +131,8 @@ test('buildDatasetUnderstandingGraph gives every node a main label capped at fiv
   assert.ok(model.nodes.every((node) => node.shortLabel));
   assert.ok(model.nodes.every((node) => Array.from(node.shortLabel).length <= 5));
   assert.equal(model.nodes.find((node) => node.kind === 'dataset')?.shortLabel, '客户经营资');
-  assert.equal(model.nodes.find((node) => node.name === '客户清单.pdf')?.shortLabel, '客户清单');
-  assert.equal(model.nodes.find((node) => node.name === '季度复盘.xlsx')?.shortLabel, '季度复盘');
+  assert.equal(model.nodes.find((node) => node.name === '客户清单')?.shortLabel, '客户清单');
+  assert.equal(model.nodes.find((node) => node.name === '季度复盘')?.shortLabel, '季度复盘');
 });
 
 test('buildDatasetUnderstandingGraph exposes evidence-backed details for every processing stage', () => {
@@ -132,11 +143,11 @@ test('buildDatasetUnderstandingGraph exposes evidence-backed details for every p
   assert.ok(model.pipeline.every((stage) => stage.source));
   assert.ok(model.pipeline.every((stage) => stage.summary));
   assert.ok(model.pipeline.every((stage) => Array.isArray(stage.items)));
-  assert.deepEqual(stages.ingest.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
-  assert.deepEqual(stages.clean.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
-  assert.deepEqual(stages.structure.items.map((item) => item.label), ['经营概览', '风险跟进', 'heading', 'table']);
+  assert.deepEqual(stages.ingest.items.map((item) => item.label), ['客户清单', '季度复盘']);
+  assert.deepEqual(stages.clean.items.map((item) => item.label), ['客户清单', '季度复盘']);
+  assert.deepEqual(stages.structure.items.map((item) => item.label), ['经营概览', '风险跟进']);
   assert.deepEqual(stages.knowledge.items.map((item) => item.label), ['客户分层', '流失风险']);
-  assert.deepEqual(stages.ready.items.map((item) => item.label), ['客户清单.pdf']);
+  assert.deepEqual(stages.ready.items.map((item) => item.label), ['客户清单']);
   assert.match(stages.structure.source, /section_title_hints/);
   assert.match(stages.knowledge.source, /noun_term_hints/);
 });
@@ -151,9 +162,9 @@ test('buildDatasetUnderstandingGraph separates core concepts from technical iden
   assert.deepEqual(model.understanding.technicalIdentifiers, ['k11', 'lcrm']);
   assert.deepEqual(model.understanding.structurePath, ['经营概览', '风险跟进']);
   assert.deepEqual(model.understanding.retrievalCoverage, { ready: 1, total: 2 });
-  assert.ok(model.understanding.summary.includes('5 个知识词'));
+  assert.ok(model.understanding.summary.includes('3 个可信知识词'));
   assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'concept').every((node) => node.symbolSize > 20));
-  assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'identifier').every((node) => node.symbolSize < 20));
+  assert.equal(model.nodes.some((node) => node.kind === 'knowledge' && node.signal === 'identifier'), false);
 });
 
 test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and keeps evidence labels', () => {
@@ -167,7 +178,7 @@ test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and k
 
 test('buildDatasetUnderstandingGraph adds factual document-to-material relationships', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
-  const pdfNode = model.nodes.find((node) => node.kind === 'material' && node.name === 'PDF');
+  const pdfNode = model.nodes.find((node) => node.kind === 'material' && node.name === '文档资料');
   const spreadsheetNode = model.nodes.find((node) => node.kind === 'material' && node.name === '表格');
 
   assert.ok(pdfNode);
@@ -239,6 +250,22 @@ test('buildDatasetUnderstandingGraph does not fabricate knowledge or strategy no
   assert.equal(model.nodes.some((node) => node.kind === 'section'), false);
   assert.equal(model.nodes.some((node) => node.kind === 'strategy'), false);
   assert.equal(model.emptyKnowledgeMessage, '当前接口尚未返回知识词、章节或理解策略。');
+});
+
+test('fallback quality filtering happens before limits and never backfills with noisy labels', () => {
+  const noisyPrefix = Array.from({ length: 24 }, (_, index) => `${20260000 + index}`);
+  const model = buildDatasetUnderstandingGraph({
+    id: 'quality-before-limit',
+    title: '质量限额测试',
+    noun_term_hints: [...noisyPrefix, '可信概念甲', '可信概念乙'],
+  });
+
+  assert.deepEqual(
+    model.nodes.filter((node) => node.kind === 'knowledge').map((node) => node.name),
+    ['可信概念甲', '可信概念乙'],
+  );
+  assert.equal(model.nodes.some((node) => /^\d+$/.test(node.name)), false);
+  assert.equal(model.fallbackQuality.hiddenCount, 24);
 });
 
 test('buildDatasetUnderstandingGraph returns a selection state without a dataset', () => {
@@ -475,8 +502,11 @@ test('empty semantic status falls back honestly to existing dataset hints', () =
 
   assert.equal(model.mode, 'fallback');
   assert.equal(model.snapshotStatus, 'empty');
-  assert.ok(model.nodes.some((node) => node.name === '客户清单.pdf'));
-  assert.match(model.statusMessage, /基础视图/);
+  assert.ok(model.nodes.some((node) => node.name === '客户清单'));
+  assert.equal(model.viewLabel, '资料来源图（语义生成中）');
+  assert.equal(model.overviewTitle, '当前资料来源包含什么');
+  assert.match(model.statusMessage, /资料来源图（语义生成中）/);
+  assert.doesNotMatch(model.statusMessage, /系统已理解/);
 });
 
 test('local graph focus returns stable one-hop and two-hop neighborhoods', () => {

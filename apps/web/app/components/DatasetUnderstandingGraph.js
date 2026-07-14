@@ -189,16 +189,25 @@ function PipelineStage({ stage, index, last, active, onSelect }) {
 
 function UnderstandingOverview({ model }) {
   const { understanding } = model;
+  const hiddenQualityEntries = Object.entries(model.fallbackQuality?.hiddenByClass || {});
+  const qualityClassLabels = {
+    document: '资料标题',
+    technical: '技术标识',
+    row: '原始数据行',
+    sql: 'SQL / 注释',
+    numeric: '数字编号',
+    unknown: '未分类线索',
+  };
   return (
     <>
-      <span>系统理解摘要</span>
+      <span>{model.mode === 'semantic' ? '系统理解摘要' : '资料来源摘要'}</span>
       <div className={`dataset-understanding-node-kind overview ${model.mode}`.trim()}>
-        <i />{model.mode === 'semantic' ? '真实语义快照' : '基础理解视图'}
+        <i />{model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}
       </div>
-      <h4>系统已经理解到什么</h4>
+      <h4>{model.overviewTitle || (model.mode === 'semantic' ? '系统已经理解到什么' : '当前资料来源包含什么')}</h4>
       <p>{understanding.summary}</p>
       <div className="dataset-understanding-insight-group">
-        <strong>核心概念</strong>
+        <strong>{model.mode === 'semantic' ? '核心概念' : '可信中文线索'}</strong>
         <div className="dataset-understanding-insight-tags">
           {understanding.keyConcepts.length
             ? understanding.keyConcepts.slice(0, 10).map((term) => <span key={term}>{term}</span>)
@@ -211,8 +220,25 @@ function UnderstandingOverview({ model }) {
       </div>
       {understanding.technicalIdentifiers.length ? (
         <div className="dataset-understanding-insight-group muted">
-          <strong>技术标识</strong>
+          <strong>技术标识（仅详情）</strong>
           <p>{understanding.technicalIdentifiers.join(' · ')}</p>
+        </div>
+      ) : null}
+      {model.mode === 'fallback' && model.fallbackQuality?.hiddenCount ? (
+        <div className="dataset-understanding-insight-group muted">
+          <strong>待解释清单</strong>
+          <p>
+            已从主画布隐藏 {model.fallbackQuality.hiddenCount} 个低质量或技术项
+            {model.fallbackQuality.deduplicatedDocumentTitles
+              ? `，并合并 ${model.fallbackQuality.deduplicatedDocumentTitles} 个重复资料标题`
+              : ''}。
+          </p>
+          <div className="dataset-understanding-insight-tags">
+            {hiddenQualityEntries.map(([qualityClass, count]) => (
+              <span key={qualityClass}>{qualityClassLabels[qualityClass] || '待解释'} {count}</span>
+            ))}
+          </div>
+          <small>原始数据行、SQL、路径、编号和 hash 不在界面回显；安全的技术原名只保留在阶段详情中。</small>
         </div>
       ) : null}
       {model.limitations?.length ? (
@@ -224,7 +250,7 @@ function UnderstandingOverview({ model }) {
       <small className="dataset-understanding-honesty-note">
         {model.mode === 'semantic'
           ? '摘要、对象、字段和关系均来自版本化语义快照；推断关系不等同于已确认事实。'
-          : '基础视图只归纳现有摘要字段和可见资料，不补写业务结论。'}
+          : '资料来源图只归纳通过质量门禁的摘要字段和可见资料；语义快照生成前不声称系统已经理解业务。'}
       </small>
     </>
   );
@@ -503,11 +529,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     <section className="dataset-understanding-panel" aria-label={`${model.title} 数据集理解图谱`}>
       <header className="dataset-understanding-head">
         <div>
-          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {model.mode === 'semantic' ? '真实语义快照' : '基础视图'}</span>
+          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}</span>
           <h3>{model.title}</h3>
           <p>{model.mode === 'semantic'
             ? '业务对象、字段与关系来自版本化语义快照；点击节点可查看入向依据、出向理解和原始字段。'
-            : '当前按已有摘要与可见资料展示基础连线；虚线推断不等同于已确认业务关系。'}</p>
+            : '语义快照尚未生成；当前只展示通过质量门禁的资料来源与摘要连线，不能代表系统已经形成业务理解。'}</p>
         </div>
         <div className="dataset-understanding-metrics" aria-label="数据集理解指标">
           <span><small>{model.mode === 'semantic' ? '来源' : '资料'}</small><strong>{model.mode === 'semantic' ? model.metrics.sourceCount : model.metrics.documentCount}</strong></span>
@@ -526,7 +552,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           {understandingState?.status === 'loading'
             ? '正在读取真实语义理解快照；暂时保留当前可用视图。'
             : understandingState?.status === 'failed'
-              ? '真实语义快照暂时不可用；当前展示可追溯的基础视图。'
+              ? '真实语义快照暂时不可用；当前展示通过质量门禁的资料来源图。'
               : model.statusMessage}
         </span>
       </div>
@@ -547,11 +573,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         ))}
       </div>
 
-      <div className="dataset-understanding-semantic-brief" aria-label="系统理解概览">
+      <div className="dataset-understanding-semantic-brief" aria-label={model.mode === 'semantic' ? '系统理解概览' : '资料来源概览'}>
         <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'structure' : 'knowledge')}>
-          <span>{model.mode === 'semantic' ? '业务对象' : '核心概念'}</span>
+          <span>{model.mode === 'semantic' ? '业务对象' : '可信线索'}</span>
           <strong>{model.understanding.keyConcepts.slice(0, 4).join(' · ') || '待识别'}</strong>
-          <small>{model.understanding.keyConcepts.length} 个业务语义词</small>
+          <small>{model.understanding.keyConcepts.length} 个{model.mode === 'semantic' ? '业务语义词' : '可信中文线索'}</small>
         </button>
         <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'labels' : 'structure')}>
           <span>{model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
@@ -564,7 +590,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <small>{model.mode === 'semantic' ? '可追溯覆盖情况' : '明确进入检索的资料'}</small>
         </button>
         <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'relations' : 'overview')}>
-          <span>关系理解</span>
+          <span>{model.mode === 'semantic' ? '关系理解' : '关系线索'}</span>
           <strong>{model.metrics.confirmedRelationCount || 0} 确 · {model.metrics.observedRelationCount} 观 · {model.metrics.inferredRelationCount} 推</strong>
           <small>点击图中节点查看关联依据</small>
         </button>
@@ -648,10 +674,10 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
 
       <div className="dataset-understanding-canvas-grid">
         <div className="dataset-understanding-chart-shell">
-          <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} 知识连接图`} />
+          <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} ${model.mode === 'semantic' ? '知识连接图' : '资料来源连接图'}`} />
           {chartState === 'loading' ? <div className="dataset-understanding-chart-state">正在生成理解图谱…</div> : null}
           {chartState === 'error' ? <div className="dataset-understanding-chart-state">图谱画布加载失败，可使用右侧证据详情和下方清单。</div> : null}
-          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 每个对象优先展示 4 个中文字段' : ''}</div>
+          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 每个对象优先展示 4 个中文字段' : ' · 低质量标签已移入待解释清单'}</div>
         </div>
 
         <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">

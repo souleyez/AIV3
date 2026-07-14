@@ -86,4 +86,3 @@ export const newbaiProjectMaterialsNoisyFallback = Object.freeze({
     relations: [],
   },
 });
-

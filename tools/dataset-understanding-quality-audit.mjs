@@ -99,4 +99,3 @@ const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
   runCli();
 }
-

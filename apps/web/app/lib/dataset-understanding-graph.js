@@ -1,3 +1,8 @@
+import {
+  canonicalDocumentTitle,
+  projectFallbackLabel,
+} from './dataset-understanding-label-quality.js';
+
 export const DATASET_GRAPH_CATEGORIES = [
   { key: 'dataset', name: '数据集', color: '#f8fbff' },
   { key: 'object', name: '业务对象', color: '#38bdf8' },
@@ -118,16 +123,51 @@ function readableStatus(value, fallback = '状态未返回') {
 function documentTypeLabel(contentType) {
   const value = cleanText(contentType).toLocaleLowerCase();
   if (!value) return '';
-  if (value.includes('pdf')) return 'PDF';
+  if (value.includes('pdf')) return '文档资料';
   if (value.includes('sheet') || value.includes('excel') || value.includes('csv') || /(^|\W)xlsx?(\W|$)/.test(value)) return '表格';
-  if (value.includes('word') || value.includes('document') || /(^|\W)docx?(\W|$)/.test(value)) return 'Word 文档';
+  if (value.includes('zip') || value.includes('archive') || value.includes('compressed')) return '压缩资料';
+  if (value.includes('word') || value.includes('document') || /(^|\W)docx?(\W|$)/.test(value)) return '文字文档';
   if (value.includes('presentation') || value.includes('powerpoint') || /(^|\W)pptx?(\W|$)/.test(value)) return '演示文稿';
-  if (value.includes('markdown') || /(^|\W)md(\W|$)/.test(value)) return 'Markdown';
+  if (value.includes('markdown') || /(^|\W)md(\W|$)/.test(value)) return '标记文档';
   if (value.includes('html') || value.includes('web') || value.includes('url')) return '网页';
   if (value.startsWith('image/')) return '图片';
   if (value.startsWith('audio/') || value.startsWith('video/')) return '音视频';
   if (value.startsWith('text/')) return '文本';
   return contentType;
+}
+
+function projectedFallbackItems(value, kind, limit) {
+  const allowed = [];
+  const hidden = [];
+  const seen = new Set();
+  let duplicateCount = 0;
+  cleanList(value).forEach((rawLabel, index) => {
+    const projection = projectFallbackLabel(rawLabel, { kind });
+    const item = {
+      id: `${kind}:${index}`,
+      rawLabel,
+      ...projection,
+    };
+    if (!projection.main_canvas_allowed) {
+      hidden.push({
+        id: `hidden:${kind}:${index}`,
+        kind,
+        label: projection.display_label,
+        qualityClass: projection.quality_class,
+        reason: projection.reason,
+        detail: projection.detail_label,
+      });
+      return;
+    }
+    const key = projection.normalized_key || projection.display_label.toLocaleLowerCase();
+    if (seen.has(key)) {
+      duplicateCount += 1;
+      return;
+    }
+    seen.add(key);
+    if (allowed.length < limit) allowed.push(item);
+  });
+  return { allowed, hidden, duplicateCount };
 }
 
 function summaryItems(value) {
@@ -306,6 +346,8 @@ function selectionModel() {
   return {
     hasDataset: false,
     mode: 'empty',
+    viewLabel: '',
+    overviewTitle: '',
     snapshotStatus: 'idle',
     statusMessage: '',
     datasetId: '',
@@ -340,6 +382,12 @@ function selectionModel() {
     nodes: [],
     links: [],
     emptyKnowledgeMessage: '',
+    fallbackQuality: {
+      hiddenCount: 0,
+      hiddenItems: [],
+      hiddenByClass: {},
+      deduplicatedDocumentTitles: 0,
+    },
   };
 }
 
@@ -672,6 +720,8 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
   return {
     hasDataset: true,
     mode: 'semantic',
+    viewLabel: '真实语义快照',
+    overviewTitle: '系统已经理解到什么',
     snapshotStatus: understanding.status,
     statusMessage: understanding.stale ? '当前展示上一版可用理解快照，后台最新重建尚未成功完成。' : '当前展示最新可用语义理解快照。',
     stale: understanding.stale,
@@ -744,28 +794,29 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
   const datasetId = String(dataset.id);
   const scopedDocuments = (Array.isArray(documents) ? documents : [])
     .filter((document) => datasetDocumentIds(document).includes(datasetId));
-  const knowledgeTerms = cleanList(
+  const rawKnowledgeTerms = cleanList(
     dataset.noun_term_hints || dataset.nounTermHints || dataset.noun_terms || dataset.nounTerms,
-    LIMITS.knowledge,
   );
-  const sectionTitles = cleanList(
-    dataset.section_title_hints || dataset.sectionTitleHints,
-    LIMITS.section,
-  );
-  const understandingStrategies = cleanList(
+  const rawSectionTitles = cleanList(dataset.section_title_hints || dataset.sectionTitleHints);
+  const rawUnderstandingStrategies = cleanList(
     dataset.document_understanding_strategies || dataset.documentUnderstandingStrategies,
-    LIMITS.strategy,
   );
-  const materialHints = cleanList(dataset.material_hints || dataset.materialHints, LIMITS.material);
+  const materialHints = cleanList(dataset.material_hints || dataset.materialHints);
   const explicitContentTypes = summaryItems(dataset.content_type_summary || dataset.contentTypeSummary);
   const documentContentTypes = cleanList(
     scopedDocuments.map((document) => documentTypeLabel(document.content_type || document.contentType)),
-    LIMITS.material,
   );
-  const materialTypes = cleanList(
+  const rawMaterialTypes = cleanList(
     [...documentContentTypes, ...explicitContentTypes, ...materialHints],
-    LIMITS.material,
   );
+  const knowledgeProjection = projectedFallbackItems(rawKnowledgeTerms, 'knowledge', LIMITS.knowledge);
+  const sectionProjection = projectedFallbackItems(rawSectionTitles, 'section', LIMITS.section);
+  const strategyProjection = projectedFallbackItems(rawUnderstandingStrategies, 'strategy', LIMITS.strategy);
+  const materialProjection = projectedFallbackItems(rawMaterialTypes, 'material', LIMITS.material);
+  const knowledgeTerms = knowledgeProjection.allowed;
+  const sectionTitles = sectionProjection.allowed;
+  const understandingStrategies = strategyProjection.allowed;
+  const materialTypes = materialProjection.allowed;
 
   const parseSummary = cleanText(dataset.parse_status_summary || dataset.parseStatusSummary);
   const actualDocumentCount = scopedDocuments.length;
@@ -833,59 +884,103 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
     });
   };
 
-  const documentNodes = scopedDocuments.slice(0, LIMITS.document).map((document) => ({
-    id: document.id ? `document:${document.id}` : nodeId('document', document.title),
-    name: cleanText(document.title) || cleanText(document.object_key) || '未命名文档',
-    detail: `${documentTypeLabel(document.content_type || document.contentType) || '未知格式'} · ${documentParseStatus(document) || documentLifecycle(document) || '状态未知'}`,
-    status: documentQualityStatus(document) || documentParseStatus(document) || documentLifecycle(document),
-    evidence: '当前数据集文档列表',
-    materialName: documentTypeLabel(document.content_type || document.contentType),
+  const documentCandidates = [];
+  const documentStageRecords = [];
+  const knownCanonicalTitles = new Set();
+  const seenDocumentKeys = new Set();
+  let deduplicatedDocumentTitles = 0;
+  scopedDocuments.forEach((document, index) => {
+    const rawLabel = cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`;
+    const projection = projectFallbackLabel(rawLabel, { kind: 'document' });
+    const materialName = documentTypeLabel(document.content_type || document.contentType);
+    const canonicalTitle = canonicalDocumentTitle(rawLabel) || `untitled-${index}`;
+    const candidate = {
+      id: document.id ? `document:${document.id}` : nodeId('document', canonicalTitle, index),
+      rawLabel,
+      projection,
+      canonicalTitle,
+      name: projection.display_label,
+      detail: `${materialName || '未知格式'} · ${documentParseStatus(document) || documentLifecycle(document) || '状态未知'} · ${projection.detail_label}`,
+      status: documentQualityStatus(document) || documentParseStatus(document) || documentLifecycle(document),
+      evidence: '当前数据集文档列表',
+      materialName,
+    };
+    documentStageRecords.push({ document, candidate });
+    knownCanonicalTitles.add(canonicalTitle);
+    const candidateKey = `${canonicalTitle}|${normalizedLabel(materialName) || 'unknown'}`;
+    if (seenDocumentKeys.has(candidateKey)) {
+      deduplicatedDocumentTitles += 1;
+      return;
+    }
+    seenDocumentKeys.add(candidateKey);
+    documentCandidates.push(candidate);
+  });
+  cleanList(dataset.document_title_hints || dataset.documentTitleHints).forEach((rawLabel, index) => {
+    const canonicalTitle = canonicalDocumentTitle(rawLabel) || `hint-${index}`;
+    if (knownCanonicalTitles.has(canonicalTitle) || seenDocumentKeys.has(`${canonicalTitle}|hint`)) {
+      deduplicatedDocumentTitles += 1;
+      return;
+    }
+    seenDocumentKeys.add(`${canonicalTitle}|hint`);
+    const projection = projectFallbackLabel(rawLabel, { kind: 'document' });
+    documentCandidates.push({
+      id: nodeId('document', canonicalTitle, index),
+      rawLabel,
+      projection,
+      canonicalTitle,
+      name: projection.display_label,
+      detail: `数据集摘要返回的文档标题线索 · ${projection.detail_label}`,
+      status: '标题线索',
+      evidence: '数据集 document_title_hints',
+      materialName: '',
+    });
+  });
+  const hiddenDocumentItems = documentCandidates
+    .filter((item) => !item.projection.main_canvas_allowed)
+    .map((item, index) => ({
+      id: `hidden:document:${index}`,
+      kind: 'document',
+      label: item.projection.display_label,
+      qualityClass: item.projection.quality_class,
+      reason: item.projection.reason,
+      detail: item.projection.detail_label,
+    }));
+  const documentNodes = documentCandidates
+    .filter((item) => item.projection.main_canvas_allowed)
+    .slice(0, LIMITS.document);
+  const createdDocumentNodes = addConnectedNodes(documentNodes, 'document', (item) => ({
+    ...graphNode({ ...item, kind: 'document', symbolSize: 18 }),
+    technicalName: item.rawLabel,
+    qualityClass: item.projection.quality_class,
   }));
-  if (documentNodes.length < LIMITS.document) {
-    const knownTitles = new Set(documentNodes.map((item) => item.name.toLocaleLowerCase()));
-    cleanList(dataset.document_title_hints || dataset.documentTitleHints, LIMITS.document)
-      .filter((title) => !knownTitles.has(title.toLocaleLowerCase()))
-      .slice(0, LIMITS.document - documentNodes.length)
-      .forEach((title, index) => documentNodes.push({
-        id: nodeId('document', title, index),
-        name: title,
-        detail: '数据集摘要返回的文档标题线索。',
-        status: '标题线索',
-        evidence: '数据集 document_title_hints',
-        materialName: '',
-      }));
-  }
-  const createdDocumentNodes = addConnectedNodes(documentNodes, 'document', (item) => graphNode({ ...item, kind: 'document', symbolSize: 18 }));
   const createdKnowledgeNodes = addConnectedNodes(knowledgeTerms, 'knowledge', (term, index) => graphNode({
-    id: nodeId('knowledge', term, index),
-    name: term,
+    id: nodeId('knowledge', term.normalized_key || term.display_label, index),
+    name: term.display_label,
     kind: 'knowledge',
-    detail: knowledgeSignal(term) === 'concept'
-      ? '系统从数据集摘要中识别到的业务概念或知识要点。'
-      : '系统从数据集摘要中保留的代码式名称或技术标识。',
+    detail: `数据集摘要返回的可信中文知识线索 · ${term.detail_label}`,
     evidence: '数据集 noun_term_hints',
-    signal: knowledgeSignal(term),
-    symbolSize: knowledgeSignal(term) === 'concept' ? 28 : 16,
+    signal: 'concept',
+    symbolSize: 28,
   }));
   const createdSectionNodes = addConnectedNodes(sectionTitles, 'section', (title, index) => graphNode({
-    id: nodeId('section', title, index),
-    name: title,
+    id: nodeId('section', title.normalized_key || title.display_label, index),
+    name: title.display_label,
     kind: 'section',
-    detail: '解析过程中识别出的章节或结构标题。',
+    detail: `解析摘要返回的可信中文结构线索 · ${title.detail_label}`,
     evidence: '数据集 section_title_hints',
     symbolSize: 21,
   }));
   const createdMaterialNodes = addConnectedNodes(materialTypes, 'material', (material, index) => graphNode({
-    id: nodeId('material', material, index),
-    name: material,
+    id: nodeId('material', material.normalized_key || material.display_label, index),
+    name: material.display_label,
     kind: 'material',
     detail: '当前数据集已有的资料类型或材料线索。',
     evidence: explicitContentTypes.length ? '数据集 content_type_summary / material_hints' : '文档 content_type / 数据集 material_hints',
     symbolSize: 18,
   }));
   const createdStrategyNodes = addConnectedNodes(understandingStrategies, 'strategy', (strategy, index) => graphNode({
-    id: nodeId('strategy', strategy, index),
-    name: strategy,
+    id: nodeId('strategy', strategy.normalized_key || strategy.display_label, index),
+    name: strategy.display_label,
     kind: 'strategy',
     detail: '当前数据集摘要记录的文档理解策略。',
     evidence: '数据集 document_understanding_strategies',
@@ -978,6 +1073,23 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
     });
   });
 
+  const hiddenItems = [
+    ...hiddenDocumentItems,
+    ...knowledgeProjection.hidden,
+    ...sectionProjection.hidden,
+    ...materialProjection.hidden,
+    ...strategyProjection.hidden,
+  ];
+  const hiddenByClass = hiddenItems.reduce((counts, item) => {
+    counts[item.qualityClass] = (counts[item.qualityClass] || 0) + 1;
+    return counts;
+  }, {});
+  const fallbackQuality = {
+    hiddenCount: hiddenItems.length,
+    hiddenItems,
+    hiddenByClass,
+    deduplicatedDocumentTitles,
+  };
   const metrics = {
     documentCount,
     estimatedWordCount,
@@ -989,73 +1101,64 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
     inferredRelationCount: links.filter((link) => link.type === 'inferred').length,
     crossNodeRelationCount: links.filter((link) => !link.rootRelation).length,
   };
-  const documentItems = scopedDocuments.map((document, index) => ({
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
+  const documentItems = documentStageRecords.map(({ document, candidate }, index) => ({
     id: document.id ? `document:${document.id}` : `document-stage:${index}`,
-    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
-    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
-    meta: documentTypeLabel(document.content_type || document.contentType) || '格式未返回',
-    detail: readableStatus(document.lifecycle),
+    nodeId: visibleNodeIds.has(candidate.id) ? candidate.id : '',
+    label: candidate.projection.display_label,
+    meta: candidate.materialName || '格式未返回',
+    detail: `${readableStatus(document.lifecycle)} · ${candidate.projection.detail_label}`,
     evidence: '当前数据集文档列表',
     status: 'complete',
   }));
-  const parseItems = scopedDocuments.map((document, index) => ({
+  const parseItems = documentStageRecords.map(({ document, candidate }, index) => ({
     id: document.id ? `parse:${document.id}` : `parse-stage:${index}`,
-    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
-    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
+    nodeId: visibleNodeIds.has(candidate.id) ? candidate.id : '',
+    label: candidate.projection.display_label,
     meta: parsedDocument(document) ? '已解析' : '待解析',
     detail: attentionDocument(document)
-      ? `质量状态：${readableStatus(documentQualityStatus(document), '需要关注')}`
-      : `解析状态：${readableStatus(documentParseStatus(document) || documentLifecycle(document))}`,
+      ? `质量状态：${readableStatus(documentQualityStatus(document), '需要关注')} · ${candidate.projection.detail_label}`
+      : `解析状态：${readableStatus(documentParseStatus(document) || documentLifecycle(document))} · ${candidate.projection.detail_label}`,
     evidence: '文档 parse_status / parse_quality_status / lifecycle',
     status: attentionDocument(document) ? 'attention' : parsedDocument(document) ? 'complete' : 'empty',
   }));
-  const structureItems = [
-    ...sectionTitles.map((title, index) => ({
+  const structureItems = sectionTitles.map((title, index) => ({
       id: `section-stage:${index}`,
-      nodeId: nodeId('section', title, index),
-      label: title,
+      nodeId: nodeId('section', title.normalized_key || title.display_label, index),
+      label: title.display_label,
       meta: '结构线索',
-      detail: '解析摘要返回的章节或结构标题',
+      detail: `解析摘要返回的可信中文章节或结构标题 · ${title.detail_label}`,
       evidence: '数据集 section_title_hints',
       status: 'complete',
-    })),
-    ...understandingStrategies.map((strategy, index) => ({
-      id: `strategy-stage:${index}`,
-      nodeId: nodeId('strategy', strategy, index),
-      label: strategy,
-      meta: '理解策略',
-      detail: '解析摘要记录的文档理解策略',
-      evidence: '数据集 document_understanding_strategies',
-      status: 'complete',
-    })),
-  ];
+    }));
   const knowledgeItems = knowledgeTerms.map((term, index) => ({
     id: `knowledge-stage:${index}`,
-    nodeId: nodeId('knowledge', term, index),
-    label: term,
-    meta: knowledgeSignal(term) === 'concept' ? '核心概念' : '技术标识',
-    detail: knowledgeSignal(term) === 'concept'
-      ? '接口返回的业务知识词'
-      : '接口返回的代码式或英文标识',
+    nodeId: nodeId('knowledge', term.normalized_key || term.display_label, index),
+    label: term.display_label,
+    meta: '核心概念',
+    detail: `接口返回且通过质量门禁的中文知识词 · ${term.detail_label}`,
     evidence: '数据集 noun_term_hints',
     status: 'complete',
   }));
-  const readyItems = scopedDocuments.filter(readyDocument).map((document, index) => ({
+  const readyItems = documentStageRecords.filter(({ document }) => readyDocument(document)).map(({ document, candidate }, index) => ({
     id: document.id ? `ready:${document.id}` : `ready-stage:${index}`,
-    nodeId: document.id ? `document:${document.id}` : nodeId('document', document.title, index),
-    label: cleanText(document.title) || cleanText(document.object_key) || `未命名文档 ${index + 1}`,
+    nodeId: visibleNodeIds.has(candidate.id) ? candidate.id : '',
+    label: candidate.projection.display_label,
     meta: '可检索',
-    detail: `生命周期：${readableStatus(document.lifecycle)} · 解析：${readableStatus(documentParseStatus(document))}`,
+    detail: `生命周期：${readableStatus(document.lifecycle)} · 解析：${readableStatus(documentParseStatus(document))} · ${candidate.projection.detail_label}`,
     evidence: '文档 lifecycle / parse_status',
     status: 'complete',
   }));
+  const technicalIdentifiers = knowledgeProjection.hidden
+    .map((item) => item.detail.match(/^原始技术标识：(.+)$/u)?.[1] || '')
+    .filter(Boolean);
   const understanding = {
-    summary: `系统基于现有接口字段，在 ${documentCount} 份资料中识别出 ${knowledgeTerms.length} 个知识词和 ${sectionTitles.length} 个结构线索；${readyCount}/${documentCount || 0} 份已进入检索。`,
-    keyConcepts: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'concept'),
+    summary: `当前资料来源图汇总 ${documentCount} 份资料、${knowledgeTerms.length} 个可信知识词和 ${sectionTitles.length} 个可信结构线索；${readyCount}/${documentCount || 0} 份已进入检索，尚未生成可解释语义快照。`,
+    keyConcepts: knowledgeTerms.map((term) => term.display_label),
     keyFields: [],
-    technicalIdentifiers: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'identifier'),
-    structurePath: sectionTitles,
-    strategies: understandingStrategies,
+    technicalIdentifiers,
+    structurePath: sectionTitles.map((title) => title.display_label),
+    strategies: [],
     retrievalCoverage: { ready: readyCount, total: documentCount },
   };
   const pipeline = [
@@ -1088,25 +1191,25 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
     {
       key: 'structure',
       label: '结构识别',
-      value: understandingStrategies.length
-        ? `${understandingStrategies.length} 种策略`
-        : sectionTitles.length
-          ? `${sectionTitles.length} 个章节`
-          : '待识别',
-      detail: sectionTitles.length ? `已返回 ${sectionTitles.length} 个章节线索` : '接口暂无章节线索',
-      status: understandingStrategies.length || sectionTitles.length ? 'complete' : 'empty',
+      value: sectionTitles.length ? `${sectionTitles.length} 个结构线索` : '待识别',
+      detail: sectionTitles.length
+        ? `已返回 ${sectionTitles.length} 个可信中文结构线索`
+        : sectionProjection.hidden.length || strategyProjection.hidden.length
+          ? '低质量结构或策略标识已进入待解释清单'
+          : '接口暂无章节线索',
+      status: sectionTitles.length ? 'complete' : sectionProjection.hidden.length || strategyProjection.hidden.length ? 'attention' : 'empty',
       source: '数据集 section_title_hints / document_understanding_strategies',
-      summary: `接口返回 ${sectionTitles.length} 个结构线索和 ${understandingStrategies.length} 种理解策略。`,
+      summary: `质量门禁保留 ${sectionTitles.length} 个可信中文结构线索，隐藏 ${sectionProjection.hidden.length + strategyProjection.hidden.length} 个技术或低质量项。`,
       items: structureItems,
     },
     {
       key: 'knowledge',
       label: '知识抽取',
-      value: knowledgeTerms.length ? `${knowledgeTerms.length} 个知识词` : '待抽取',
-      detail: knowledgeTerms.length ? '来自数据集名词线索' : '接口暂无知识词',
-      status: knowledgeTerms.length ? 'complete' : 'empty',
+      value: knowledgeTerms.length ? `${knowledgeTerms.length} 个可信知识词` : '待抽取',
+      detail: knowledgeTerms.length ? '来自通过质量门禁的数据集名词线索' : knowledgeProjection.hidden.length ? '低质量知识线索已进入待解释清单' : '接口暂无知识词',
+      status: knowledgeTerms.length ? 'complete' : knowledgeProjection.hidden.length ? 'attention' : 'empty',
       source: '数据集 noun_term_hints',
-      summary: `接口返回 ${knowledgeTerms.length} 个知识词，其中 ${understanding.keyConcepts.length} 个包含明确中文语义，${understanding.technicalIdentifiers.length} 个为技术标识。`,
+      summary: `质量门禁保留 ${knowledgeTerms.length} 个可信中文知识词，隐藏 ${knowledgeProjection.hidden.length} 个技术或低质量项。`,
       items: knowledgeItems,
     },
     {
@@ -1124,10 +1227,12 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
   return {
     hasDataset: true,
     mode: 'fallback',
+    viewLabel: '资料来源图（语义生成中）',
+    overviewTitle: '当前资料来源包含什么',
     snapshotStatus: semanticUnderstanding?.status || 'unavailable',
     statusMessage: semanticUnderstanding?.status === 'empty'
-      ? '语义快照尚未生成，当前展示由数据集摘要和可见资料组成的基础视图。'
-      : '当前展示基础理解视图；统一语义快照可用后会自动切换。',
+      ? '资料来源图（语义生成中）：语义快照尚未生成，当前只展示通过质量门禁的资料与摘要线索。'
+      : '当前展示资料来源图；统一语义快照可用后会自动切换为真实语义图。',
     datasetId,
     title: cleanText(dataset.title) || cleanText(dataset.key) || '当前数据集',
     categories: DATASET_GRAPH_CATEGORIES,
@@ -1136,8 +1241,11 @@ export function buildDatasetUnderstandingGraph(dataset, documents = [], semantic
     understanding,
     nodes,
     links,
+    fallbackQuality,
     emptyKnowledgeMessage: knowledgeTerms.length || sectionTitles.length || understandingStrategies.length
       ? ''
-      : '当前接口尚未返回知识词、章节或理解策略。',
+      : rawKnowledgeTerms.length || rawSectionTitles.length || rawUnderstandingStrategies.length
+        ? '当前摘要中的低质量知识词、结构或策略项已进入待解释清单，未进入主画布。'
+        : '当前接口尚未返回知识词、章节或理解策略。',
   };
 }
