@@ -954,18 +954,22 @@ async function liveBrowserSmoke(targetUrl) {
       await context.addCookies([contextCookie(authentication.cookie, targetUrl)]);
     }
     const requestBody = await loadApiBody();
-    const page = await context.newPage();
+    let page = await context.newPage();
     const sampleCount = performanceRuns || 1;
     let navigation = await navigateToReadyChart(page, targetUrl);
     const navigationSamples = navigation.targetDataset?.firstInteractiveMs
       ? [navigation.targetDataset.firstInteractiveMs]
       : [];
+    const pageReadySamples = [navigation.pageReadyMs];
     for (let index = 1; index < sampleCount; index += 1) {
-      const targetDataset = datasetId
-        ? await selectAndVerifyTargetDataset(page, datasetId, datasetTitle)
-        : null;
-      if (targetDataset?.firstInteractiveMs) navigationSamples.push(targetDataset.firstInteractiveMs);
-      navigation = { ...navigation, targetDataset };
+      const previousPage = page;
+      page = await context.newPage();
+      navigation = await navigateToReadyChart(page, targetUrl);
+      if (navigation.targetDataset?.firstInteractiveMs) {
+        navigationSamples.push(navigation.targetDataset.firstInteractiveMs);
+      }
+      pageReadySamples.push(navigation.pageReadyMs);
+      await previousPage.close();
     }
     const chart = navigation.chart;
 
@@ -1051,7 +1055,8 @@ async function liveBrowserSmoke(targetUrl) {
           samples: navigationSamples.length,
           p95Ms: rounded(percentile(navigationSamples, 95)),
           thresholdMs: 1500,
-          coldPageReadyMs: navigation.pageReadyMs,
+          pageReadyP95Ms: rounded(percentile(pageReadySamples, 95)),
+          pageReadyScope: 'diagnostic only; excluded from dataset chart SLO',
         }
       : { status: 'skipped', reason: 'requires --performance-runs >=5 and --dataset-id' };
     if (firstInteractive.status === 'measured') {
