@@ -3067,11 +3067,13 @@ impl PgDocumentRepository {
         &self,
         tenant_id: TenantId,
         dataset_id: DatasetId,
+        as_of: DateTime<Utc>,
         limit: usize,
     ) -> Result<Vec<Document>> {
         let rows = sqlx::query(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL)
             .bind(tenant_id.0)
             .bind(dataset_id.0)
+            .bind(as_of)
             .bind(limit.clamp(1, 10_000) as i64)
             .fetch_all(&self.pool)
             .await?;
@@ -3285,7 +3287,9 @@ pub const DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL: &str = r#"
                d.object_key, d.content_type, d.lifecycle, d.metadata,
                d.created_at, d.updated_at
         from documents d
-        where d.tenant_id = $1 and d.dataset_id = $2
+        where d.tenant_id = $1
+          and d.dataset_id = $2
+          and d.created_at <= $3
         union all
         select d.id, d.tenant_id, d.dataset_id, d.owner_user_id, d.title,
                d.object_key, d.content_type, d.lifecycle, d.metadata,
@@ -3296,10 +3300,12 @@ pub const DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL: &str = r#"
          and d.id = m.document_id
         where m.tenant_id = $1
           and m.dataset_id = $2
-          and (m.expires_at is null or m.expires_at > now())
+          and m.created_at <= $3
+          and d.created_at <= $3
+          and (m.expires_at is null or m.expires_at > $3)
     ) scoped
     order by scoped.id, scoped.updated_at desc
-    limit $3
+    limit $4
 "#;
 
 async fn resolve_canonical_document_id(
@@ -3608,6 +3614,23 @@ impl PgDatasetDocumentMembershipRepository {
             .collect())
     }
 
+    pub async fn list_active_by_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        as_of: DateTime<Utc>,
+    ) -> Result<Vec<DatasetDocumentMembership>> {
+        let rows = sqlx::query(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .bind(as_of)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(map_dataset_document_membership_row)
+            .collect()
+    }
+
     pub async fn list_dataset_ids_by_document(
         &self,
         tenant_id: TenantId,
@@ -3710,6 +3733,16 @@ impl PgDatasetDocumentMembershipRepository {
         Ok(result.rows_affected())
     }
 }
+
+pub const DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL: &str = r#"
+    select tenant_id, dataset_id, document_id, membership_kind, source, expires_at, created_at
+    from dataset_document_memberships
+    where tenant_id = $1
+      and dataset_id = $2
+      and created_at <= $3
+      and (expires_at is null or expires_at > $3)
+    order by document_id
+"#;
 
 impl PgModelGatewayProfileRepository {
     pub async fn list_enabled_by_lane(
@@ -11643,6 +11676,10 @@ mod tests {
         assert!(DATASET_SEMANTIC_MARK_READY_SQL.contains("status = 'building'"));
         assert!(DATASET_SEMANTIC_MARK_FAILED_SQL.contains("status = 'building'"));
         assert!(SEMANTIC_DICTIONARY_RESOLVE_SQL.contains("tenant_id = $1"));
+        assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("tenant_id = $1"));
+        assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("dataset_id = $2"));
+        assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("created_at <= $3"));
+        assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("expires_at > $3"));
     }
 
     #[test]
@@ -12079,7 +12116,9 @@ mod tests {
                 .count(),
             2
         );
-        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("limit $3"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("created_at <= $3"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("expires_at > $3"));
+        assert!(DATASET_SEMANTIC_DOCUMENT_SCOPE_SQL.contains("limit $4"));
     }
 
     #[test]

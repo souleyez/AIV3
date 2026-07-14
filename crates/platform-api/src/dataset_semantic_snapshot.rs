@@ -21,6 +21,7 @@ use crate::semantic_understanding::{
 #[derive(Clone, Debug)]
 pub struct SnapshotDictionaryEntry {
     pub source_kind: String,
+    pub source_system_key: String,
     pub source_object_key: String,
     pub raw_field_key: String,
     pub candidate: LabelCandidate,
@@ -35,6 +36,7 @@ pub struct DatasetFactSnapshotRef {
 
 #[derive(Clone, Debug)]
 pub struct DatasetSemanticSnapshotBuildInput {
+    pub tenant_id: TenantId,
     pub dataset: DatasetSemanticIdentity,
     pub source_fingerprint: String,
     pub generated_at: DateTime<Utc>,
@@ -87,10 +89,30 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .get_by_id(tenant_id, dataset_id)
         .await?
         .ok_or_else(|| anyhow!("dataset {dataset_id} not found"))?;
-    let documents = storage
-        .documents()
-        .list_by_dataset_scope_bounded(tenant_id, dataset_id, limit.clamp(1, 10_000))
+    let memberships = storage
+        .dataset_document_memberships()
+        .list_active_by_dataset(tenant_id, dataset_id, generated_at)
         .await?;
+    let raw_documents = storage
+        .documents()
+        .list_by_dataset_scope_bounded(tenant_id, dataset_id, generated_at, 10_000)
+        .await?;
+    let canonical_datasets = storage.datasets().list_by_tenant(tenant_id).await?;
+    let contribution =
+        crate::document_visibility_support::filter_documents_for_dataset_contribution(
+            &dataset,
+            raw_documents,
+            &canonical_datasets,
+        );
+    if !contribution.excluded.is_empty() {
+        tracing::warn!(
+            target_dataset_id = %dataset_id,
+            excluded = ?contribution.excluded,
+            "historical documents excluded from semantic snapshot due to incompatible scope"
+        );
+    }
+    let mut documents = contribution.documents;
+    documents.truncate(limit.clamp(1, 10_000));
     let document_ids = documents.iter().map(|item| item.id).collect::<Vec<_>>();
     let chunks = storage
         .document_chunks()
@@ -170,6 +192,9 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         document_versions.push(
             crate::dataset_semantic_source_support::SemanticDocumentSourceVersion {
                 document_id: document.id,
+                source_dataset_id: document.dataset_id,
+                owner_user_id: document.owner_user_id,
+                secret_binding_ids: document.secret_binding_ids.clone(),
                 updated_at: document.updated_at,
                 parse_versions,
                 fact_snapshot_versions: fact_versions,
@@ -181,15 +206,19 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
             .map(|chunk| map_to_value(&chunk.metadata))
             .unwrap_or_else(|| map_to_value(&document.metadata));
         let source_metadata = if source_kind == "database" {
-            normalize_database_row_metadata(&source_metadata)
+            normalize_database_row_metadata_with_fallback(
+                &source_metadata,
+                &database_source_system_fallback(
+                    document.dataset_id,
+                    &document.object_key,
+                    &map_to_value(&document.metadata),
+                ),
+            )
         } else {
             source_metadata
         };
-        let source_key = source_metadata
-            .pointer("/parse_metadata/source_table")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| document.id.to_string());
+        let source_key =
+            semantic_source_scope_key(&source_kind, &source_metadata, &document.id.to_string());
         if source_kind == "database" {
             record_count += 1;
         }
@@ -270,8 +299,12 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .iter()
         .map(|entry| {
             format!(
-                "{}@{}",
+                "{}|{}|{}|{}|{}@{}",
                 entry.id,
+                entry.source_kind.trim(),
+                entry.source_system_key.trim(),
+                entry.source_object_key.trim(),
+                entry.raw_field_key.trim(),
                 entry
                     .updated_at
                     .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
@@ -280,8 +313,44 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .collect::<Vec<_>>();
     let source_fingerprint = crate::dataset_semantic_source_support::source_fingerprint(
         &crate::dataset_semantic_source_support::SemanticSourceFingerprintInput {
+            dataset_scope: Some(
+                crate::dataset_semantic_source_support::SemanticDatasetScopeVersion {
+                    tenant_id,
+                    dataset_id,
+                    owner_user_id: dataset.owner_user_id,
+                    visibility: dataset.visibility.as_str().to_string(),
+                    default_secret_binding_ids: dataset.default_secret_binding_ids.clone(),
+                    updated_at: dataset.updated_at,
+                },
+            ),
             documents: document_versions,
             assets: asset_versions,
+            memberships: memberships
+                .into_iter()
+                .map(|membership| {
+                    crate::dataset_semantic_source_support::SemanticDatasetMembershipVersion {
+                        document_id: membership.document_id,
+                        membership_kind: membership.membership_kind,
+                        source: membership.source,
+                        expires_at: membership.expires_at,
+                        created_at: membership.created_at,
+                    }
+                })
+                .collect(),
+            source_identities: observations
+                .iter()
+                .filter_map(|observation| {
+                    let identity = observation.source_identity.as_ref()?;
+                    Some(
+                        crate::dataset_semantic_source_support::SemanticSourceIdentityVersion {
+                            source_kind: observation.source_kind.clone(),
+                            source_system_key: identity.source_system_key.clone(),
+                            source_schema_key: identity.source_schema_key.clone(),
+                            source_object_key: identity.source_object_key.clone(),
+                        },
+                    )
+                })
+                .collect(),
             dataset_fact_snapshot_version: fact_snapshot_version.clone(),
             dictionary_versions,
         },
@@ -290,6 +359,7 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .into_iter()
         .map(|entry| SnapshotDictionaryEntry {
             source_kind: entry.source_kind,
+            source_system_key: entry.source_system_key,
             source_object_key: entry.source_object_key,
             raw_field_key: entry.raw_field_key,
             candidate: LabelCandidate {
@@ -309,6 +379,7 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .into_iter()
         .collect::<Vec<_>>();
     let semantic_snapshot = build_dataset_semantic_snapshot(&DatasetSemanticSnapshotBuildInput {
+        tenant_id,
         dataset: DatasetSemanticIdentity {
             id: dataset.id,
             title: dataset.title,
@@ -462,21 +533,6 @@ pub fn build_dataset_semantic_snapshot(
     observations.sort_by(|left, right| left.id.cmp(&right.id));
     observations.dedup_by(|left, right| left.id == right.id);
 
-    let dictionary = input
-        .dictionary_entries
-        .iter()
-        .map(|entry| {
-            (
-                (
-                    entry.source_kind.trim().to_ascii_lowercase(),
-                    entry.source_object_key.trim().to_ascii_lowercase(),
-                    entry.raw_field_key.trim().to_ascii_lowercase(),
-                ),
-                entry.candidate.clone(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-
     let mut object_observations = BTreeMap::<String, Vec<&SemanticObservation>>::new();
     for observation in &observations {
         let key = object_group_key(observation);
@@ -494,18 +550,15 @@ pub fn build_dataset_semantic_snapshot(
             .copied()
             .find(|item| item.observation_kind == "object")
             .unwrap_or(group[0]);
-        let object_id = stable_semantic_id("object", &[group_key]);
+        let public_technical_name = public_object_technical_name(representative);
+        let object_id = stable_semantic_id("object", &[&input.tenant_id.to_string(), group_key]);
         object_ids.insert(group_key.clone(), object_id.clone());
-        let object_dictionary_key = (
-            representative.source_kind.trim().to_ascii_lowercase(),
-            representative.object_key.trim().to_ascii_lowercase(),
-            "*".to_string(),
-        );
-        let confirmed_object_label = dictionary.get(&object_dictionary_key).filter(|candidate| {
-            candidate.status == "confirmed" && !candidate.label.trim().is_empty()
-        });
+        let confirmed_object_label =
+            dictionary_candidate(&input.dictionary_entries, representative, "*").filter(
+                |candidate| candidate.status == "confirmed" && !candidate.label.trim().is_empty(),
+            );
         let (label, label_source, status, confidence, dictionary_description) =
-            if let Some(candidate) = confirmed_object_label {
+            if let Some(candidate) = confirmed_object_label.as_ref() {
                 (
                     candidate.label.trim().to_string(),
                     "confirmed_dictionary".to_string(),
@@ -519,7 +572,7 @@ pub fn build_dataset_semantic_snapshot(
                         .label_hint
                         .as_deref()
                         .filter(|value| !value.trim().is_empty())
-                        .unwrap_or(&representative.technical_name)
+                        .unwrap_or(&public_technical_name)
                         .trim()
                         .to_string(),
                     representative.label_source.clone(),
@@ -541,7 +594,7 @@ pub fn build_dataset_semantic_snapshot(
             id: object_id,
             kind: representative.object_kind.clone(),
             label,
-            technical_name: representative.object_key.clone(),
+            technical_name: public_technical_name,
             description: dictionary_description
                 .unwrap_or_else(|| format!("由 {source_count} 个来源记录的可追溯结构观察归纳。")),
             label_source,
@@ -574,11 +627,6 @@ pub fn build_dataset_semantic_snapshot(
         let Some(object_id) = object_ids.get(&group_key) else {
             continue;
         };
-        let dictionary_key = (
-            observation.source_kind.trim().to_ascii_lowercase(),
-            observation.object_key.trim().to_ascii_lowercase(),
-            observation.technical_name.trim().to_ascii_lowercase(),
-        );
         let observed_values = group
             .iter()
             .flat_map(|item| item.observed_values.iter().cloned())
@@ -611,7 +659,11 @@ pub fn build_dataset_semantic_snapshot(
         let declared_value_type = dominant_value_type(&group);
         let resolution = resolve_semantic_label(&SemanticLabelInput {
             raw_field_key: observation.technical_name.clone(),
-            confirmed_dictionary: dictionary.get(&dictionary_key).cloned(),
+            confirmed_dictionary: dictionary_candidate(
+                &input.dictionary_entries,
+                observation,
+                &observation.technical_name,
+            ),
             source_comment,
             reviewed_template,
             model_suggestion,
@@ -810,13 +862,153 @@ pub fn semantic_snapshot_failure_fallback(
 
 fn object_group_key(observation: &SemanticObservation) -> String {
     if observation.object_kind == "database_table" {
-        format!("{}|{}", observation.object_kind, observation.object_key)
+        let (source_system_key, source_schema_key, source_object_key) = observation
+            .source_identity
+            .as_ref()
+            .map(|identity| {
+                (
+                    identity.source_system_key.as_str(),
+                    identity.source_schema_key.as_str(),
+                    identity.source_object_key.as_str(),
+                )
+            })
+            .unwrap_or((
+                observation.source_id.as_str(),
+                "",
+                observation.object_key.as_str(),
+            ));
+        format!(
+            "{}|{}|{}|{}|{}",
+            normalized_identity_key(&observation.object_kind),
+            normalized_identity_key(&observation.source_kind),
+            normalized_identity_key(source_system_key),
+            normalized_identity_key(source_schema_key),
+            normalized_identity_key(source_object_key),
+        )
     } else {
         format!(
             "{}|{}|{}",
             observation.object_kind, observation.source_id, observation.object_key
         )
     }
+}
+
+fn public_object_technical_name(observation: &SemanticObservation) -> String {
+    if observation.object_kind != "database_table" {
+        return observation.object_key.trim().to_string();
+    }
+    observation
+        .source_identity
+        .as_ref()
+        .map(|identity| identity.source_object_key.trim())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            observation
+                .object_key
+                .trim()
+                .rsplit('.')
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("database_object")
+        .to_string()
+}
+
+fn dictionary_candidate(
+    entries: &[SnapshotDictionaryEntry],
+    observation: &SemanticObservation,
+    raw_field_key: &str,
+) -> Option<LabelCandidate> {
+    let source_kind = normalized_identity_key(&observation.source_kind);
+    let (source_system_key, source_object_key, bare_source_object_key) =
+        dictionary_source_scope(observation);
+    let raw_field_key = normalized_identity_key(raw_field_key);
+    entries
+        .iter()
+        .filter(|entry| normalized_identity_key(&entry.source_kind) == source_kind)
+        .filter(|entry| {
+            let candidate = normalized_identity_key(&entry.source_system_key);
+            candidate == "*" || candidate == source_system_key
+        })
+        .filter(|entry| {
+            let candidate = normalized_identity_key(&entry.source_object_key);
+            let candidate_system = normalized_identity_key(&entry.source_system_key);
+            candidate == "*"
+                || candidate == source_object_key
+                || (candidate_system == source_system_key && candidate == bare_source_object_key)
+        })
+        .filter(|entry| normalized_identity_key(&entry.raw_field_key) == raw_field_key)
+        .min_by(|left, right| {
+            dictionary_candidate_rank(
+                left,
+                &source_system_key,
+                &source_object_key,
+                &bare_source_object_key,
+            )
+            .cmp(&dictionary_candidate_rank(
+                right,
+                &source_system_key,
+                &source_object_key,
+                &bare_source_object_key,
+            ))
+            .then_with(|| {
+                right
+                    .candidate
+                    .confidence
+                    .partial_cmp(&left.candidate.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.candidate.label.cmp(&right.candidate.label))
+        })
+        .map(|entry| entry.candidate.clone())
+}
+
+fn dictionary_candidate_rank(
+    entry: &SnapshotDictionaryEntry,
+    source_system_key: &str,
+    source_object_key: &str,
+    bare_source_object_key: &str,
+) -> (u8, u8, u8) {
+    let candidate_object_key = normalized_identity_key(&entry.source_object_key);
+    let object_scope_rank = if candidate_object_key == source_object_key {
+        0
+    } else if candidate_object_key == bare_source_object_key {
+        1
+    } else {
+        2
+    };
+    (
+        u8::from(entry.candidate.status != "confirmed"),
+        u8::from(normalized_identity_key(&entry.source_system_key) != source_system_key),
+        object_scope_rank,
+    )
+}
+
+fn dictionary_source_scope(observation: &SemanticObservation) -> (String, String, String) {
+    let Some(identity) = observation.source_identity.as_ref() else {
+        return (
+            normalized_identity_key(&observation.source_id),
+            normalized_identity_key(&observation.object_key),
+            normalized_identity_key(&observation.object_key),
+        );
+    };
+    let schema = normalized_identity_key(&identity.source_schema_key);
+    let object = normalized_identity_key(&identity.source_object_key);
+    let scoped_object = if schema.is_empty() {
+        object.clone()
+    } else {
+        format!("{schema}.{object}")
+    };
+    (
+        normalized_identity_key(&identity.source_system_key),
+        scoped_object,
+        object,
+    )
+}
+
+fn normalized_identity_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 fn asset_is_derived_from_documents(
@@ -881,10 +1073,17 @@ fn constraint_relations(
         .iter()
         .filter_map(|(group_key, group)| {
             let observation = group.first()?;
-            (observation.object_kind == "database_table").then_some((
-                group_key.as_str(),
-                observation.object_key.trim().to_ascii_lowercase(),
-            ))
+            if observation.object_kind != "database_table" {
+                return None;
+            }
+            let (source_system_key, source_schema_key, source_object_key) =
+                normalized_database_source_identity(observation);
+            Some(DatabaseRelationGroup {
+                group_key: group_key.as_str(),
+                source_system_key,
+                source_schema_key,
+                source_object_key,
+            })
         })
         .collect::<Vec<_>>();
 
@@ -899,23 +1098,8 @@ fn constraint_relations(
                 .or(constraint.label_hint.as_deref())?
                 .trim();
             let (target_object_key, target_field_key) = reference.rsplit_once('.')?;
-            let target_table = target_object_key
-                .rsplit('.')
-                .next()
-                .unwrap_or(target_object_key)
-                .trim()
-                .to_ascii_lowercase();
-            let target_group = database_groups
-                .iter()
-                .find(|(_, object_key)| {
-                    object_key.as_str() == target_object_key.trim().to_ascii_lowercase()
-                })
-                .or_else(|| {
-                    database_groups
-                        .iter()
-                        .find(|(_, object_key)| object_key.as_str() == target_table)
-                })?
-                .0;
+            let target_group =
+                resolve_database_reference_group(constraint, target_object_key, &database_groups)?;
             let source_group = object_group_key(constraint);
             let source_id = field_ids.get(&(
                 source_group,
@@ -934,6 +1118,73 @@ fn constraint_relations(
             ))
         })
         .collect()
+}
+
+struct DatabaseRelationGroup<'a> {
+    group_key: &'a str,
+    source_system_key: String,
+    source_schema_key: String,
+    source_object_key: String,
+}
+
+fn normalized_database_source_identity(
+    observation: &SemanticObservation,
+) -> (String, String, String) {
+    if let Some(identity) = observation.source_identity.as_ref() {
+        return (
+            normalized_identity_key(&identity.source_system_key),
+            normalized_identity_key(&identity.source_schema_key),
+            normalized_identity_key(&identity.source_object_key),
+        );
+    }
+    let object_key = normalized_identity_key(&observation.object_key);
+    let (schema, object) = object_key
+        .rsplit_once('.')
+        .map(|(schema, object)| (schema.to_string(), object.to_string()))
+        .unwrap_or_else(|| (String::new(), object_key));
+    (
+        normalized_identity_key(&observation.source_id),
+        schema,
+        object,
+    )
+}
+
+fn resolve_database_reference_group<'a>(
+    constraint: &SemanticObservation,
+    target_object_key: &str,
+    database_groups: &'a [DatabaseRelationGroup<'a>],
+) -> Option<&'a str> {
+    let (source_system_key, source_schema_key, _) = normalized_database_source_identity(constraint);
+    let normalized_target = normalized_identity_key(target_object_key);
+    let (explicit_schema, target_object) = normalized_target
+        .rsplit_once('.')
+        .map(|(schema, object)| (Some(schema), object))
+        .unwrap_or((None, normalized_target.as_str()));
+    let candidates = database_groups
+        .iter()
+        .filter(|candidate| candidate.source_system_key == source_system_key)
+        .filter(|candidate| candidate.source_object_key == target_object)
+        .filter(|candidate| {
+            explicit_schema.is_none_or(|schema| candidate.source_schema_key == schema)
+        })
+        .collect::<Vec<_>>();
+
+    if explicit_schema.is_some() {
+        return unique_database_group(&candidates);
+    }
+    if !source_schema_key.is_empty() {
+        let same_schema = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.source_schema_key == source_schema_key)
+            .collect::<Vec<_>>();
+        return unique_database_group(&same_schema);
+    }
+    unique_database_group(&candidates)
+}
+
+fn unique_database_group<'a>(candidates: &[&'a DatabaseRelationGroup<'a>]) -> Option<&'a str> {
+    (candidates.len() == 1).then(|| candidates[0].group_key)
 }
 
 fn build_source_groups(
@@ -981,7 +1232,10 @@ fn map_to_value(values: &BTreeMap<String, Value>) -> Value {
 }
 
 fn normalize_database_row_metadata(metadata: &Value) -> Value {
-    let parse = metadata.get("parse_metadata").unwrap_or(metadata);
+    let parse = metadata
+        .get("parse_metadata")
+        .or_else(|| metadata.get("external_metadata"))
+        .unwrap_or(metadata);
     let Some(parse_object) = parse.as_object() else {
         return metadata.clone();
     };
@@ -1000,6 +1254,9 @@ fn normalize_database_row_metadata(metadata: &Value) -> Value {
     let mut normalized = Map::new();
     for key in [
         "source_table",
+        "source_system_key",
+        "source_system",
+        "source_schema",
         "schema",
         "table_comment",
         "field_comments",
@@ -1007,6 +1264,20 @@ fn normalize_database_row_metadata(metadata: &Value) -> Value {
     ] {
         if let Some(value) = parse_object.get(key) {
             normalized.insert(key.to_string(), value.clone());
+        }
+    }
+    if !normalized.contains_key("source_system_key") {
+        if let Some(source_system_key) = metadata
+            .get("external_source")
+            .and_then(|value| value.get("source_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            normalized.insert(
+                "source_system_key".to_string(),
+                Value::String(source_system_key.to_string()),
+            );
         }
     }
     let primary_key = parse_object
@@ -1020,11 +1291,91 @@ fn normalize_database_row_metadata(metadata: &Value) -> Value {
     json!({"parse_metadata": normalized})
 }
 
+fn normalize_database_row_metadata_with_fallback(metadata: &Value, fallback: &str) -> Value {
+    let mut normalized = normalize_database_row_metadata(metadata);
+    let Some(parse) = normalized
+        .get_mut("parse_metadata")
+        .and_then(Value::as_object_mut)
+    else {
+        return normalized;
+    };
+    if !parse.contains_key("source_system_key") {
+        parse.insert(
+            "source_system_key".to_string(),
+            Value::String(fallback.trim().to_string()),
+        );
+    }
+    normalized
+}
+
+fn database_source_system_fallback(
+    source_dataset_id: DatasetId,
+    object_key: &str,
+    document_metadata: &Value,
+) -> String {
+    if let Some(source_id) = document_metadata
+        .get("external_source")
+        .and_then(|value| value.get("source_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return source_id.to_string();
+    }
+    let mut segments = object_key.trim().split('/');
+    if segments.next() == Some("external") {
+        if let Some(source_id) = segments
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return source_id.to_string();
+        }
+    }
+    stable_semantic_id("legacy_source", &[&source_dataset_id.to_string()])
+}
+
+fn semantic_source_scope_key(source_kind: &str, metadata: &Value, fallback_id: &str) -> String {
+    if source_kind != "database" {
+        return stable_semantic_id("source_scope", &[source_kind, fallback_id]);
+    }
+    let parse = metadata
+        .get("parse_metadata")
+        .or_else(|| metadata.get("external_metadata"))
+        .unwrap_or(metadata);
+    let source_system = parse
+        .get("source_system_key")
+        .or_else(|| parse.get("source_system"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_id);
+    let source_schema = parse
+        .get("source_schema")
+        .or_else(|| parse.get("schema"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let source_object = parse
+        .get("source_table")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_id);
+    stable_semantic_id(
+        "database_source_scope",
+        &[source_system, source_schema, source_object],
+    )
+}
+
 fn database_metadata_control_key(key: &str) -> bool {
     matches!(
         key.trim().to_ascii_lowercase().as_str(),
         "source_kind"
             | "source_table"
+            | "source_system_key"
+            | "source_system"
+            | "source_schema"
             | "source_primary_key"
             | "source_primary_key_columns"
             | "source_updated_at"
@@ -1103,7 +1454,14 @@ fn semantic_document_source_kind(
             .and_then(|value| value.get("source_table"))
             .and_then(Value::as_str)
             .is_some()
-    }) {
+    }) || document
+        .metadata
+        .get("external_metadata")
+        .or_else(|| document.metadata.get("parse_metadata"))
+        .and_then(|value| value.get("source_table"))
+        .and_then(Value::as_str)
+        .is_some()
+    {
         return "database".to_string();
     }
     let content_type = document.content_type.to_ascii_lowercase();
@@ -1165,6 +1523,7 @@ mod tests {
             evidence_labels: vec!["结构解析".to_string()],
         };
         DatasetSemanticSnapshotBuildInput {
+            tenant_id: TenantId(Uuid::from_u128(2)),
             dataset: DatasetSemanticIdentity {
                 id: DatasetId(Uuid::from_u128(1)),
                 title: "经营分析".to_string(),
@@ -1185,6 +1544,7 @@ mod tests {
             observations: adapt_semantic_profile(&source),
             dictionary_entries: vec![SnapshotDictionaryEntry {
                 source_kind: "database".to_string(),
+                source_system_key: "*".to_string(),
                 source_object_key: "lease_contract".to_string(),
                 raw_field_key: "*".to_string(),
                 candidate: LabelCandidate::confirmed("租赁合同", "租赁合同主数据及其可追溯结构。"),
@@ -1237,6 +1597,75 @@ mod tests {
         assert!(!observations
             .iter()
             .any(|item| item.technical_name == "api_token"));
+    }
+
+    #[test]
+    fn database_source_system_fallback_is_stable_per_canonical_dataset() {
+        let dataset_id = DatasetId(Uuid::from_u128(11));
+        let other_dataset_id = DatasetId(Uuid::from_u128(12));
+        let first = database_source_system_fallback(dataset_id, "legacy/row-1", &json!({}));
+        let second = database_source_system_fallback(dataset_id, "legacy/row-2", &json!({}));
+        let other = database_source_system_fallback(other_dataset_id, "legacy/row-1", &json!({}));
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+        assert_eq!(
+            database_source_system_fallback(dataset_id, "external/connector-a/row-1", &json!({})),
+            "connector-a"
+        );
+        assert_eq!(
+            database_source_system_fallback(
+                dataset_id,
+                "legacy/row-1",
+                &json!({"external_source": {"source_id": "connector-b"}})
+            ),
+            "connector-b"
+        );
+
+        let normalized = normalize_database_row_metadata_with_fallback(
+            &json!({"external_metadata": {
+                "schema": "finance",
+                "source_table": "lease_contract",
+                "fields": {"contract_id": "C-001"}
+            }}),
+            &first,
+        );
+        assert_eq!(normalized["parse_metadata"]["source_system_key"], first);
+        assert_eq!(normalized["parse_metadata"]["schema"], "finance");
+        assert_eq!(
+            normalized["parse_metadata"]["source_table"],
+            "lease_contract"
+        );
+
+        let erp_a = semantic_source_scope_key(
+            "database",
+            &json!({"parse_metadata": {
+                "source_system_key": "erp-a",
+                "schema": "finance",
+                "source_table": "lease_contract"
+            }}),
+            "row-a",
+        );
+        let erp_a_again = semantic_source_scope_key(
+            "database",
+            &json!({"parse_metadata": {
+                "source_system_key": "erp-a",
+                "schema": "finance",
+                "source_table": "lease_contract"
+            }}),
+            "row-b",
+        );
+        let erp_b = semantic_source_scope_key(
+            "database",
+            &json!({"parse_metadata": {
+                "source_system_key": "erp-b",
+                "schema": "finance",
+                "source_table": "lease_contract"
+            }}),
+            "row-c",
+        );
+        assert_eq!(erp_a, erp_a_again);
+        assert_ne!(erp_a, erp_b);
     }
 
     #[test]
@@ -1303,14 +1732,17 @@ mod tests {
                 source_id: source_id.to_string(),
                 source_kind: "database".to_string(),
                 title: "租赁合同".to_string(),
-                metadata: json!({"parse_metadata": {
-                    "source_table": "lease_contract",
-                    "fields": fields,
-                    "field_comments": {
-                        "contract_id": "合同编号",
-                        "rent_amount": "租金金额"
+                metadata: normalize_database_row_metadata(&json!({
+                    "external_source": {"source_id": "fixture-db"},
+                    "parse_metadata": {
+                        "source_table": "lease_contract",
+                        "fields": fields,
+                        "field_comments": {
+                            "contract_id": "合同编号",
+                            "rent_amount": "租金金额"
+                        }
                     }
-                }}),
+                })),
                 facts: Vec::new(),
                 evidence_labels: vec![format!("结构解析:{source_id}")],
             })
@@ -1341,6 +1773,256 @@ mod tests {
     }
 
     #[test]
+    fn dictionary_resolution_prefers_schema_scope_but_keeps_same_system_table_compatibility() {
+        let mut input = fixture_input();
+        input.observations = adapt_semantic_profile(&SemanticProfileInput {
+            source_id: "row-a".to_string(),
+            source_kind: "database".to_string(),
+            title: "租赁合同".to_string(),
+            metadata: json!({"parse_metadata": {
+                "source_system_key": "erp-a",
+                "schema": "finance",
+                "source_table": "lease_contract",
+                "fields": {"contract_id": "C-001"}
+            }}),
+            facts: Vec::new(),
+            evidence_labels: vec!["结构解析".to_string()],
+        });
+        input.dictionary_entries = vec![
+            SnapshotDictionaryEntry {
+                source_kind: "database".to_string(),
+                source_system_key: "*".to_string(),
+                source_object_key: "*".to_string(),
+                raw_field_key: "contract_id".to_string(),
+                candidate: LabelCandidate::confirmed("通用合同号", "wildcard"),
+            },
+            SnapshotDictionaryEntry {
+                source_kind: "database".to_string(),
+                source_system_key: "erp-a".to_string(),
+                source_object_key: "lease_contract".to_string(),
+                raw_field_key: "contract_id".to_string(),
+                candidate: LabelCandidate::confirmed("兼容合同号", "legacy table scope"),
+            },
+            SnapshotDictionaryEntry {
+                source_kind: "database".to_string(),
+                source_system_key: "erp-a".to_string(),
+                source_object_key: "finance.lease_contract".to_string(),
+                raw_field_key: "contract_id".to_string(),
+                candidate: LabelCandidate::confirmed("财务合同号", "schema scope"),
+            },
+        ];
+
+        let exact = build_dataset_semantic_snapshot(&input);
+        assert_eq!(exact.fields[0].label, "财务合同号");
+
+        input
+            .dictionary_entries
+            .retain(|entry| entry.source_object_key != "finance.lease_contract");
+        let compatible = build_dataset_semantic_snapshot(&input);
+        assert_eq!(compatible.fields[0].label, "兼容合同号");
+    }
+
+    #[test]
+    fn same_named_database_objects_are_scoped_by_tenant_system_and_schema() {
+        let mut input = fixture_input();
+        input.observations = [
+            ("row-a", "erp-internal-a", "甲系统合同", "甲合同号"),
+            ("row-b", "erp-internal-b", "乙系统合同", "乙合同号"),
+        ]
+        .into_iter()
+        .flat_map(|(source_id, source_system_key, _, _)| {
+            adapt_semantic_profile(&SemanticProfileInput {
+                source_id: source_id.to_string(),
+                source_kind: "database".to_string(),
+                title: "租赁合同".to_string(),
+                metadata: json!({"parse_metadata": {
+                    "source_system_key": source_system_key,
+                    "schema": "finance_private",
+                    "source_table": "lease_contract",
+                    "fields": {"contract_id": source_id}
+                }}),
+                facts: Vec::new(),
+                evidence_labels: vec![format!("结构解析:{source_id}")],
+            })
+        })
+        .collect();
+        input.dictionary_entries = [
+            ("erp-internal-a", "*", "甲系统合同"),
+            ("erp-internal-b", "*", "乙系统合同"),
+            ("erp-internal-a", "contract_id", "甲合同号"),
+            ("erp-internal-b", "contract_id", "乙合同号"),
+        ]
+        .into_iter()
+        .map(
+            |(source_system_key, raw_field_key, display_name)| SnapshotDictionaryEntry {
+                source_kind: "database".to_string(),
+                source_system_key: source_system_key.to_string(),
+                source_object_key: "finance_private.lease_contract".to_string(),
+                raw_field_key: raw_field_key.to_string(),
+                candidate: LabelCandidate::confirmed(display_name, "fixture dictionary"),
+            },
+        )
+        .collect();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        assert_eq!(snapshot.objects.len(), 2);
+        assert_eq!(snapshot.fields.len(), 2);
+        assert_eq!(
+            snapshot
+                .objects
+                .iter()
+                .map(|object| object.label.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["甲系统合同", "乙系统合同"])
+        );
+        assert_eq!(
+            snapshot
+                .fields
+                .iter()
+                .map(|field| field.label.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["甲合同号", "乙合同号"])
+        );
+        assert_ne!(snapshot.objects[0].id, snapshot.objects[1].id);
+        assert_ne!(snapshot.fields[0].id, snapshot.fields[1].id);
+
+        let public_manifest = serde_json::to_string(&snapshot).expect("serializable snapshot");
+        assert!(!public_manifest.contains("erp-internal-a"));
+        assert!(!public_manifest.contains("erp-internal-b"));
+        assert!(!public_manifest.contains("finance_private"));
+
+        let mut other_tenant_input = input.clone();
+        other_tenant_input.tenant_id = TenantId(Uuid::from_u128(999));
+        let other_tenant = build_dataset_semantic_snapshot(&other_tenant_input);
+        assert!(snapshot
+            .fields
+            .iter()
+            .all(|field| other_tenant.fields.iter().all(|other| other.id != field.id)));
+    }
+
+    #[test]
+    fn schema_qualified_database_table_does_not_expose_schema_in_public_manifest() {
+        let mut input = fixture_input();
+        input.observations = adapt_semantic_profile(&SemanticProfileInput {
+            source_id: "row-a".to_string(),
+            source_kind: "database".to_string(),
+            title: "租赁合同".to_string(),
+            metadata: json!({"parse_metadata": {
+                "source_system_key": "erp-internal-a",
+                "source_table": "finance_private.lease_contract",
+                "fields": {"contract_id": "C-001"}
+            }}),
+            facts: Vec::new(),
+            evidence_labels: vec!["结构解析".to_string()],
+        });
+        input.dictionary_entries.clear();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let public_manifest = serde_json::to_string(&snapshot).expect("serializable snapshot");
+
+        assert_eq!(snapshot.objects[0].technical_name, "lease_contract");
+        assert!(!public_manifest.contains("finance_private"));
+        assert!(!public_manifest.contains("erp-internal-a"));
+    }
+
+    #[test]
+    fn foreign_keys_do_not_cross_same_named_tables_from_different_source_systems() {
+        let mut input = fixture_input();
+        input.observations = [
+            (
+                "erp-a-contract",
+                "erp-a",
+                "lease_contract",
+                "甲合同",
+                json!({"store_id": "A-01"}),
+                json!({"store_id": "甲门店编号"}),
+                json!([{"field": "store_id", "references": "store.id"}]),
+            ),
+            (
+                "erp-a-store",
+                "erp-a",
+                "store",
+                "甲门店",
+                json!({"id": "A-01"}),
+                json!({"id": "甲门店主键"}),
+                json!([]),
+            ),
+            (
+                "erp-b-contract",
+                "erp-b",
+                "lease_contract",
+                "乙合同",
+                json!({"store_id": "B-01"}),
+                json!({"store_id": "乙门店编号"}),
+                json!([{"field": "store_id", "references": "store.id"}]),
+            ),
+            (
+                "erp-b-store",
+                "erp-b",
+                "store",
+                "乙门店",
+                json!({"id": "B-01"}),
+                json!({"id": "乙门店主键"}),
+                json!([]),
+            ),
+        ]
+        .into_iter()
+        .flat_map(
+            |(
+                source_id,
+                source_system,
+                table,
+                table_comment,
+                fields,
+                field_comments,
+                foreign_keys,
+            )| {
+                adapt_semantic_profile(&SemanticProfileInput {
+                    source_id: source_id.to_string(),
+                    source_kind: "database".to_string(),
+                    title: table_comment.to_string(),
+                    metadata: json!({"parse_metadata": {
+                        "source_system_key": source_system,
+                        "schema": "retail",
+                        "source_table": table,
+                        "table_comment": table_comment,
+                        "fields": fields,
+                        "field_comments": field_comments,
+                        "foreign_keys": foreign_keys
+                    }}),
+                    facts: Vec::new(),
+                    evidence_labels: vec![format!("结构解析:{source_id}")],
+                })
+            },
+        )
+        .collect();
+        input.dictionary_entries.clear();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let field_labels = snapshot
+            .fields
+            .iter()
+            .map(|field| (field.id.as_str(), field.label.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let relation_pairs = snapshot
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == "foreign_key")
+            .map(|relation| {
+                (
+                    *field_labels.get(relation.source_id.as_str()).unwrap(),
+                    *field_labels.get(relation.target_id.as_str()).unwrap(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            relation_pairs,
+            BTreeSet::from([("甲门店编号", "甲门店主键"), ("乙门店编号", "乙门店主键"),])
+        );
+    }
+
+    #[test]
     fn database_foreign_key_constraint_becomes_a_confirmed_field_relation() {
         let mut input = fixture_input();
         let contract = SemanticProfileInput {
@@ -1348,6 +2030,8 @@ mod tests {
             source_kind: "database".to_string(),
             title: "租赁合同".to_string(),
             metadata: json!({"parse_metadata": {
+                "source_system_key": "fixture-db",
+                "schema": "public",
                 "source_table": "lease_contract",
                 "fields": {"contract_id": "C-001", "store_id": "S-01"},
                 "field_comments": {"contract_id": "合同编号", "store_id": "门店编号"},
@@ -1361,6 +2045,8 @@ mod tests {
             source_kind: "database".to_string(),
             title: "门店".to_string(),
             metadata: json!({"parse_metadata": {
+                "source_system_key": "fixture-db",
+                "schema": "public",
                 "source_table": "store",
                 "fields": {"id": "S-01", "name": "中环店"},
                 "field_comments": {"id": "门店编号", "name": "门店名称"}
@@ -1595,15 +2281,21 @@ mod tests {
     #[test]
     fn fingerprint_input_references_versions_and_ids_without_document_content() {
         let source = crate::dataset_semantic_source_support::SemanticSourceFingerprintInput {
+            dataset_scope: None,
             documents: vec![
                 crate::dataset_semantic_source_support::SemanticDocumentSourceVersion {
                     document_id: DocumentId(Uuid::from_u128(2)),
+                    source_dataset_id: DatasetId(Uuid::from_u128(1)),
+                    owner_user_id: None,
+                    secret_binding_ids: Vec::new(),
                     updated_at: fixture_input().generated_at,
                     parse_versions: vec!["parser-v1".to_string()],
                     fact_snapshot_versions: vec!["facts-v7".to_string()],
                 },
             ],
             assets: Vec::new(),
+            memberships: Vec::new(),
+            source_identities: Vec::new(),
             dataset_fact_snapshot_version: Some("v7".to_string()),
             dictionary_versions: vec!["dictionary-v1".to_string()],
         };

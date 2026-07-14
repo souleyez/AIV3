@@ -112,6 +112,8 @@ pub struct SemanticObservation {
     pub id: String,
     pub source_kind: String,
     pub source_id: String,
+    #[serde(default, skip_serializing)]
+    pub source_identity: Option<SemanticSourceIdentity>,
     pub observation_kind: String,
     pub object_kind: String,
     pub object_key: String,
@@ -125,6 +127,13 @@ pub struct SemanticObservation {
     pub status: SemanticStatus,
     pub confidence: f64,
     pub evidence_refs: Vec<SemanticEvidenceRef>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SemanticSourceIdentity {
+    pub source_system_key: String,
+    pub source_schema_key: String,
+    pub source_object_key: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

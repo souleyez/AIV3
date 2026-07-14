@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::semantic_understanding::{
-    stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticStatus,
-    MAX_EVIDENCE_REFS, MAX_EXAMPLES,
+    stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticSourceIdentity,
+    SemanticStatus, MAX_EVIDENCE_REFS, MAX_EXAMPLES,
 };
 
 #[derive(Clone, Debug)]
@@ -52,6 +52,7 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let parse = input
         .metadata
         .get("parse_metadata")
+        .or_else(|| input.metadata.get("external_metadata"))
         .unwrap_or(&input.metadata);
     let table = string_at(parse, "source_table").unwrap_or_else(|| input.title.clone());
     let table_comment = string_at(parse, "table_comment");
@@ -429,6 +430,7 @@ fn observation(
         ),
         source_kind: input.source_kind.clone(),
         source_id: input.source_id.clone(),
+        source_identity: semantic_source_identity(input, object_kind, object_key),
         observation_kind: observation_kind.to_string(),
         object_kind: object_kind.to_string(),
         object_key: object_key.to_string(),
@@ -443,6 +445,55 @@ fn observation(
         confidence,
         evidence_refs: evidence_refs(input),
     }
+}
+
+fn semantic_source_identity(
+    input: &SemanticProfileInput,
+    object_kind: &str,
+    object_key: &str,
+) -> Option<SemanticSourceIdentity> {
+    if object_kind != "database_table" {
+        return None;
+    }
+    let parse = input
+        .metadata
+        .get("parse_metadata")
+        .or_else(|| input.metadata.get("external_metadata"))
+        .unwrap_or(&input.metadata);
+    let source_system_key = string_at_any(
+        parse,
+        &["source_system_key", "source_system", "connection_key"],
+    )
+    .or_else(|| {
+        input
+            .metadata
+            .get("external_source")
+            .and_then(|value| string_at_any(value, &["source_id", "source_system_key"]))
+    })
+    .unwrap_or_else(|| input.source_id.trim().to_string());
+    let mut source_schema_key =
+        string_at_any(parse, &["source_schema", "schema"]).unwrap_or_default();
+    let mut source_object_key = object_key.trim().to_string();
+    if source_schema_key.is_empty() {
+        if let Some((schema, object)) = source_object_key.rsplit_once('.') {
+            if !schema.trim().is_empty() && !object.trim().is_empty() {
+                source_schema_key = schema.trim().to_string();
+                source_object_key = object.trim().to_string();
+            }
+        }
+    } else if source_object_key
+        .to_ascii_lowercase()
+        .starts_with(&format!("{}.", source_schema_key.to_ascii_lowercase()))
+    {
+        source_object_key = source_object_key[source_schema_key.len() + 1..]
+            .trim()
+            .to_string();
+    }
+    Some(SemanticSourceIdentity {
+        source_system_key,
+        source_schema_key,
+        source_object_key,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -518,6 +569,10 @@ fn array_at<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 
 fn string_at(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(value_string)
+}
+
+fn string_at_any(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| string_at(value, key))
 }
 
 fn string_array_at(value: &Value, key: &str) -> Vec<String> {
@@ -611,6 +666,35 @@ mod tests {
         assert!(observations
             .iter()
             .any(|item| item.observation_kind == "constraint"));
+    }
+
+    #[test]
+    fn database_adapter_preserves_internal_source_identity_without_serializing_it() {
+        let observations = adapt_semantic_profile(&input(
+            "database",
+            json!({"parse_metadata": {
+                "source_system_key": "oracle-badw-internal",
+                "schema": "finance_private",
+                "source_table": "lease_contract",
+                "fields": {"contract_id": "C-001"}
+            }}),
+        ));
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("database object observation");
+        let identity = object
+            .source_identity
+            .as_ref()
+            .expect("database source identity");
+
+        assert_eq!(identity.source_system_key, "oracle-badw-internal");
+        assert_eq!(identity.source_schema_key, "finance_private");
+        assert_eq!(identity.source_object_key, "lease_contract");
+
+        let public_json = serde_json::to_string(object).expect("serializable observation");
+        assert!(!public_json.contains("oracle-badw-internal"));
+        assert!(!public_json.contains("source_identity"));
     }
 
     #[test]
