@@ -276,6 +276,14 @@ pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolu
             SemanticStatus::Confirmed,
             1.0,
         )
+    } else if let Some(label) = reviewed_field_alias(raw_field_key) {
+        (
+            label.to_string(),
+            None,
+            "reviewed_alias".to_string(),
+            SemanticStatus::Confirmed,
+            1.0,
+        )
     } else if let Some(candidate) = input.model_suggestion.as_ref().filter(|candidate| {
         candidate.status == "suggested"
             && classify_semantic_primary_label(&candidate.label).business_label
@@ -323,6 +331,16 @@ pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolu
         label_source,
         confidence,
         examples: safe_public_examples(&input.observed_values),
+    }
+}
+
+fn reviewed_field_alias(raw: &str) -> Option<&'static str> {
+    match deterministic_field_label(raw).as_str() {
+        "object type" => Some("对象类型"),
+        "origin id" => Some("来源记录标识"),
+        "zlqj s" => Some("租赁期间开始"),
+        "zlqj e" => Some("租赁期间结束"),
+        _ => None,
     }
 }
 
@@ -705,6 +723,23 @@ mod tests {
         assert_eq!(resolution.display_name, "模型猜测租金");
         assert_eq!(resolution.status, SemanticStatus::Inferred);
         assert_eq!(resolution.label_source, "model_suggestion");
+    }
+
+    #[test]
+    fn reviewed_source_aliases_resolve_to_meaningful_chinese_labels() {
+        for (raw, expected) in [
+            ("object_type", "对象类型"),
+            ("originId", "来源记录标识"),
+            ("zlqj_s", "租赁期间开始"),
+            ("zlqj_e", "租赁期间结束"),
+        ] {
+            let mut value = input();
+            value.raw_field_key = raw.to_string();
+            let resolution = resolve_semantic_label(&value);
+            assert_eq!(resolution.display_name, expected, "raw={raw}");
+            assert_eq!(resolution.label_source, "reviewed_alias");
+            assert_eq!(resolution.status, SemanticStatus::Confirmed);
+        }
     }
 
     #[test]
