@@ -3,7 +3,7 @@ use contracts::DocumentSummary;
 use domain_model::{DatasetId, Document, DocumentId, SecretBindingId, UserId};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use storage::NewDatasetDocumentMembership;
 
 use crate::{
@@ -80,6 +80,16 @@ pub(crate) async fn add_document_dataset_membership_for_user(
             )
             .await
             .map_err(ApiError::from_storage)?;
+        refresh_semantic_snapshots_after_membership_change(
+            state,
+            semantic_dataset_ids_invalidated_by_membership_change(
+                document.dataset_id,
+                dataset_id,
+                document.dataset_id,
+                &[],
+            ),
+        )
+        .await;
     }
 
     document_dataset_membership_response(state, document, None).await
@@ -112,6 +122,13 @@ pub(crate) async fn remove_document_dataset_membership_for_user(
         current_user_id,
     )
     .await?;
+    let membership_dataset_ids = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(state.tenant_id, document.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let canonical_before = document.dataset_id;
 
     let updated_document = if document.dataset_id == dataset_id {
         remove_canonical_dataset_membership(
@@ -131,6 +148,17 @@ pub(crate) async fn remove_document_dataset_membership_for_user(
             .map_err(ApiError::from_storage)?;
         document
     };
+
+    refresh_semantic_snapshots_after_membership_change(
+        state,
+        semantic_dataset_ids_invalidated_by_membership_change(
+            canonical_before,
+            dataset_id,
+            updated_document.dataset_id,
+            &membership_dataset_ids,
+        ),
+    )
+    .await;
 
     document_dataset_membership_response(state, updated_document, None).await
 }
@@ -247,6 +275,112 @@ fn candidate_membership_dataset_ids_after_removal(
         .into_iter()
         .filter(|dataset_id| *dataset_id != removed_dataset_id)
         .collect()
+}
+
+fn semantic_dataset_ids_invalidated_by_membership_change(
+    canonical_before: DatasetId,
+    target_dataset_id: DatasetId,
+    canonical_after: DatasetId,
+    membership_dataset_ids: &[DatasetId],
+) -> Vec<DatasetId> {
+    let canonical_changed = canonical_before != canonical_after;
+    [target_dataset_id]
+        .into_iter()
+        .chain(canonical_changed.then_some(canonical_before))
+        .chain(canonical_changed.then_some(canonical_after))
+        .chain(
+            canonical_changed
+                .then_some(membership_dataset_ids.iter().copied())
+                .into_iter()
+                .flatten(),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+async fn refresh_semantic_snapshots_after_membership_change(
+    state: &AppState,
+    dataset_ids: Vec<DatasetId>,
+) {
+    for dataset_id in dataset_ids {
+        if !semantic_snapshot_refresh_allowed(state.tenant_id, dataset_id) {
+            continue;
+        }
+        let now = Utc::now();
+        if let Err(_) = state
+            .storage
+            .dataset_semantic_links()
+            .mark_ready_links_stale_for_dataset(state.tenant_id, dataset_id, now)
+            .await
+        {
+            tracing::warn!(
+                tenant_id = %state.tenant_id,
+                dataset_id = %dataset_id,
+                failure_code = "semantic_link_stale_marker_failed",
+                "membership mutation committed but semantic link stale marker failed"
+            );
+        }
+        if let Err(_) =
+            crate::dataset_semantic_snapshot::rebuild_dataset_semantic_snapshot_from_storage(
+                &state.storage,
+                state.tenant_id,
+                dataset_id,
+                now,
+            )
+            .await
+        {
+            tracing::warn!(
+                tenant_id = %state.tenant_id,
+                dataset_id = %dataset_id,
+                failure_code = "semantic_snapshot_refresh_failed",
+                "membership mutation committed but semantic snapshot refresh failed"
+            );
+        }
+    }
+}
+
+fn semantic_snapshot_refresh_allowed(
+    tenant_id: domain_model::TenantId,
+    dataset_id: DatasetId,
+) -> bool {
+    semantic_snapshot_refresh_allowed_from_values(
+        std::env::var("DATASET_SEMANTIC_UNDERSTANDING_ENABLED")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            }),
+        std::env::var("DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST")
+            .ok()
+            .as_deref(),
+        std::env::var("DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST")
+            .ok()
+            .as_deref(),
+        tenant_id,
+        dataset_id,
+    )
+}
+
+fn semantic_snapshot_refresh_allowed_from_values(
+    enabled: bool,
+    tenant_allowlist: Option<&str>,
+    dataset_allowlist: Option<&str>,
+    tenant_id: domain_model::TenantId,
+    dataset_id: DatasetId,
+) -> bool {
+    enabled
+        && exact_uuid_csv_contains(tenant_allowlist, tenant_id.0)
+        && exact_uuid_csv_contains(dataset_allowlist, dataset_id.0)
+}
+
+fn exact_uuid_csv_contains(csv: Option<&str>, expected: uuid::Uuid) -> bool {
+    csv.into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().parse::<uuid::Uuid>().ok())
+        .any(|value| value == expected)
 }
 
 fn document_dataset_membership_update_metadata(
@@ -508,5 +642,70 @@ mod tests {
             error.payload.message,
             "document must belong to at least one visible dataset"
         );
+    }
+
+    #[test]
+    fn secondary_membership_changes_invalidate_only_the_changed_target_snapshot() {
+        let canonical_before = dataset_id(1);
+        let target = dataset_id(2);
+        let shared = dataset_id(3);
+
+        assert_eq!(
+            semantic_dataset_ids_invalidated_by_membership_change(
+                canonical_before,
+                target,
+                canonical_before,
+                &[shared, target],
+            ),
+            vec![target]
+        );
+    }
+
+    #[test]
+    fn canonical_promotion_invalidates_old_promoted_and_remaining_shared_snapshots() {
+        let canonical_before = dataset_id(1);
+        let target = canonical_before;
+        let shared = dataset_id(3);
+        let canonical_after_move = dataset_id(4);
+
+        assert_eq!(
+            semantic_dataset_ids_invalidated_by_membership_change(
+                canonical_before,
+                target,
+                canonical_after_move,
+                &[shared, canonical_after_move],
+            ),
+            vec![canonical_before, shared, canonical_after_move]
+        );
+    }
+
+    #[test]
+    fn membership_semantic_refresh_is_independently_fail_closed() {
+        let tenant_id = domain_model::TenantId(uuid::Uuid::from_u128(10));
+        let dataset_id = dataset_id(20);
+        let tenant_allowlist = tenant_id.to_string();
+        let dataset_allowlist = dataset_id.to_string();
+
+        assert!(!semantic_snapshot_refresh_allowed_from_values(
+            false,
+            Some(&tenant_allowlist),
+            Some(&dataset_allowlist),
+            tenant_id,
+            dataset_id,
+        ));
+        assert!(!semantic_snapshot_refresh_allowed_from_values(
+            true,
+            Some("*"),
+            Some("*"),
+            tenant_id,
+            dataset_id,
+        ));
+        assert!(semantic_snapshot_refresh_allowed_from_values(
+            true,
+            Some(&tenant_allowlist),
+            Some(&dataset_allowlist),
+            tenant_id,
+            dataset_id,
+        ));
     }
 }

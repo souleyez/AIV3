@@ -1,11 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use domain_model::{DatasetId, DocumentId, TenantId};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use storage::{NewDatasetSemanticSnapshot, PgStorage};
+use sha2::{Digest, Sha256};
+use storage::{
+    NewDatasetSemanticLinkRun, NewDatasetSemanticLinkSnapshot, NewDatasetSemanticSnapshot,
+    PgStorage,
+};
 
 use crate::semantic_label_resolver::{
     classify_semantic_primary_label, resolve_semantic_label, safe_semantic_business_label,
@@ -79,6 +84,295 @@ pub struct DatasetSemanticSnapshotPreview {
     pub source_asset_count: i64,
     pub source_record_count: i64,
     pub snapshot: DatasetSemanticUnderstanding,
+}
+
+pub const DATASET_CROSS_SEMANTIC_GRAPH_ENABLED_ENV: &str = "DATASET_CROSS_SEMANTIC_GRAPH_ENABLED";
+pub const DATASET_CROSS_SEMANTIC_GRAPH_TENANT_ALLOWLIST_ENV: &str =
+    "DATASET_CROSS_SEMANTIC_GRAPH_TENANT_ALLOWLIST";
+pub const DATASET_CROSS_SEMANTIC_GRAPH_DATASET_ALLOWLIST_ENV: &str =
+    "DATASET_CROSS_SEMANTIC_GRAPH_DATASET_ALLOWLIST";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatasetCrossSemanticGraphAccess {
+    Allowed,
+    FeatureDisabled,
+    TenantNotAllowlisted,
+    LeftDatasetNotAllowlisted,
+    RightDatasetNotAllowlisted,
+}
+
+impl DatasetCrossSemanticGraphAccess {
+    pub fn is_allowed(self) -> bool {
+        self == Self::Allowed
+    }
+
+    pub fn safe_reason(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::FeatureDisabled => "feature_disabled",
+            Self::TenantNotAllowlisted => "tenant_not_allowlisted",
+            Self::LeftDatasetNotAllowlisted => "left_dataset_not_allowlisted",
+            Self::RightDatasetNotAllowlisted => "right_dataset_not_allowlisted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ReadyDatasetSemanticLinkEndpoint {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub snapshot_id: uuid::Uuid,
+    pub source_fingerprint: String,
+}
+
+pub fn dataset_cross_semantic_graph_access(
+    tenant_id: TenantId,
+    left_dataset_id: DatasetId,
+    right_dataset_id: DatasetId,
+) -> DatasetCrossSemanticGraphAccess {
+    dataset_cross_semantic_graph_access_from_values(
+        semantic_env_flag(DATASET_CROSS_SEMANTIC_GRAPH_ENABLED_ENV, false),
+        std::env::var(DATASET_CROSS_SEMANTIC_GRAPH_TENANT_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(DATASET_CROSS_SEMANTIC_GRAPH_DATASET_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        tenant_id,
+        left_dataset_id,
+        right_dataset_id,
+    )
+}
+
+pub fn dataset_cross_semantic_graph_access_from_values(
+    enabled: bool,
+    tenant_allowlist: Option<&str>,
+    dataset_allowlist: Option<&str>,
+    tenant_id: TenantId,
+    left_dataset_id: DatasetId,
+    right_dataset_id: DatasetId,
+) -> DatasetCrossSemanticGraphAccess {
+    if !enabled {
+        return DatasetCrossSemanticGraphAccess::FeatureDisabled;
+    }
+    if !semantic_uuid_csv_contains(tenant_allowlist, tenant_id.0) {
+        return DatasetCrossSemanticGraphAccess::TenantNotAllowlisted;
+    }
+    if !semantic_uuid_csv_contains(dataset_allowlist, left_dataset_id.0) {
+        return DatasetCrossSemanticGraphAccess::LeftDatasetNotAllowlisted;
+    }
+    if !semantic_uuid_csv_contains(dataset_allowlist, right_dataset_id.0) {
+        return DatasetCrossSemanticGraphAccess::RightDatasetNotAllowlisted;
+    }
+    DatasetCrossSemanticGraphAccess::Allowed
+}
+
+pub fn plan_dataset_semantic_link_runs_from_values(
+    enabled: bool,
+    tenant_allowlist: Option<&str>,
+    dataset_allowlist: Option<&str>,
+    current: &ReadyDatasetSemanticLinkEndpoint,
+    candidates: &[ReadyDatasetSemanticLinkEndpoint],
+    available_at: DateTime<Utc>,
+) -> Vec<NewDatasetSemanticLinkRun> {
+    let unique_candidates = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.tenant_id == current.tenant_id
+                && candidate.dataset_id != current.dataset_id
+                && dataset_cross_semantic_graph_access_from_values(
+                    enabled,
+                    tenant_allowlist,
+                    dataset_allowlist,
+                    current.tenant_id,
+                    current.dataset_id,
+                    candidate.dataset_id,
+                )
+                .is_allowed()
+        })
+        .cloned()
+        .map(|candidate| ((candidate.dataset_id, candidate.snapshot_id), candidate))
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+
+    unique_candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let (left_dataset_id, right_dataset_id, left_snapshot_id, right_snapshot_id) =
+                storage::canonical_dataset_semantic_link_pair(
+                    current.dataset_id,
+                    candidate.dataset_id,
+                    current.snapshot_id,
+                    candidate.snapshot_id,
+                )
+                .ok()?;
+            let (left_source_fingerprint, right_source_fingerprint) =
+                if current.dataset_id < candidate.dataset_id {
+                    (
+                        current.source_fingerprint.as_str(),
+                        candidate.source_fingerprint.as_str(),
+                    )
+                } else {
+                    (
+                        candidate.source_fingerprint.as_str(),
+                        current.source_fingerprint.as_str(),
+                    )
+                };
+            Some(NewDatasetSemanticLinkRun {
+                left_dataset_id,
+                right_dataset_id,
+                left_snapshot_id,
+                right_snapshot_id,
+                generation_version:
+                    crate::cross_dataset_semantic_graph::DATASET_SEMANTIC_GRAPH_GENERATION_VERSION
+                        .to_string(),
+                source_fingerprint: dataset_semantic_link_source_fingerprint(
+                    left_dataset_id,
+                    right_dataset_id,
+                    left_snapshot_id,
+                    right_snapshot_id,
+                    left_source_fingerprint,
+                    right_source_fingerprint,
+                ),
+                priority: 100,
+                max_attempts: 3,
+                available_at,
+            })
+        })
+        .collect()
+}
+
+pub fn dataset_semantic_link_source_fingerprint(
+    left_dataset_id: DatasetId,
+    right_dataset_id: DatasetId,
+    left_snapshot_id: uuid::Uuid,
+    right_snapshot_id: uuid::Uuid,
+    left_source_fingerprint: &str,
+    right_source_fingerprint: &str,
+) -> String {
+    let (left_source_fingerprint, right_source_fingerprint) = if left_dataset_id < right_dataset_id
+    {
+        (left_source_fingerprint, right_source_fingerprint)
+    } else {
+        (right_source_fingerprint, left_source_fingerprint)
+    };
+    let (left_dataset_id, right_dataset_id, left_snapshot_id, right_snapshot_id) =
+        storage::canonical_dataset_semantic_link_pair(
+            left_dataset_id,
+            right_dataset_id,
+            left_snapshot_id,
+            right_snapshot_id,
+        )
+        .expect("semantic link fingerprint requires distinct endpoints");
+    let mut digest = Sha256::new();
+    for value in [
+        left_dataset_id.to_string(),
+        right_dataset_id.to_string(),
+        left_snapshot_id.to_string(),
+        right_snapshot_id.to_string(),
+        left_source_fingerprint.trim().to_string(),
+        right_source_fingerprint.trim().to_string(),
+        crate::cross_dataset_semantic_graph::DATASET_SEMANTIC_GRAPH_GENERATION_VERSION.to_string(),
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    let mut encoded = String::with_capacity(64);
+    for byte in digest.finalize() {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    encoded
+}
+
+pub async fn enqueue_dataset_semantic_link_runs_for_ready_snapshot(
+    storage: &PgStorage,
+    ready_snapshot: &storage::DatasetSemanticSnapshot,
+    now: DateTime<Utc>,
+) -> Result<usize> {
+    let enabled = semantic_env_flag(DATASET_CROSS_SEMANTIC_GRAPH_ENABLED_ENV, false);
+    let tenant_allowlist = std::env::var(DATASET_CROSS_SEMANTIC_GRAPH_TENANT_ALLOWLIST_ENV).ok();
+    let dataset_allowlist = std::env::var(DATASET_CROSS_SEMANTIC_GRAPH_DATASET_ALLOWLIST_ENV).ok();
+    let current = ReadyDatasetSemanticLinkEndpoint {
+        tenant_id: ready_snapshot.tenant_id,
+        dataset_id: ready_snapshot.dataset_id,
+        snapshot_id: ready_snapshot.id,
+        source_fingerprint: ready_snapshot.source_fingerprint.clone(),
+    };
+    let candidates = storage
+        .dataset_semantic_snapshots()
+        .list_latest_ready_by_tenant(ready_snapshot.tenant_id, 10_000)
+        .await?
+        .into_iter()
+        .map(|snapshot| ReadyDatasetSemanticLinkEndpoint {
+            tenant_id: snapshot.tenant_id,
+            dataset_id: snapshot.dataset_id,
+            snapshot_id: snapshot.id,
+            source_fingerprint: snapshot.source_fingerprint,
+        })
+        .collect::<Vec<_>>();
+    let runs = plan_dataset_semantic_link_runs_from_values(
+        enabled,
+        tenant_allowlist.as_deref(),
+        dataset_allowlist.as_deref(),
+        &current,
+        &candidates,
+        now,
+    );
+    for run in &runs {
+        ensure_dataset_semantic_link_run(storage, ready_snapshot.tenant_id, run, now).await?;
+    }
+    Ok(runs.len())
+}
+
+pub async fn ensure_dataset_semantic_link_run(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    run: &NewDatasetSemanticLinkRun,
+    now: DateTime<Utc>,
+) -> Result<storage::DatasetSemanticLinkRun> {
+    let links = storage.dataset_semantic_links();
+    let persisted = links.create_or_get_run(tenant_id, run, now).await?;
+    if persisted.status != "dead_letter" {
+        links
+            .try_begin_build(
+                tenant_id,
+                &NewDatasetSemanticLinkSnapshot {
+                    left_dataset_id: run.left_dataset_id,
+                    right_dataset_id: run.right_dataset_id,
+                    left_snapshot_id: run.left_snapshot_id,
+                    right_snapshot_id: run.right_snapshot_id,
+                    schema_version:
+                        crate::cross_dataset_semantic_graph::DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION
+                            .to_string(),
+                    generation_version: run.generation_version.clone(),
+                    source_fingerprint: run.source_fingerprint.clone(),
+                    manifest: json!({}),
+                },
+                now,
+            )
+            .await?;
+    }
+    Ok(persisted)
+}
+
+fn semantic_uuid_csv_contains(csv: Option<&str>, expected: uuid::Uuid) -> bool {
+    csv.into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().parse::<uuid::Uuid>().ok())
+        .any(|value| value == expected)
+}
+
+fn semantic_env_flag(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
 }
 
 pub const MAX_SEMANTIC_SNAPSHOT_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
@@ -568,6 +862,23 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage_with_limit(
         snapshot.source_fingerprint == preview.source_fingerprint
             && snapshot.generation_version == DATASET_SEMANTIC_GENERATION_VERSION
     }) {
+        if let Some(snapshot) = latest_ready.as_ref() {
+            if let Err(_) = enqueue_dataset_semantic_link_runs_for_ready_snapshot(
+                storage,
+                snapshot,
+                generated_at,
+            )
+            .await
+            {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    dataset_id = %dataset_id,
+                    snapshot_id = %snapshot.id,
+                    failure_code = "link_enqueue_repair_failed",
+                    "existing ready semantic snapshot could not repair cross-dataset link enqueue"
+                );
+            }
+        }
         let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
         return Ok(DatasetSemanticRebuildOutcome {
             status: "skipped".to_string(),
@@ -629,7 +940,7 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage_with_limit(
         });
     }
     let manifest = serde_json::to_value(&preview.snapshot)?;
-    storage
+    let ready_record = storage
         .dataset_semantic_snapshots()
         .mark_ready(
             tenant_id,
@@ -642,6 +953,18 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage_with_limit(
         )
         .await?
         .ok_or_else(|| anyhow!("semantic snapshot build record is no longer claimable"))?;
+    if let Err(_) =
+        enqueue_dataset_semantic_link_runs_for_ready_snapshot(storage, &ready_record, generated_at)
+            .await
+    {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            dataset_id = %dataset_id,
+            snapshot_id = %ready_record.id,
+            failure_code = "link_enqueue_failed",
+            "dataset semantic snapshot is ready but cross-dataset link enqueue failed"
+        );
+    }
     Ok(DatasetSemanticRebuildOutcome {
         status: "ready".to_string(),
         source_fingerprint: preview.source_fingerprint,
@@ -2607,5 +2930,100 @@ mod tests {
             crate::dataset_semantic_source_support::source_fingerprint(&source).len(),
             64
         );
+    }
+
+    #[test]
+    fn semantic_link_enqueue_plan_is_same_tenant_exact_allowlist_and_pair_idempotent() {
+        let tenant_id = TenantId(Uuid::from_u128(1));
+        let current = ReadyDatasetSemanticLinkEndpoint {
+            tenant_id,
+            dataset_id: DatasetId(Uuid::from_u128(10)),
+            snapshot_id: Uuid::from_u128(100),
+            source_fingerprint: "left-source-v1".to_string(),
+        };
+        let allowed_peer = ReadyDatasetSemanticLinkEndpoint {
+            tenant_id,
+            dataset_id: DatasetId(Uuid::from_u128(20)),
+            snapshot_id: Uuid::from_u128(200),
+            source_fingerprint: "right-source-v1".to_string(),
+        };
+        let denied_peer = ReadyDatasetSemanticLinkEndpoint {
+            tenant_id,
+            dataset_id: DatasetId(Uuid::from_u128(30)),
+            snapshot_id: Uuid::from_u128(300),
+            source_fingerprint: "denied-source-v1".to_string(),
+        };
+        let other_tenant_peer = ReadyDatasetSemanticLinkEndpoint {
+            tenant_id: TenantId(Uuid::from_u128(2)),
+            ..allowed_peer.clone()
+        };
+        let tenant_allowlist = tenant_id.to_string();
+        let dataset_allowlist = format!("{},{}", current.dataset_id, allowed_peer.dataset_id);
+        let planned = plan_dataset_semantic_link_runs_from_values(
+            true,
+            Some(&tenant_allowlist),
+            Some(&dataset_allowlist),
+            &current,
+            &[
+                denied_peer,
+                allowed_peer.clone(),
+                other_tenant_peer,
+                allowed_peer.clone(),
+                current.clone(),
+            ],
+            fixture_input().generated_at,
+        );
+
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].left_dataset_id, current.dataset_id);
+        assert_eq!(planned[0].right_dataset_id, allowed_peer.dataset_id);
+        assert_eq!(planned[0].left_snapshot_id, current.snapshot_id);
+        assert_eq!(planned[0].right_snapshot_id, allowed_peer.snapshot_id);
+        assert_eq!(planned[0].max_attempts, 3);
+    }
+
+    #[test]
+    fn semantic_link_pair_identity_changes_with_any_single_snapshot_identity() {
+        let left_dataset_id = DatasetId(Uuid::from_u128(10));
+        let right_dataset_id = DatasetId(Uuid::from_u128(20));
+        let left_snapshot_id = Uuid::from_u128(100);
+        let right_snapshot_id = Uuid::from_u128(200);
+        let original = dataset_semantic_link_source_fingerprint(
+            left_dataset_id,
+            right_dataset_id,
+            left_snapshot_id,
+            right_snapshot_id,
+            "left-source-v1",
+            "right-source-v1",
+        );
+        let reversed = dataset_semantic_link_source_fingerprint(
+            right_dataset_id,
+            left_dataset_id,
+            right_snapshot_id,
+            left_snapshot_id,
+            "right-source-v1",
+            "left-source-v1",
+        );
+        let changed = dataset_semantic_link_source_fingerprint(
+            left_dataset_id,
+            right_dataset_id,
+            Uuid::from_u128(101),
+            right_snapshot_id,
+            "left-source-v1",
+            "right-source-v1",
+        );
+        let source_changed = dataset_semantic_link_source_fingerprint(
+            left_dataset_id,
+            right_dataset_id,
+            left_snapshot_id,
+            right_snapshot_id,
+            "left-source-v2",
+            "right-source-v1",
+        );
+
+        assert_eq!(original, reversed);
+        assert_ne!(original, changed);
+        assert_ne!(original, source_changed);
+        assert_eq!(original.len(), 64);
     }
 }

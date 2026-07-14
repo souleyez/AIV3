@@ -4733,6 +4733,28 @@ pub const DATASET_SEMANTIC_LATEST_READY_SQL: &str = r#"
     limit 1
 "#;
 
+pub const DATASET_SEMANTIC_READY_BY_ID_SQL: &str = r#"
+    select id, tenant_id, dataset_id, schema_version, generation_version,
+           source_fingerprint, status, manifest, source_document_count,
+           source_asset_count, source_record_count, node_count, edge_count,
+           failure_code, generated_at, created_at, updated_at
+    from dataset_semantic_snapshots
+    where tenant_id = $1 and dataset_id = $2 and id = $3 and status = 'ready'
+    limit 1
+"#;
+
+pub const DATASET_SEMANTIC_LATEST_READY_BY_TENANT_SQL: &str = r#"
+    select distinct on (dataset_id)
+           id, tenant_id, dataset_id, schema_version, generation_version,
+           source_fingerprint, status, manifest, source_document_count,
+           source_asset_count, source_record_count, node_count, edge_count,
+           failure_code, generated_at, created_at, updated_at
+    from dataset_semantic_snapshots
+    where tenant_id = $1 and status = 'ready'
+    order by dataset_id asc, generated_at desc, created_at desc, id asc
+    limit $2
+"#;
+
 const DATASET_SEMANTIC_MARK_READY_SQL: &str = r#"
     update dataset_semantic_snapshots
     set status = 'ready', manifest = $4, node_count = $5, edge_count = $6,
@@ -4804,6 +4826,21 @@ pub const DATASET_SEMANTIC_LINK_LATEST_ATTEMPT_SQL: &str = r#"
       and left_dataset_id = $2
       and right_dataset_id = $3
     order by updated_at desc, created_at desc, id asc
+    limit 1
+"#;
+
+pub const DATASET_SEMANTIC_LINK_BY_INPUTS_SQL: &str = r#"
+    select id, tenant_id, left_dataset_id, right_dataset_id,
+           left_snapshot_id, right_snapshot_id, schema_version, generation_version,
+           source_fingerprint, status, manifest, node_count, edge_count,
+           failure_code, generated_at, created_at, updated_at
+    from dataset_semantic_link_snapshots
+    where tenant_id = $1
+      and left_dataset_id = $2
+      and right_dataset_id = $3
+      and left_snapshot_id = $4
+      and right_snapshot_id = $5
+      and generation_version = $6
     limit 1
 "#;
 
@@ -4896,6 +4933,116 @@ pub const DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_SQL: &str = r#"
               available_at, claimed_at, finished_at, failure_code, created_at, updated_at
 "#;
 
+pub const DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_FOR_DATASETS_SQL: &str = r#"
+    with next_run as (
+        select id
+        from dataset_semantic_link_runs
+        where tenant_id = $1
+          and status in ('pending', 'retry_wait')
+          and available_at <= $2
+          and attempt_count < max_attempts
+          and left_dataset_id = any($3::uuid[])
+          and right_dataset_id = any($3::uuid[])
+        order by priority asc, available_at asc, created_at asc, id asc
+        for update skip locked
+        limit 1
+    )
+    update dataset_semantic_link_runs
+    set status = 'running',
+        attempt_count = attempt_count + 1,
+        claimed_at = $2,
+        finished_at = null,
+        failure_code = null,
+        updated_at = $2
+    where tenant_id = $1 and id in (select id from next_run)
+    returning id, tenant_id, left_dataset_id, right_dataset_id,
+              left_snapshot_id, right_snapshot_id, generation_version,
+              source_fingerprint, status, priority, attempt_count, max_attempts,
+              available_at, claimed_at, finished_at, failure_code, created_at, updated_at
+"#;
+
+pub const DATASET_SEMANTIC_LINK_DEFER_RUN_SQL: &str = r#"
+    update dataset_semantic_link_runs
+    set status = 'retry_wait',
+        attempt_count = greatest(attempt_count - 1, 0),
+        available_at = $3,
+        claimed_at = null,
+        finished_at = null,
+        failure_code = null,
+        updated_at = $4
+    where tenant_id = $1 and id = $2 and status = 'running'
+    returning id, tenant_id, left_dataset_id, right_dataset_id,
+              left_snapshot_id, right_snapshot_id, generation_version,
+              source_fingerprint, status, priority, attempt_count, max_attempts,
+              available_at, claimed_at, finished_at, failure_code, created_at, updated_at
+"#;
+
+pub const DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL: &str = r#"
+    update dataset_semantic_link_runs
+    set status = case
+            when attempt_count >= max_attempts then 'dead_letter'
+            else 'retry_wait'
+        end,
+        available_at = $3,
+        claimed_at = null,
+        finished_at = case
+            when attempt_count >= max_attempts then $3
+            else null
+        end,
+        failure_code = 'worker_lease_expired',
+        updated_at = $3
+    where tenant_id = $1
+      and status = 'running'
+      and claimed_at <= $2
+      and left_dataset_id = any($4::uuid[])
+      and right_dataset_id = any($4::uuid[])
+    returning id, tenant_id, left_dataset_id, right_dataset_id,
+              left_snapshot_id, right_snapshot_id, generation_version,
+              source_fingerprint, status, priority, attempt_count, max_attempts,
+              available_at, claimed_at, finished_at, failure_code, created_at, updated_at
+"#;
+
+pub const DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL: &str = r#"
+    update dataset_semantic_link_snapshots
+    set status = 'failed', failure_code = $6, updated_at = $7
+    where tenant_id = $1
+      and left_dataset_id = $2
+      and right_dataset_id = $3
+      and left_snapshot_id = $4
+      and right_snapshot_id = $5
+      and status = 'building'
+"#;
+
+pub const DATASET_SEMANTIC_LINK_MARK_PAIR_READY_STALE_SQL: &str = r#"
+    update dataset_semantic_link_snapshots
+    set manifest = jsonb_set(manifest, '{stale}', 'true'::jsonb, true),
+        updated_at = $4
+    where tenant_id = $1
+      and left_dataset_id = $2
+      and right_dataset_id = $3
+      and status = 'ready'
+"#;
+
+pub const DATASET_SEMANTIC_LINK_MARK_DATASET_READY_STALE_SQL: &str = r#"
+    update dataset_semantic_link_snapshots
+    set manifest = jsonb_set(manifest, '{stale}', 'true'::jsonb, true),
+        updated_at = $3
+    where tenant_id = $1
+      and status = 'ready'
+      and (left_dataset_id = $2 or right_dataset_id = $2)
+"#;
+
+pub const DATASET_SEMANTIC_LINK_REVIVE_DEAD_LETTER_RUN_SQL: &str = r#"
+    update dataset_semantic_link_runs
+    set status = 'pending', attempt_count = 0, available_at = $3,
+        claimed_at = null, finished_at = null, failure_code = null, updated_at = $3
+    where tenant_id = $1 and id = $2 and status = 'dead_letter'
+    returning id, tenant_id, left_dataset_id, right_dataset_id,
+              left_snapshot_id, right_snapshot_id, generation_version,
+              source_fingerprint, status, priority, attempt_count, max_attempts,
+              available_at, claimed_at, finished_at, failure_code, created_at, updated_at
+"#;
+
 pub const DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL: &str = r#"
     update dataset_semantic_link_runs
     set status = case
@@ -4978,6 +5125,10 @@ fn canonical_dataset_semantic_link_dataset_pair(
     } else {
         (right_dataset_id, left_dataset_id)
     })
+}
+
+fn dataset_semantic_link_run_status_requires_failed_build(status: &str) -> bool {
+    status == "dead_letter"
 }
 
 fn validate_dataset_semantic_link_manifest(manifest: &Value) -> Result<()> {
@@ -5141,6 +5292,35 @@ impl PgDatasetSemanticSnapshotRepository {
             .transpose()
     }
 
+    pub async fn load_ready_by_id(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_id: Uuid,
+    ) -> Result<Option<DatasetSemanticSnapshot>> {
+        let row = sqlx::query(DATASET_SEMANTIC_READY_BY_ID_SQL)
+            .bind(tenant_id.0)
+            .bind(dataset_id.0)
+            .bind(snapshot_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_snapshot_row(&row))
+            .transpose()
+    }
+
+    pub async fn list_latest_ready_by_tenant(
+        &self,
+        tenant_id: TenantId,
+        limit: usize,
+    ) -> Result<Vec<DatasetSemanticSnapshot>> {
+        let rows = sqlx::query(DATASET_SEMANTIC_LATEST_READY_BY_TENANT_SQL)
+            .bind(tenant_id.0)
+            .bind(limit.clamp(1, 10_000) as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(map_dataset_semantic_snapshot_row).collect()
+    }
+
     pub async fn load_latest_attempt(
         &self,
         tenant_id: TenantId,
@@ -5223,6 +5403,35 @@ impl PgDatasetSemanticLinkRepository {
             .bind(tenant_id.0)
             .bind(left_dataset_id.0)
             .bind(right_dataset_id.0)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_link_snapshot_row(&row))
+            .transpose()
+    }
+
+    pub async fn load_by_inputs(
+        &self,
+        tenant_id: TenantId,
+        left_dataset_id: DatasetId,
+        right_dataset_id: DatasetId,
+        left_snapshot_id: Uuid,
+        right_snapshot_id: Uuid,
+        generation_version: &str,
+    ) -> Result<Option<DatasetSemanticLinkSnapshot>> {
+        let (left_dataset_id, right_dataset_id, left_snapshot_id, right_snapshot_id) =
+            canonical_dataset_semantic_link_pair(
+                left_dataset_id,
+                right_dataset_id,
+                left_snapshot_id,
+                right_snapshot_id,
+            )?;
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_BY_INPUTS_SQL)
+            .bind(tenant_id.0)
+            .bind(left_dataset_id.0)
+            .bind(right_dataset_id.0)
+            .bind(left_snapshot_id)
+            .bind(right_snapshot_id)
+            .bind(generation_version.trim())
             .fetch_optional(&self.pool)
             .await?;
         row.map(|row| map_dataset_semantic_link_snapshot_row(&row))
@@ -5343,24 +5552,207 @@ impl PgDatasetSemanticLinkRepository {
             .transpose()
     }
 
-    pub async fn retry_or_dead_letter(
+    pub async fn claim_ready_run_for_datasets(
+        &self,
+        tenant_id: TenantId,
+        claimed_at: DateTime<Utc>,
+        allowed_dataset_ids: &[DatasetId],
+    ) -> Result<Option<DatasetSemanticLinkRun>> {
+        if allowed_dataset_ids.is_empty() {
+            return Ok(None);
+        }
+        let allowed_dataset_ids = allowed_dataset_ids
+            .iter()
+            .map(|dataset_id| dataset_id.0)
+            .collect::<Vec<_>>();
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_FOR_DATASETS_SQL)
+            .bind(tenant_id.0)
+            .bind(claimed_at)
+            .bind(allowed_dataset_ids)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_link_run_row(&row))
+            .transpose()
+    }
+
+    pub async fn defer_run_without_attempt(
         &self,
         tenant_id: TenantId,
         run_id: Uuid,
-        failure_code: &str,
         available_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<Option<DatasetSemanticLinkRun>> {
-        let row = sqlx::query(DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL)
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_DEFER_RUN_SQL)
             .bind(tenant_id.0)
             .bind(run_id)
-            .bind(failure_code.trim())
             .bind(available_at)
             .bind(now)
             .fetch_optional(&self.pool)
             .await?;
         row.map(|row| map_dataset_semantic_link_run_row(&row))
             .transpose()
+    }
+
+    pub async fn recover_stale_runs(
+        &self,
+        tenant_id: TenantId,
+        claimed_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+        allowed_dataset_ids: &[DatasetId],
+    ) -> Result<Vec<DatasetSemanticLinkRun>> {
+        if allowed_dataset_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let allowed_dataset_ids = allowed_dataset_ids
+            .iter()
+            .map(|dataset_id| dataset_id.0)
+            .collect::<Vec<_>>();
+        let mut transaction = self.pool.begin().await?;
+        let rows = sqlx::query(DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL)
+            .bind(tenant_id.0)
+            .bind(claimed_before)
+            .bind(now)
+            .bind(allowed_dataset_ids)
+            .fetch_all(&mut *transaction)
+            .await?;
+        let runs = rows
+            .iter()
+            .map(map_dataset_semantic_link_run_row)
+            .collect::<Result<Vec<_>>>()?;
+        for run in &runs {
+            let failed_build_count = sqlx::query(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL)
+                .bind(tenant_id.0)
+                .bind(run.left_dataset_id.0)
+                .bind(run.right_dataset_id.0)
+                .bind(run.left_snapshot_id)
+                .bind(run.right_snapshot_id)
+                .bind("worker_lease_expired")
+                .bind(now)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+            if failed_build_count > 0 {
+                sqlx::query(DATASET_SEMANTIC_LINK_MARK_PAIR_READY_STALE_SQL)
+                    .bind(tenant_id.0)
+                    .bind(run.left_dataset_id.0)
+                    .bind(run.right_dataset_id.0)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(runs)
+    }
+
+    pub async fn mark_ready_links_stale_for_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        now: DateTime<Utc>,
+    ) -> Result<u64> {
+        Ok(
+            sqlx::query(DATASET_SEMANTIC_LINK_MARK_DATASET_READY_STALE_SQL)
+                .bind(tenant_id.0)
+                .bind(dataset_id.0)
+                .bind(now)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
+
+    pub async fn revive_dead_letter_run(
+        &self,
+        tenant_id: TenantId,
+        run_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticLinkRun>> {
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_REVIVE_DEAD_LETTER_RUN_SQL)
+            .bind(tenant_id.0)
+            .bind(run_id)
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| map_dataset_semantic_link_run_row(&row))
+            .transpose()
+    }
+
+    pub async fn retry_or_dead_letter(
+        &self,
+        tenant_id: TenantId,
+        run: &DatasetSemanticLinkRun,
+        failure_code: &str,
+        available_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticLinkRun>> {
+        if run.tenant_id != tenant_id {
+            return Err(anyhow!("dataset semantic link run tenant mismatch"));
+        }
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL)
+            .bind(tenant_id.0)
+            .bind(run.id)
+            .bind(failure_code.trim())
+            .bind(available_at)
+            .bind(now)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let transitioned = row
+            .map(|row| map_dataset_semantic_link_run_row(&row))
+            .transpose()?;
+        if transitioned.as_ref().is_some_and(|transitioned| {
+            dataset_semantic_link_run_status_requires_failed_build(&transitioned.status)
+        }) {
+            sqlx::query(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL)
+                .bind(tenant_id.0)
+                .bind(run.left_dataset_id.0)
+                .bind(run.right_dataset_id.0)
+                .bind(run.left_snapshot_id)
+                .bind(run.right_snapshot_id)
+                .bind(failure_code.trim())
+                .bind(now)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(transitioned)
+    }
+
+    pub async fn mark_obsolete_run_succeeded(
+        &self,
+        tenant_id: TenantId,
+        run: &DatasetSemanticLinkRun,
+        failure_code: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<Option<DatasetSemanticLinkRun>> {
+        if run.tenant_id != tenant_id {
+            return Err(anyhow!("dataset semantic link run tenant mismatch"));
+        }
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(DATASET_SEMANTIC_LINK_MARK_RUN_SUCCEEDED_SQL)
+            .bind(tenant_id.0)
+            .bind(run.id)
+            .bind(finished_at)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let transitioned = row
+            .map(|row| map_dataset_semantic_link_run_row(&row))
+            .transpose()?;
+        if transitioned.is_some() {
+            sqlx::query(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL)
+                .bind(tenant_id.0)
+                .bind(run.left_dataset_id.0)
+                .bind(run.right_dataset_id.0)
+                .bind(run.left_snapshot_id)
+                .bind(run.right_snapshot_id)
+                .bind(failure_code.trim())
+                .bind(finished_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(transitioned)
     }
 
     pub async fn mark_run_succeeded(
@@ -12280,6 +12672,12 @@ mod tests {
         assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("dataset_id = $2"));
         assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("created_at <= $3"));
         assert!(DATASET_SEMANTIC_ACTIVE_MEMBERSHIPS_SQL.contains("expires_at > $3"));
+        assert!(DATASET_SEMANTIC_READY_BY_ID_SQL.contains("tenant_id = $1"));
+        assert!(DATASET_SEMANTIC_READY_BY_ID_SQL.contains("dataset_id = $2"));
+        assert!(DATASET_SEMANTIC_READY_BY_ID_SQL.contains("id = $3"));
+        assert!(DATASET_SEMANTIC_READY_BY_ID_SQL.contains("status = 'ready'"));
+        assert!(DATASET_SEMANTIC_LATEST_READY_BY_TENANT_SQL.contains("tenant_id = $1"));
+        assert!(DATASET_SEMANTIC_LATEST_READY_BY_TENANT_SQL.contains("distinct on (dataset_id)"));
     }
 
     #[test]
@@ -12318,6 +12716,18 @@ mod tests {
         assert!(validate_dataset_semantic_link_ready_payload(&json!([]), 3, 4).is_err());
         assert!(validate_dataset_semantic_link_ready_payload(&json!({}), -1, 4).is_err());
         assert!(validate_dataset_semantic_link_ready_payload(&json!({}), 3, -1).is_err());
+    }
+
+    #[test]
+    fn dataset_semantic_link_terminal_run_state_fails_any_orphan_build() {
+        assert!(dataset_semantic_link_run_status_requires_failed_build(
+            "dead_letter"
+        ));
+        for non_terminal_status in ["pending", "running", "retry_wait", "succeeded"] {
+            assert!(!dataset_semantic_link_run_status_requires_failed_build(
+                non_terminal_status
+            ));
+        }
     }
 
     #[test]
@@ -12380,9 +12790,31 @@ mod tests {
         for (name, sql) in [
             ("latest ready", DATASET_SEMANTIC_LINK_LATEST_READY_SQL),
             ("latest attempt", DATASET_SEMANTIC_LINK_LATEST_ATTEMPT_SQL),
+            ("exact inputs", DATASET_SEMANTIC_LINK_BY_INPUTS_SQL),
             ("mark ready", DATASET_SEMANTIC_LINK_MARK_READY_SQL),
             ("mark failed", DATASET_SEMANTIC_LINK_MARK_FAILED_SQL),
             ("claim run", DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_SQL),
+            (
+                "allowlisted claim run",
+                DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_FOR_DATASETS_SQL,
+            ),
+            ("defer run", DATASET_SEMANTIC_LINK_DEFER_RUN_SQL),
+            (
+                "recover stale run",
+                DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL,
+            ),
+            (
+                "fail stale build",
+                DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL,
+            ),
+            (
+                "stale dataset links",
+                DATASET_SEMANTIC_LINK_MARK_DATASET_READY_STALE_SQL,
+            ),
+            (
+                "revive dead letter",
+                DATASET_SEMANTIC_LINK_REVIVE_DEAD_LETTER_RUN_SQL,
+            ),
             ("retry run", DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL),
             ("succeed run", DATASET_SEMANTIC_LINK_MARK_RUN_SUCCEEDED_SQL),
         ] {
@@ -12400,9 +12832,29 @@ mod tests {
             assert!(sql.contains("on conflict"));
         }
         assert!(DATASET_SEMANTIC_LINK_MARK_READY_SQL.contains("status = 'building'"));
+        assert!(DATASET_SEMANTIC_LINK_BY_INPUTS_SQL.contains("left_snapshot_id = $4"));
+        assert!(DATASET_SEMANTIC_LINK_BY_INPUTS_SQL.contains("right_snapshot_id = $5"));
         assert!(DATASET_SEMANTIC_LINK_MARK_FAILED_SQL.contains("status = 'building'"));
         assert!(DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_SQL.contains("for update skip locked"));
         assert!(DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_SQL.contains("attempt_count + 1"));
+        assert!(DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_FOR_DATASETS_SQL
+            .contains("left_dataset_id = any($3::uuid[])"));
+        assert!(DATASET_SEMANTIC_LINK_CLAIM_READY_RUN_FOR_DATASETS_SQL
+            .contains("right_dataset_id = any($3::uuid[])"));
+        assert!(DATASET_SEMANTIC_LINK_DEFER_RUN_SQL
+            .contains("attempt_count = greatest(attempt_count - 1, 0)"));
+        assert!(DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL
+            .contains("failure_code = 'worker_lease_expired'"));
+        assert!(DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL
+            .contains("left_dataset_id = any($4::uuid[])"));
+        assert!(DATASET_SEMANTIC_LINK_RECOVER_STALE_RUNS_SQL
+            .contains("right_dataset_id = any($4::uuid[])"));
+        assert!(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL.contains("failure_code = $6"));
+        assert!(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL.contains("updated_at = $7"));
+        assert!(DATASET_SEMANTIC_LINK_FAIL_BUILD_FOR_RUN_SQL.contains("status = 'building'"));
+        assert!(DATASET_SEMANTIC_LINK_MARK_PAIR_READY_STALE_SQL.contains("jsonb_set"));
+        assert!(DATASET_SEMANTIC_LINK_MARK_DATASET_READY_STALE_SQL.contains("jsonb_set"));
+        assert!(DATASET_SEMANTIC_LINK_REVIVE_DEAD_LETTER_RUN_SQL.contains("status = 'dead_letter'"));
         assert!(DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL
             .contains("attempt_count >= max_attempts"));
         assert!(DATASET_SEMANTIC_LINK_RETRY_OR_DEAD_LETTER_SQL.contains("'dead_letter'"));

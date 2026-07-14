@@ -12,6 +12,7 @@ domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
 observability = { path = "../observability" }
 platform-api = { path = "../platform-api" }
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
