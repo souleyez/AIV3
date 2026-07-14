@@ -151,6 +151,9 @@ fn apply_latest_attempt_state(
 }
 
 fn sanitize_understanding_for_public_response(understanding: &mut DatasetSemanticUnderstanding) {
+    understanding
+        .fields
+        .retain(|field| !looks_internal(&field.technical_name) && !looks_internal(&field.label));
     for field in &mut understanding.fields {
         field.examples = safe_public_examples(&field.examples);
         field.evidence_refs.retain(safe_evidence_ref);
@@ -158,6 +161,16 @@ fn sanitize_understanding_for_public_response(understanding: &mut DatasetSemanti
     for object in &mut understanding.objects {
         object.evidence_refs.retain(safe_evidence_ref);
     }
+    let valid_node_ids = understanding
+        .objects
+        .iter()
+        .map(|object| object.id.as_str())
+        .chain(understanding.fields.iter().map(|field| field.id.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    understanding.relations.retain(|relation| {
+        valid_node_ids.contains(relation.source_id.as_str())
+            && valid_node_ids.contains(relation.target_id.as_str())
+    });
     for relation in &mut understanding.relations {
         relation.evidence_refs.retain(safe_evidence_ref);
     }
@@ -181,6 +194,7 @@ fn looks_internal(value: &str) -> bool {
             "/users/",
             "/root/",
             "/etc/",
+            "file:",
             "file://",
             "postgres://",
             "mysql://",
@@ -316,7 +330,13 @@ mod tests {
                 label: "内部路径".to_string(),
             }],
         });
+        let mut unsafe_locator = contract.fields[0].clone();
+        unsafe_locator.id = "field:unsafe".to_string();
+        unsafe_locator.label = "File: internal/source.xlsx".to_string();
+        unsafe_locator.technical_name = "File: internal/source.xlsx".to_string();
+        contract.fields.push(unsafe_locator);
         sanitize_understanding_for_public_response(&mut contract);
+        assert_eq!(contract.fields.len(), 1);
         assert_eq!(contract.fields[0].examples, vec!["普通值"]);
         assert!(contract.fields[0].evidence_refs.is_empty());
     }
