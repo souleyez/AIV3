@@ -104,10 +104,18 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
         .retrieval_evidences()
         .list_latest_by_document_ids(tenant_id, &document_ids, 50_000)
         .await?;
-    let assets = storage
+    let raw_assets = storage
         .asset_items()
         .list_by_dataset_scope(tenant_id, dataset_id, limit.clamp(1, 10_000))
         .await?;
+    let scoped_document_ids = documents
+        .iter()
+        .map(|document| document.id.to_string())
+        .collect::<BTreeSet<_>>();
+    let assets = raw_assets
+        .into_iter()
+        .filter(|asset| !asset_is_derived_from_documents(asset, &scoped_document_ids))
+        .collect::<Vec<_>>();
     let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
     let profiles = storage
         .asset_items()
@@ -470,13 +478,38 @@ pub fn build_dataset_semantic_snapshot(
             .unwrap_or(group[0]);
         let object_id = stable_semantic_id("object", &[group_key]);
         object_ids.insert(group_key.clone(), object_id.clone());
-        let label = representative
-            .label_hint
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&representative.technical_name)
-            .trim()
-            .to_string();
+        let object_dictionary_key = (
+            representative.source_kind.trim().to_ascii_lowercase(),
+            representative.object_key.trim().to_ascii_lowercase(),
+            "*".to_string(),
+        );
+        let confirmed_object_label = dictionary.get(&object_dictionary_key).filter(|candidate| {
+            candidate.status == "confirmed" && !candidate.label.trim().is_empty()
+        });
+        let (label, label_source, status, confidence, dictionary_description) =
+            if let Some(candidate) = confirmed_object_label {
+                (
+                    candidate.label.trim().to_string(),
+                    "confirmed_dictionary".to_string(),
+                    SemanticStatus::Confirmed,
+                    candidate.confidence.clamp(0.0, 1.0),
+                    candidate.description.clone(),
+                )
+            } else {
+                (
+                    representative
+                        .label_hint
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or(&representative.technical_name)
+                        .trim()
+                        .to_string(),
+                    representative.label_source.clone(),
+                    representative.status,
+                    representative.confidence,
+                    None,
+                )
+            };
         let evidence_refs = group
             .iter()
             .flat_map(|item| item.evidence_refs.clone())
@@ -491,11 +524,12 @@ pub fn build_dataset_semantic_snapshot(
             kind: representative.object_kind.clone(),
             label,
             technical_name: representative.object_key.clone(),
-            description: format!("由 {source_count} 个来源记录的可追溯结构观察归纳。"),
-            label_source: representative.label_source.clone(),
-            confidence: representative.confidence,
+            description: dictionary_description
+                .unwrap_or_else(|| format!("由 {source_count} 个来源记录的可追溯结构观察归纳。")),
+            label_source,
+            confidence,
             coverage_count: source_count,
-            status: representative.status,
+            status,
             evidence_refs,
         });
     }
@@ -767,6 +801,24 @@ fn object_group_key(observation: &SemanticObservation) -> String {
     }
 }
 
+fn asset_is_derived_from_documents(
+    asset: &storage::AssetItemRecord,
+    scoped_document_ids: &BTreeSet<String>,
+) -> bool {
+    let metadata_document_id = asset
+        .metadata
+        .get("document_id")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    metadata_document_id.is_some_and(|document_id| scoped_document_ids.contains(document_id))
+        || (asset.source_kind.eq_ignore_ascii_case("document")
+            && asset
+                .source_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|document_id| scoped_document_ids.contains(document_id)))
+}
+
 fn semantic_field_observation(observation: &SemanticObservation) -> bool {
     !matches!(
         observation.observation_kind.as_str(),
@@ -1011,7 +1063,12 @@ mod tests {
                 ..SemanticCoverage::default()
             },
             observations: adapt_semantic_profile(&source),
-            dictionary_entries: Vec::new(),
+            dictionary_entries: vec![SnapshotDictionaryEntry {
+                source_kind: "database".to_string(),
+                source_object_key: "lease_contract".to_string(),
+                raw_field_key: "*".to_string(),
+                candidate: LabelCandidate::confirmed("租赁合同", "租赁合同主数据及其可追溯结构。"),
+            }],
             explicit_relations: Vec::new(),
             fact_snapshot_refs: vec![DatasetFactSnapshotRef {
                 snapshot_kind: "answer_facts".to_string(),
@@ -1054,6 +1111,7 @@ mod tests {
     #[test]
     fn snapshot_builder_does_not_promote_unresolved_english_identifier_to_headline() {
         let mut input = fixture_input();
+        input.dictionary_entries.clear();
         for observation in &mut input.observations {
             observation.label_hint = Some("cardparentname".to_string());
             observation.status = SemanticStatus::Unresolved;
@@ -1302,6 +1360,37 @@ mod tests {
             .limitations
             .iter()
             .any(|item| item.contains("暂无已确认事实")));
+    }
+
+    #[test]
+    fn document_derived_assets_are_not_counted_as_independent_semantic_sources() {
+        let document_id = Uuid::from_u128(42).to_string();
+        let asset = storage::AssetItemRecord {
+            id: Uuid::from_u128(43),
+            tenant_id: TenantId(Uuid::from_u128(2)),
+            asset_library_id: None,
+            collection_id: None,
+            external_id: None,
+            title: "派生文档画像".to_string(),
+            asset_kind: "document".to_string(),
+            source_kind: "document".to_string(),
+            source_id: Some(document_id.clone()),
+            content_type: Some("application/pdf".to_string()),
+            object_key: None,
+            metadata: json!({"document_id": document_id}),
+            profile_count: 1,
+            created_at: fixture_input().generated_at,
+            updated_at: fixture_input().generated_at,
+        };
+        let scoped = BTreeSet::from([Uuid::from_u128(42).to_string()]);
+
+        assert!(asset_is_derived_from_documents(&asset, &scoped));
+
+        let mut standalone = asset;
+        standalone.source_kind = "asset_import".to_string();
+        standalone.source_id = None;
+        standalone.metadata = json!({});
+        assert!(!asset_is_derived_from_documents(&standalone, &scoped));
     }
 
     #[test]

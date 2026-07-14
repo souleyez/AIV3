@@ -54,16 +54,22 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         .get("parse_metadata")
         .unwrap_or(&input.metadata);
     let table = string_at(parse, "source_table").unwrap_or_else(|| input.title.clone());
+    let table_comment = string_at(parse, "table_comment");
+    let (label_source, status, confidence) = if table_comment.is_some() {
+        ("source_comment", SemanticStatus::Confirmed, 1.0)
+    } else {
+        ("unresolved_source_object", SemanticStatus::Unresolved, 0.0)
+    };
     let mut output = vec![observation(
         input,
         "object",
         "database_table",
         &table,
         &table,
-        Some(input.title.clone()),
-        "source_title",
-        SemanticStatus::Observed,
-        0.95,
+        table_comment,
+        label_source,
+        status,
+        confidence,
         json_subset(parse, &["schema", "table_comment"]),
     )];
 
