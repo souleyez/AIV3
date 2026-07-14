@@ -196,6 +196,7 @@ async function staticFixtureSmoke() {
   assertIncludes(component, 'echarts.getInstanceByDom(chartRef.current)', 'single-instance lifecycle');
   assertIncludes(component, "replaceMerge: ['series']", 'incremental series update');
   assertIncludes(component, 'lazyUpdate: true', 'lazy ECharts update');
+  assertIncludes(component, "layout: force.layoutAnimation ? 'force' : 'none'", 'large-graph deterministic layout');
   assertIncludes(component, 'new ResizeObserver(scheduleChartResize)', 'resize observer');
   assertIncludes(component, 'window.requestAnimationFrame', 'resize throttling');
   assertIncludes(component, "event.key === 'Escape'", 'focus-mode Escape exit');
@@ -454,9 +455,22 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
   };
 }
 
+async function openDatasetDirectory(page) {
+  const datasetPageButton = page.getByRole('button', { name: '数据集', exact: true });
+  assert.equal(await datasetPageButton.count(), 1, 'main toolbar must expose one dataset page button');
+  if (!await datasetPageButton.evaluate((element) => element.classList.contains('active'))) {
+    await datasetPageButton.click();
+  }
+  await page.locator('.dataset-directory-workspace .dataset-understanding-panel').waitFor({
+    state: 'visible',
+    timeout: 15_000,
+  });
+}
+
 async function navigateToReadyChart(page, targetUrl) {
   const startedAt = performance.now();
   await page.goto(targetUrl, { waitUntil: 'networkidle' });
+  await openDatasetDirectory(page);
   const targetDataset = datasetId
     ? await selectAndVerifyTargetDataset(page, datasetId, datasetTitle)
     : null;
@@ -474,6 +488,18 @@ async function measureDensityInteraction(page, chart, samples) {
   if (await standard.count() === 0 || await expanded.count() === 0) {
     return { status: 'skipped', reason: 'density controls were not present on the live page' };
   }
+  // First-time chart initialization is measured separately by the
+  // first-interactive gate. Warm both density paths before sampling the
+  // steady-state selection/filter interaction budget.
+  for (const control of [expanded, standard]) {
+    const previous = await chart.evaluate((element) => Number(element.dataset.echartsUpdateCount || 0));
+    await control.click();
+    await page.waitForFunction(
+      (updateCount) => Number(document.querySelector('.dataset-understanding-chart')?.dataset.echartsUpdateCount || 0) > updateCount,
+      previous,
+      { timeout: 10_000 },
+    );
+  }
   const elapsed = [];
   for (let index = 0; index < samples; index += 1) {
     const previous = await chart.evaluate((element) => Number(element.dataset.echartsUpdateCount || 0));
@@ -487,7 +513,10 @@ async function measureDensityInteraction(page, chart, samples) {
     elapsed.push(performance.now() - startedAt);
   }
   const p95Ms = percentile(elapsed, 95);
-  assert.ok(p95Ms <= 100, `live selection/filter p95 was ${p95Ms.toFixed(2)}ms`);
+  assert.ok(
+    p95Ms <= 100,
+    `live selection/filter p95 was ${p95Ms.toFixed(2)}ms (samples=${elapsed.map(rounded).join(',')})`,
+  );
   return {
     status: 'measured',
     method: 'Playwright density toggle to ECharts update counter',

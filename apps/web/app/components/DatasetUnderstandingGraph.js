@@ -113,7 +113,11 @@ function optionForModel(model, filters, projectedGraph = null) {
     series: [{
       id: DATASET_GRAPH_SERIES_ID,
       type: 'graph',
-      layout: 'force',
+      // Large expanded views already have deterministic ring/fan positions.
+      // Re-running force relaxation for every density/filter interaction adds
+      // avoidable main-thread work, so only the animated <=120-node view uses
+      // ECharts force layout.
+      layout: force.layoutAnimation ? 'force' : 'none',
       roam: true,
       draggable: true,
       cursor: 'grab',
