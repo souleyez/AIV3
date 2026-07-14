@@ -2,6 +2,7 @@ import {
   canonicalDocumentTitle,
   projectFallbackLabel,
 } from './dataset-understanding-label-quality.js';
+import { applyDatasetUnderstandingGraphBudget } from './dataset-understanding-graph-budget.js';
 
 export const DATASET_GRAPH_CATEGORIES = [
   { key: 'dataset', name: '数据集', color: '#f8fbff' },
@@ -461,25 +462,13 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
     viewMode = 'business',
     focusNodeId = '',
     focusDepth = 'all',
+    density = 'standard',
   } = options;
   const localIds = focusDepth === 'all'
     ? null
     : graphNeighborhoodIds(model, focusNodeId, focusDepth);
   const revealUnresolved = activeCategory === 'unresolved';
-  const preferredBusinessFieldIds = new Set();
-  if (model.mode === 'semantic' && viewMode === 'business' && !revealUnresolved) {
-    const fieldsByObject = new Map();
-    model.nodes.filter((node) => node.entityType === 'field' && !node.technicalOnly).forEach((node) => {
-      const fields = fieldsByObject.get(node.objectId) || [];
-      fields.push(node);
-      fieldsByObject.set(node.objectId, fields);
-    });
-    fieldsByObject.forEach((fields) => fields
-      .sort((left, right) => right.businessScore - left.businessScore || left.name.localeCompare(right.name, 'zh-CN'))
-      .slice(0, 4)
-      .forEach((field) => preferredBusinessFieldIds.add(field.id)));
-  }
-  const nodes = model.nodes.filter((node) => {
+  const candidateNodes = model.nodes.filter((node) => {
     if (activeCategory !== 'all' && node.kind !== 'dataset' && node.kind !== activeCategory) return false;
     if (
       model.mode === 'semantic'
@@ -488,23 +477,31 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
       && node.kind !== 'dataset'
       && (node.kind === 'unresolved' || node.technicalOnly)
     ) return false;
-    if (
-      model.mode === 'semantic'
-      && viewMode === 'business'
-      && !revealUnresolved
-      && node.entityType === 'field'
-      && !preferredBusinessFieldIds.has(node.id)
-    ) return false;
     if (localIds && !localIds.has(node.id)) return false;
     return true;
   });
-  const visibleIds = new Set(nodes.map((node) => node.id));
-  const links = model.links.filter((link) => (
-    visibleIds.has(link.source)
-      && visibleIds.has(link.target)
-      && (activeRelationType === 'all' || link.type === activeRelationType)
+  const candidateIds = new Set(candidateNodes.map((node) => node.id));
+  const candidateLinks = model.links.filter((link) => (
+    candidateIds.has(link.source) && candidateIds.has(link.target)
   ));
-  return { nodes, links };
+  const budgeted = applyDatasetUnderstandingGraphBudget({
+    nodes: candidateNodes,
+    links: candidateLinks,
+  }, {
+    density,
+    selectedNodeId: focusNodeId,
+    allowTechnical: viewMode !== 'business' || revealUnresolved,
+  });
+  if (activeRelationType === 'all') return budgeted;
+  const links = budgeted.links.filter((link) => link.type === activeRelationType);
+  return {
+    ...budgeted,
+    links,
+    stats: {
+      ...budgeted.stats,
+      visibleEdgeCount: links.length,
+    },
+  };
 }
 
 function semanticPipelineItems(stage, understanding, nodeById) {

@@ -6,6 +6,10 @@ import {
   DATASET_GRAPH_CATEGORIES,
   filterDatasetUnderstandingGraph,
 } from '../lib/dataset-understanding-graph';
+import {
+  graphBudgetStatusText,
+  graphDensityForContainerWidth,
+} from '../lib/dataset-understanding-graph-budget';
 
 function compactNumber(value) {
   const number = Number(value) || 0;
@@ -57,8 +61,9 @@ function semanticRoleLabel(value) {
   }[value] || value || '待判断';
 }
 
-function optionForModel(model, filters) {
-  const { nodes: visibleNodes, links: visibleLinks } = filterDatasetUnderstandingGraph(model, filters);
+function optionForModel(model, filters, projectedGraph = null) {
+  const { nodes: visibleNodes, links: visibleLinks } = projectedGraph
+    || filterDatasetUnderstandingGraph(model, filters);
 
   return {
     animationDuration: 650,
@@ -411,6 +416,10 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const [selectedLinkId, setSelectedLinkId] = useState('');
   const [selectedStageKey, setSelectedStageKey] = useState('overview');
   const [chartState, setChartState] = useState('loading');
+  const [densityPreference, setDensityPreference] = useState('auto');
+  const [chartContainerWidth, setChartContainerWidth] = useState(1024);
+  const responsiveDensity = graphDensityForContainerWidth(chartContainerWidth);
+  const graphDensity = densityPreference === 'auto' ? responsiveDensity : densityPreference;
   const selectedNode = model.nodes.find((node) => node.id === selectedNodeId) || model.nodes[0] || null;
   const selectedLink = model.links.find((link) => link.id === selectedLinkId) || null;
   const selectedLinkSource = selectedLink
@@ -425,7 +434,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     activeRelationType: 'all',
     viewMode,
     focusDepth: 'all',
-  }), [model, viewMode]);
+    density: graphDensity,
+  }), [model, viewMode, graphDensity]);
   const categoryCounts = useMemo(() => Object.fromEntries(
     DATASET_GRAPH_CATEGORIES.map((category) => [
       category.key,
@@ -439,6 +449,22 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     observed: overviewGraph.links.filter((link) => link.type === 'observed').length,
     inferred: overviewGraph.links.filter((link) => link.type === 'inferred').length,
   }), [overviewGraph.links]);
+  const activeGraph = useMemo(() => filterDatasetUnderstandingGraph(model, {
+    activeCategory,
+    activeRelationType,
+    viewMode,
+    focusNodeId: selectedNodeId,
+    focusDepth,
+    density: graphDensity,
+  }), [
+    model,
+    activeCategory,
+    activeRelationType,
+    viewMode,
+    selectedNodeId,
+    focusDepth,
+    graphDensity,
+  ]);
   const chartOption = useMemo(
     () => optionForModel(model, {
       activeCategory,
@@ -446,8 +472,18 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       viewMode,
       focusNodeId: selectedNodeId,
       focusDepth,
-    }),
-    [model, activeCategory, activeRelationType, viewMode, selectedNodeId, focusDepth],
+      density: graphDensity,
+    }, activeGraph),
+    [
+      model,
+      activeCategory,
+      activeRelationType,
+      viewMode,
+      selectedNodeId,
+      focusDepth,
+      graphDensity,
+      activeGraph,
+    ],
   );
   const chartSignature = JSON.stringify(chartOption, (key, value) => typeof value === 'function' ? String(value) : value);
 
@@ -459,6 +495,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setActiveRelationType('all');
     setViewMode('business');
     setFocusDepth('all');
+    setDensityPreference('auto');
   }, [model.datasetId]);
 
   useEffect(() => {
@@ -492,10 +529,16 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           setSelectedStageKey('');
         }
       });
+      const syncChartContainer = () => {
+        const width = Math.round(chartRef.current?.getBoundingClientRect?.().width || 0);
+        if (width > 0) setChartContainerWidth((current) => current === width ? current : width);
+        chart?.resize();
+      };
       observer = typeof ResizeObserver === 'undefined'
         ? null
-        : new ResizeObserver(() => chart?.resize());
+        : new ResizeObserver(syncChartContainer);
       observer?.observe(chartRef.current);
+      syncChartContainer();
       setChartState('ready');
     }).catch(() => {
       if (!disposed) setChartState('error');
@@ -672,12 +715,35 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         </div>
       ) : null}
 
+      <div className="dataset-understanding-local-toolbar" aria-label="图谱节点密度">
+        <span>节点密度</span>
+        {[
+          ['auto', `自适应（${responsiveDensity === 'compact' ? '精简' : '标准'}）`],
+          ['compact', '精简'],
+          ['standard', '标准'],
+          ['expanded', '展开'],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={densityPreference === key ? 'active' : ''}
+            onClick={() => setDensityPreference(key)}
+          >
+            {label}
+          </button>
+        ))}
+        <small>{graphBudgetStatusText(activeGraph.stats)}</small>
+      </div>
+
       <div className="dataset-understanding-canvas-grid">
         <div className="dataset-understanding-chart-shell">
           <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} ${model.mode === 'semantic' ? '知识连接图' : '资料来源连接图'}`} />
           {chartState === 'loading' ? <div className="dataset-understanding-chart-state">正在生成理解图谱…</div> : null}
           {chartState === 'error' ? <div className="dataset-understanding-chart-state">图谱画布加载失败，可使用右侧证据详情和下方清单。</div> : null}
-          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 每个对象优先展示 4 个中文字段' : ' · 低质量标签已移入待解释清单'}</div>
+          <div className="dataset-understanding-chart-hint">
+            {graphBudgetStatusText(activeGraph.stats)} · 滚轮缩放 · 拖拽节点 · 点击查看证据
+            {model.mode === 'semantic' ? ' · 字段按对象公平分配' : ' · 低质量标签已移入待解释清单'}
+          </div>
         </div>
 
         <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">

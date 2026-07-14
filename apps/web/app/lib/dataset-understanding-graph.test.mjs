@@ -436,7 +436,7 @@ test('semantic graph replaces mixed technical and numbered labels with concise C
     .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
 });
 
-test('business graph keeps at most four trusted Chinese fields per object', () => {
+test('business graph uses the standard balanced budget instead of a fixed four-field slice', () => {
   const extraFields = ['合同编号', '合同状态', '合同日期', '合同金额', '签约门店', '租赁分类']
     .map((label, index) => ({
       ...semanticUnderstanding.fields[0],
@@ -459,9 +459,13 @@ test('business graph keeps at most four trusted Chinese fields per object', () =
     activeCategory: 'all',
     activeRelationType: 'all',
     focusDepth: 'all',
+    density: 'standard',
   });
 
-  assert.equal(business.nodes.filter((node) => node.entityType === 'field' && node.objectId === 'object:lease').length, 4);
+  assert.equal(business.nodes.filter((node) => node.entityType === 'field' && node.objectId === 'object:lease').length, 6);
+  assert.equal(business.stats.density, 'standard');
+  assert.equal(business.stats.visibleNodeCount, business.nodes.length);
+  assert.equal(business.stats.availableNodeCount, business.nodes.length);
   assert.ok(business.nodes.filter((node) => node.entityType === 'field')
     .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
 });
