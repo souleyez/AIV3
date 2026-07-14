@@ -70,6 +70,9 @@ jobs:
           npm run smoke:fashion-design-asset-import -- --self-test --pretty
           npm run smoke:fashion-design-asset-import -- --preflight --pretty
 
+      - name: Run dataset semantic understanding no-credential smoke
+        run: bash scripts/run-dataset-semantic-understanding-smoke.sh --no-credentials
+
       - name: Check generated public integration guide
         run: npm run check:pure-third-party-guide-html
 
@@ -109,6 +112,13 @@ jobs:
         run: |
           cargo test -p platform-api asset_import --lib
           cargo test -p platform-api fashion_postchain_adapter --lib
+
+      - name: Dataset semantic understanding gates
+        run: |
+          cargo test -p storage dataset_semantic --lib
+          cargo test -p platform-api semantic_understanding --lib
+          cargo test -p platform-api dataset_semantic --lib
+          cargo test -p retrieval-worker semantic_profile
 
       - name: Model gateway tests
         run: |

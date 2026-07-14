@@ -474,7 +474,7 @@ pub fn build_dataset_semantic_snapshot(
     let mut field_observations = BTreeMap::<(String, String), Vec<&SemanticObservation>>::new();
     for observation in observations
         .iter()
-        .filter(|item| matches!(item.observation_kind.as_str(), "field" | "fact"))
+        .filter(|item| semantic_field_observation(item))
     {
         field_observations
             .entry((
@@ -560,6 +560,46 @@ pub fn build_dataset_semantic_snapshot(
             .collect::<BTreeSet<_>>()
             .len() as u64;
         let is_fact = group.iter().any(|item| item.observation_kind == "fact");
+        let observed_label = group.iter().find_map(|item| {
+            (item.status == SemanticStatus::Observed)
+                .then_some(item)
+                .and_then(|item| {
+                    item.label_hint
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|label| {
+                            (
+                                label.to_string(),
+                                SemanticStatus::Observed,
+                                item.label_source.clone(),
+                                item.confidence,
+                            )
+                        })
+                })
+        });
+        let (display_name, status, label_source, confidence) = if is_fact {
+            (
+                resolution.display_name.clone(),
+                SemanticStatus::Confirmed,
+                "document_fact".to_string(),
+                1.0,
+            )
+        } else if resolution.status == SemanticStatus::Unresolved {
+            observed_label.unwrap_or((
+                resolution.display_name.clone(),
+                resolution.status,
+                resolution.label_source.clone(),
+                resolution.confidence,
+            ))
+        } else {
+            (
+                resolution.display_name.clone(),
+                resolution.status,
+                resolution.label_source.clone(),
+                resolution.confidence,
+            )
+        };
         let evidence_refs = group
             .iter()
             .flat_map(|item| item.evidence_refs.clone())
@@ -567,24 +607,16 @@ pub fn build_dataset_semantic_snapshot(
         fields.push(SemanticField {
             id: field_id.clone(),
             object_id: object_id.clone(),
-            label: resolution.display_name.clone(),
+            label: display_name,
             technical_name: resolution.technical_name.clone(),
             semantic_role: resolution.semantic_role.as_str().to_string(),
             value_type: resolution.value_type.clone(),
             non_empty_count,
             distinct_count,
             examples: resolution.examples.clone(),
-            status: if is_fact {
-                SemanticStatus::Confirmed
-            } else {
-                resolution.status
-            },
-            label_source: if is_fact {
-                "document_fact".to_string()
-            } else {
-                resolution.label_source.clone()
-            },
-            confidence: if is_fact { 1.0 } else { resolution.confidence },
+            status,
+            label_source,
+            confidence,
             evidence_refs: evidence_refs.clone(),
         });
         relation_fields.push(RelationFieldProfile {
@@ -625,7 +657,7 @@ pub fn build_dataset_semantic_snapshot(
         .count() as u64;
     let mut limitations = input.limitations.clone();
     if coverage.confirmed_fact_count == 0 {
-        limitations.push("当前没有已确认事实；关系仅来自结构观察或明确标注的推断。".to_string());
+        limitations.push("暂无已确认事实；关系仅来自结构观察或明确标注的推断。".to_string());
     }
     if input.fact_snapshot_refs.is_empty() && coverage.confirmed_fact_count > 0 {
         limitations.push("已确认事实计数存在，但尚未关联可追溯事实快照版本。".to_string());
@@ -700,6 +732,13 @@ fn object_group_key(observation: &SemanticObservation) -> String {
             observation.object_kind, observation.source_id, observation.object_key
         )
     }
+}
+
+fn semantic_field_observation(observation: &SemanticObservation) -> bool {
+    !matches!(
+        observation.observation_kind.as_str(),
+        "object" | "constraint"
+    )
 }
 
 fn dominant_value_type(observations: &[&SemanticObservation]) -> Option<String> {
@@ -1107,6 +1146,129 @@ mod tests {
         assert_eq!(relation.confidence, 1.0);
         assert_eq!(source.technical_name, "store_id");
         assert_eq!(target.technical_name, "id");
+    }
+
+    #[test]
+    fn no_credential_smoke_all_source_kinds_share_one_business_safe_contract() {
+        let sources = vec![
+            SemanticProfileInput {
+                source_id: "db:contract".to_string(),
+                source_kind: "database".to_string(),
+                title: "租赁合同".to_string(),
+                metadata: json!({"parse_metadata": {
+                    "source_table": "lease_contract",
+                    "fields": {"rent_amount": 1200},
+                    "field_comments": {"rent_amount": "租金金额"}
+                }}),
+                facts: Vec::new(),
+                evidence_labels: vec!["数据库结构".to_string()],
+            },
+            SemanticProfileInput {
+                source_id: "sheet:sales".to_string(),
+                source_kind: "spreadsheet".to_string(),
+                title: "销售经营表".to_string(),
+                metadata: json!({
+                    "sheet_name": "销售经营表",
+                    "headers": ["交易日期", "销售金额", "品类"]
+                }),
+                facts: Vec::new(),
+                evidence_labels: vec!["表头结构".to_string()],
+            },
+            SemanticProfileInput {
+                source_id: "doc:policy".to_string(),
+                source_kind: "document".to_string(),
+                title: "企业问答制度".to_string(),
+                metadata: json!({"sections": ["适用范围"], "entities": ["审批负责人"]}),
+                facts: Vec::new(),
+                evidence_labels: vec!["文档结构".to_string()],
+            },
+            SemanticProfileInput {
+                source_id: "asset:product".to_string(),
+                source_kind: "asset".to_string(),
+                title: "商品视觉".to_string(),
+                metadata: json!({
+                    "profile_kind": "product_visual",
+                    "safe_profile": {"labels": ["主色调", "版型特征"]}
+                }),
+                facts: Vec::new(),
+                evidence_labels: vec!["资产画像".to_string()],
+            },
+            SemanticProfileInput {
+                source_id: "media:training".to_string(),
+                source_kind: "media".to_string(),
+                title: "培训视频".to_string(),
+                metadata: json!({"pages": [{"title": "服务流程"}]}),
+                facts: Vec::new(),
+                evidence_labels: vec!["媒体分段".to_string()],
+            },
+            SemanticProfileInput {
+                source_id: "api:store".to_string(),
+                source_kind: "web_api".to_string(),
+                title: "门店接口".to_string(),
+                metadata: json!({
+                    "resource_type": "store_resource",
+                    "title": "门店资源",
+                    "fields": ["store_name"]
+                }),
+                facts: Vec::new(),
+                evidence_labels: vec!["接口结构".to_string()],
+            },
+        ];
+
+        for source in sources {
+            let mut input = fixture_input();
+            input.coverage.confirmed_fact_count = 0;
+            input.fact_snapshot_refs.clear();
+            input.observations = adapt_semantic_profile(&source);
+            let snapshot = build_dataset_semantic_snapshot(&input);
+
+            assert_eq!(snapshot.schema_version, DATASET_SEMANTIC_SCHEMA_VERSION);
+            assert_eq!(snapshot.status, "ready");
+            assert!(
+                !snapshot.objects.is_empty(),
+                "{} object",
+                source.source_kind
+            );
+            assert!(!snapshot.fields.is_empty(), "{} field", source.source_kind);
+            if source.source_kind == "database" {
+                assert_eq!(snapshot.objects[0].label, "租赁合同");
+                assert!(!snapshot.objects[0].label.contains("rent_amount"));
+            }
+            assert!(snapshot
+                .summary
+                .limitations
+                .iter()
+                .any(|item| item.contains("暂无已确认事实")));
+        }
+    }
+
+    #[test]
+    fn empty_unknown_fixture_keeps_technical_field_unresolved_and_out_of_headline() {
+        let mut input = fixture_input();
+        input.coverage.confirmed_fact_count = 0;
+        input.fact_snapshot_refs.clear();
+        input.observations = adapt_semantic_profile(&SemanticProfileInput {
+            source_id: "db:unknown".to_string(),
+            source_kind: "database".to_string(),
+            title: "未知来源".to_string(),
+            metadata: json!({"parse_metadata": {
+                "source_table": "TABLE_X",
+                "fields": {"cardparentname": "opaque"}
+            }}),
+            facts: Vec::new(),
+            evidence_labels: vec!["隔离结构".to_string()],
+        });
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+
+        assert_eq!(snapshot.fields.len(), 1);
+        assert_eq!(snapshot.fields[0].status, SemanticStatus::Unresolved);
+        assert!(!snapshot.summary.headline.contains("cardparentname"));
+        assert!(snapshot
+            .summary
+            .limitations
+            .iter()
+            .any(|item| item.contains("暂无已确认事实")));
     }
 
     #[test]

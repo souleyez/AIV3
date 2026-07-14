@@ -5,15 +5,19 @@ use axum::{
     response::Response,
 };
 use chrono::Utc;
-use domain_model::{Dataset, DatasetId, SecretBindingId, TenantId, UserId};
+use domain_model::{Dataset, DatasetId};
+#[cfg(test)]
+use domain_model::{SecretBindingId, TenantId, UserId};
 
+#[cfg(test)]
+use crate::dataset_is_visible_for_request;
 use crate::semantic_label_resolver::safe_public_examples;
 use crate::semantic_understanding::{
     DatasetSemanticIdentity, DatasetSemanticUnderstanding, SemanticCoverage, SemanticSummary,
     SemanticTruncation, DATASET_SEMANTIC_GENERATION_VERSION, DATASET_SEMANTIC_SCHEMA_VERSION,
 };
 use crate::{
-    active_secret_binding_ids_from_headers, current_auth_user_id, dataset_is_visible_for_request,
+    active_secret_binding_ids_from_headers, current_auth_user_id,
     load_visible_dataset_for_user_with_local_scope, local_thread_id_from_headers, ApiError,
     AppState,
 };
