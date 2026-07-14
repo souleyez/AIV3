@@ -10,6 +10,29 @@
 
 ---
 
+## 执行收口（2026-07-15）
+
+**状态：已完成并冻结。** Task 1–13 已实现、测试、提交发布并在 8 服务器完成 feature-off、单集、首对、逐项扩容、回滚和恢复。生产应用代码基线为 `d4dc0f3a2a4bfa5a165f32bb76155ce1909842b7`；最终仓库提交还包含验收文档和浏览器 smoke 的 hydration 点击重试保护，精确 GitHub/8 服务器 SHA 记录在受控备份目录的 `git-head-after.txt`。
+
+| 完成定义 | 结论与证据 |
+| --- | --- |
+| 1. ready v3 快照 | 通过：新百项目资料为 `ready`，9 个对象、160 个字段、160 条关系 |
+| 2. 默认画布降噪 | 通过：质量投影 170/170 个主画布节点标签为中文，六类污染项 0 |
+| 3. 90–120 节点、42px 中心、扩大画布 | 通过：standard 100 节点，中心 42px，桌面画布 720px |
+| 4. 性能、单实例、响应式和全屏 | 通过：最终 10 样本首次可交互 p95 654.4ms、筛选 68.4ms、60.62fps、最大 long task 0ms；ECharts 实例保持 |
+| 5. exact shared 与 reference 能力 | 通过：脱敏契约覆盖 shared document/field/concept 和 explicit reference；首对 live 数据只证明 1 个 shared document，没有制造现场不存在的共享字段、概念或 reference |
+| 6. 相似关系不冒充真实关系 | 通过：similarity 保持 inferred 虚线且不折叠，evidence cap 测试 5/5 |
+| 7. 权限矩阵和隐藏贡献 | 通过：API 脱敏 15/15、资源权限 7/7、mixed 整体 404，3 份响应和 1 份日志泄漏扫描 0 命中 |
+| 8. feature-off 隔离 | 通过：单集 200/304；导入 preflight、解析回归和检索通过，四张保护表计数不变 |
+| 9. 8 服务器发布证据 | 通过：7 个数据集、21/21 个 current ready pair、0 pending，回滚与恢复回执均已入备份并校验 |
+
+权威验收记录：
+
+- `docs/validation/dataset-understanding-graph-quality.md`
+- `docs/operations/dataset-cross-semantic-graph-rollout.md`
+
+本文件不再追加后续流水；第 7 节列出的二期能力必须另立新计划。
+
 ## 0. 计划边界与执行原则
 
 本文件是后续“数据集图谱提质与跨数据集网络”唯一执行入口。以下历史文件只保留为背景，不再向其中追加本轮任务：
@@ -152,7 +175,7 @@ content_mix=8 份表格 + 1 份 other/压缩包
 
 ### ADR-021：跨数据集使用成对关系快照，不引入图数据库
 
-**Status:** Proposed；Task 8 完成后转 Accepted。
+**Status:** Accepted；Task 8 已完成，以 PostgreSQL 成对关系快照和独立 worker 作为当前落地方案。
 
 **Context:** 当前主要查询是“以一个数据集为中心，查看少量已授权相邻数据集的一到两跳关系”。单集语义快照已在 PostgreSQL 中稳定运行，节点规模为百级，不需要亿级图遍历。
 
@@ -166,13 +189,13 @@ content_mix=8 份表格 + 1 份 other/压缩包
 
 ### ADR-022：只有精确身份关系允许折叠
 
-**Status:** Proposed；Task 7 完成后转 Accepted。
+**Status:** Accepted；Task 7 已完成，只有精确身份关系允许折叠为共享节点。
 
 **Decision:** exact identity 才生成共享节点；observed entity match 默认不折叠；similarity 永远不折叠。任何打分算法都不能把 inferred 自动升级为 confirmed。
 
 ### ADR-023：默认采用质量预算，不采用“每对象固定 N 个字段”
 
-**Status:** Proposed；Task 5 完成后转 Accepted。
+**Status:** Accepted；Task 5 已完成，当前实现采用整体节点/边质量预算。
 
 **Decision:** 每个对象先保底 6 个可信字段，再按对象轮询、业务分数和标签质量分配全局预算。单对象 soft cap=12、hard cap=24；选中节点与其一跳邻居始终保留。
 

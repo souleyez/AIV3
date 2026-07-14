@@ -534,13 +534,19 @@ async function selectAndVerifyTargetDataset(
 async function openDatasetDirectory(page) {
   const datasetPageButton = page.getByRole('button', { name: '数据集', exact: true });
   assert.equal(await datasetPageButton.count(), 1, 'main toolbar must expose one dataset page button');
-  if (!await datasetPageButton.evaluate((element) => element.classList.contains('active'))) {
-    await datasetPageButton.click();
+  const datasetPanel = page.locator('.dataset-directory-workspace .dataset-understanding-panel');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await datasetPanel.isVisible()) return;
+    if (!await datasetPageButton.evaluate((element) => element.classList.contains('active'))) {
+      await datasetPageButton.click();
+    }
+    try {
+      await datasetPanel.waitFor({ state: 'visible', timeout: 15_000 });
+      return;
+    } catch (error) {
+      if (attempt === 2) throw error;
+    }
   }
-  await page.locator('.dataset-directory-workspace .dataset-understanding-panel').waitFor({
-    state: 'visible',
-    timeout: 45_000,
-  });
 }
 
 async function navigateToReadyChart(page, targetUrl) {

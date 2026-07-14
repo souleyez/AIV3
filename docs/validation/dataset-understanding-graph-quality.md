@@ -12,7 +12,7 @@ apps/web/app/lib/fixtures/newbai-project-materials-noisy-fallback.js
 
 fixture 只保留已观察到的噪声形态，例如年份、数字开头多列文本、SQL 表达式、MIME、解析策略标识、英文文件名以及带/不带扩展名的重复标题。文档名、编号、金额、日期、UUID、hash 和路径均为合成值，不复制线上业务原值。
 
-## 2. 基线复现
+## 2. 历史基线与当前复验
 
 在仓库根目录运行：
 
@@ -21,7 +21,9 @@ pnpm --filter @ai-data-platform-v3/web exec node --test app/lib/dataset-understa
 node tools/dataset-understanding-quality-audit.mjs --fixture newbai-project-materials
 ```
 
-2026-07-14 Task 1 基线：
+`49` 节点 / `97` 边是 commit `d2784c8d` 上冻结的 Task 1 历史噪声基线，不是当前 HEAD 再运行上述命令的输出。需要复核历史数值时必须检出该 commit 或读取当时留存的审计证据；当前 HEAD 使用同一 fixture 的结果已经过降噪，为 `22` 节点 / `47` 边。
+
+2026-07-14 Task 1 历史基线（commit `d2784c8d`）：
 
 | 指标 | 数量 |
 | --- | ---: |
@@ -59,7 +61,7 @@ Task 2 完成后使用同一 fixture 复验，主画布必须满足：
 - `status=empty` 继续明确标记为 fallback，并展示“资料来源图（语义生成中）”，不得声称系统已形成真实业务理解；
 - evidence 缺失边保持为 0。
 
-基线与目标使用同一条审计命令，避免通过更换 fixture 掩盖质量回归。
+历史基线和当前结果使用同一 fixture 与同一审计口径，避免通过更换 fixture 掩盖质量回归；由于实现已经变化，当前 HEAD 的命令应输出 Task 2 列的 `22/47`，而不是历史 `49/97`。
 
 ## 4. Task 2 验证结果
 
@@ -244,7 +246,7 @@ node tools/dataset-understanding-browser-smoke.mjs `
 | --- | --- | --- |
 | 快照状态 | `ready` | live canary |
 | 业务对象 / 字段 / 关系 | 9 / 160 / 160 | live canary |
-| 中文主标签 | 167 / 167，100% | live canary |
+| 主画布节点中文标签 | 170 / 170，100% | live canary |
 | raw row / SQL / MIME / strategy / extension / duplicate | 0 / 0 / 0 / 0 / 0 / 0 | live canary |
 | public path / connection / SQL / MIME / hex64 | 0 / 0 / 0 / 0 / 0 | live canary |
 | manifest 大小 | 293,643 bytes | live canary |
@@ -278,14 +280,32 @@ pnpm --filter @ai-data-platform-v3/web exec node --test app/lib/dataset-understa
 
 仓库当前没有 `.github/workflows/ci.yml`，本任务没有为单一 smoke 另建新的 CI 工作流。
 
-### 6.3 仍需 live 完成的项目
+### 6.3 跨数据集 live canary
 
-以下项目当前必须保持未完成，不得由 fixture 或历史数字代替：
+8 服务器按单项扩容完成 7 个数据集、21 个当前 pair；全部 pair 为 `ready`，待处理 pair 为 0。每一阶段都复验首次 200、相同作用域 ETag 304、mixed visible/invisible 整体 masked 404 和响应 `<2MB`：
 
-- feature-off 页面上的真实入口隐藏和 DOM 尺寸；
-- cached cross-graph API p95 `<500ms`；
-- 首次可交互 p95 `<=1.5s`；
-- 真实选点/筛选 p95 `<=100ms`；
-- 连续拖拽缩放 `>=45fps` 和 long-task gate；
-- 两数据集 pair 的共享资料/字段/概念/明确引用 live 结果；
-- live mixed visibility 响应与服务日志的隐藏标题、贡献数、hash、原值和内部路径 0 命中。
+| 阶段 | 数据集 / 当前 pair | cached API p95 | HTTP / 缓存 | 响应大小 | 权限结果 |
+| --- | ---: | ---: | --- | ---: | --- |
+| D1 普通文档 | 3 / 3 | 78.50ms | 200 / 10 次 304 | 35,713 bytes | mixed 404 |
+| D2 表格 | 4 / 6 | 61.74ms | 200 / 10 次 304 | 35,796 bytes | mixed 404 |
+| D3 资产 | 5 / 10 | 68.79ms | 200 / 10 次 304 | 35,918 bytes | mixed 404 |
+| D4 音视频 | 6 / 15 | 99.58ms | 200 / 10 次 304 | 36,046 bytes | mixed 404；保持真实 local-thread 范围 |
+| D5 Web/API | 7 / 21 | 74.90ms | 200 / 10 次 304 | 38,738 bytes | mixed 404 |
+
+首对“新百项目资料 + 新百经营分析”的 live pair 为 `ready`，pair 投影 160 个节点、0 条跨数据集关系边。API 仅依据精确 document identity 折叠出 1 个共享资料节点；现场数据没有形成可证明的共享字段、共享概念或明确 reference，因此这些关系没有被制造出来。共享字段、共享概念和 reference 的实现能力已由脱敏 fixture 契约测试证明，但 fixture 结果不能替代 live 业务关系证据。
+
+### 6.4 最终发布复核结果
+
+2026-07-15 在最终应用代码基线 `d4dc0f3a2a4bfa5a165f32bb76155ce1909842b7` 上完成 feature-off 回滚、7 数据集恢复和最终浏览器/API 复验：
+
+| 门禁 | 最终结果 |
+| --- | --- |
+| feature-off 浏览器 | 5 个真实样本通过；跨数据集入口隐藏；首次可交互 p95 1135.8ms；筛选 p95 65.9ms；60.21fps；登录/注销 201/200 |
+| feature-off 单集 API | 200、ETag、304；293,643 bytes；9 个对象、160 个字段、160 条关系 |
+| 导入、解析、检索隔离 | 资产导入 preflight 无 provider 调用；检索命中 5；四张保护表前后计数不变；本地 asset import 70 项、ingest parser 3 项通过 |
+| feature-on 浏览器 | 10 个真实样本通过；首次可交互 p95 654.4ms；筛选 p95 68.4ms；cached API p95 64.9ms；60.62fps；最大 long task 0ms |
+| 7 集 API | 160 节点、5 条 observed 集内边、1 个精确共享资料节点、0 条真实跨集边；10/10 次缓存请求 304；p95 84.85ms；38,738 bytes；mixed 请求整体 404 |
+| 权限与脱敏 | 8 项跨集契约、5 项 evidence cap、15 项 API 脱敏和 7 项权限矩阵全部通过；3 份真实响应与 1 份日志的通用敏感模式和隐藏 UUID 命中均为 0 |
+| 运行态恢复 | 1 个 tenant、7 个 dataset UUID；21/21 个 pair 与两端 latest-ready 快照一致；待处理任务 0；API/Web/link worker active |
+
+最终本地回归同时通过：storage semantic 8/8、platform-api semantic 105/105、resource access 7/7、retrieval-worker semantic 16/16、Web 467/467 和 Web production build。浏览器 smoke 对 `domcontentloaded` 早于 React 事件绑定的偶发点击丢失增加了“确认页面切换、必要时重试”保护；该保护不放宽任何质量或性能阈值。
