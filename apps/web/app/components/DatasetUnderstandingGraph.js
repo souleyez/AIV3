@@ -826,7 +826,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         (Number(chartRef.current.dataset.echartsInitCount) || 0) + 1,
       );
       chartRef.current.__datasetGraphScreenPositionSnapshot = () => {
-        const seriesModel = chart.getModel?.().getSeriesById?.(DATASET_GRAPH_SERIES_ID)?.[0];
+        const seriesModel = chart.getModel?.().getSeriesByIndex?.(0);
         const data = seriesModel?.getData?.();
         if (!data) return [];
         const positions = [];
