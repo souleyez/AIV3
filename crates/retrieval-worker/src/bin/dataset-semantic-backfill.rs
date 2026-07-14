@@ -1,10 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{DatasetId, TenantId};
-use platform_api::dataset_semantic_source_support::{
-    source_fingerprint, SemanticAssetSourceVersion, SemanticDocumentSourceVersion,
-    SemanticSourceFingerprintInput,
-};
+use platform_api::semantic_understanding::SemanticEvidenceClass;
 use serde_json::json;
 use std::str::FromStr;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -57,42 +54,68 @@ async fn main() -> Result<()> {
     };
 
     let output = if args.dry_run {
-        let documents = storage
-            .documents()
-            .list_by_dataset_scope_bounded(tenant_id, args.dataset_id, args.limit)
-            .await?;
-        let assets = storage
-            .asset_items()
-            .list_by_dataset_scope(tenant_id, args.dataset_id, args.limit)
-            .await?;
-        let fingerprint = source_fingerprint(&SemanticSourceFingerprintInput {
-            documents: documents
-                .iter()
-                .map(|document| SemanticDocumentSourceVersion {
-                    document_id: document.id,
-                    updated_at: document.updated_at,
-                    parse_versions: Vec::new(),
-                    fact_snapshot_versions: Vec::new(),
-                })
-                .collect(),
-            assets: assets
-                .iter()
-                .map(|asset| SemanticAssetSourceVersion {
-                    asset_id: asset.id,
-                    updated_at: asset.updated_at,
-                    profile_versions: Vec::new(),
-                })
-                .collect(),
-            dataset_fact_snapshot_version: None,
-        });
+        let preview = platform_api::dataset_semantic_snapshot::preview_dataset_semantic_snapshot_from_storage(
+            &storage,
+            tenant_id,
+            args.dataset_id,
+            Utc::now(),
+            args.limit,
+        )
+        .await?;
+        let direct_document_count = sqlx::query_scalar::<_, i64>(
+            "select count(*) from documents where tenant_id = $1 and dataset_id = $2",
+        )
+        .bind(tenant_id.0)
+        .bind(args.dataset_id.0)
+        .fetch_one(storage.pool())
+        .await?;
+        let membership_document_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            select count(distinct membership.document_id)
+            from dataset_document_memberships membership
+            join documents document
+              on document.id = membership.document_id
+             and document.tenant_id = membership.tenant_id
+            where membership.tenant_id = $1
+              and membership.dataset_id = $2
+              and (membership.expires_at is null or membership.expires_at > now())
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(args.dataset_id.0)
+        .fetch_one(storage.pool())
+        .await?;
+        let relation_counts = preview.snapshot.relations.iter().fold(
+            (0usize, 0usize, 0usize),
+            |(confirmed, observed, inferred), relation| match relation.evidence_class {
+                SemanticEvidenceClass::Confirmed => (confirmed + 1, observed, inferred),
+                SemanticEvidenceClass::Observed => (confirmed, observed + 1, inferred),
+                SemanticEvidenceClass::Inferred => (confirmed, observed, inferred + 1),
+            },
+        );
+        let manifest_bytes = serde_json::to_vec(&preview.snapshot)?.len();
         json!({
             "dry_run": true,
             "summary_only": true,
             "dataset_id": args.dataset_id,
             "limit": args.limit,
-            "document_count": documents.len(),
-            "asset_count": assets.len(),
-            "source_fingerprint": fingerprint,
+            "direct_document_count": direct_document_count,
+            "membership_document_count": membership_document_count,
+            "deduplicated_document_count": preview.source_document_count,
+            "asset_count": preview.source_asset_count,
+            "source_object_count": preview.snapshot.objects.len(),
+            "field_count": preview.snapshot.fields.len(),
+            "relation_count": preview.snapshot.relations.len(),
+            "confirmed_relation_count": relation_counts.0,
+            "observed_relation_count": relation_counts.1,
+            "inferred_relation_count": relation_counts.2,
+            "confirmed_fact_count": preview.snapshot.coverage.confirmed_fact_count,
+            "unresolved_field_count": preview.snapshot.coverage.unresolved_field_count,
+            "headline": preview.snapshot.summary.headline,
+            "schema_version": preview.snapshot.schema_version,
+            "generation_version": preview.snapshot.generation_version,
+            "manifest_bytes": manifest_bytes,
+            "source_fingerprint": preview.source_fingerprint,
             "status": "planned",
             "write_count": 0,
         })

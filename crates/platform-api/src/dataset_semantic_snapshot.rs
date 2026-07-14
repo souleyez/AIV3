@@ -66,12 +66,22 @@ pub struct DatasetSemanticRebuildOutcome {
     pub failure_code: Option<String>,
 }
 
-pub async fn rebuild_dataset_semantic_snapshot_from_storage(
+#[derive(Clone, Debug)]
+pub struct DatasetSemanticSnapshotPreview {
+    pub source_fingerprint: String,
+    pub source_document_count: i64,
+    pub source_asset_count: i64,
+    pub source_record_count: i64,
+    pub snapshot: DatasetSemanticUnderstanding,
+}
+
+pub async fn preview_dataset_semantic_snapshot_from_storage(
     storage: &PgStorage,
     tenant_id: TenantId,
     dataset_id: DatasetId,
     generated_at: DateTime<Utc>,
-) -> Result<DatasetSemanticRebuildOutcome> {
+    limit: usize,
+) -> Result<DatasetSemanticSnapshotPreview> {
     let dataset = storage
         .datasets()
         .get_by_id(tenant_id, dataset_id)
@@ -79,7 +89,7 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
         .ok_or_else(|| anyhow!("dataset {dataset_id} not found"))?;
     let documents = storage
         .documents()
-        .list_by_dataset_scope_bounded(tenant_id, dataset_id, 10_000)
+        .list_by_dataset_scope_bounded(tenant_id, dataset_id, limit.clamp(1, 10_000))
         .await?;
     let document_ids = documents.iter().map(|item| item.id).collect::<Vec<_>>();
     let chunks = storage
@@ -96,7 +106,7 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
         .await?;
     let assets = storage
         .asset_items()
-        .list_by_dataset_scope(tenant_id, dataset_id, 10_000)
+        .list_by_dataset_scope(tenant_id, dataset_id, limit.clamp(1, 10_000))
         .await?;
     let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
     let profiles = storage
@@ -250,47 +260,6 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
             dataset_fact_snapshot_version: fact_snapshot_version.clone(),
         },
     );
-    let latest_ready = storage
-        .dataset_semantic_snapshots()
-        .load_latest_ready(tenant_id, dataset_id)
-        .await?;
-    if latest_ready.as_ref().is_some_and(|snapshot| {
-        snapshot.source_fingerprint == source_fingerprint
-            && snapshot.generation_version == DATASET_SEMANTIC_GENERATION_VERSION
-    }) {
-        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
-        return Ok(DatasetSemanticRebuildOutcome {
-            status: "skipped".to_string(),
-            source_fingerprint,
-            snapshot,
-            failure_code: None,
-        });
-    }
-
-    let new_snapshot = NewDatasetSemanticSnapshot {
-        dataset_id,
-        schema_version: DATASET_SEMANTIC_SCHEMA_VERSION.to_string(),
-        generation_version: DATASET_SEMANTIC_GENERATION_VERSION.to_string(),
-        source_fingerprint: source_fingerprint.clone(),
-        manifest: json!({}),
-        source_document_count: documents.len() as i64,
-        source_asset_count: assets.len() as i64,
-        source_record_count: record_count as i64,
-    };
-    let Some(build_record) = storage
-        .dataset_semantic_snapshots()
-        .try_begin_build(tenant_id, &new_snapshot, generated_at)
-        .await?
-    else {
-        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
-        return Ok(DatasetSemanticRebuildOutcome {
-            status: "skipped".to_string(),
-            source_fingerprint,
-            snapshot,
-            failure_code: Some("build_in_progress_or_complete".to_string()),
-        });
-    };
-
     let dictionary_entries = dictionary
         .into_iter()
         .map(|entry| SnapshotDictionaryEntry {
@@ -335,7 +304,71 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
         fact_snapshot_refs,
         limitations: Vec::new(),
     });
-    let manifest = serde_json::to_value(&semantic_snapshot)?;
+    Ok(DatasetSemanticSnapshotPreview {
+        source_fingerprint,
+        source_document_count: documents.len() as i64,
+        source_asset_count: assets.len() as i64,
+        source_record_count: record_count as i64,
+        snapshot: semantic_snapshot,
+    })
+}
+
+pub async fn rebuild_dataset_semantic_snapshot_from_storage(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    generated_at: DateTime<Utc>,
+) -> Result<DatasetSemanticRebuildOutcome> {
+    let preview = preview_dataset_semantic_snapshot_from_storage(
+        storage,
+        tenant_id,
+        dataset_id,
+        generated_at,
+        10_000,
+    )
+    .await?;
+    let latest_ready = storage
+        .dataset_semantic_snapshots()
+        .load_latest_ready(tenant_id, dataset_id)
+        .await?;
+    if latest_ready.as_ref().is_some_and(|snapshot| {
+        snapshot.source_fingerprint == preview.source_fingerprint
+            && snapshot.generation_version == DATASET_SEMANTIC_GENERATION_VERSION
+    }) {
+        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
+        return Ok(DatasetSemanticRebuildOutcome {
+            status: "skipped".to_string(),
+            source_fingerprint: preview.source_fingerprint,
+            snapshot,
+            failure_code: None,
+        });
+    }
+
+    let new_snapshot = NewDatasetSemanticSnapshot {
+        dataset_id,
+        schema_version: DATASET_SEMANTIC_SCHEMA_VERSION.to_string(),
+        generation_version: DATASET_SEMANTIC_GENERATION_VERSION.to_string(),
+        source_fingerprint: preview.source_fingerprint.clone(),
+        manifest: json!({}),
+        source_document_count: preview.source_document_count,
+        source_asset_count: preview.source_asset_count,
+        source_record_count: preview.source_record_count,
+    };
+    let Some(build_record) = storage
+        .dataset_semantic_snapshots()
+        .try_begin_build(tenant_id, &new_snapshot, generated_at)
+        .await?
+    else {
+        let snapshot = latest_ready.and_then(|item| serde_json::from_value(item.manifest).ok());
+        return Ok(DatasetSemanticRebuildOutcome {
+            status: "skipped".to_string(),
+            source_fingerprint: preview.source_fingerprint,
+            snapshot,
+            failure_code: Some("build_in_progress_or_complete".to_string()),
+        });
+    };
+
+    let manifest = serde_json::to_value(&preview.snapshot)?;
     let manifest_bytes = serde_json::to_vec(&manifest)?.len();
     if manifest_bytes > 2 * 1024 * 1024 {
         storage
@@ -350,7 +383,7 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
             .await?;
         return Ok(DatasetSemanticRebuildOutcome {
             status: "failed".to_string(),
-            source_fingerprint,
+            source_fingerprint: preview.source_fingerprint,
             snapshot: latest_ready
                 .and_then(|item| serde_json::from_value(item.manifest).ok())
                 .and_then(|item| {
@@ -366,16 +399,16 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
             dataset_id,
             build_record.id,
             &manifest,
-            (semantic_snapshot.objects.len() + semantic_snapshot.fields.len()) as i32,
-            semantic_snapshot.relations.len() as i32,
+            (preview.snapshot.objects.len() + preview.snapshot.fields.len()) as i32,
+            preview.snapshot.relations.len() as i32,
             generated_at,
         )
         .await?
         .ok_or_else(|| anyhow!("semantic snapshot build record is no longer claimable"))?;
     Ok(DatasetSemanticRebuildOutcome {
         status: "ready".to_string(),
-        source_fingerprint,
-        snapshot: Some(semantic_snapshot),
+        source_fingerprint: preview.source_fingerprint,
+        snapshot: Some(preview.snapshot),
         failure_code: None,
     })
 }
