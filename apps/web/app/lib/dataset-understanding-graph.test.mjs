@@ -262,6 +262,50 @@ test('cross-dataset layout keeps dataset roots fixed and shared nodes between cl
   assert.ok(Number.isFinite(shared.y));
 });
 
+test('cross-dataset static layout is order-stable and separates dense shared nodes', () => {
+  const nodes = [
+    { id: 'root:main', kind: 'dataset', datasetRefs: ['dataset-main'], rootDataset: true },
+    { id: 'root:neighbor', kind: 'dataset', datasetRefs: ['dataset-neighbor'] },
+    ...Array.from({ length: 28 }, (_, index) => ({
+      id: `member:${String(index).padStart(2, '0')}`,
+      kind: 'field',
+      datasetRefs: [index % 2 ? 'dataset-main' : 'dataset-neighbor'],
+      symbolSize: 24,
+    })),
+    ...Array.from({ length: 24 }, (_, index) => ({
+      id: `shared:${String(index).padStart(2, '0')}`,
+      kind: 'field',
+      shared: true,
+      datasetRefs: ['dataset-main', 'dataset-neighbor'],
+      symbolSize: 24,
+    })),
+  ];
+  const clusters = [{ id: 'dataset-main' }, { id: 'dataset-neighbor' }];
+  const positioned = layoutCrossDatasetUnderstandingGraph(nodes, clusters);
+  const reversed = new Map(
+    layoutCrossDatasetUnderstandingGraph(
+      [...nodes].reverse().map((node) => ({ ...node, datasetRefs: [...node.datasetRefs].reverse() })),
+      [...clusters].reverse(),
+    )
+      .map((node) => [node.id, { x: node.x, y: node.y }]),
+  );
+  const shared = positioned.filter((node) => node.shared);
+  const other = positioned.filter((node) => !node.shared);
+  const minimumDistance = Math.min(...shared.flatMap((node, index) => (
+    shared.slice(index + 1).map((other) => Math.hypot(node.x - other.x, node.y - other.y))
+  )));
+  const minimumOtherDistance = Math.min(...shared.flatMap((node) => (
+    other.map((candidate) => Math.hypot(node.x - candidate.x, node.y - candidate.y))
+  )));
+
+  assert.ok(positioned.every((node) => {
+    const other = reversed.get(node.id);
+    return other?.x === node.x && other?.y === node.y;
+  }));
+  assert.ok(minimumDistance >= 48, `minimum shared-node distance was ${minimumDistance}px`);
+  assert.ok(minimumOtherDistance >= 32, `minimum shared-to-other distance was ${minimumOtherDistance}px`);
+});
+
 test('filters the sanitized newbai project fallback noise out of the main canvas', () => {
   const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
   const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);

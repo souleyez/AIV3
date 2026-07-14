@@ -70,19 +70,75 @@ function semanticRoleLabel(value) {
   }[value] || value || '待判断';
 }
 
+function staticLayoutExtentAnchors(nodes) {
+  const positioned = (Array.isArray(nodes) ? nodes : []).filter((node) => (
+    Number.isFinite(Number(node?.x)) && Number.isFinite(Number(node?.y))
+  ));
+  if (!positioned.length) return [];
+  const xs = positioned.map((node) => Number(node.x));
+  const ys = positioned.map((node) => Number(node.y));
+  const minimumX = Math.min(...xs) - 90;
+  const maximumX = Math.max(...xs) + 90;
+  const minimumY = Math.min(...ys) - 90;
+  const maximumY = Math.max(...ys) + 90;
+  return [
+    ['north-west', minimumX, minimumY],
+    ['north-east', maximumX, minimumY],
+    ['south-east', maximumX, maximumY],
+    ['south-west', minimumX, maximumY],
+  ].map(([key, x, y]) => ({
+    id: `__dataset-layout-anchor:${key}`,
+    name: '',
+    x,
+    y,
+    fixed: true,
+    layoutAnchor: true,
+    symbolSize: 0,
+  }));
+}
+
 function optionForModel(model, filters, projectedGraph = null) {
   const { nodes: visibleNodes, links: visibleLinks } = projectedGraph
     || filterDatasetUnderstandingGraph(model, filters);
-  const positionedNodes = model.mode === 'cross'
-    ? layoutCrossDatasetUnderstandingGraph(visibleNodes, model.datasetClusters)
-    : layoutDatasetUnderstandingGraph(visibleNodes);
-  const force = datasetUnderstandingForceConfig(positionedNodes.length);
+  const expandedLayoutProjection = filterDatasetUnderstandingGraph(model, {
+    activeCategory: 'all',
+    activeRelationType: 'all',
+    viewMode: filters?.viewMode || 'business',
+    focusDepth: 'all',
+    density: 'expanded',
+  });
+  const layoutInputById = new Map(expandedLayoutProjection.nodes.map((node) => [node.id, node]));
+  visibleNodes.forEach((node) => {
+    if (!layoutInputById.has(node.id)) layoutInputById.set(node.id, node);
+  });
+  const layoutInputNodes = [...layoutInputById.values()];
+  const layoutBaseNodes = model.mode === 'cross'
+    ? layoutCrossDatasetUnderstandingGraph(layoutInputNodes, model.datasetClusters)
+    : layoutDatasetUnderstandingGraph(layoutInputNodes);
+  const layoutById = new Map(layoutBaseNodes.map((node) => [node.id, node]));
+  const positionedNodes = visibleNodes.map((node) => {
+    const layoutNode = layoutById.get(node.id);
+    return layoutNode ? {
+      ...node,
+      x: layoutNode.x,
+      y: layoutNode.y,
+      fixed: layoutNode.fixed,
+      layoutTier: layoutNode.layoutTier,
+      symbol: layoutNode.symbol || node.symbol,
+      symbolSize: layoutNode.symbolSize || node.symbolSize,
+    } : node;
+  });
+  const force = datasetUnderstandingForceConfig(layoutBaseNodes.length);
+  const staticLayout = model.mode === 'cross' || layoutBaseNodes.length > 120;
+  const seriesNodes = staticLayout
+    ? [...positionedNodes, ...staticLayoutExtentAnchors(layoutBaseNodes)]
+    : positionedNodes;
   const zoom = Number(filters?.zoom) || 1;
   const selectedNodeId = filters?.focusNodeId || '';
 
   return {
-    animationDuration: force.layoutAnimation ? 650 : 0,
-    animationDurationUpdate: force.layoutAnimation ? 420 : 0,
+    animationDuration: staticLayout ? 0 : 650,
+    animationDurationUpdate: staticLayout ? 0 : 420,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
@@ -113,19 +169,24 @@ function optionForModel(model, filters, projectedGraph = null) {
     series: [{
       id: DATASET_GRAPH_SERIES_ID,
       type: 'graph',
-      // Large expanded views already have deterministic ring/fan positions.
-      // Re-running force relaxation for every density/filter interaction adds
-      // avoidable main-thread work, so only the animated <=120-node view uses
-      // ECharts force layout.
-      layout: force.layoutAnimation ? 'force' : 'none',
+      // Large single-dataset and every clustered cross-dataset view already
+      // have deterministic coordinates. Keeping the layout strategy tied to
+      // the full model preserves the same mental map as filters change.
+      layout: staticLayout ? 'none' : 'force',
       roam: true,
-      draggable: true,
+      draggable: !staticLayout,
       cursor: 'grab',
       categories: model.categories.map((category) => ({
         name: category.name,
         itemStyle: { color: category.color },
       })),
-      data: positionedNodes.map((node) => ({
+      data: seriesNodes.map((node) => node.layoutAnchor ? {
+        ...node,
+        silent: true,
+        tooltip: { show: false },
+        label: { show: false },
+        itemStyle: { opacity: 0 },
+      } : ({
         ...node,
         label: {
           fontSize: node.kind === 'dataset' ? 11 : 9,
@@ -210,9 +271,9 @@ function optionForModel(model, filters, projectedGraph = null) {
   };
 }
 
-function updateChartLabelLod(chart, zoom, selectedNodeId) {
+function updateChartLabelLod(chart, zoom, selectedNodeId, element = null) {
   if (!chart || chart.isDisposed?.()) return;
-  chart.setOption({
+  const option = {
     series: [{
       id: DATASET_GRAPH_SERIES_ID,
       label: {
@@ -223,7 +284,34 @@ function updateChartLabelLod(chart, zoom, selectedNodeId) {
         },
       },
     }],
-  }, { lazyUpdate: true });
+  };
+  markChartRenderRequested(element, option);
+  chart.setOption(option, { lazyUpdate: true });
+}
+
+function markChartRenderRequested(element, option) {
+  if (!element) return 0;
+  const revision = Number(element.dataset.echartsRequestedRevision || 0) + 1;
+  const series = option?.series?.[0] || {};
+  element.dataset.echartsRequestedRevision = String(revision);
+  element.dataset.echartsUpdateCount = String(revision);
+  element.dataset.echartsReady = 'false';
+  if (series.layout) element.dataset.echartsLayout = String(series.layout);
+  if (Array.isArray(series.data)) {
+    element.dataset.echartsNodeCount = String(series.data.filter((node) => !node.layoutAnchor).length);
+  }
+  if (Array.isArray(series.links)) element.dataset.echartsEdgeCount = String(series.links.length);
+  return revision;
+}
+
+function markChartRenderFinished(element) {
+  if (!element) return;
+  const requested = Number(element.dataset.echartsRequestedRevision || 0);
+  const rendered = Number(element.dataset.echartsRenderedRevision || 0);
+  if (requested <= rendered) return;
+  element.dataset.echartsRenderedRevision = String(requested);
+  element.dataset.echartsFinishedAt = String(performance.now());
+  element.dataset.echartsReady = 'true';
 }
 
 function PipelineStage({ stage, index, last, active, onSelect }) {
@@ -507,6 +595,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const chartOptionRef = useRef(null);
   const selectedNodeIdRef = useRef('');
   const graphZoomRef = useRef(1);
+  const graphCenterRef = useRef(null);
   const resizeFrameRef = useRef(null);
   const [graphMode, setGraphMode] = useState('single');
   const [crossDatasetIds, setCrossDatasetIds] = useState(() => dataset?.id ? [dataset.id] : []);
@@ -696,6 +785,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setDensityPreference('auto');
     setFocusMode(false);
     graphZoomRef.current = 1;
+    graphCenterRef.current = null;
   }, [model.datasetId, model.mode]);
 
   useEffect(() => {
@@ -735,6 +825,28 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       chartRef.current.dataset.echartsInitCount = String(
         (Number(chartRef.current.dataset.echartsInitCount) || 0) + 1,
       );
+      chartRef.current.__datasetGraphScreenPositionSnapshot = () => {
+        const seriesModel = chart.getModel?.().getSeriesById?.(DATASET_GRAPH_SERIES_ID)?.[0];
+        const data = seriesModel?.getData?.();
+        if (!data) return [];
+        const positions = [];
+        for (let index = 0; index < data.count(); index += 1) {
+          const id = String(data.getId(index) || '');
+          if (!id || id.startsWith('__dataset-layout-anchor:')) continue;
+          const layout = data.getItemLayout(index);
+          const x = Array.isArray(layout) ? Number(layout[0]) : Number(layout?.x);
+          const y = Array.isArray(layout) ? Number(layout[1]) : Number(layout?.y);
+          if (Number.isFinite(x) && Number.isFinite(y)) positions.push({ id, x, y });
+        }
+        return positions;
+      };
+      const handleFinished = () => {
+        if (cancelled || !chartRef.current) return;
+        markChartRenderFinished(chartRef.current);
+        setChartState('ready');
+      };
+      chart.on('finished', handleFinished);
+      markChartRenderRequested(chartRef.current, chartOptionRef.current);
       chart.setOption(chartOptionRef.current, {
         replaceMerge: ['series'],
         lazyUpdate: true,
@@ -751,9 +863,13 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         }
       };
       const handleGraphRoam = () => {
-        const zoom = Number(chart.getOption()?.series?.[0]?.zoom) || graphZoomRef.current;
+        const liveSeries = chart.getOption()?.series?.[0] || {};
+        const zoom = Number(liveSeries.zoom) || graphZoomRef.current;
         graphZoomRef.current = zoom;
-        updateChartLabelLod(chart, zoom, selectedNodeIdRef.current);
+        if (Array.isArray(liveSeries.center) && liveSeries.center.length === 2) {
+          graphCenterRef.current = [...liveSeries.center];
+        }
+        updateChartLabelLod(chart, zoom, selectedNodeIdRef.current, chartRef.current);
       };
       const scheduleChartResize = () => {
         if (resizeFrameRef.current !== null) return;
@@ -772,12 +888,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         : new ResizeObserver(scheduleChartResize);
       observer?.observe(chartRef.current);
       scheduleChartResize();
-      setChartState('ready');
-
-      chartRef.current.dataset.echartsReady = 'true';
       chartRef.current.__datasetGraphCleanup = () => {
         chart.off('click', handleClick);
         chart.off('graphRoam', handleGraphRoam);
+        chart.off('finished', handleFinished);
+        if (chartRef.current) delete chartRef.current.__datasetGraphScreenPositionSnapshot;
       };
     }).catch(() => {
       if (!cancelled) setChartState('error');
@@ -806,18 +921,14 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       series: chartOption.series.map((series) => ({
         ...series,
         zoom: graphZoomRef.current,
+        ...(graphCenterRef.current ? { center: graphCenterRef.current } : {}),
       })),
     };
+    markChartRenderRequested(chartRef.current, option);
     chart.setOption(option, {
       replaceMerge: ['series'],
       lazyUpdate: true,
     });
-    if (chartRef.current) {
-      chartRef.current.dataset.echartsUpdateCount = String(
-        (Number(chartRef.current.dataset.echartsUpdateCount) || 0) + 1,
-      );
-    }
-    updateChartLabelLod(chart, graphZoomRef.current, selectedNodeId);
   }, [model.hasDataset, chartOption, selectedNodeId]);
 
   if (!model.hasDataset) {

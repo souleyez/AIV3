@@ -8,6 +8,9 @@ import { dirname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 
 import {
+  layoutCrossDatasetUnderstandingGraph,
+} from '../apps/web/app/lib/dataset-understanding-graph.js';
+import {
   datasetUnderstandingForceConfig,
   layoutDatasetUnderstandingGraph,
 } from '../apps/web/app/lib/dataset-understanding-graph-layout.js';
@@ -178,11 +181,41 @@ async function staticFixtureSmoke() {
   const layoutP95Ms = percentile(layoutSamples, 95);
   const projectionP95Ms = percentile(projectionSamples, 95);
   const root = laidOut.find((node) => node.kind === 'dataset');
+  const fullLayout = layoutDatasetUnderstandingGraph(fixture.nodes);
+  const fullLayoutById = new Map(fullLayout.map((node) => [node.id, node]));
+  const expandedLayout = expanded.nodes.map((node) => fullLayoutById.get(node.id)).filter(Boolean);
+  const crossNodes = [
+    { id: 'dataset:left', kind: 'dataset', datasetRefs: ['left'], rootDataset: true },
+    { id: 'dataset:right', kind: 'dataset', datasetRefs: ['right'] },
+    ...Array.from({ length: 24 }, (_, index) => ({
+      id: `shared:${String(index).padStart(2, '0')}`,
+      kind: 'field',
+      shared: true,
+      datasetRefs: ['left', 'right'],
+      symbolSize: 24,
+    })),
+  ];
+  const crossClusters = [{ id: 'left' }, { id: 'right' }];
+  const crossLayout = layoutCrossDatasetUnderstandingGraph(crossNodes, crossClusters);
+  const reversedCrossLayout = new Map(
+    layoutCrossDatasetUnderstandingGraph([...crossNodes].reverse(), [...crossClusters].reverse())
+      .map((node) => [node.id, { x: node.x, y: node.y }]),
+  );
+  const sharedNodes = crossLayout.filter((node) => node.shared);
+  const sharedDistances = sharedNodes.flatMap((node, index) => (
+    sharedNodes.slice(index + 1).map((other) => Math.hypot(node.x - other.x, node.y - other.y))
+  ));
+  const minimumSharedDistancePx = Math.min(...sharedDistances);
 
   assert.equal(standard.nodes.length, 100, 'standard fixture should exercise exactly 100 nodes');
   assert.ok(standard.links.length <= 180, 'standard fixture should stay within 180 edges');
   assert.equal(expanded.nodes.length, 160, 'expanded fixture should exercise exactly 160 nodes');
   assert.ok(expanded.links.length <= 240, 'expanded fixture should stay within 240 edges');
+  assert.equal(expandedLayout.length, expanded.nodes.length, 'expanded nodes must all reuse the full-model coordinate map');
+  assert.ok(expanded.links.every((link) => (
+    expanded.nodes.some((node) => node.id === link.source)
+      && expanded.nodes.some((node) => node.id === link.target)
+  )), 'expanded edges must retain valid endpoints');
   assert.deepEqual(
     { x: root?.x, y: root?.y, fixed: root?.fixed, symbolSize: root?.symbolSize },
     { x: 0, y: 0, fixed: true, symbolSize: 42 },
@@ -191,16 +224,24 @@ async function staticFixtureSmoke() {
   assert.ok(layoutP95Ms < 100, `100-node fixture layout p95 took ${layoutP95Ms.toFixed(2)}ms`);
   assert.ok(projectionP95Ms < 100, `selection/budget projection p95 took ${projectionP95Ms.toFixed(2)}ms`);
   assert.equal(datasetUnderstandingForceConfig(121).layoutAnimation, false);
+  assert.ok(minimumSharedDistancePx >= 48, `cross shared-node spacing was ${minimumSharedDistancePx.toFixed(2)}px`);
+  assert.ok(crossLayout.every((node) => {
+    const reversed = reversedCrossLayout.get(node.id);
+    return reversed?.x === node.x && reversed?.y === node.y;
+  }), 'cross layout coordinates must not depend on input order');
 
   assert.equal((component.match(/echarts\.init\(/g) || []).length, 1, 'ECharts must have one init call site');
   assertIncludes(component, 'echarts.getInstanceByDom(chartRef.current)', 'single-instance lifecycle');
   assertIncludes(component, "replaceMerge: ['series']", 'incremental series update');
   assertIncludes(component, 'lazyUpdate: true', 'lazy ECharts update');
-  assertIncludes(component, "layout: force.layoutAnimation ? 'force' : 'none'", 'large-graph deterministic layout');
+  assertIncludes(component, "layout: staticLayout ? 'none' : 'force'", 'large and cross graph deterministic layout');
+  assertIncludes(component, 'staticLayoutExtentAnchors(layoutBaseNodes)', 'stable static layout extent anchors');
   assertIncludes(component, 'new ResizeObserver(scheduleChartResize)', 'resize observer');
   assertIncludes(component, 'window.requestAnimationFrame', 'resize throttling');
   assertIncludes(component, "event.key === 'Escape'", 'focus-mode Escape exit');
   assertIncludes(component, 'dataset.echartsInitCount', 'browser lifecycle instrumentation');
+  assertIncludes(component, "chart.on('finished', handleFinished)", 'render-finished instrumentation');
+  assertIncludes(component, 'dataset.echartsRenderedRevision', 'render revision instrumentation');
   assertIncludes(component, 'crossGraphAvailable ? (', 'feature-off cross-graph hiding');
   assertIncludes(graphModel, 'const rootId = `dataset:${datasetId}`;', 'single-graph root dataset identity');
 
@@ -224,6 +265,7 @@ async function staticFixtureSmoke() {
     layoutP95Ms: rounded(layoutP95Ms),
     selectionProjectionP95Ms: rounded(projectionP95Ms),
     centerNodePx: root.symbolSize,
+    crossSharedMinimumDistancePx: rounded(minimumSharedDistancePx),
     desktopCanvasCss: 'clamp(680px, 72vh, 820px)',
     desktopBenchmark: { viewport: '1440x1000', canvasPx: benchmarkCanvasPx, method: 'css-expression' },
     echartsInitCallSites: 1,
@@ -242,6 +284,7 @@ async function staticFixtureSmoke() {
       },
       cachedApi: { status: 'skipped', reason: 'requires --url, --api-url, --api-body-file and --performance-runs >=5' },
       firstInteractive: { status: 'skipped', reason: 'requires live browser samples' },
+      firstExpansion: { status: 'skipped', reason: 'requires live browser samples' },
       selectionFilterInteraction: { status: 'skipped', reason: 'requires live browser samples' },
       dragZoomFps: { status: 'skipped', reason: 'requires --measure-fps against a live chart' },
     },
@@ -412,6 +455,7 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
     return path === `/api/v3/datasets/${encodeURIComponent(targetDatasetId)}/understanding`
       && [200, 304].includes(response.status());
   }, { timeout: 15_000 });
+  const selectionStartedAt = await page.evaluate(() => performance.now());
   await item.click();
   await understandingResponse;
 
@@ -441,6 +485,10 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
 
   const chart = page.locator('.dataset-understanding-chart[data-echarts-ready="true"]');
   await chart.waitFor({ state: 'visible', timeout: 15_000 });
+  const renderState = await readRenderedChartState(chart);
+  const firstInteractiveMs = renderState.finishedAt - selectionStartedAt;
+  assert.equal(renderState.nodeCount, 100, `standard graph rendered ${renderState.nodeCount} nodes instead of 100`);
+  assert.ok(renderState.edgeCount <= 180, `standard graph rendered ${renderState.edgeCount} edges`);
   const renderedTitle = (await page.locator('.dataset-understanding-head h3').innerText()).trim();
   const chartLabel = await chart.getAttribute('aria-label');
   assert.equal(renderedTitle, target.title, 'rendered graph title did not match the target dataset');
@@ -452,6 +500,8 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
     understandingDatasetId: understanding.datasetId,
     understandingDatasetTitle: understanding.datasetTitle,
     snapshotStatus: understanding.snapshotStatus,
+    firstInteractiveMs: rounded(firstInteractiveMs),
+    renderState,
   };
 }
 
@@ -469,60 +519,135 @@ async function openDatasetDirectory(page) {
 
 async function navigateToReadyChart(page, targetUrl) {
   const startedAt = performance.now();
-  await page.goto(targetUrl, { waitUntil: 'networkidle' });
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
   await openDatasetDirectory(page);
+  const pageReadyMs = performance.now() - startedAt;
   const targetDataset = datasetId
     ? await selectAndVerifyTargetDataset(page, datasetId, datasetTitle)
     : null;
   const chart = page.locator('.dataset-understanding-chart[data-echarts-ready="true"]');
   await chart.waitFor({ state: 'visible', timeout: 15_000 });
-  return { chart, targetDataset, elapsedMs: performance.now() - startedAt };
+  return { chart, targetDataset, pageReadyMs: rounded(pageReadyMs) };
+}
+
+async function readRenderedChartState(chart) {
+  return chart.evaluate((element) => ({
+    requestedRevision: Number(element.dataset.echartsRequestedRevision || 0),
+    renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
+    nodeCount: Number(element.dataset.echartsNodeCount || 0),
+    edgeCount: Number(element.dataset.echartsEdgeCount || 0),
+    layout: String(element.dataset.echartsLayout || ''),
+    finishedAt: Number(element.dataset.echartsFinishedAt || 0),
+  }));
+}
+
+async function readScreenPositionSnapshot(chart) {
+  const positions = await chart.evaluate((element) => (
+    element.__datasetGraphScreenPositionSnapshot?.() || []
+  ));
+  return new Map(positions.map((position) => [position.id, position]));
+}
+
+async function waitForChartIdle(page, chart) {
+  await page.waitForFunction(() => {
+    const element = document.querySelector('.dataset-understanding-chart');
+    const requested = Number(element?.dataset.echartsRequestedRevision || 0);
+    const rendered = Number(element?.dataset.echartsRenderedRevision || 0);
+    return element?.dataset.echartsReady === 'true' && requested > 0 && rendered === requested;
+  }, null, { timeout: 10_000 });
+  return readRenderedChartState(chart);
+}
+
+async function clickAndWaitForChartRender(page, chart, control) {
+  const idle = await waitForChartIdle(page, chart);
+  const baselineRevision = idle.requestedRevision;
+  const startedAt = await chart.evaluate(() => performance.now());
+  await control.click();
+  await page.waitForFunction(
+    ({ previousRevision, actionStartedAt }) => {
+      const element = document.querySelector('.dataset-understanding-chart');
+      const requested = Number(element?.dataset.echartsRequestedRevision || 0);
+      const rendered = Number(element?.dataset.echartsRenderedRevision || 0);
+      const finishedAt = Number(element?.dataset.echartsFinishedAt || 0);
+      return element?.dataset.echartsReady === 'true'
+        && requested > previousRevision
+        && rendered === requested
+        && finishedAt >= actionStartedAt;
+    },
+    { previousRevision: baselineRevision, actionStartedAt: startedAt },
+    { timeout: 10_000 },
+  );
+  const state = await readRenderedChartState(chart);
+  return {
+    elapsedMs: state.finishedAt - startedAt,
+    state,
+  };
 }
 
 async function measureDensityInteraction(page, chart, samples) {
   if (samples < 5) {
-    return { status: 'skipped', reason: 'requires --performance-runs >=5' };
+    const skipped = { status: 'skipped', reason: 'requires --performance-runs >=5' };
+    return { firstExpansion: skipped, selectionFilterInteraction: skipped };
   }
-  const standard = page.getByRole('button', { name: '标准', exact: true });
   const expanded = page.getByRole('button', { name: '展开', exact: true });
-  if (await standard.count() === 0 || await expanded.count() === 0) {
-    return { status: 'skipped', reason: 'density controls were not present on the live page' };
+  const allRelations = page.locator('.dataset-understanding-relation-filter button').filter({ hasText: /^全部关系/u });
+  const confirmedRelations = page.locator('.dataset-understanding-relation-filter button').filter({ hasText: /^已确认/u });
+  if (await expanded.count() === 0 || await allRelations.count() === 0 || await confirmedRelations.count() === 0) {
+    const skipped = { status: 'skipped', reason: 'density or relation controls were not present on the live page' };
+    return { firstExpansion: skipped, selectionFilterInteraction: skipped };
   }
-  // First-time chart initialization is measured separately by the
-  // first-interactive gate. Warm both density paths before sampling the
-  // steady-state selection/filter interaction budget.
-  for (const control of [expanded, standard]) {
-    const previous = await chart.evaluate((element) => Number(element.dataset.echartsUpdateCount || 0));
-    await control.click();
-    await page.waitForFunction(
-      (updateCount) => Number(document.querySelector('.dataset-understanding-chart')?.dataset.echartsUpdateCount || 0) > updateCount,
-      previous,
-      { timeout: 10_000 },
-    );
-  }
+  const firstExpanded = await clickAndWaitForChartRender(page, chart, expanded);
+  assert.ok(firstExpanded.state.nodeCount > 120, `expanded graph rendered only ${firstExpanded.state.nodeCount} nodes`);
+  assert.ok(firstExpanded.state.nodeCount <= 160, `expanded graph rendered ${firstExpanded.state.nodeCount} nodes`);
+  assert.ok(firstExpanded.state.edgeCount <= 240, `expanded graph rendered ${firstExpanded.state.edgeCount} edges`);
+  assert.equal(firstExpanded.state.layout, 'none', 'expanded graph did not use deterministic static layout');
+  assert.ok(firstExpanded.elapsedMs <= 1500, `first expanded render took ${firstExpanded.elapsedMs.toFixed(2)}ms`);
+  await clickAndWaitForChartRender(page, chart, confirmedRelations.first());
+  await clickAndWaitForChartRender(page, chart, allRelations.first());
+  const baselinePositions = await readScreenPositionSnapshot(chart);
   const elapsed = [];
   for (let index = 0; index < samples; index += 1) {
-    const previous = await chart.evaluate((element) => Number(element.dataset.echartsUpdateCount || 0));
-    const startedAt = performance.now();
-    await (index % 2 === 0 ? expanded : standard).click();
-    await page.waitForFunction(
-      (updateCount) => Number(document.querySelector('.dataset-understanding-chart')?.dataset.echartsUpdateCount || 0) > updateCount,
-      previous,
-      { timeout: 10_000 },
+    const sample = await clickAndWaitForChartRender(
+      page,
+      chart,
+      index % 2 === 0 ? confirmedRelations.first() : allRelations.first(),
     );
-    elapsed.push(performance.now() - startedAt);
+    elapsed.push(sample.elapsedMs);
   }
+  if (samples % 2 === 1) await clickAndWaitForChartRender(page, chart, allRelations.first());
+  const finalPositions = await readScreenPositionSnapshot(chart);
+  const commonPositions = [...baselinePositions.entries()].filter(([id]) => finalPositions.has(id));
+  const maximumScreenDriftPx = Math.max(0, ...commonPositions.map(([id, before]) => {
+    const after = finalPositions.get(id);
+    return Math.hypot(before.x - after.x, before.y - after.y);
+  }));
+  assert.ok(commonPositions.length > 0, 'screen-position stability sample was empty');
+  assert.ok(maximumScreenDriftPx <= 1, `static graph screen drift was ${maximumScreenDriftPx.toFixed(2)}px`);
   const p95Ms = percentile(elapsed, 95);
   assert.ok(
     p95Ms <= 100,
     `live selection/filter p95 was ${p95Ms.toFixed(2)}ms (samples=${elapsed.map(rounded).join(',')})`,
   );
   return {
-    status: 'measured',
-    method: 'Playwright density toggle to ECharts update counter',
-    samples: elapsed.length,
-    p95Ms: rounded(p95Ms),
-    thresholdMs: 100,
+    firstExpansion: {
+      status: 'measured',
+      method: 'first expanded-density click to ECharts finished revision',
+      elapsedMs: rounded(firstExpanded.elapsedMs),
+      thresholdMs: 1500,
+      nodeCount: firstExpanded.state.nodeCount,
+      edgeCount: firstExpanded.state.edgeCount,
+      layout: firstExpanded.state.layout,
+    },
+    selectionFilterInteraction: {
+      status: 'measured',
+      method: 'expanded graph relation-filter toggle to ECharts finished revision',
+      samples: elapsed.length,
+      p95Ms: rounded(p95Ms),
+      thresholdMs: 100,
+      stableNodeCount: commonPositions.length,
+      maximumScreenDriftPx: rounded(maximumScreenDriftPx),
+      maximumScreenDriftThresholdPx: 1,
+    },
   };
 }
 
@@ -671,9 +796,12 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
   if (!expectCrossEnabled) {
     return { status: 'skipped', reason: 'pass --expect-cross-enabled during a cross-graph canary' };
   }
+  await waitForChartIdle(page, chart);
   const before = await chart.evaluate((element) => ({
     instanceId: element.dataset.echartsInstanceId,
     initCount: Number(element.dataset.echartsInitCount || 0),
+    requestedRevision: Number(element.dataset.echartsRequestedRevision || 0),
+    renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
   }));
   const crossButton = page.getByRole('button', { name: '跨数据集', exact: true });
   assert.equal(await crossButton.count(), 1, 'cross-dataset mode must be visible when the feature is enabled');
@@ -681,12 +809,27 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
     new URL(response.url()).pathname === '/api/v3/dataset-semantic-graphs/query'
       && [200, 304].includes(response.status())
   ), { timeout: 15_000 });
+  const actionStartedAt = await chart.evaluate(() => performance.now());
   await crossButton.click();
   await uiRequest;
   await page.locator('.dataset-understanding-snapshot-state.ready').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForFunction(() => (
     document.querySelector('.dataset-understanding-eyebrow')?.textContent?.includes('跨数据集语义图')
   ));
+  await page.waitForFunction(
+    ({ previousRevision, startedAt }) => {
+      const element = document.querySelector('.dataset-understanding-chart');
+      const requested = Number(element?.dataset.echartsRequestedRevision || 0);
+      const rendered = Number(element?.dataset.echartsRenderedRevision || 0);
+      const finishedAt = Number(element?.dataset.echartsFinishedAt || 0);
+      return element?.dataset.echartsReady === 'true'
+        && requested > previousRevision
+        && rendered === requested
+        && finishedAt >= startedAt;
+    },
+    { previousRevision: before.requestedRevision, startedAt: actionStartedAt },
+    { timeout: 10_000 },
+  );
 
   const api = await page.evaluate(async (rootDatasetId) => {
     const response = await fetch('/api/v3/dataset-semantic-graphs/query', {
@@ -767,9 +910,16 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
   const after = await chart.evaluate((element) => ({
     instanceId: element.dataset.echartsInstanceId,
     initCount: Number(element.dataset.echartsInitCount || 0),
+    renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
+    nodeCount: Number(element.dataset.echartsNodeCount || 0),
+    edgeCount: Number(element.dataset.echartsEdgeCount || 0),
+    layout: String(element.dataset.echartsLayout || ''),
   }));
   assert.equal(after.instanceId, before.instanceId, 'cross-mode switch must retain the ECharts instance');
   assert.equal(after.initCount, 1, 'cross-mode switch must not reinitialize ECharts');
+  assert.equal(after.layout, 'none', 'cross-mode graph must use its deterministic clustered layout');
+  assert.ok(after.nodeCount <= 160, `cross-mode graph rendered ${after.nodeCount} nodes`);
+  assert.ok(after.edgeCount <= 240, `cross-mode graph rendered ${after.edgeCount} edges`);
   return {
     status: 'measured',
     crossLinksStatus: api.crossLinksStatus,
@@ -805,12 +955,17 @@ async function liveBrowserSmoke(targetUrl) {
     }
     const requestBody = await loadApiBody();
     const page = await context.newPage();
-    const navigationSamples = [];
-    let navigation = null;
     const sampleCount = performanceRuns || 1;
-    for (let index = 0; index < sampleCount; index += 1) {
-      navigation = await navigateToReadyChart(page, targetUrl);
-      navigationSamples.push(navigation.elapsedMs);
+    let navigation = await navigateToReadyChart(page, targetUrl);
+    const navigationSamples = navigation.targetDataset?.firstInteractiveMs
+      ? [navigation.targetDataset.firstInteractiveMs]
+      : [];
+    for (let index = 1; index < sampleCount; index += 1) {
+      const targetDataset = datasetId
+        ? await selectAndVerifyTargetDataset(page, datasetId, datasetTitle)
+        : null;
+      if (targetDataset?.firstInteractiveMs) navigationSamples.push(targetDataset.firstInteractiveMs);
+      navigation = { ...navigation, targetDataset };
     }
     const chart = navigation.chart;
 
@@ -818,6 +973,10 @@ async function liveBrowserSmoke(targetUrl) {
       instanceId: element.dataset.echartsInstanceId,
       initCount: Number(element.dataset.echartsInitCount || 0),
       updateCount: Number(element.dataset.echartsUpdateCount || 0),
+      renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
+      nodeCount: Number(element.dataset.echartsNodeCount || 0),
+      edgeCount: Number(element.dataset.echartsEdgeCount || 0),
+      layout: String(element.dataset.echartsLayout || ''),
     }));
     assert.ok(before.instanceId, 'chart should expose its ECharts instance id');
     assert.equal(before.initCount, 1, 'chart should initialize exactly once');
@@ -838,24 +997,25 @@ async function liveBrowserSmoke(targetUrl) {
       };
     }
 
-    const crossEnabled = await verifyCrossEnabledUi(page, chart, datasetId);
-
-    const selectionPerformance = await measureDensityInteraction(page, chart, performanceRuns);
+    const densityPerformance = await measureDensityInteraction(page, chart, performanceRuns);
+    const firstExpansionPerformance = densityPerformance.firstExpansion;
+    const selectionPerformance = densityPerformance.selectionFilterInteraction;
     if (selectionPerformance.status === 'skipped') {
       const action = page.locator('.dataset-understanding-local-toolbar button').filter({ hasText: '展开' });
       if (await action.count()) {
-        await action.first().click();
-        await page.waitForFunction(
-          (previous) => Number(document.querySelector('.dataset-understanding-chart')?.dataset.echartsUpdateCount || 0) > previous,
-          before.updateCount,
-        );
+        await clickAndWaitForChartRender(page, chart, action.first());
       }
     }
+    const crossEnabled = await verifyCrossEnabledUi(page, chart, datasetId);
 
     const after = await chart.evaluate((element) => ({
       instanceId: element.dataset.echartsInstanceId,
       initCount: Number(element.dataset.echartsInitCount || 0),
       updateCount: Number(element.dataset.echartsUpdateCount || 0),
+      renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
+      nodeCount: Number(element.dataset.echartsNodeCount || 0),
+      edgeCount: Number(element.dataset.echartsEdgeCount || 0),
+      layout: String(element.dataset.echartsLayout || ''),
     }));
     assert.equal(after.instanceId, before.instanceId, 'filter/density updates must retain the ECharts instance');
     assert.equal(after.initCount, 1, 'filter/density updates must not reinitialize ECharts');
@@ -884,15 +1044,16 @@ async function liveBrowserSmoke(targetUrl) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await chart.waitFor({ state: 'visible' });
 
-    const firstInteractive = performanceRuns
+    const firstInteractive = performanceRuns && navigationSamples.length
       ? {
           status: 'measured',
-          method: 'navigation start to live chart data-echarts-ready',
+          method: 'dataset selection click to ECharts finished revision',
           samples: navigationSamples.length,
           p95Ms: rounded(percentile(navigationSamples, 95)),
           thresholdMs: 1500,
+          coldPageReadyMs: navigation.pageReadyMs,
         }
-      : { status: 'skipped', reason: 'requires --performance-runs >=5' };
+      : { status: 'skipped', reason: 'requires --performance-runs >=5 and --dataset-id' };
     if (firstInteractive.status === 'measured') {
       assert.ok(firstInteractive.p95Ms <= 1500, `first-interactive p95 was ${firstInteractive.p95Ms.toFixed(2)}ms`);
     }
@@ -913,6 +1074,7 @@ async function liveBrowserSmoke(targetUrl) {
       performance: {
         cachedApi: cachedApiPerformance,
         firstInteractive,
+        firstExpansion: firstExpansionPerformance,
         selectionFilterInteraction: selectionPerformance,
         dragZoomFps: dragZoomPerformance,
       },

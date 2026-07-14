@@ -1,8 +1,9 @@
 const ROOT_SIZE = 42;
 const OBJECT_RING_RADIUS = 210;
 const FIELD_SECOND_RING_RADIUS = 340;
-const FIELD_THIRD_RING_RADIUS = 470;
 const FIELDS_PER_RING = 12;
+const FIELD_RING_STEP = 130;
+const FIELD_SLOT_ORDER = [5, 6, 4, 7, 3, 8, 2, 9, 1, 10, 0, 11];
 
 function cleanId(value) {
   return typeof value === 'string' ? value.trim() : String(value || '').trim();
@@ -31,10 +32,10 @@ function polarPosition(radius, angle) {
   };
 }
 
-function fieldFanAngle(parentAngle, index, count, primaryCount) {
-  if (count <= 1) return parentAngle;
+function fieldFanAngle(parentAngle, index, primaryCount) {
   const availableSector = Math.min(0.9, (Math.PI * 2 / Math.max(1, primaryCount)) * 0.72);
-  return parentAngle - availableSector / 2 + availableSector * (index / (count - 1));
+  const slot = FIELD_SLOT_ORDER[index % FIELDS_PER_RING];
+  return parentAngle - availableSector / 2 + availableSector * (slot / (FIELDS_PER_RING - 1));
 }
 
 function nodeKindRank(node) {
@@ -119,26 +120,15 @@ export function layoutDatasetUnderstandingGraph(inputNodes) {
     .forEach(([objectId, group], groupIndex) => {
       const parentAngle = primaryAngles.get(objectId)
         ?? (-Math.PI / 2 + Math.PI * 2 * groupIndex / Math.max(1, fieldsByObject.size));
-      const secondRing = group.slice(0, FIELDS_PER_RING);
-      const thirdRing = group.slice(FIELDS_PER_RING);
-      secondRing.forEach((field, index) => {
-        const angle = fieldFanAngle(parentAngle, index, secondRing.length, primaryNodes.length);
+      group.forEach((field, index) => {
+        const ring = Math.floor(index / FIELDS_PER_RING);
+        const angle = fieldFanAngle(parentAngle, index, primaryNodes.length);
         positioned.set(field.id, {
           ...field,
-          ...polarPosition(FIELD_SECOND_RING_RADIUS, angle),
+          ...polarPosition(FIELD_SECOND_RING_RADIUS + ring * FIELD_RING_STEP, angle),
           fixed: false,
-          layoutTier: 2,
-          symbolSize: clamp(field.symbolSize, 12, 22, 17),
-        });
-      });
-      thirdRing.forEach((field, index) => {
-        const angle = fieldFanAngle(parentAngle, index, thirdRing.length, primaryNodes.length);
-        positioned.set(field.id, {
-          ...field,
-          ...polarPosition(FIELD_THIRD_RING_RADIUS, angle),
-          fixed: false,
-          layoutTier: 3,
-          symbolSize: clamp(field.symbolSize, 12, 22, 15),
+          layoutTier: ring === 0 ? 2 : 3,
+          symbolSize: clamp(field.symbolSize, 12, 22, ring === 0 ? 17 : 15),
         });
       });
     });

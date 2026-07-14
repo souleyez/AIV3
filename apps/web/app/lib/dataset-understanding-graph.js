@@ -852,9 +852,17 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
 
 export function layoutCrossDatasetUnderstandingGraph(inputNodes, inputClusters = []) {
   const nodes = (Array.isArray(inputNodes) ? inputNodes : []).filter((node) => node?.id);
+  const datasetKey = (node) => [...new Set(node.datasetRefs || [])].sort().join('|');
+  const orderedNodes = [...nodes].sort((left, right) => {
+    const rank = (node) => node.kind === 'dataset' ? 0 : node.shared ? 1 : 2;
+    return rank(left) - rank(right)
+      || datasetKey(left).localeCompare(datasetKey(right))
+      || String(left.id).localeCompare(String(right.id));
+  });
   const represented = new Set(nodes.flatMap((node) => node.datasetRefs || []));
   const clusters = (Array.isArray(inputClusters) ? inputClusters : [])
-    .filter((cluster) => represented.has(cluster.id));
+    .filter((cluster) => represented.has(cluster.id))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   const centers = new Map();
   const clusterRadius = clusters.length <= 1 ? 0 : Math.min(540, 270 + clusters.length * 32);
   clusters.forEach((cluster, index) => {
@@ -865,37 +873,15 @@ export function layoutCrossDatasetUnderstandingGraph(inputNodes, inputClusters =
     });
   });
   const memberCounts = new Map();
-  nodes.forEach((node) => {
+  orderedNodes.forEach((node) => {
     if (node.kind === 'dataset' || node.shared) return;
-    const datasetId = node.datasetRefs?.[0];
+    const datasetId = [...new Set(node.datasetRefs || [])].sort()[0];
     memberCounts.set(datasetId, (memberCounts.get(datasetId) || 0) + 1);
   });
   const memberIndexes = new Map();
-  let sharedIndex = 0;
-  return nodes.map((node) => {
-    if (node.kind === 'dataset') {
-      const center = centers.get(node.datasetRefs?.[0]) || { x: 0, y: 0 };
-      return { ...node, ...center, fixed: true, layoutTier: 0, symbolSize: node.rootDataset ? 42 : 36 };
-    }
-    if (node.shared) {
-      const scopedCenters = (node.datasetRefs || []).map((id) => centers.get(id)).filter(Boolean);
-      const base = scopedCenters.length ? {
-        x: scopedCenters.reduce((sum, center) => sum + center.x, 0) / scopedCenters.length,
-        y: scopedCenters.reduce((sum, center) => sum + center.y, 0) / scopedCenters.length,
-      } : { x: 0, y: 0 };
-      const angle = sharedIndex * 2.3999632297;
-      sharedIndex += 1;
-      return {
-        ...node,
-        x: Number((base.x + Math.cos(angle) * 54).toFixed(3)),
-        y: Number((base.y + Math.sin(angle) * 54).toFixed(3)),
-        fixed: false,
-        layoutTier: 1,
-        symbol: 'diamond',
-        symbolSize: Math.max(24, Number(node.symbolSize) || 0),
-      };
-    }
-    const datasetId = node.datasetRefs?.[0];
+  const memberPositions = new Map();
+  orderedNodes.filter((node) => node.kind !== 'dataset' && !node.shared).forEach((node) => {
+    const datasetId = [...new Set(node.datasetRefs || [])].sort()[0];
     const center = centers.get(datasetId) || { x: 0, y: 0 };
     const index = memberIndexes.get(datasetId) || 0;
     memberIndexes.set(datasetId, index + 1);
@@ -903,14 +889,94 @@ export function layoutCrossDatasetUnderstandingGraph(inputNodes, inputClusters =
     const angle = Math.PI * 2 * (index % 14)
       / Math.min(14, Math.max(1, memberCounts.get(datasetId) || 1));
     const radius = 105 + ring * 68;
-    return {
-      ...node,
+    memberPositions.set(node.id, {
       x: Number((center.x + Math.cos(angle) * radius).toFixed(3)),
       y: Number((center.y + Math.sin(angle) * radius).toFixed(3)),
-      fixed: false,
       layoutTier: Math.min(3, ring + 1),
-    };
+    });
   });
+  const sharedPositions = new Map();
+  const occupiedSharedPositions = [];
+  const sharedSlotOrder = [0, 4, 2, 6, 1, 3, 5, 7];
+  const reservedPositions = orderedNodes.filter((node) => node.kind === 'dataset').map((node) => ({
+    ...(centers.get([...new Set(node.datasetRefs || [])].sort()[0]) || { x: 0, y: 0 }),
+    radius: (node.rootDataset ? 42 : 36) / 2,
+  }));
+  orderedNodes.filter((node) => node.kind !== 'dataset' && !node.shared).forEach((node) => {
+    const position = memberPositions.get(node.id) || { x: 0, y: 0 };
+    reservedPositions.push({
+      x: position.x,
+      y: position.y,
+      radius: Math.max(12, (Number(node.symbolSize) || 24) / 2),
+    });
+  });
+  const sharedNodes = orderedNodes.filter((node) => node.shared);
+  sharedNodes.forEach((node) => {
+    const scopedCenters = (node.datasetRefs || []).map((id) => centers.get(id)).filter(Boolean);
+    const base = scopedCenters.length ? {
+      x: scopedCenters.reduce((sum, center) => sum + center.x, 0) / scopedCenters.length,
+      y: scopedCenters.reduce((sum, center) => sum + center.y, 0) / scopedCenters.length,
+    } : { x: 0, y: 0 };
+    let chosen = null;
+    const maximumRings = Math.max(8, sharedNodes.length + reservedPositions.length + 4);
+    for (let ring = 0; ring < maximumRings && !chosen; ring += 1) {
+      const radius = 72 + ring * 48;
+      for (const slot of sharedSlotOrder) {
+        const angle = -Math.PI / 2 + Math.PI * 2 * slot / sharedSlotOrder.length;
+        const candidate = {
+          x: Number((base.x + Math.cos(angle) * radius).toFixed(3)),
+          y: Number((base.y + Math.sin(angle) * radius).toFixed(3)),
+        };
+        const clearsSharedNodes = occupiedSharedPositions.every((position) => (
+          Math.hypot(position.x - candidate.x, position.y - candidate.y) >= 48
+        ));
+        const clearsOtherNodes = reservedPositions.every((position) => (
+          Math.hypot(position.x - candidate.x, position.y - candidate.y) >= position.radius + 20
+        ));
+        if (clearsSharedNodes && clearsOtherNodes) {
+          chosen = candidate;
+          break;
+        }
+      }
+    }
+    if (!chosen) throw new Error(`unable to place shared graph node: ${String(node.id)}`);
+    occupiedSharedPositions.push(chosen);
+    sharedPositions.set(node.id, chosen);
+  });
+  const positioned = new Map();
+  orderedNodes.forEach((node) => {
+    if (node.kind === 'dataset') {
+      const center = centers.get(node.datasetRefs?.[0]) || { x: 0, y: 0 };
+      positioned.set(node.id, {
+        ...node,
+        ...center,
+        fixed: true,
+        layoutTier: 0,
+        symbolSize: node.rootDataset ? 42 : 36,
+      });
+      return;
+    }
+    if (node.shared) {
+      positioned.set(node.id, {
+        ...node,
+        ...(sharedPositions.get(node.id) || { x: 0, y: 0 }),
+        fixed: false,
+        layoutTier: 1,
+        symbol: 'diamond',
+        symbolSize: Math.max(24, Number(node.symbolSize) || 0),
+      });
+      return;
+    }
+    const position = memberPositions.get(node.id) || { x: 0, y: 0, layoutTier: 1 };
+    positioned.set(node.id, {
+      ...node,
+      x: position.x,
+      y: position.y,
+      fixed: false,
+      layoutTier: position.layoutTier,
+    });
+  });
+  return nodes.map((node) => positioned.get(node.id) || node);
 }
 
 function semanticPipelineItems(stage, understanding, nodeById) {

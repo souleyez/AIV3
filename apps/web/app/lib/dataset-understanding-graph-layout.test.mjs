@@ -77,6 +77,29 @@ test('layout positions do not depend on backend input order', () => {
   assert.deepEqual(positionMap(forward), positionMap(reversed));
 });
 
+test('dense fields use fixed twelve-slot rings without overlap in the expanded budget', () => {
+  const nodes = [
+    { id: 'dataset:root', kind: 'dataset' },
+    { id: 'object:only', kind: 'object', entityType: 'object' },
+    ...Array.from({ length: 100 }, (_, index) => ({
+      id: `field:${String(index).padStart(3, '0')}`,
+      kind: 'field',
+      entityType: 'field',
+      objectId: 'object:only',
+      businessScore: 100 - index,
+      symbolSize: 15,
+    })),
+  ];
+  const fields = layoutDatasetUnderstandingGraph(nodes)
+    .filter((node) => node.entityType === 'field')
+    .slice(0, 24);
+  const minimumDistance = Math.min(...fields.flatMap((node, index) => (
+    fields.slice(index + 1).map((other) => Math.hypot(node.x - other.x, node.y - other.y))
+  )));
+
+  assert.ok(minimumDistance >= 22, `expanded field spacing was ${minimumDistance}px`);
+});
+
 test('force config scales repulsion from 280 to 380 and disables layout animation above 120 nodes', () => {
   assert.equal(datasetUnderstandingForceConfig(48).repulsion, 280);
   assert.equal(datasetUnderstandingForceConfig(84).repulsion, 330);
