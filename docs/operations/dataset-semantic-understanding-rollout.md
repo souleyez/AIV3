@@ -88,6 +88,47 @@ manifest_bytes=247194
 
 网页/API fixture 首次使用了无效 chunk state `ready`，在生成快照前即失败；修正为系统支持的 `indexed` 后成功，未留下失败 ready 快照。表格 v2 dry-run 暴露原始 CSV 行作为对象标题，发布门禁因此停止；v3 增加行标题识别与“表格数据”安全降级后重新构建，公开 API 中 `2026-03-31`、`Douyin` 和内部路径匹配均为 0。
 
+## 2026-07-14“新百项目资料”提质 canary
+
+目标数据集为 `d4923d83-6053-4feb-8005-b22ee51e0227`（新百项目资料）。执行时 8 服务器仓库干净，单集运行基线为 `7cdb797e`，PostgreSQL 服务端为 18.4，platform-api、retrieval worker、document-enrichment worker 和 Web 均为 active、`NRestarts=0`。完整发布前备份和本次 allowlist 配置备份分别位于：
+
+```text
+/srv/aiv3/backups/dataset-semantic-newbai-materials-20260714-134501
+/srv/aiv3/backups/dataset-semantic-newbai-allowlist-20260714-143208
+```
+
+完整备份包含环境文件、PostgreSQL 18 schema、旧二进制、Web `.next` 归档、`SHA256SUMS` 和 `auto_delete=false` 的清理清单。服务器 release 构建继续使用 `CC=clang CXX=clang++`；一次误用默认 GCC 的构建在 `aws-lc-sys` 保护处中止，发生在服务重启前，未改变运行态。
+
+最终 dry-run 与 real run 结果：
+
+| 项目 | 结果 |
+| --- | ---: |
+| direct 文档 | 8 |
+| membership 文档 | 1 |
+| 合并去重后文档 | 9 |
+| 业务对象 | 9 |
+| 语义字段 | 160 |
+| 语义关系 | 160 |
+| 业务标签 | 167 |
+| 中文业务标签 | 167（100%） |
+| manifest | 293,643 bytes |
+| dry-run 写入 | 0 |
+
+原始行、SQL/MIME、策略串、绝对路径/连接串、技术文件名和数字标识六类质量命中均为 0，dry-run `quality_gate_passed=true` 后才执行 `--limit 1 --confirm-real-run --summary-only`。真实结果为：
+
+```text
+snapshot_id=4e4505b1-12b7-4f22-877e-5fbff6cf50da
+status=ready
+node_count=169
+edge_count=160
+failure_code=none
+updated_at=2026-07-14 14:32:15 +08:00
+```
+
+API 返回 `ready`、9 个对象、160 个字段和 160 条关系；首次请求 HTTP 200 并返回 ETag，`If-None-Match` 二次请求为 304。公开正文中绝对路径、连接串、SQL/MIME 和 64 位十六进制 hash 命中均为 0。
+
+已执行不删数据的 allowlist 回滚演练：移除目标 UUID 后 API 诚实返回 `empty`、0/0/0 且无 ETag；恢复原 allowlist 并顺序重启三项后端服务后，无需重跑 backfill 即恢复 `ready` 9/160/160 和 304，ETag 与 canary source fingerprint 保持一致。恢复脚本第一次即时探测命中 systemd active 到端口监听之间的短暂启动窗口；带就绪重试的复验随后通过，四项服务仍为 active、`NRestarts=0`。
+
 ## 日常回填命令
 
 先 dry-run，再明确确认 real run；每次只处理一个已经进入 tenant/dataset allowlist 的数据集：
@@ -95,13 +136,13 @@ manifest_bytes=247194
 ```bash
 target/release/dataset-semantic-backfill \
   --dataset-id <dataset-uuid> \
-  --limit <explicit-limit> \
+  --limit 1 \
   --dry-run \
   --summary-only
 
 target/release/dataset-semantic-backfill \
   --dataset-id <dataset-uuid> \
-  --limit <explicit-limit> \
+  --limit 1 \
   --confirm-real-run \
   --summary-only
 ```
