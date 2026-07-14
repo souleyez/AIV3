@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createDatasetSemanticGraphClient,
   DATASET_SEMANTIC_GRAPH_LIMITS,
+  datasetSemanticGraphStateAfterFailure,
   datasetSemanticGraphSelectionKey,
   normalizeDatasetSemanticGraph,
   normalizeDatasetSemanticGraphQuery,
@@ -253,4 +254,45 @@ test('automatic neighbors cannot be admitted by inferred similarity alone', asyn
     client({ rootDatasetId: 'dataset-a', datasetIds: [], autoNeighbors: 3 }),
     /automatic neighbor dataset-b has no confirmed or observed evidence/,
   );
+});
+
+test('masked access failures clear cached cross graphs while 5xx retains data without availability', () => {
+  const cachedData = fixture();
+  const current = {
+    rootDatasetId: 'dataset-a',
+    selectionKey: 'cross|dataset-a|dataset-b',
+    status: 'ready',
+    data: cachedData,
+    error: '',
+    available: true,
+  };
+  for (const status of [401, 403, 404]) {
+    const error = new Error(`masked ${status}`);
+    error.status = status;
+    const failed = datasetSemanticGraphStateAfterFailure(current, {
+      rootDatasetId: 'dataset-a',
+      error,
+    });
+    assert.equal(failed.available, false);
+    assert.equal(failed.data, null);
+    assert.equal(failed.selectionKey, '');
+  }
+
+  const serverError = new Error('temporary failure');
+  serverError.status = 503;
+  const retained = datasetSemanticGraphStateAfterFailure(current, {
+    rootDatasetId: 'dataset-a',
+    error: serverError,
+  });
+  assert.equal(retained.available, false);
+  assert.equal(retained.data, cachedData);
+  assert.equal(retained.selectionKey, current.selectionKey);
+
+  const probeFailure = datasetSemanticGraphStateAfterFailure(current, {
+    rootDatasetId: 'dataset-a',
+    probe: true,
+    error: serverError,
+  });
+  assert.equal(probeFailure.data, null);
+  assert.equal(probeFailure.available, false);
 });

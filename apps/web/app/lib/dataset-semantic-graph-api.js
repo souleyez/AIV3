@@ -290,6 +290,22 @@ async function responseError(response) {
   return error;
 }
 
+export function datasetSemanticGraphStateAfterFailure(current = {}, options = {}) {
+  const probe = options.probe === true;
+  const error = options.error;
+  const status = Number(error?.status) || 0;
+  const accessRevoked = [401, 403, 404].includes(status);
+  const clearCachedGraph = probe || accessRevoked;
+  return {
+    rootDatasetId: text(options.rootDatasetId),
+    selectionKey: clearCachedGraph ? '' : text(current.selectionKey),
+    status: 'failed',
+    data: clearCachedGraph ? null : current.data || null,
+    error: error instanceof Error ? error.message : '跨数据集语义图谱加载失败',
+    available: false,
+  };
+}
+
 export function createDatasetSemanticGraphClient(dependencies = {}) {
   const {
     fetchImpl = (...args) => globalThis.fetch(...args),

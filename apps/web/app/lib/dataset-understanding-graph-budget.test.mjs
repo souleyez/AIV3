@@ -156,6 +156,78 @@ test('low-quality fields never enter the graph merely to fill a node target', ()
   assert.equal(result.nodes.some((node) => node.technicalOnly), false);
 });
 
+test('standard dense cross graph retains an exact shared node even when identity folding has no edge', () => {
+  const datasetNodes = Array.from({ length: 8 }, (_, index) => ({
+    id: `dataset:${index}`,
+    kind: 'dataset',
+    entityType: 'dataset',
+  }));
+  const ordinaryObjects = Array.from({ length: 100 }, (_, index) => ({
+    id: `object:${String(index).padStart(3, '0')}`,
+    kind: 'object',
+    entityType: 'object',
+  }));
+  const sharedDocument = {
+    id: 'shared:document:critical',
+    kind: 'document',
+    entityType: 'document',
+    shared: true,
+    businessScore: 100,
+  };
+
+  const result = applyDatasetUnderstandingGraphBudget({
+    nodes: [...datasetNodes, ...ordinaryObjects, sharedDocument],
+    links: [],
+  }, { density: 'standard' });
+
+  assert.equal(result.nodes.length, 100);
+  assert.equal(result.nodes.some((node) => node.id === sharedDocument.id), true);
+});
+
+test('confirmed and observed cross-edge endpoints remain protected under the standard budget', () => {
+  const datasetNodes = Array.from({ length: 8 }, (_, index) => ({
+    id: `dataset:${index}`,
+    kind: 'dataset',
+    entityType: 'dataset',
+  }));
+  const ordinaryObjects = Array.from({ length: 100 }, (_, index) => ({
+    id: `object:${String(index).padStart(3, '0')}`,
+    kind: 'object',
+    entityType: 'object',
+  }));
+  const endpoints = ['confirmed:left', 'confirmed:right', 'observed:left', 'observed:right']
+    .map((id) => ({ id, kind: 'field', entityType: 'field', objectId: 'object:000' }));
+  const links = [
+    {
+      id: 'cross:confirmed',
+      source: 'confirmed:left',
+      target: 'confirmed:right',
+      type: 'confirmed',
+      evidenceClass: 'confirmed',
+      relationSemantics: 'reference',
+      crossDataset: true,
+    },
+    {
+      id: 'cross:observed',
+      source: 'observed:left',
+      target: 'observed:right',
+      type: 'observed',
+      evidenceClass: 'observed',
+      relationSemantics: 'structure',
+      crossDataset: true,
+    },
+  ];
+
+  const result = applyDatasetUnderstandingGraphBudget({
+    nodes: [...datasetNodes, ...ordinaryObjects, ...endpoints],
+    links,
+  }, { density: 'standard' });
+  const retainedIds = new Set(result.nodes.map((node) => node.id));
+
+  endpoints.forEach((node) => assert.equal(retainedIds.has(node.id), true));
+  assert.deepEqual(result.links.map((link) => link.id), ['cross:confirmed', 'cross:observed']);
+});
+
 test('budget projection is stable when backend node and edge order changes', () => {
   const graph = graphFixture();
   const forward = applyDatasetUnderstandingGraphBudget(graph, { density: 'standard' });

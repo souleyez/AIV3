@@ -70,6 +70,13 @@ function graphNeighborhoodIds(nodes, links, selectedNodeId) {
   return protectedIds;
 }
 
+function reliableCrossLink(link) {
+  const evidenceClass = cleanId(link?.evidenceClass || link?.type).toLowerCase();
+  return link?.crossDataset === true
+    && link?.relationSemantics !== 'similarity'
+    && ['confirmed', 'observed'].includes(evidenceClass);
+}
+
 function qualityEligibleNode(node, allowTechnical) {
   if (!node || !cleanId(node.id)) return false;
   return allowTechnical || node.kind === 'dataset' || !node.technicalOnly;
@@ -152,6 +159,18 @@ export function applyDatasetUnderstandingGraphBudget(graph, options = {}) {
     eligibleIds.has(link?.source) && eligibleIds.has(link?.target)
   ));
   const protectedIds = graphNeighborhoodIds(nodes, links, selectedNodeId);
+  const criticalCrossIds = new Set();
+  nodes.filter((node) => node.shared === true).forEach((node) => {
+    protectedIds.add(node.id);
+    criticalCrossIds.add(node.id);
+  });
+  links.filter(reliableCrossLink).forEach((link) => {
+    [link.source, link.target].forEach((id) => {
+      if (!eligibleIds.has(id)) return;
+      protectedIds.add(id);
+      criticalCrossIds.add(id);
+    });
+  });
   const nonFields = nodes.filter((node) => node.entityType !== 'field' && node.kind !== 'field');
   const fields = nodes.filter((node) => node.entityType === 'field' || node.kind === 'field');
   const groups = groupFields(fields);
@@ -166,6 +185,9 @@ export function applyDatasetUnderstandingGraphBudget(graph, options = {}) {
     .sort((left, right) => {
       if (left.id === selectedNodeId) return -1;
       if (right.id === selectedNodeId) return 1;
+      if (criticalCrossIds.has(left.id) !== criticalCrossIds.has(right.id)) {
+        return criticalCrossIds.has(left.id) ? -1 : 1;
+      }
       if ((left.entityType === 'field' || left.kind === 'field')
         && (right.entityType === 'field' || right.kind === 'field')) {
         return stableFieldCompare(left, right);
@@ -181,7 +203,7 @@ export function applyDatasetUnderstandingGraphBudget(graph, options = {}) {
     }
     const objectId = cleanId(node.objectId) || `unscoped:${node.id}`;
     const count = protectedFieldCounts.get(objectId) || 0;
-    if (node.id === selectedNodeId || count < FIELD_HARD_CAP) {
+    if (node.id === selectedNodeId || criticalCrossIds.has(node.id) || count < FIELD_HARD_CAP) {
       selectedIds.add(node.id);
       protectedFieldCounts.set(objectId, count + 1);
     }

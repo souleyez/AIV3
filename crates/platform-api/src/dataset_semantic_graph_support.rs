@@ -9,7 +9,10 @@ use axum::{
     Json,
 };
 use domain_model::{Dataset, DatasetId, DatasetLifecycle, SecretBindingId, TenantId, UserId};
-use futures_util::future::join_all;
+use futures_util::{
+    future::join_all,
+    stream::{self, StreamExt},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,7 +22,9 @@ use crate::cross_dataset_semantic_graph::{
     DatasetSemanticGraphV1, DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION,
 };
 use crate::resource_access::filter_visible_datasets;
-use crate::semantic_label_resolver::safe_semantic_business_label;
+use crate::semantic_label_resolver::{
+    classify_semantic_primary_label, safe_semantic_business_label,
+};
 use crate::semantic_understanding::{
     stable_semantic_id, DatasetSemanticUnderstanding, SemanticEvidenceClass,
     SemanticRelationSemantics, DATASET_SEMANTIC_SCHEMA_VERSION,
@@ -40,6 +45,8 @@ const DATASET_SEMANTIC_GRAPH_MAX_NODES: usize = 360;
 const DATASET_SEMANTIC_GRAPH_MAX_EDGES: usize = 600;
 const DATASET_SEMANTIC_GRAPH_MAX_DEPTH: usize = 2;
 const DATASET_SEMANTIC_GRAPH_MAX_AUTO_NEIGHBORS: usize = 4;
+const DATASET_SEMANTIC_GRAPH_MAX_AUTO_NEIGHBOR_CANDIDATES: usize = 64;
+const DATASET_SEMANTIC_GRAPH_AUTO_NEIGHBOR_CONCURRENCY: usize = 8;
 const DATASET_SEMANTIC_GRAPH_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -181,6 +188,21 @@ fn uuid_csv_contains(csv: Option<&str>, expected: Uuid) -> bool {
         .flat_map(|value| value.split(','))
         .filter_map(|value| value.trim().parse::<Uuid>().ok())
         .any(|value| value == expected)
+}
+
+fn bounded_allowlisted_auto_neighbor_ids(
+    dataset_allowlist: Option<&str>,
+    selected_dataset_ids: &BTreeSet<DatasetId>,
+) -> Vec<DatasetId> {
+    dataset_allowlist
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().parse::<Uuid>().ok().map(DatasetId))
+        .filter(|dataset_id| !selected_dataset_ids.contains(dataset_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(DATASET_SEMANTIC_GRAPH_MAX_AUTO_NEIGHBOR_CANDIDATES)
+        .collect()
 }
 
 fn masked_graph_not_found() -> ApiError {
@@ -540,8 +562,13 @@ fn sanitize_graph_for_visible_scope(
             {
                 return None;
             }
-            let supporting_dataset_ids =
-                supporting_dataset_ids_from_nodes(&edge.source_id, &edge.target_id, &all_node_refs);
+            let supporting_dataset_ids = visible_supporting_dataset_ids(
+                &edge.supporting_dataset_ids,
+                &edge.source_id,
+                &edge.target_id,
+                &all_node_refs,
+                &visible_dataset_ids,
+            );
             if supporting_dataset_ids.len() < 2 {
                 return None;
             }
@@ -617,11 +644,16 @@ fn sanitize_graph_for_visible_scope(
         } else {
             edge.evidence_class
         };
-        let supporting_dataset_ids = supporting_dataset_ids_from_nodes(
+        let supporting_dataset_ids = visible_supporting_dataset_ids(
+            &edge.supporting_dataset_ids,
             &edge.source_id,
             &edge.target_id,
             &retained_node_refs,
+            &visible_dataset_ids,
         );
+        if supporting_dataset_ids.is_empty() {
+            continue;
+        }
         let evidence_rank = evidence_rank(evidence_class);
         let safe_edge = DatasetSemanticGraphEdge {
             id: stable_semantic_id(
@@ -701,9 +733,30 @@ fn supporting_dataset_ids_from_nodes(
         .collect()
 }
 
+fn visible_supporting_dataset_ids(
+    reported_dataset_ids: &[DatasetId],
+    source_id: &str,
+    target_id: &str,
+    node_refs: &BTreeMap<String, Vec<DatasetId>>,
+    visible_dataset_ids: &BTreeSet<DatasetId>,
+) -> Vec<DatasetId> {
+    let endpoint_scope = supporting_dataset_ids_from_nodes(source_id, target_id, node_refs)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    reported_dataset_ids
+        .iter()
+        .copied()
+        .filter(|dataset_id| visible_dataset_ids.contains(dataset_id))
+        .filter(|dataset_id| endpoint_scope.contains(dataset_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn safe_dataset_title(value: &str) -> String {
     let value = value.trim();
-    if value.is_empty() || looks_sensitive(value) {
+    let quality = classify_semantic_primary_label(value);
+    if value.is_empty() || looks_sensitive(value) || !quality.business_label {
         "数据集".to_string()
     } else {
         value.chars().take(80).collect()
@@ -1004,7 +1057,14 @@ fn reliable_link_counts(
             || edge.evidence_class == SemanticEvidenceClass::Inferred
             || !node_refs.contains_key(&edge.source_id)
             || !node_refs.contains_key(&edge.target_id)
-            || supporting_dataset_ids_from_nodes(&edge.source_id, &edge.target_id, &node_refs).len()
+            || visible_supporting_dataset_ids(
+                &edge.supporting_dataset_ids,
+                &edge.source_id,
+                &edge.target_id,
+                &node_refs,
+                allowed_pair,
+            )
+            .len()
                 < 2
         {
             continue;
@@ -1213,37 +1273,63 @@ pub(crate) async fn query_dataset_semantic_graph(
         .min(remaining_dataset_capacity)
         .min(DATASET_SEMANTIC_GRAPH_MAX_AUTO_NEIGHBORS);
     if auto_limit > 0 {
-        let all_tenant_datasets = state
-            .storage
-            .datasets()
-            .list_by_tenant(state.tenant_id)
-            .await
-            .map_err(ApiError::from_storage)?;
+        let dataset_allowlist =
+            std::env::var(DATASET_CROSS_SEMANTIC_GRAPH_DATASET_ALLOWLIST_ENV).ok();
+        let candidate_ids = bounded_allowlisted_auto_neighbor_ids(
+            dataset_allowlist.as_deref(),
+            &selected_dataset_ids,
+        );
+        let dataset_repository = state.storage.datasets();
+        let tenant_id = state.tenant_id;
+        let candidate_results = stream::iter(candidate_ids.into_iter().map(|candidate_id| {
+            let dataset_repository = dataset_repository.clone();
+            async move { dataset_repository.get_by_id(tenant_id, candidate_id).await }
+        }))
+        .buffer_unordered(DATASET_SEMANTIC_GRAPH_AUTO_NEIGHBOR_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+        let mut allowlisted_datasets = Vec::new();
+        for result in candidate_results {
+            if let Some(dataset) = result.map_err(ApiError::from_storage)? {
+                allowlisted_datasets.push(dataset);
+            }
+        }
         let mut candidates = visible_auto_neighbor_candidates(
-            all_tenant_datasets,
+            allowlisted_datasets,
             &active_secret_binding_ids,
             current_user_id,
             local_thread_id.as_deref(),
             &selected_dataset_ids,
         );
-        candidates.retain(|candidate| {
-            cross_graph_access(state.tenant_id, &[candidate.id]) == CrossGraphAccess::Allowed
-        });
+        candidates.truncate(DATASET_SEMANTIC_GRAPH_MAX_AUTO_NEIGHBOR_CANDIDATES);
         let mut reliable_counts = BTreeMap::new();
-        for candidate in &candidates {
-            let pair = canonical_pair(query.root_dataset_id, candidate.id);
-            let latest_ready = state
-                .storage
-                .dataset_semantic_links()
-                .load_latest_ready(state.tenant_id, pair.0, pair.1)
-                .await
-                .map_err(ApiError::from_storage)?;
+        let link_repository = state.storage.dataset_semantic_links();
+        let root_dataset_id = query.root_dataset_id;
+        let candidate_link_ids = candidates
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>();
+        let link_results = stream::iter(candidate_link_ids.into_iter().map(|candidate_id| {
+            let link_repository = link_repository.clone();
+            async move {
+                let pair = canonical_pair(root_dataset_id, candidate_id);
+                let latest_ready = link_repository
+                    .load_latest_ready(tenant_id, pair.0, pair.1)
+                    .await;
+                (candidate_id, pair, latest_ready)
+            }
+        }))
+        .buffer_unordered(DATASET_SEMANTIC_GRAPH_AUTO_NEIGHBOR_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+        for (candidate_id, pair, latest_ready) in link_results {
+            let latest_ready = latest_ready.map_err(ApiError::from_storage)?;
             let allowed_pair = BTreeSet::from([pair.0, pair.1]);
             if let Some(graph) = latest_ready
                 .as_ref()
                 .and_then(|snapshot| graph_from_link_manifest(&snapshot.manifest, &allowed_pair))
             {
-                reliable_counts.insert(candidate.id, reliable_link_counts(&graph, &allowed_pair));
+                reliable_counts.insert(candidate_id, reliable_link_counts(&graph, &allowed_pair));
             }
             auto_ready_links.insert(pair, latest_ready);
         }
@@ -1513,6 +1599,43 @@ mod tests {
     }
 
     #[test]
+    fn public_dataset_title_projection_rejects_hash_numeric_sql_rows_and_paths() {
+        let unsafe_titles = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "20260714123456",
+            "select customer_id from sales where active = true",
+            "门店\t销售额\t利润额",
+            "C:\\private\\raw-data.csv",
+            "postgresql://user:password@example.invalid:5432/raw",
+        ];
+        for title in unsafe_titles {
+            assert_eq!(safe_dataset_title(title), "数据集", "accepted {title}");
+        }
+        assert_eq!(safe_dataset_title("新百项目资料"), "新百项目资料");
+        assert_eq!(safe_dataset_title("New Bai Project"), "New Bai Project");
+    }
+
+    #[test]
+    fn auto_neighbor_candidates_are_built_only_from_a_bounded_exact_allowlist() {
+        let root = DatasetId(Uuid::from_u128(1));
+        let selected = BTreeSet::from([root]);
+        let allowlist = (1..=501)
+            .map(|value| DatasetId(Uuid::from_u128(value)).to_string())
+            .chain(["not-a-uuid".to_string(), root.to_string()])
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let candidates = bounded_allowlisted_auto_neighbor_ids(Some(&allowlist), &selected);
+
+        assert_eq!(candidates.len(), 64);
+        assert!(!candidates.contains(&root));
+        assert_eq!(candidates[0], DatasetId(Uuid::from_u128(2)));
+        assert_eq!(candidates[63], DatasetId(Uuid::from_u128(65)));
+        assert!(candidates.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
     fn cross_graph_gate_is_fail_closed_for_feature_tenant_and_every_dataset() {
         let tenant_id = TenantId(Uuid::from_u128(100));
         let left = DatasetId(Uuid::from_u128(1));
@@ -1701,6 +1824,16 @@ mod tests {
             cross_dataset: true,
             supporting_dataset_ids: vec![DatasetId(Uuid::from_u128(999))],
         });
+        assert_eq!(
+            reliable_link_counts(&graph, &allowed_pair),
+            ReliableLinkCounts::default(),
+            "out-of-scope reported support must not be promoted from endpoint refs"
+        );
+        graph
+            .edges
+            .last_mut()
+            .expect("observed fixture edge")
+            .supporting_dataset_ids = vec![root, neighbor];
         assert_eq!(
             reliable_link_counts(&graph, &allowed_pair),
             ReliableLinkCounts {
@@ -2018,6 +2151,75 @@ mod tests {
         ] {
             assert!(!serialized.contains(secret), "leaked {secret}");
         }
+    }
+
+    #[test]
+    fn public_projection_never_promotes_reported_single_dataset_support_to_cross_dataset() {
+        let left = dataset(1, DatasetVisibility::Public);
+        let right = dataset(2, DatasetVisibility::Public);
+        let shared_id = "shared:field:0123456789abcdef0123456789abcdef";
+        let left_id = format!("d:{}:field:left", left.id);
+        let mut graph_request = request(left.id);
+        graph_request.dataset_ids = vec![right.id];
+        let query = normalize_query(graph_request).expect("two-dataset query");
+
+        let project = |reported_dataset_ids: Vec<DatasetId>| {
+            sanitize_graph_for_visible_scope(
+                DatasetSemanticGraphV1 {
+                    schema_version: DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION.to_string(),
+                    root_dataset_id: left.id,
+                    datasets: Vec::new(),
+                    nodes: vec![
+                        DatasetSemanticGraphNode {
+                            id: shared_id.to_string(),
+                            kind: DatasetSemanticGraphNodeKind::Field,
+                            display_label: "共享字段".to_string(),
+                            dataset_refs: vec![left.id, right.id],
+                            visible_provenance_count: 2,
+                        },
+                        DatasetSemanticGraphNode {
+                            id: left_id.clone(),
+                            kind: DatasetSemanticGraphNodeKind::Field,
+                            display_label: "本地字段".to_string(),
+                            dataset_refs: vec![left.id],
+                            visible_provenance_count: 1,
+                        },
+                    ],
+                    edges: vec![DatasetSemanticGraphEdge {
+                        id: "unsafe-persisted-edge-id".to_string(),
+                        source_id: shared_id.to_string(),
+                        target_id: left_id.clone(),
+                        relation_type: "explicit_reference".to_string(),
+                        label: "内部标签".to_string(),
+                        relation_semantics: SemanticRelationSemantics::Reference,
+                        evidence_class: SemanticEvidenceClass::Observed,
+                        confidence: 0.72,
+                        reason: "内部依据".to_string(),
+                        cross_dataset: reported_dataset_ids.len() >= 2,
+                        supporting_dataset_ids: reported_dataset_ids,
+                    }],
+                    truncated: DatasetSemanticGraphTruncation::default(),
+                    stale: false,
+                },
+                &[left.clone(), right.clone()],
+                &query,
+            )
+            .edges
+            .into_iter()
+            .next()
+            .expect("safe projected edge")
+        };
+
+        let single_support = project(vec![left.id]);
+        assert_eq!(single_support.supporting_dataset_ids, vec![left.id]);
+        assert!(!single_support.cross_dataset);
+
+        let cross_support = project(vec![left.id, right.id]);
+        assert_eq!(
+            cross_support.supporting_dataset_ids,
+            vec![left.id, right.id]
+        );
+        assert!(cross_support.cross_dataset);
     }
 
     #[test]
