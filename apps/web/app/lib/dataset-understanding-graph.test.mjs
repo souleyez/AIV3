@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildCrossDatasetUnderstandingGraph,
   buildDatasetUnderstandingGraph,
   filterDatasetUnderstandingGraph,
   graphNeighborhoodIds,
+  layoutCrossDatasetUnderstandingGraph,
 } from './dataset-understanding-graph.js';
 import {
   newbaiProjectMaterialsNoisyFallback,
@@ -61,6 +63,204 @@ const documents = [
     parse_quality_status: 'ok',
   },
 ];
+
+function crossGraphFixture(overrides = {}) {
+  return {
+    schema_version: '1.0.0',
+    generation_version: 'dataset_semantic_graph_v1',
+    root_dataset_id: 'dataset-main',
+    datasets: [
+      { id: 'dataset-main', title: '新百项目资料', stale: false },
+      { id: 'dataset-neighbor', title: '新百经营分析', stale: false },
+    ],
+    nodes: [
+      {
+        id: 'root:main',
+        kind: 'dataset',
+        display_label: '新百项目资料',
+        dataset_refs: ['dataset-main'],
+        visible_provenance_count: 1,
+      },
+      {
+        id: 'root:neighbor',
+        kind: 'dataset',
+        display_label: '新百经营分析',
+        dataset_refs: ['dataset-neighbor'],
+        visible_provenance_count: 1,
+      },
+      {
+        id: 'shared:document',
+        kind: 'document',
+        display_label: '经营分析资料',
+        dataset_refs: ['dataset-main', 'dataset-neighbor'],
+        visible_provenance_count: 2,
+      },
+      {
+        id: 'main:field',
+        kind: 'field',
+        display_label: '合同金额',
+        dataset_refs: ['dataset-main'],
+        visible_provenance_count: 12,
+      },
+      {
+        id: 'neighbor:field',
+        kind: 'field',
+        display_label: '租赁金额',
+        dataset_refs: ['dataset-neighbor'],
+        visible_provenance_count: 8,
+      },
+    ],
+    edges: [
+      {
+        id: 'edge:identity',
+        source_id: 'root:main',
+        target_id: 'shared:document',
+        relation_type: 'shared_document',
+        label: '共享资料',
+        relation_semantics: 'identity',
+        evidence_class: 'confirmed',
+        confidence: 1,
+        reason: '两个数据集引用同一份已确认资料。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+      {
+        id: 'edge:reference',
+        source_id: 'shared:document',
+        target_id: 'neighbor:field',
+        relation_type: 'explicit_reference',
+        label: '明确引用',
+        relation_semantics: 'reference',
+        evidence_class: 'observed',
+        confidence: 0.86,
+        reason: '可见资料中观察到明确字段引用。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+      {
+        id: 'edge:similarity',
+        source_id: 'main:field',
+        target_id: 'neighbor:field',
+        relation_type: 'label_similarity',
+        label: '同一字段',
+        relation_semantics: 'similarity',
+        evidence_class: 'inferred',
+        confidence: 0.72,
+        reason: '可见证据提示可能相关，不代表同一实体。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+    ],
+    truncated: { datasets: 0, nodes: 0, edges: 0 },
+    stale: false,
+    cross_links_status: 'ready',
+    ...overrides,
+  };
+}
+
+test('cross-dataset model forms dataset-colored clusters and shared diamonds', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const main = model.nodes.find((node) => node.id === 'main:field');
+  const neighbor = model.nodes.find((node) => node.id === 'neighbor:field');
+  const shared = model.nodes.find((node) => node.id === 'shared:document');
+
+  assert.equal(model.mode, 'cross');
+  assert.equal(model.datasetClusters.length, 2);
+  assert.equal(main.clusterId, 'dataset-main');
+  assert.equal(neighbor.clusterId, 'dataset-neighbor');
+  assert.notEqual(main.clusterColor, neighbor.clusterColor);
+  assert.equal(shared.shared, true);
+  assert.equal(shared.symbol, 'diamond');
+  assert.equal(shared.sharedBadge, '共享');
+  assert.deepEqual(shared.sourceDatasets.map((item) => item.title), ['新百项目资料', '新百经营分析']);
+  assert.equal(shared.visibleProvenanceCount, 2);
+});
+
+test('cross-dataset visual grammar keeps identity/reference solid and similarity dashed without identity claims', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const identity = model.links.find((link) => link.id === 'edge:identity');
+  const reference = model.links.find((link) => link.id === 'edge:reference');
+  const similarity = model.links.find((link) => link.id === 'edge:similarity');
+
+  assert.equal(identity.lineKind, 'solid');
+  assert.equal(reference.lineKind, 'solid');
+  assert.equal(similarity.lineKind, 'dashed');
+  assert.equal(similarity.type, 'inferred');
+  assert.doesNotMatch(similarity.relation, /同一|真实共享/);
+  assert.doesNotMatch(similarity.reason, /同一|真实共享/);
+  assert.equal(reference.evidenceClass, 'observed');
+  assert.equal(reference.reason, '可见资料中观察到明确字段引用。');
+  assert.deepEqual(reference.supportingDatasets.map((item) => item.id), ['dataset-main', 'dataset-neighbor']);
+  assert.equal(reference.visibleContributionCount, 2);
+});
+
+test('inferred-only cross graph exposes an honest no-evidence state and no reliable neighbors', () => {
+  const input = crossGraphFixture({
+    nodes: crossGraphFixture().nodes.filter((node) => node.id !== 'shared:document'),
+    edges: [crossGraphFixture().edges.find((edge) => edge.id === 'edge:similarity')],
+    cross_links_status: 'empty',
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.hasReliableCrossLinks, false);
+  assert.deepEqual(model.reliableNeighborDatasetIds, []);
+  assert.match(model.emptyCrossMessage, /尚未发现有证据的跨数据集共享/);
+});
+
+test('an exact shared node remains reliable even when identity folding needs no edge', () => {
+  const input = crossGraphFixture({
+    edges: [],
+    cross_links_status: 'ready',
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.hasReliableCrossLinks, true);
+  assert.deepEqual(model.reliableNeighborDatasetIds, ['dataset-neighbor']);
+  assert.equal(model.emptyCrossMessage, '');
+  assert.equal(model.datasetClusters.find((cluster) => cluster.id === 'dataset-neighbor')?.reliableLinkCount, 1);
+});
+
+test('cross-dataset filtering reuses 100/160 budgets and can focus one dataset cluster', () => {
+  const input = crossGraphFixture();
+  for (let index = 0; index < 180; index += 1) {
+    const datasetId = index % 2 ? 'dataset-main' : 'dataset-neighbor';
+    const id = `field:${String(index).padStart(3, '0')}`;
+    input.nodes.push({
+      id,
+      kind: 'field',
+      display_label: `经营字段${index}`,
+      dataset_refs: [datasetId],
+      visible_provenance_count: 1,
+    });
+  }
+  const model = buildCrossDatasetUnderstandingGraph(input);
+  const standard = filterDatasetUnderstandingGraph(model, { density: 'standard' });
+  const expanded = filterDatasetUnderstandingGraph(model, { density: 'expanded' });
+  const focused = filterDatasetUnderstandingGraph(model, {
+    density: 'standard',
+    focusDatasetId: 'dataset-neighbor',
+  });
+
+  assert.ok(standard.nodes.length <= 120);
+  assert.ok(expanded.nodes.length <= 160);
+  assert.ok(focused.nodes.every((node) => node.datasetRefs.includes('dataset-neighbor')));
+  assert.equal(focused.nodes.some((node) => node.id === 'root:neighbor'), true);
+  assert.equal(focused.nodes.some((node) => node.id === 'root:main'), false);
+});
+
+test('cross-dataset layout keeps dataset roots fixed and shared nodes between clusters', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const positioned = layoutCrossDatasetUnderstandingGraph(model.nodes, model.datasetClusters);
+  const roots = positioned.filter((node) => node.kind === 'dataset');
+  const shared = positioned.find((node) => node.id === 'shared:document');
+
+  assert.equal(roots.length, 2);
+  assert.ok(roots.every((node) => node.fixed));
+  assert.equal(new Set(roots.map((node) => `${node.x}:${node.y}`)).size, 2);
+  assert.equal(shared.symbol, 'diamond');
+  assert.ok(Number.isFinite(shared.x));
+  assert.ok(Number.isFinite(shared.y));
+});
 
 test('filters the sanitized newbai project fallback noise out of the main canvas', () => {
   const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;

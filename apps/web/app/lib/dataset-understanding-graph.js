@@ -8,6 +8,8 @@ export const DATASET_GRAPH_CATEGORIES = [
   { key: 'dataset', name: '数据集', color: '#f8fbff' },
   { key: 'object', name: '业务对象', color: '#38bdf8' },
   { key: 'field', name: '关键字段', color: '#5eead4' },
+  { key: 'concept', name: '共享概念', color: '#fbbf24' },
+  { key: 'structure', name: '数据结构', color: '#93c5fd' },
   { key: 'unresolved', name: '待解释', color: '#94a3b8' },
   { key: 'document', name: '原始文档', color: '#5eead4' },
   { key: 'knowledge', name: '知识词', color: '#fbbf24' },
@@ -462,6 +464,7 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
     viewMode = 'business',
     focusNodeId = '',
     focusDepth = 'all',
+    focusDatasetId = '',
     density = 'standard',
   } = options;
   const localIds = focusDepth === 'all'
@@ -469,6 +472,11 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
     : graphNeighborhoodIds(model, focusNodeId, focusDepth);
   const revealUnresolved = activeCategory === 'unresolved';
   const candidateNodes = model.nodes.filter((node) => {
+    if (
+      model.mode === 'cross'
+      && focusDatasetId
+      && !(Array.isArray(node.datasetRefs) && node.datasetRefs.includes(focusDatasetId))
+    ) return false;
     if (activeCategory !== 'all' && node.kind !== 'dataset' && node.kind !== activeCategory) return false;
     if (
       model.mode === 'semantic'
@@ -502,6 +510,407 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
       visibleEdgeCount: links.length,
     },
   };
+}
+
+const CROSS_DATASET_CLUSTER_COLORS = [
+  '#38bdf8',
+  '#a78bfa',
+  '#fb7185',
+  '#fbbf24',
+  '#34d399',
+  '#60a5fa',
+  '#f97316',
+  '#22d3ee',
+];
+
+const CROSS_SHARED_COLOR = '#f8fafc';
+const CROSS_SHARED_KINDS = new Set(['document', 'field', 'concept']);
+
+function safeSimilarityRelationLabel(value) {
+  const label = cleanText(value);
+  if (!label || /同一|真实共享|完全相同|确认为/u.test(label)) return '相似线索';
+  return label;
+}
+
+function safeSimilarityReason(value) {
+  const reason = cleanText(value);
+  if (!reason || /同一|真实共享/u.test(reason)) {
+    return '可见证据只提示语义相近，尚未形成确定身份或确定共享关系。';
+  }
+  return reason;
+}
+
+function crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedCount) {
+  const reliableCount = reliableNeighborDatasetIds.length;
+  return [
+    {
+      key: 'scope',
+      label: '可见范围',
+      value: `${graph.datasets.length} 个数据集`,
+      detail: '逐数据集完成权限校验后进入本次图谱。',
+      status: 'complete',
+      source: 'dataset_semantic_graph_v1.datasets',
+      summary: `本次仅展示 ${graph.datasets.length} 个当前可见数据集。`,
+      items: graph.datasets.map((dataset) => ({
+        id: `scope:${dataset.id}`,
+        nodeId: '',
+        label: dataset.title,
+        meta: dataset.stale ? '上一版快照' : '当前快照',
+        detail: '已通过当前请求的逐数据集可见性校验。',
+        evidence: '跨数据集图谱可见范围',
+        status: dataset.stale ? 'attention' : 'complete',
+      })),
+    },
+    {
+      key: 'shared',
+      label: '共享识别',
+      value: `${sharedCount} 个共享节点`,
+      detail: '只把有确定身份依据的资料、字段或概念显示为共享节点。',
+      status: sharedCount ? 'complete' : 'empty',
+      source: 'dataset_semantic_graph_v1.nodes',
+      summary: sharedCount ? `识别到 ${sharedCount} 个可追溯共享节点。` : '尚未识别到可追溯共享节点。',
+      items: [],
+    },
+    {
+      key: 'relations',
+      label: '关系证据',
+      value: `${reliableCount} 个可靠邻居`,
+      detail: '确认或观察关系使用实线；相似线索使用虚线。',
+      status: reliableCount ? 'complete' : 'empty',
+      source: 'dataset_semantic_graph_v1.edges',
+      summary: reliableCount
+        ? `当前根数据集与 ${reliableCount} 个可见数据集存在确认或观察证据。`
+        : '尚未发现有证据的跨数据集共享。',
+      items: [],
+    },
+  ];
+}
+
+export function buildCrossDatasetUnderstandingGraph(graph) {
+  if (!graph || !Array.isArray(graph.datasets) || !graph.datasets.length) return selectionModel();
+  const datasets = [...graph.datasets].sort((left, right) => (
+    Number(right.id === graph.root_dataset_id) - Number(left.id === graph.root_dataset_id)
+    || left.id.localeCompare(right.id, 'en')
+  ));
+  const datasetById = new Map(datasets.map((dataset) => [dataset.id, dataset]));
+  const datasetClusters = datasets.map((dataset, index) => ({
+    id: dataset.id,
+    title: dataset.title,
+    color: CROSS_DATASET_CLUSTER_COLORS[index % CROSS_DATASET_CLUSTER_COLORS.length],
+    stale: dataset.stale,
+    root: dataset.id === graph.root_dataset_id,
+    nodeCount: 0,
+    reliableLinkCount: 0,
+  }));
+  const clusterById = new Map(datasetClusters.map((cluster) => [cluster.id, cluster]));
+  const datasetRootById = new Map();
+
+  const nodes = graph.nodes.map((input) => {
+    const datasetRefs = [...input.dataset_refs];
+    const sourceDatasets = datasetRefs.map((id) => datasetById.get(id)).filter(Boolean);
+    const shared = datasetRefs.length > 1 && CROSS_SHARED_KINDS.has(input.kind);
+    const clusterId = datasetRefs.length === 1
+      ? datasetRefs[0]
+      : `shared:${[...datasetRefs].sort((left, right) => left.localeCompare(right, 'en')).join('|')}`;
+    const clusterColors = datasetRefs.map((id) => clusterById.get(id)?.color).filter(Boolean);
+    const clusterColor = shared ? CROSS_SHARED_COLOR : clusterColors[0] || CROSS_SHARED_COLOR;
+    const item = {
+      ...graphNode({
+        id: input.id,
+        name: input.display_label,
+        kind: input.kind,
+        detail: shared
+          ? `由 ${input.visible_provenance_count} 条当前可见证据共同贡献。`
+          : `来自 ${sourceDatasets[0]?.title || '当前可见数据集'}。`,
+        evidence: sourceDatasets.map((dataset) => dataset.title).join(' · '),
+        status: sourceDatasets.some((dataset) => dataset.stale) ? '上一版可用快照' : '当前可见快照',
+        signal: shared ? 'shared' : input.kind,
+        symbolSize: input.kind === 'dataset' ? 38 : shared ? 30 : input.kind === 'field' ? 20 : 27,
+      }),
+      entityType: input.kind,
+      datasetRefs,
+      sourceDatasets,
+      visibleProvenanceCount: input.visible_provenance_count,
+      shared,
+      sharedBadge: shared ? '共享' : '',
+      symbol: shared ? 'diamond' : 'circle',
+      clusterId,
+      clusterColor,
+      clusterColors,
+      rootDataset: input.kind === 'dataset' && datasetRefs.includes(graph.root_dataset_id),
+      objectId: input.kind === 'field' ? `cluster:${datasetRefs[0] || 'unscoped'}` : '',
+      businessScore: (shared ? 100 : 0) + Math.min(80, input.visible_provenance_count),
+      technicalOnly: false,
+    };
+    if (input.kind === 'dataset' && datasetRefs.length === 1 && !datasetRootById.has(datasetRefs[0])) {
+      datasetRootById.set(datasetRefs[0], item.id);
+    }
+    datasetRefs.forEach((id) => {
+      const cluster = clusterById.get(id);
+      if (cluster) cluster.nodeCount += 1;
+    });
+    return item;
+  });
+
+  datasets.forEach((dataset) => {
+    if (datasetRootById.has(dataset.id)) return;
+    const cluster = clusterById.get(dataset.id);
+    const node = {
+      ...graphNode({
+        id: `dataset:${dataset.id}`,
+        name: dataset.title,
+        kind: 'dataset',
+        detail: dataset.id === graph.root_dataset_id ? '当前数据集' : '当前可见关联数据集',
+        evidence: 'dataset_semantic_graph_v1.datasets',
+        status: dataset.stale ? '上一版可用快照' : '当前可见快照',
+        signal: 'dataset',
+        symbolSize: dataset.id === graph.root_dataset_id ? 42 : 36,
+      }),
+      entityType: 'dataset',
+      datasetRefs: [dataset.id],
+      sourceDatasets: [dataset],
+      visibleProvenanceCount: 1,
+      shared: false,
+      sharedBadge: '',
+      symbol: 'circle',
+      clusterId: dataset.id,
+      clusterColor: cluster.color,
+      clusterColors: [cluster.color],
+      rootDataset: dataset.id === graph.root_dataset_id,
+      objectId: '',
+      businessScore: 100,
+      technicalOnly: false,
+    };
+    nodes.push(node);
+    datasetRootById.set(dataset.id, node.id);
+    cluster.nodeCount += 1;
+  });
+
+  const links = graph.edges.map((input) => {
+    const similarity = input.relation_semantics === 'similarity';
+    const reason = similarity ? safeSimilarityReason(input.reason) : input.reason;
+    const supportingDatasets = input.supporting_dataset_ids
+      .map((id) => datasetById.get(id))
+      .filter(Boolean);
+    return {
+      id: input.id,
+      source: input.source_id,
+      target: input.target_id,
+      relation: similarity ? safeSimilarityRelationLabel(input.label) : input.label,
+      relationType: input.relation_type,
+      relationSemantics: input.relation_semantics,
+      type: similarity ? 'inferred' : input.evidence_class,
+      evidenceClass: input.evidence_class,
+      confidence: input.confidence,
+      evidence: reason,
+      reason,
+      crossDataset: input.cross_dataset,
+      supportingDatasetIds: [...input.supporting_dataset_ids],
+      supportingDatasets,
+      visibleContributionCount: supportingDatasets.length,
+      lineKind: similarity ? 'dashed' : 'solid',
+      rootRelation: false,
+      structural: input.relation_semantics === 'structure',
+    };
+  });
+
+  const pairKeys = new Set(links.flatMap((link) => [
+    `${link.source}|${link.target}`,
+    `${link.target}|${link.source}`,
+  ]));
+  nodes.filter((node) => node.kind !== 'dataset').forEach((node) => {
+    node.datasetRefs.forEach((datasetId) => {
+      const rootNodeId = datasetRootById.get(datasetId);
+      if (!rootNodeId || pairKeys.has(`${rootNodeId}|${node.id}`)) return;
+      const dataset = datasetById.get(datasetId);
+      const id = `cluster:${datasetId}:${node.id}`;
+      links.push({
+        id,
+        source: rootNodeId,
+        target: node.id,
+        relation: '可见归属',
+        relationType: 'dataset_scope',
+        relationSemantics: 'structure',
+        type: 'observed',
+        evidenceClass: 'observed',
+        confidence: 1,
+        evidence: '节点的可见数据集范围。',
+        reason: '节点的可见数据集范围。',
+        crossDataset: false,
+        supportingDatasetIds: [datasetId],
+        supportingDatasets: dataset ? [dataset] : [],
+        visibleContributionCount: 1,
+        lineKind: 'solid',
+        rootRelation: true,
+        structural: true,
+      });
+      pairKeys.add(`${rootNodeId}|${node.id}`);
+      pairKeys.add(`${node.id}|${rootNodeId}`);
+    });
+  });
+
+  withSemanticNeighborhoods(nodes, links);
+  const reliableLinks = links.filter((link) => (
+    link.crossDataset
+    && link.relationSemantics !== 'similarity'
+    && ['confirmed', 'observed'].includes(link.evidenceClass)
+  ));
+  const sharedNodes = nodes.filter((node) => node.shared);
+  const reliableNeighborDatasetIds = [...new Set([
+    ...reliableLinks.flatMap((link) => link.supportingDatasetIds),
+    ...sharedNodes.flatMap((node) => node.datasetRefs),
+  ].filter((id) => id !== graph.root_dataset_id))]
+    .sort((left, right) => left.localeCompare(right, 'en'));
+  reliableLinks.forEach((link) => link.supportingDatasetIds.forEach((id) => {
+    if (id === graph.root_dataset_id) return;
+    const cluster = clusterById.get(id);
+    if (cluster) cluster.reliableLinkCount += 1;
+  }));
+  sharedNodes.forEach((node) => node.datasetRefs.forEach((id) => {
+    if (id === graph.root_dataset_id) return;
+    const cluster = clusterById.get(id);
+    if (cluster) cluster.reliableLinkCount += 1;
+  }));
+  const crossLinks = links.filter((link) => link.crossDataset);
+  const confirmedLinks = crossLinks.filter((link) => link.evidenceClass === 'confirmed');
+  const observedLinks = crossLinks.filter((link) => link.evidenceClass === 'observed');
+  const inferredLinks = crossLinks.filter((link) => link.evidenceClass === 'inferred');
+  const rootDataset = datasetById.get(graph.root_dataset_id) || datasets[0];
+  const emptyCrossMessage = reliableNeighborDatasetIds.length
+    ? ''
+    : '尚未发现有证据的跨数据集共享；系统不会使用纯相似度凑推荐。';
+
+  return {
+    hasDataset: true,
+    mode: 'cross',
+    viewLabel: '跨数据集语义图',
+    overviewTitle: '跨数据集共享与引用',
+    snapshotStatus: graph.cross_links_status,
+    crossLinksStatus: graph.cross_links_status,
+    statusMessage: graph.stale
+      ? '当前展示上一版可用跨数据集图谱。'
+      : '当前只展示本次可见范围内的共享、引用与相似线索。',
+    stale: graph.stale,
+    generatedAt: '',
+    limitations: [
+      '相似关系仅作为推断线索，不折叠节点，也不升级为确定身份或确定共享关系。',
+      ...(graph.truncated.nodes || graph.truncated.edges ? ['后端响应已按安全上限截断。'] : []),
+    ],
+    datasetId: graph.root_dataset_id,
+    rootDatasetId: graph.root_dataset_id,
+    title: rootDataset?.title || '当前数据集',
+    categories: DATASET_GRAPH_CATEGORIES,
+    datasetClusters,
+    hasReliableCrossLinks: reliableNeighborDatasetIds.length > 0,
+    reliableNeighborDatasetIds,
+    emptyCrossMessage,
+    metrics: {
+      documentCount: nodes.filter((node) => node.kind === 'document').length,
+      estimatedWordCount: 0,
+      parsedDocumentCount: 0,
+      readyDocumentCount: datasets.filter((dataset) => !dataset.stale).length,
+      attentionDocumentCount: datasets.filter((dataset) => dataset.stale).length,
+      knowledgeCount: nodes.filter((node) => node.kind === 'concept').length,
+      observedRelationCount: observedLinks.length,
+      inferredRelationCount: inferredLinks.length,
+      confirmedRelationCount: confirmedLinks.length,
+      crossNodeRelationCount: crossLinks.length,
+      sourceCount: datasets.length,
+      objectCount: nodes.filter((node) => node.kind === 'object').length,
+      fieldCount: nodes.filter((node) => node.kind === 'field').length,
+      unresolvedFieldCount: 0,
+      confirmedFactCount: confirmedLinks.length,
+      sharedNodeCount: sharedNodes.length,
+    },
+    pipeline: crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedNodes.length),
+    understanding: {
+      summary: reliableNeighborDatasetIds.length
+        ? `当前数据集与 ${reliableNeighborDatasetIds.length} 个可见邻居存在确认或观察证据，识别到 ${sharedNodes.length} 个共享节点。`
+        : emptyCrossMessage,
+      keyConcepts: cleanList(sharedNodes.map((node) => node.name), 10),
+      keyFields: cleanList(nodes.filter((node) => node.kind === 'field').map((node) => node.name), 10),
+      technicalIdentifiers: [],
+      structurePath: datasets.map((dataset) => dataset.title),
+      strategies: [],
+      retrievalCoverage: {
+        ready: datasets.filter((dataset) => !dataset.stale).length,
+        total: datasets.length,
+      },
+    },
+    nodes,
+    links,
+    emptyKnowledgeMessage: emptyCrossMessage,
+    fallbackQuality: {
+      hiddenCount: 0,
+      hiddenItems: [],
+      hiddenByClass: {},
+      deduplicatedDocumentTitles: 0,
+    },
+    truncated: graph.truncated,
+  };
+}
+
+export function layoutCrossDatasetUnderstandingGraph(inputNodes, inputClusters = []) {
+  const nodes = (Array.isArray(inputNodes) ? inputNodes : []).filter((node) => node?.id);
+  const represented = new Set(nodes.flatMap((node) => node.datasetRefs || []));
+  const clusters = (Array.isArray(inputClusters) ? inputClusters : [])
+    .filter((cluster) => represented.has(cluster.id));
+  const centers = new Map();
+  const clusterRadius = clusters.length <= 1 ? 0 : Math.min(540, 270 + clusters.length * 32);
+  clusters.forEach((cluster, index) => {
+    const angle = -Math.PI / 2 + Math.PI * 2 * index / Math.max(1, clusters.length);
+    centers.set(cluster.id, {
+      x: Number((Math.cos(angle) * clusterRadius).toFixed(3)),
+      y: Number((Math.sin(angle) * clusterRadius).toFixed(3)),
+    });
+  });
+  const memberCounts = new Map();
+  nodes.forEach((node) => {
+    if (node.kind === 'dataset' || node.shared) return;
+    const datasetId = node.datasetRefs?.[0];
+    memberCounts.set(datasetId, (memberCounts.get(datasetId) || 0) + 1);
+  });
+  const memberIndexes = new Map();
+  let sharedIndex = 0;
+  return nodes.map((node) => {
+    if (node.kind === 'dataset') {
+      const center = centers.get(node.datasetRefs?.[0]) || { x: 0, y: 0 };
+      return { ...node, ...center, fixed: true, layoutTier: 0, symbolSize: node.rootDataset ? 42 : 36 };
+    }
+    if (node.shared) {
+      const scopedCenters = (node.datasetRefs || []).map((id) => centers.get(id)).filter(Boolean);
+      const base = scopedCenters.length ? {
+        x: scopedCenters.reduce((sum, center) => sum + center.x, 0) / scopedCenters.length,
+        y: scopedCenters.reduce((sum, center) => sum + center.y, 0) / scopedCenters.length,
+      } : { x: 0, y: 0 };
+      const angle = sharedIndex * 2.3999632297;
+      sharedIndex += 1;
+      return {
+        ...node,
+        x: Number((base.x + Math.cos(angle) * 54).toFixed(3)),
+        y: Number((base.y + Math.sin(angle) * 54).toFixed(3)),
+        fixed: false,
+        layoutTier: 1,
+        symbol: 'diamond',
+        symbolSize: Math.max(24, Number(node.symbolSize) || 0),
+      };
+    }
+    const datasetId = node.datasetRefs?.[0];
+    const center = centers.get(datasetId) || { x: 0, y: 0 };
+    const index = memberIndexes.get(datasetId) || 0;
+    memberIndexes.set(datasetId, index + 1);
+    const ring = Math.floor(index / 14);
+    const angle = Math.PI * 2 * (index % 14)
+      / Math.min(14, Math.max(1, memberCounts.get(datasetId) || 1));
+    const radius = 105 + ring * 68;
+    return {
+      ...node,
+      x: Number((center.x + Math.cos(angle) * radius).toFixed(3)),
+      y: Number((center.y + Math.sin(angle) * radius).toFixed(3)),
+      fixed: false,
+      layoutTier: Math.min(3, ring + 1),
+    };
+  });
 }
 
 function semanticPipelineItems(stage, understanding, nodeById) {

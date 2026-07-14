@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPanel from './components/ChatPanel';
 import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
@@ -80,6 +80,7 @@ import {
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import { fetchDatasetUnderstanding } from './lib/dataset-understanding-api';
+import { fetchDatasetSemanticGraph } from './lib/dataset-semantic-graph-api';
 import {
   datasetSelectionStateAfterToggle,
   datasetIdsAfterCatalogRefresh,
@@ -413,6 +414,14 @@ export default function HomePageClient() {
     data: null,
     error: '',
   });
+  const [datasetSemanticGraphState, setDatasetSemanticGraphState] = useState({
+    rootDatasetId: '',
+    selectionKey: '',
+    status: 'idle',
+    data: null,
+    error: '',
+    available: false,
+  });
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -425,6 +434,7 @@ export default function HomePageClient() {
   const codexCustomerChatMessageKeysRef = useRef(new Set());
   const uiNoticeMessageKeysRef = useRef(new Set());
   const datasetUnderstandingCacheRef = useRef(new Map());
+  const datasetSemanticGraphAbortRef = useRef(null);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -479,6 +489,76 @@ export default function HomePageClient() {
       controller.abort();
     };
   }, [selectedDatasetId]);
+
+  useEffect(() => {
+    datasetSemanticGraphAbortRef.current?.abort();
+    datasetSemanticGraphAbortRef.current = null;
+    setDatasetSemanticGraphState({
+      rootDatasetId: String(selectedDatasetId || '').trim(),
+      selectionKey: '',
+      status: 'idle',
+      data: null,
+      error: '',
+      available: false,
+    });
+    return () => datasetSemanticGraphAbortRef.current?.abort();
+  }, [selectedDatasetId]);
+
+  const requestDatasetSemanticGraph = useCallback(async (request) => {
+    const rootDatasetId = String(request?.rootDatasetId || request?.root_dataset_id || '').trim();
+    const probe = request?.probe === true;
+    if (!rootDatasetId) throw new TypeError('跨数据集图谱需要当前数据集。');
+    datasetSemanticGraphAbortRef.current?.abort();
+    const controller = new AbortController();
+    datasetSemanticGraphAbortRef.current = controller;
+    setDatasetSemanticGraphState((current) => ({
+      rootDatasetId,
+      selectionKey: current.rootDatasetId === rootDatasetId ? current.selectionKey : '',
+      status: 'loading',
+      data: current.rootDatasetId === rootDatasetId ? current.data : null,
+      error: '',
+      available: current.rootDatasetId === rootDatasetId && current.available,
+    }));
+    try {
+      const result = await fetchDatasetSemanticGraph(request, { signal: controller.signal });
+      if (controller.signal.aborted) return null;
+      setDatasetSemanticGraphState({
+        rootDatasetId,
+        selectionKey: result.selectionKey,
+        status: result.data.cross_links_status,
+        data: result.data,
+        error: '',
+        available: true,
+      });
+      return result;
+    } catch (loadError) {
+      if (controller.signal.aborted || loadError?.name === 'AbortError') return null;
+      setDatasetSemanticGraphState((current) => ({
+        rootDatasetId,
+        selectionKey: probe ? '' : current.selectionKey,
+        status: 'failed',
+        data: probe ? null : current.data,
+        error: loadError instanceof Error ? loadError.message : '跨数据集语义图谱加载失败',
+        available: probe ? false : current.available,
+      }));
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const rootDatasetId = String(selectedDatasetId || '').trim();
+    if (!rootDatasetId) return undefined;
+    void requestDatasetSemanticGraph({
+      rootDatasetId,
+      datasetIds: [],
+      autoNeighbors: 0,
+      maxNodes: 1,
+      maxEdges: 0,
+      depth: 1,
+      probe: true,
+    });
+    return () => datasetSemanticGraphAbortRef.current?.abort();
+  }, [requestDatasetSemanticGraph, selectedDatasetId]);
   const selectedAssetLibrary = useMemo(
     () => selectedAssetLibraryView(assetLibraries, selectedAssetLibraryId),
     [assetLibraries, selectedAssetLibraryId],
@@ -4663,7 +4743,13 @@ export default function HomePageClient() {
     onRefreshAssetLibraries: () => refreshAssetLibraries({ silent: false }),
     selectedDatasetId,
     selectedDatasetIds,
-    datasetUnderstandingState,
+    datasetUnderstandingState: {
+      ...datasetUnderstandingState,
+      crossGraphState: datasetSemanticGraphState,
+      crossGraphAvailable: datasetSemanticGraphState.available,
+      availableDatasets: datasets,
+      loadCrossGraph: requestDatasetSemanticGraph,
+    },
     onSelectDataset: sidebarProps.onSelectDataset,
     onClearDatasetSelection: sidebarProps.onClearDatasetSelection,
     datasetDraft,

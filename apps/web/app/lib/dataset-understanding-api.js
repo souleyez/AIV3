@@ -42,6 +42,10 @@ function requiredId(value, path) {
   return id;
 }
 
+export function datasetUnderstandingSelectionKey(datasetId) {
+  return `single:${requiredId(datasetId, 'datasetId')}`;
+}
+
 function semanticStatus(value, path) {
   const status = text(value).toLowerCase();
   if (!SEMANTIC_STATUSES.has(status)) throw new TypeError(`${path} is invalid`);
@@ -237,6 +241,7 @@ export function createDatasetUnderstandingClient(dependencies = {}) {
 
   return async function fetchDatasetUnderstanding(datasetId, options = {}) {
     const id = requiredId(datasetId, 'datasetId');
+    const selectionKey = datasetUnderstandingSelectionKey(id);
     const secretBindingIds = readSecretBindingIdsHeader();
     const etag = text(options.etag);
     const response = await fetchImpl(`/api/v3/datasets/${encodeURIComponent(id)}/understanding`, {
@@ -253,13 +258,14 @@ export function createDatasetUnderstandingClient(dependencies = {}) {
     });
     const responseEtag = response.headers.get('etag') || etag;
     if (response.status === 304) {
-      return { data: null, etag: responseEtag, notModified: true };
+      return { data: null, etag: responseEtag, notModified: true, selectionKey };
     }
     if (!response.ok) throw await responseError(response);
     return {
       data: normalizeDatasetUnderstanding(await response.json()),
       etag: responseEtag,
       notModified: false,
+      selectionKey,
     };
   };
 }

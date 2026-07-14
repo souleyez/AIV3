@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   DATASET_UNDERSTANDING_LIMITS,
   createDatasetUnderstandingClient,
+  datasetUnderstandingSelectionKey,
   normalizeDatasetUnderstanding,
 } from './dataset-understanding-api.js';
 
@@ -151,5 +152,15 @@ test('dataset understanding client normalizes a 200 response and returns its ETa
 
   assert.equal(result.notModified, false);
   assert.equal(result.etag, '"fingerprint-2"');
+  assert.equal(result.selectionKey, 'single:dataset-1');
   assert.equal(result.data.objects[0].label, '租赁合同');
+});
+
+test('single-dataset selection keys stay backward compatible and isolated per dataset', () => {
+  assert.equal(datasetUnderstandingSelectionKey('dataset-1'), 'single:dataset-1');
+  assert.equal(datasetUnderstandingSelectionKey(' dataset-2 '), 'single:dataset-2');
+  assert.notEqual(
+    datasetUnderstandingSelectionKey('dataset-1'),
+    datasetUnderstandingSelectionKey('dataset-2'),
+  );
 });
