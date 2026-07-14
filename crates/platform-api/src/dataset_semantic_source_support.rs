@@ -33,6 +33,7 @@ pub struct SemanticSourceFingerprintInput {
     pub documents: Vec<SemanticDocumentSourceVersion>,
     pub assets: Vec<SemanticAssetSourceVersion>,
     pub dataset_fact_snapshot_version: Option<String>,
+    pub dictionary_versions: Vec<String>,
 }
 
 pub fn merge_dataset_document_ownership(
@@ -92,6 +93,9 @@ pub fn source_fingerprint(input: &SemanticSourceFingerprintInput) -> String {
             .unwrap_or("none")
             .trim()
     ));
+    for version in normalized_versions(&input.dictionary_versions) {
+        canonical.push(format!("semantic_dictionary|{version}"));
+    }
     canonical.sort();
     canonical.dedup();
 
@@ -164,6 +168,7 @@ mod tests {
                 profile_versions: vec!["profile-v1".to_string()],
             }],
             dataset_fact_snapshot_version: Some("snapshot-v1".to_string()),
+            dictionary_versions: vec!["dictionary-entry-1@v1".to_string()],
         };
         let mut reordered = input.clone();
         reordered.documents.reverse();
@@ -176,5 +181,12 @@ mod tests {
         let mut changed = input;
         changed.documents[0].parse_versions = vec!["parser-v2".to_string()];
         assert_ne!(source_fingerprint(&changed), source_fingerprint(&reordered));
+
+        let mut dictionary_changed = reordered.clone();
+        dictionary_changed.dictionary_versions = vec!["dictionary-entry-1@v2".to_string()];
+        assert_ne!(
+            source_fingerprint(&dictionary_changed),
+            source_fingerprint(&reordered)
+        );
     }
 }

@@ -180,6 +180,11 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
             .first()
             .map(|chunk| map_to_value(&chunk.metadata))
             .unwrap_or_else(|| map_to_value(&document.metadata));
+        let source_metadata = if source_kind == "database" {
+            normalize_database_row_metadata(&source_metadata)
+        } else {
+            source_metadata
+        };
         let source_key = source_metadata
             .pointer("/parse_metadata/source_table")
             .and_then(Value::as_str)
@@ -261,11 +266,24 @@ pub async fn preview_dataset_semantic_snapshot_from_storage(
     }
 
     let fact_snapshot_version = fact_snapshot.as_ref().map(|item| item.snapshot_key.clone());
+    let dictionary_versions = dictionary
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}@{}",
+                entry.id,
+                entry
+                    .updated_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+            )
+        })
+        .collect::<Vec<_>>();
     let source_fingerprint = crate::dataset_semantic_source_support::source_fingerprint(
         &crate::dataset_semantic_source_support::SemanticSourceFingerprintInput {
             documents: document_versions,
             assets: asset_versions,
             dataset_fact_snapshot_version: fact_snapshot_version.clone(),
+            dictionary_versions,
         },
     );
     let dictionary_entries = dictionary
@@ -962,6 +980,103 @@ fn map_to_value(values: &BTreeMap<String, Value>) -> Value {
     )
 }
 
+fn normalize_database_row_metadata(metadata: &Value) -> Value {
+    let parse = metadata.get("parse_metadata").unwrap_or(metadata);
+    let Some(parse_object) = parse.as_object() else {
+        return metadata.clone();
+    };
+    let mut fields = parse_object
+        .get("fields")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in parse_object {
+        if database_metadata_control_key(key) || sensitive_semantic_field_key(key) {
+            continue;
+        }
+        fields.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+
+    let mut normalized = Map::new();
+    for key in [
+        "source_table",
+        "schema",
+        "table_comment",
+        "field_comments",
+        "foreign_keys",
+    ] {
+        if let Some(value) = parse_object.get(key) {
+            normalized.insert(key.to_string(), value.clone());
+        }
+    }
+    let primary_key = parse_object
+        .get("primary_key")
+        .or_else(|| parse_object.get("source_primary_key_columns"))
+        .or_else(|| parse_object.get("source_primary_key"));
+    if let Some(value) = primary_key {
+        normalized.insert("primary_key".to_string(), normalized_string_array(value));
+    }
+    normalized.insert("fields".to_string(), Value::Object(fields));
+    json!({"parse_metadata": normalized})
+}
+
+fn database_metadata_control_key(key: &str) -> bool {
+    matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "source_kind"
+            | "source_table"
+            | "source_primary_key"
+            | "source_primary_key_columns"
+            | "source_updated_at"
+            | "schema"
+            | "table_comment"
+            | "field_comments"
+            | "foreign_keys"
+            | "primary_key"
+            | "fields"
+    )
+}
+
+fn sensitive_semantic_field_key(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_lowercase().replace(['-', '.'], "_");
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "access_key",
+        "private_key",
+        "credential",
+        "connection_string",
+        "database_url",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn normalized_string_array(value: &Value) -> Value {
+    let mut values = match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        Value::String(item) => item
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    values.sort();
+    values.dedup();
+    Value::Array(values.into_iter().map(Value::String).collect())
+}
+
 fn metadata_string(values: &BTreeMap<String, Value>, key: &str) -> Option<String> {
     values
         .get(key)
@@ -1082,6 +1197,46 @@ mod tests {
             }],
             limitations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn database_row_metadata_becomes_structured_fields_and_drops_sensitive_keys() {
+        let normalized = normalize_database_row_metadata(&json!({
+            "parse_metadata": {
+                "source_kind": "database_row",
+                "source_table": "lease_contract",
+                "source_primary_key_columns": "contract_id, store_id",
+                "source_updated_at": "2026-07-14T00:00:00Z",
+                "contract_id": "C-001",
+                "rent_amount": 1200,
+                "api_token": "must-not-appear"
+            }
+        }));
+        let parse = normalized
+            .get("parse_metadata")
+            .expect("normalized parse metadata");
+
+        assert_eq!(parse["source_table"], json!("lease_contract"));
+        assert_eq!(parse["primary_key"], json!(["contract_id", "store_id"]));
+        assert_eq!(parse["fields"]["contract_id"], json!("C-001"));
+        assert_eq!(parse["fields"]["rent_amount"], json!(1200));
+        assert!(parse["fields"].get("source_updated_at").is_none());
+        assert!(parse["fields"].get("api_token").is_none());
+
+        let observations = adapt_semantic_profile(&SemanticProfileInput {
+            source_id: "row-1".to_string(),
+            source_kind: "database".to_string(),
+            title: "row".to_string(),
+            metadata: normalized,
+            facts: Vec::new(),
+            evidence_labels: vec!["database row".to_string()],
+        });
+        assert!(observations
+            .iter()
+            .any(|item| item.technical_name == "rent_amount"));
+        assert!(!observations
+            .iter()
+            .any(|item| item.technical_name == "api_token"));
     }
 
     #[test]
@@ -1415,7 +1570,7 @@ mod tests {
             SemanticSnapshotBuildAction::UseExisting
         );
         assert_eq!(
-            semantic_snapshot_build_action(Some(&existing), &"a".repeat(64), "semantic_profile_v2"),
+            semantic_snapshot_build_action(Some(&existing), &"a".repeat(64), "semantic_profile_v3"),
             SemanticSnapshotBuildAction::Rebuild
         );
     }
@@ -1450,6 +1605,7 @@ mod tests {
             ],
             assets: Vec::new(),
             dataset_fact_snapshot_version: Some("v7".to_string()),
+            dictionary_versions: vec!["dictionary-v1".to_string()],
         };
         assert_eq!(
             crate::dataset_semantic_source_support::source_fingerprint(&source).len(),

@@ -9,7 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const DATASET_SEMANTIC_SCHEMA_VERSION: &str = "1.0.0";
-pub const DATASET_SEMANTIC_GENERATION_VERSION: &str = "semantic_profile_v1";
+pub const DATASET_SEMANTIC_GENERATION_VERSION: &str = "semantic_profile_v2";
 pub const MAX_OBJECTS: usize = 40;
 pub const MAX_FIELDS: usize = 160;
 pub const MAX_RELATIONS: usize = 240;

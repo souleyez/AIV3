@@ -117,7 +117,8 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 }
 
 fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
-    let sheet = string_at(&input.metadata, "sheet_name").unwrap_or_else(|| input.title.clone());
+    let sheet = string_at(&input.metadata, "sheet_name")
+        .unwrap_or_else(|| business_source_title(&input.title));
     let mut output = vec![observation(
         input,
         "object",
@@ -161,13 +162,14 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
+    let display_title = business_source_title(&input.title);
     let mut output = vec![observation(
         input,
         "object",
         "document_section",
         &object_key,
         &input.title,
-        Some(input.title.clone()),
+        Some(display_title),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -263,13 +265,14 @@ fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_media(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
+    let display_title = business_source_title(&input.title);
     let mut output = vec![observation(
         input,
         "object",
         "media_segment",
         &object_key,
         &input.title,
-        Some(input.title.clone()),
+        Some(display_title),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -321,6 +324,23 @@ fn adapt_media(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         ));
     }
     output
+}
+
+fn business_source_title(title: &str) -> String {
+    let trimmed = title.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    for suffix in [
+        ".tar.gz", ".docx", ".xlsx", ".pptx", ".pdf", ".doc", ".xls", ".ppt", ".csv", ".json",
+        ".html", ".htm", ".txt", ".md", ".zip", ".mp4", ".mp3", ".wav",
+    ] {
+        if lower.ends_with(suffix) {
+            let candidate = trimmed[..trimmed.len() - suffix.len()].trim();
+            if !candidate.is_empty() {
+                return candidate.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 fn adapt_web_api(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
@@ -612,6 +632,22 @@ mod tests {
         assert!(observations
             .iter()
             .any(|item| item.observation_kind == "fact"));
+    }
+
+    #[test]
+    fn source_file_extensions_are_removed_from_business_labels_only() {
+        let mut fixture = input("document", json!({}));
+        fixture.title = "新百项目.zip".to_string();
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("document object");
+
+        assert_eq!(object.label_hint.as_deref(), Some("新百项目"));
+        assert_eq!(object.technical_name, "新百项目.zip");
+        assert_eq!(business_source_title("周报.DOCX"), "周报");
+        assert_eq!(business_source_title("无扩展名"), "无扩展名");
     }
 
     #[test]
