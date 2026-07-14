@@ -1044,7 +1044,7 @@ fn object_group_key(observation: &SemanticObservation) -> String {
 
 fn public_object_technical_name(observation: &SemanticObservation) -> String {
     if observation.object_kind != "database_table" {
-        return observation.object_key.trim().to_string();
+        return observation.technical_name.trim().to_string();
     }
     observation
         .source_identity
@@ -2205,6 +2205,28 @@ mod tests {
         assert_eq!(snapshot.objects[0].technical_name, "lease_contract");
         assert!(!public_manifest.contains("finance_private"));
         assert!(!public_manifest.contains("erp-internal-a"));
+    }
+
+    #[test]
+    fn document_public_technical_name_does_not_expose_opaque_source_id() {
+        let mut input = fixture_input();
+        let source_id = "d4923d83-6053-4feb-8005-b22ee51e0227";
+        input.observations = adapt_semantic_profile(&SemanticProfileInput {
+            source_id: source_id.to_string(),
+            source_kind: "document".to_string(),
+            title: "新百项目.zip".to_string(),
+            metadata: json!({"sections": ["经营摘要"]}),
+            facts: vec![json!({"name": "项目负责人", "value_type": "text"})],
+            evidence_labels: vec!["文档结构".to_string()],
+        });
+        input.dictionary_entries.clear();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let object = snapshot.objects.first().expect("document object");
+
+        assert_eq!(object.technical_name, "新百项目");
+        assert_ne!(object.technical_name, source_id);
+        assert!(audit_semantic_snapshot_quality(&snapshot).quality_gate_passed);
     }
 
     #[test]
