@@ -456,9 +456,10 @@ pub fn audit_semantic_snapshot_quality(
         && report.path_or_connection_hit_count == 0
         && report.technical_filename_hit_count == 0
         && report.numeric_identifier_hit_count == 0;
+    // This gate protects the public manifest. Sparse sources such as a single
+    // document or asset can be valid without fields or relations; canaries that
+    // require a fully structured graph enforce those counts separately.
     report.quality_gate_passed = !snapshot.objects.is_empty()
-        && !snapshot.fields.is_empty()
-        && !snapshot.relations.is_empty()
         && report.business_label_count > 0
         && report.chinese_label_ratio >= 0.95
         && noise_free
@@ -2186,6 +2187,12 @@ mod tests {
         assert_eq!(clean_report.technical_filename_hit_count, 0);
         assert!(clean_report.manifest_bytes > 0);
         assert!(clean_report.quality_gate_passed);
+
+        let mut sparse_but_safe = clean.clone();
+        sparse_but_safe.fields.clear();
+        sparse_but_safe.relations.clear();
+        let sparse_report = audit_semantic_snapshot_quality(&sparse_but_safe);
+        assert!(sparse_report.quality_gate_passed);
 
         let mut technical_only = clean.clone();
         technical_only.fields[0].technical_name = "2026".to_string();
