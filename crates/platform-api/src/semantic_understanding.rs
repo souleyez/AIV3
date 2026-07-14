@@ -186,12 +186,18 @@ pub fn stable_semantic_id(prefix: &str, parts: &[&str]) -> String {
 }
 
 pub fn build_semantic_summary_headline(objects: &[SemanticObject], source_count: u64) -> String {
+    let observed_coverage_floor = objects
+        .iter()
+        .map(|object| object.coverage_count)
+        .max()
+        .unwrap_or(0)
+        .div_ceil(10)
+        .max(1);
     let mut ranked_labels = BTreeMap::<String, u8>::new();
     for object in objects.iter().filter(|object| {
-        matches!(
-            object.status,
-            SemanticStatus::Confirmed | SemanticStatus::Observed
-        )
+        object.status == SemanticStatus::Confirmed
+            || (object.status == SemanticStatus::Observed
+                && object.coverage_count >= observed_coverage_floor)
     }) {
         let label = object.label.trim();
         if label.is_empty() || !label.chars().any(is_cjk) {
@@ -566,6 +572,27 @@ mod tests {
         let headline = build_semantic_summary_headline(&objects, 5);
 
         assert!(headline.contains("租赁合同"));
+    }
+
+    #[test]
+    fn semantic_summary_headline_does_not_let_tiny_auxiliary_files_replace_main_objects() {
+        let objects = vec![
+            SemanticObject {
+                label: "bi_contract".to_string(),
+                coverage_count: 100,
+                ..object("database_table", 1, SemanticStatus::Unresolved)
+            },
+            SemanticObject {
+                label: "项目资料.zip".to_string(),
+                coverage_count: 1,
+                ..object("document_section", 2, SemanticStatus::Observed)
+            },
+        ];
+
+        let headline = build_semantic_summary_headline(&objects, 2);
+
+        assert!(headline.contains("业务含义仍待确认"));
+        assert!(!headline.contains("项目资料.zip"));
     }
 
     #[test]
