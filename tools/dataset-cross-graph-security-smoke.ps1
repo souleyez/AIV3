@@ -97,7 +97,8 @@ function Measure-CapturedArtifactLeakage {
     $markerHits = 0
     foreach ($path in $Paths) {
         $resolved = Resolve-Path -LiteralPath $path
-        $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $resolved
+        $rawContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $resolved
+        $content = if ($null -eq $rawContent) { "" } else { [string] $rawContent }
         foreach ($pattern in $genericPatterns) {
             $genericHits += [regex]::Matches($content, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Count
         }
