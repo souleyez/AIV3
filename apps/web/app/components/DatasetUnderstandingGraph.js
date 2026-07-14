@@ -483,7 +483,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         </div>
         <div>
           <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE</span>
-          <h3>选择左侧数据集，查看系统理解</h3>
+          <h3>从顶部选择数据集，查看系统理解</h3>
           <p>这里会根据现有数据展示解析清洗链路、知识点、章节结构、资料类型和可追溯连线。</p>
         </div>
       </section>

@@ -25,7 +25,7 @@ import ModelPoolPanel from './ModelPoolPanel';
 const PAGE_COPY = {
   datasets: {
     title: '数据集',
-    subtitle: '选择左侧数据集查看解析关系图谱，并在下方进入文档原文与解析详情。',
+    subtitle: '从顶部数据集选择器选中范围后查看解析关系图谱，并在下方进入文档原文与解析详情。',
   },
   'document-detail': {
     title: '文档详情',
