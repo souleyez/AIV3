@@ -1037,7 +1037,7 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId, requestBody = 
     crossEdgeCount: api.crossEdgeCount,
     sharedNodeVisible: api.sharedNodeCount > 0,
     reliableEvidenceVisible: api.sharedNodeCount === 0 && metrics.reliableNeighbors > 0,
-    truthfulEmptyVisible: api.crossEdgeCount === 0,
+    truthfulEmptyVisible: api.crossEdgeCount === 0 && api.sharedNodeCount === 0,
     retainedEchartsInstance: true,
   };
 }
