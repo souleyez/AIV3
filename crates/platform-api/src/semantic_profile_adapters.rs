@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::semantic_label_resolver::{
-    safe_semantic_business_label, semantic_evidence_label_is_safe,
+    classify_semantic_primary_label, safe_semantic_business_label, semantic_evidence_label_is_safe,
 };
 use crate::semantic_understanding::{
     stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticSourceIdentity,
@@ -254,13 +254,14 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key =
         string_at(&input.metadata, "profile_kind").unwrap_or_else(|| input.source_id.clone());
+    let display_title = localized_business_source_title(&input.title, "资产资料");
     let mut output = vec![observation(
         input,
         "object",
         "asset_profile",
         &object_key,
-        &input.title,
-        Some(business_source_title(&input.title)),
+        &display_title,
+        Some(display_title.clone()),
         "asset_profile",
         SemanticStatus::Observed,
         0.9,
@@ -303,14 +304,14 @@ fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_media(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
-    let display_title = business_source_title(&input.title);
+    let display_title = localized_business_source_title(&input.title, "音视频资料");
     let mut output = vec![observation(
         input,
         "object",
         "media_segment",
         &object_key,
-        &input.title,
-        Some(display_title),
+        &display_title,
+        Some(display_title.clone()),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -382,8 +383,7 @@ fn business_source_title(title: &str) -> String {
 }
 
 fn document_business_title(title: &str) -> String {
-    let title = business_source_title(title);
-    safe_semantic_business_label(&title).unwrap_or_else(|| "文档资料".to_string())
+    localized_business_source_title(title, "文档资料")
 }
 
 fn spreadsheet_business_title(title: &str) -> String {
@@ -395,22 +395,29 @@ fn spreadsheet_business_title(title: &str) -> String {
     if trimmed.chars().count() > 80 || delimiter_count >= 4 {
         "表格数据".to_string()
     } else {
-        let title = business_source_title(trimmed);
-        safe_semantic_business_label(&title).unwrap_or_else(|| "表格数据".to_string())
+        localized_business_source_title(trimmed, "表格数据")
     }
+}
+
+fn localized_business_source_title(title: &str, fallback: &str) -> String {
+    let title = business_source_title(title);
+    safe_semantic_business_label(&title)
+        .filter(|label| classify_semantic_primary_label(label).chinese_business_label)
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn adapt_web_api(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let resource =
         string_at(&input.metadata, "resource_type").unwrap_or_else(|| input.source_id.clone());
-    let label = string_at(&input.metadata, "title").unwrap_or_else(|| input.title.clone());
+    let raw_label = string_at(&input.metadata, "title").unwrap_or_else(|| input.title.clone());
+    let label = localized_business_source_title(&raw_label, "网页接口资料");
     let mut output = vec![observation(
         input,
         "object",
         "api_resource",
         &resource,
-        &resource,
-        Some(label),
+        &label,
+        Some(label.clone()),
         "source_metadata",
         SemanticStatus::Observed,
         0.9,
@@ -973,6 +980,31 @@ mod tests {
         assert!(observations
             .iter()
             .any(|item| item.observation_kind == "reference"));
+    }
+
+    #[test]
+    fn unknown_english_source_titles_use_honest_chinese_kind_fallbacks() {
+        for (source_kind, metadata, expected_label) in [
+            ("document", json!({}), "文档资料"),
+            ("spreadsheet", json!({}), "表格数据"),
+            ("asset", json!({}), "资产资料"),
+            ("media", json!({}), "音视频资料"),
+            (
+                "web_api",
+                json!({"resource_type": "store", "title": "Store API Resource"}),
+                "网页接口资料",
+            ),
+        ] {
+            let observations = adapt_semantic_profile(&input(source_kind, metadata));
+            let object = observations
+                .iter()
+                .find(|item| item.observation_kind == "object")
+                .expect("source object");
+
+            assert_eq!(object.label_hint.as_deref(), Some(expected_label));
+            assert_eq!(object.technical_name, expected_label);
+            assert_eq!(object.source_id, format!("fixture:{source_kind}"));
+        }
     }
 
     #[test]
