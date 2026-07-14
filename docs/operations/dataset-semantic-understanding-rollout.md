@@ -119,4 +119,3 @@ target/release/dataset-semantic-backfill \
 5. migration 表和历史 ready 快照默认保留；不要为回滚删除业务、pilot 或 canary 数据。
 
 上一版 ready 快照是故障 fallback。只有在清理清单经过单独人工确认后，才可处理 fixture、字典项或历史快照。
-
