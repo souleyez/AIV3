@@ -299,6 +299,7 @@ mod client_config_package_support;
 mod client_config_session_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
+pub mod cross_dataset_semantic_graph;
 mod dataset_create_support;
 mod dataset_list_support;
 mod dataset_output_evidence_support;

@@ -33,6 +33,15 @@ pub enum SemanticEvidenceClass {
     Inferred,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticRelationSemantics {
+    Identity,
+    Reference,
+    Structure,
+    Similarity,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SemanticEvidenceRef {
     pub source_kind: String,
