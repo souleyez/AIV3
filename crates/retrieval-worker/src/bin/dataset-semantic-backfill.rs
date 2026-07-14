@@ -4,6 +4,7 @@ use domain_model::{DatasetId, TenantId};
 use platform_api::semantic_understanding::SemanticEvidenceClass;
 use retrieval_worker::dataset_semantic_understanding_access;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use uuid::Uuid;
@@ -115,6 +116,7 @@ async fn main() -> Result<()> {
         let quality = platform_api::dataset_semantic_snapshot::audit_semantic_snapshot_quality(
             &preview.snapshot,
         );
+        let non_chinese_business_labels = non_chinese_business_labels(&preview.snapshot);
         json!({
             "dry_run": true,
             "summary_only": true,
@@ -149,7 +151,7 @@ async fn main() -> Result<()> {
             "technical_filename_hit_count": quality.technical_filename_hit_count,
             "numeric_identifier_hit_count": quality.numeric_identifier_hit_count,
             "quality_gate_passed": quality.quality_gate_passed,
-            "source_fingerprint": preview.source_fingerprint,
+            "non_chinese_business_labels": non_chinese_business_labels,
             "status": "planned",
             "write_count": 0,
         })
@@ -169,13 +171,17 @@ async fn main() -> Result<()> {
         let current_attempt_quality_passed = matches!(outcome.status.as_str(), "ready" | "skipped")
             && outcome.failure_code.is_none()
             && quality.quality_gate_passed;
+        let non_chinese_business_labels = outcome
+            .snapshot
+            .as_ref()
+            .map(non_chinese_business_labels)
+            .unwrap_or_default();
         json!({
             "dry_run": false,
             "summary_only": args.summary_only,
             "dataset_id": args.dataset_id,
             "limit": args.limit,
             "source_limit": args.source_limit,
-            "source_fingerprint": outcome.source_fingerprint,
             "status": outcome.status,
             "failure_code": outcome.failure_code,
             "object_count": outcome.snapshot.as_ref().map(|item| item.objects.len()).unwrap_or(0),
@@ -191,6 +197,7 @@ async fn main() -> Result<()> {
             "path_or_connection_hit_count": quality.path_or_connection_hit_count,
             "technical_filename_hit_count": quality.technical_filename_hit_count,
             "numeric_identifier_hit_count": quality.numeric_identifier_hit_count,
+            "non_chinese_business_labels": non_chinese_business_labels,
             "quality_gate_passed": current_attempt_quality_passed,
         })
     };
@@ -200,6 +207,26 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&output)?);
     }
     Ok(())
+}
+
+fn non_chinese_business_labels(
+    snapshot: &platform_api::semantic_understanding::DatasetSemanticUnderstanding,
+) -> Vec<String> {
+    snapshot
+        .objects
+        .iter()
+        .map(|object| object.label.as_str())
+        .chain(snapshot.fields.iter().map(|field| field.label.as_str()))
+        .filter_map(|label| {
+            let label = label.trim();
+            let quality =
+                platform_api::semantic_label_resolver::classify_semantic_primary_label(label);
+            (quality.business_label && !quality.chinese_business_label).then(|| label.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(32)
+        .collect()
 }
 
 fn empty_quality_report() -> platform_api::dataset_semantic_snapshot::SemanticSnapshotQualityReport

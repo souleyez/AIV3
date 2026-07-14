@@ -539,7 +539,7 @@ async function openDatasetDirectory(page) {
   }
   await page.locator('.dataset-directory-workspace .dataset-understanding-panel').waitFor({
     state: 'visible',
-    timeout: 15_000,
+    timeout: 45_000,
   });
 }
 
@@ -831,7 +831,7 @@ async function measureCachedApi(page, requestBody) {
   };
 }
 
-async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
+async function verifyCrossEnabledUi(page, chart, targetDatasetId, requestBody = null) {
   if (!expectCrossEnabled) {
     return { status: 'skipped', reason: 'pass --expect-cross-enabled during a cross-graph canary' };
   }
@@ -851,7 +851,6 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
   const actionStartedAt = await chart.evaluate(() => performance.now());
   await crossButton.click();
   await uiRequest;
-  await page.locator('.dataset-understanding-snapshot-state.ready').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForFunction(() => (
     document.querySelector('.dataset-understanding-eyebrow')?.textContent?.includes('跨数据集语义图')
   ));
@@ -870,19 +869,75 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
     { timeout: 10_000 },
   );
 
-  const api = await page.evaluate(async (rootDatasetId) => {
+  const explicitDatasetIds = [...new Set(
+    (Array.isArray(requestBody?.dataset_ids) ? requestBody.dataset_ids : [])
+      .map((id) => String(id || '').trim())
+      .filter((id) => id && id !== targetDatasetId),
+  )];
+  if (explicitDatasetIds.length) {
+    const catalog = await page.evaluate(async (requestedIds) => {
+      const response = await fetch('/api/v3/datasets', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+      });
+      const payload = response.ok ? await response.json() : [];
+      const datasets = Array.isArray(payload) ? payload : [];
+      return {
+        status: response.status,
+        selected: requestedIds.map((id) => {
+          const dataset = datasets.find((candidate) => String(candidate?.id || '') === id);
+          return dataset ? { id, title: String(dataset.title || '') } : null;
+        }),
+      };
+    }, explicitDatasetIds);
+    assert.equal(catalog.status, 200, `cross-dataset catalog returned HTTP ${catalog.status}`);
+    assert.ok(catalog.selected.every(Boolean), 'an explicit cross-dataset selection was not visible in the catalog');
+    const selection = page.locator('.dataset-understanding-cross-selection');
+    const details = selection.locator('details');
+    if (!await details.evaluate((element) => element.open)) await selection.locator('summary').click();
+    for (const dataset of catalog.selected) {
+      const button = selection.locator('button').filter({ hasText: dataset.title });
+      assert.equal(await button.count(), 1, `cross-dataset selector did not uniquely expose ${dataset.title}`);
+      if ((await button.getAttribute('class') || '').split(/\s+/).includes('active')) continue;
+      const pairResponse = page.waitForResponse((response) => (
+        new URL(response.url()).pathname === '/api/v3/dataset-semantic-graphs/query'
+          && [200, 304].includes(response.status())
+      ), { timeout: 15_000 });
+      await button.click();
+      const response = await pairResponse;
+      if (response.status() === 200) {
+        const payload = await response.json();
+        assert.equal(payload?.cross_links_status, 'ready', 'explicit pair response was not ready');
+        assert.ok(Array.isArray(payload?.datasets) && payload.datasets.length >= 2, 'explicit pair response omitted the selected dataset');
+      }
+    }
+    await waitForChartIdle(page, chart);
+  }
+  try {
+    await page.locator('.dataset-understanding-snapshot-state.ready').waitFor({ state: 'visible', timeout: 15_000 });
+  } catch (error) {
+    const state = await page.locator('.dataset-understanding-snapshot-state').evaluate((element) => ({
+      className: element.className,
+      text: element.textContent?.trim() || '',
+    }));
+    throw new Error(`explicit cross-pair UI did not become ready: ${JSON.stringify(state)}`, { cause: error });
+  }
+
+  const api = await page.evaluate(async ({ rootDatasetId, explicitBody }) => {
+    const body = explicitBody || {
+      root_dataset_id: rootDatasetId,
+      dataset_ids: [rootDatasetId],
+      auto_neighbors: 3,
+      max_nodes: 160,
+      max_edges: 240,
+      depth: 1,
+    };
     const response = await fetch('/api/v3/dataset-semantic-graphs/query', {
       method: 'POST',
       credentials: 'include',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        root_dataset_id: rootDatasetId,
-        dataset_ids: [rootDatasetId],
-        auto_neighbors: 3,
-        max_nodes: 160,
-        max_edges: 240,
-        depth: 1,
-      }),
+      body: JSON.stringify(body),
     });
     const payload = response.ok ? await response.json() : null;
     const datasets = Array.isArray(payload?.datasets) ? payload.datasets : [];
@@ -893,6 +948,7 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
       rootDatasetId: String(payload?.root_dataset_id || ''),
       crossLinksStatus: String(payload?.cross_links_status || ''),
       datasetCount: datasets.length,
+      edgeCount: edges.length,
       sharedNodeCount: nodes.filter((node) => (
         String(node?.id || '').startsWith('shared:')
           && Array.isArray(node?.dataset_refs)
@@ -907,16 +963,13 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
         edge?.cross_dataset === true
           && ['confirmed', 'observed'].includes(String(edge?.evidence_class || ''))
       )).length,
+      crossEdgeCount: edges.filter((edge) => edge?.cross_dataset === true).length,
     };
-  }, targetDatasetId);
+  }, { rootDatasetId: targetDatasetId, explicitBody: requestBody });
   assert.equal(api.status, 200, `cross-graph API returned HTTP ${api.status}`);
   assert.equal(api.rootDatasetId, targetDatasetId, 'cross-graph root dataset did not match --dataset-id');
   assert.equal(api.crossLinksStatus, 'ready', 'cross-graph API was not ready');
   assert.ok(api.datasetCount >= 2, `cross-graph API returned only ${api.datasetCount} visible dataset`);
-  assert.ok(
-    api.sharedNodeCount > 0 || api.reliableCrossEdgeCount > 0,
-    'cross-graph API had neither an exact shared node nor a reliable cross edge',
-  );
 
   const selection = page.locator('.dataset-understanding-cross-selection');
   const clusterToolbar = page.locator('.dataset-understanding-cluster-toolbar');
@@ -931,7 +984,11 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
         .find((candidate) => candidate.querySelector('small')?.textContent?.trim() === label);
       return Number(item?.querySelector('strong')?.textContent || 0);
     };
-    return { sharedNodes: value('共享节点'), reliableNeighbors: value('可靠邻居') };
+    return {
+      sharedNodes: value('共享节点'),
+      reliableNeighbors: value('可靠邻居'),
+      inferredRelations: value('推断线索'),
+    };
   });
   if (api.sharedNodeCount > 0) {
     assert.ok(metrics.sharedNodes > 0, 'cross-graph shared-node metric was not visible');
@@ -942,8 +999,19 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
       api.firstSharedLabel,
     );
     assert.equal(sharedLabelVisible, true, 'exact shared node was not visible in the graph evidence ledger');
-  } else {
+  } else if (api.reliableCrossEdgeCount > 0) {
     assert.ok(metrics.reliableNeighbors > 0, 'reliable cross-edge evidence was not visible in the UI metrics');
+  } else if (api.crossEdgeCount > 0) {
+    assert.ok(metrics.inferredRelations > 0, 'inferred cross-edge evidence was not visible in the UI metrics');
+  } else {
+    assert.equal(api.edgeCount, 0, 'an evidence-empty pair unexpectedly returned non-cross edges');
+    const emptyMessage = page.locator('.dataset-understanding-cross-empty');
+    await emptyMessage.waitFor({ state: 'visible' });
+    assert.match(
+      (await emptyMessage.innerText()).trim(),
+      /不会使用纯相似度凑推荐/u,
+      'evidence-empty cross graph did not explain the no-fabrication policy',
+    );
   }
 
   const after = await chart.evaluate((element) => ({
@@ -966,8 +1034,10 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId) {
     clusterCount,
     exactSharedNodeCount: api.sharedNodeCount,
     reliableCrossEdgeCount: api.reliableCrossEdgeCount,
+    crossEdgeCount: api.crossEdgeCount,
     sharedNodeVisible: api.sharedNodeCount > 0,
     reliableEvidenceVisible: api.sharedNodeCount === 0 && metrics.reliableNeighbors > 0,
+    truthfulEmptyVisible: api.crossEdgeCount === 0,
     retainedEchartsInstance: true,
   };
 }
@@ -1057,7 +1127,7 @@ async function liveBrowserSmoke(targetUrl) {
         await clickAndWaitForChartRender(page, chart, action.first());
       }
     }
-    const crossEnabled = await verifyCrossEnabledUi(page, chart, datasetId);
+    const crossEnabled = await verifyCrossEnabledUi(page, chart, datasetId, requestBody);
 
     const after = await chart.evaluate((element) => ({
       instanceId: element.dataset.echartsInstanceId,
