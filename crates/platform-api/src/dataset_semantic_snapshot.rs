@@ -137,10 +137,18 @@ pub fn audit_semantic_snapshot_quality(
         }
         record_snapshot_noise_hit(&mut report, quality.class);
         if technical_name != label {
-            record_snapshot_noise_hit(
-                &mut report,
-                classify_semantic_primary_label(technical_name).class,
-            );
+            let technical_class = classify_semantic_primary_label(technical_name).class;
+            if crate::semantic_label_resolver::semantic_technical_name_is_sensitive(technical_name)
+            {
+                record_snapshot_noise_hit(&mut report, SemanticPrimaryLabelClass::PathOrConnection);
+            } else if !matches!(
+                technical_class,
+                SemanticPrimaryLabelClass::NumericIdentifier
+                    | SemanticPrimaryLabelClass::TechnicalFilename
+                    | SemanticPrimaryLabelClass::TechnicalIdentifier
+            ) {
+                record_snapshot_noise_hit(&mut report, technical_class);
+            }
         }
     }
     report.chinese_label_ratio = if report.business_label_count == 0 {
@@ -1855,6 +1863,19 @@ mod tests {
         assert_eq!(clean_report.technical_filename_hit_count, 0);
         assert!(clean_report.manifest_bytes > 0);
         assert!(clean_report.quality_gate_passed);
+
+        let mut technical_only = clean.clone();
+        technical_only.fields[0].technical_name = "2026".to_string();
+        technical_only.fields[1].technical_name = "technical_report_alpha.xlsx".to_string();
+        let technical_only_report = audit_semantic_snapshot_quality(&technical_only);
+        assert_eq!(technical_only_report.numeric_identifier_hit_count, 0);
+        assert_eq!(technical_only_report.technical_filename_hit_count, 0);
+        assert!(technical_only_report.quality_gate_passed);
+
+        technical_only.fields[0].technical_name = "a".repeat(64);
+        let sensitive_technical_report = audit_semantic_snapshot_quality(&technical_only);
+        assert_eq!(sensitive_technical_report.path_or_connection_hit_count, 1);
+        assert!(!sensitive_technical_report.quality_gate_passed);
 
         let mut noisy = clean;
         noisy.objects[0].label = "1001,新街口门店,2026,123456.78".to_string();

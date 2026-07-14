@@ -159,6 +159,10 @@ pub fn semantic_evidence_label_is_safe(value: &str) -> bool {
     )
 }
 
+pub(crate) fn semantic_technical_name_is_sensitive(value: &str) -> bool {
+    looks_sensitive(value)
+}
+
 fn is_han_character(character: char) -> bool {
     matches!(character as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff)
 }
