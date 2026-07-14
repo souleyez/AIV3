@@ -199,6 +199,92 @@ function nodeShortLabel(value) {
   return Array.from(normalized || '节点').slice(0, 5).join('');
 }
 
+const FIELD_ROLE_SUFFIXES = {
+  identifier: '标识',
+  name: '名称',
+  date: '日期',
+  amount: '金额',
+  quantity: '数量',
+  category: '分类',
+  status: '状态',
+  location: '位置',
+  text: '要点',
+  unknown: '字段',
+};
+
+function chineseLabelText(value) {
+  return (cleanText(value)
+    .replace(/[A-Za-z][A-Za-z0-9_.-]*/g, ' ')
+    .replace(/\d+(?:[./_-]\d+)*/g, ' ')
+    .match(/\p{Script=Han}+/gu) || [])
+    .join('');
+}
+
+function conciseChineseLabel(value, maximum = 10) {
+  const chinese = chineseLabelText(value);
+  return Array.from(chinese).length >= 2 && Array.from(chinese).length <= maximum
+    ? chinese
+    : '';
+}
+
+function objectKindDisplayLabel(kind) {
+  return {
+    database: '业务数据表',
+    database_table: '业务数据表',
+    spreadsheet: '表格数据',
+    spreadsheet_table: '表格数据',
+    document: '业务资料',
+    document_section: '文档结构',
+    asset: '资料资产',
+    asset_profile: '资料资产',
+    media: '媒体内容',
+    media_segment: '媒体内容',
+    web_api: '接口数据',
+    api_resource: '接口数据',
+  }[cleanText(kind).toLocaleLowerCase()] || '业务对象';
+}
+
+function semanticObjectDisplayLabel(object) {
+  if (object?.status === 'unresolved') return '待解释对象';
+  return conciseChineseLabel(object?.label) || objectKindDisplayLabel(object?.kind);
+}
+
+function objectLabelAnchor(value) {
+  const characters = Array.from(chineseLabelText(value));
+  if (!characters.length) return '业务';
+  return characters.slice(-Math.min(2, characters.length)).join('');
+}
+
+function semanticFieldDisplayLabel(field, parentLabel) {
+  const anchor = objectLabelAnchor(parentLabel);
+  if (field?.status === 'unresolved') return `${anchor}待解释`;
+  const rawLabel = cleanText(field?.label);
+  const containsEnglishIdentifier = /[A-Za-z][A-Za-z0-9_.-]*/.test(rawLabel);
+  const directChineseLabel = containsEnglishIdentifier ? '' : conciseChineseLabel(rawLabel, 8);
+  if (directChineseLabel) return directChineseLabel;
+  const suffix = FIELD_ROLE_SUFFIXES[cleanText(field?.semantic_role).toLocaleLowerCase()] || '字段';
+  return anchor.endsWith(suffix) ? anchor : `${anchor}${suffix}`;
+}
+
+function trustedBusinessFieldLabel(field) {
+  const rawLabel = cleanText(field?.label);
+  return field?.status !== 'unresolved'
+    && !/[A-Za-z][A-Za-z0-9_.-]*/.test(rawLabel)
+    && Boolean(conciseChineseLabel(rawLabel, 8));
+}
+
+function fieldBusinessScore(field) {
+  const labelSource = cleanText(field?.label_source).toLocaleLowerCase();
+  const role = cleanText(field?.semantic_role).toLocaleLowerCase();
+  const labelLength = Array.from(chineseLabelText(field?.label)).length;
+  return (labelSource.includes('confirmed') || labelSource.includes('dictionary') ? 80 : 0)
+    + (labelSource.includes('comment') ? 55 : 0)
+    + (role && role !== 'unknown' ? 30 : 0)
+    + Math.round((Number(field?.confidence) || 0) * 20)
+    + Math.min(18, Math.log2(Math.max(0, Number(field?.non_empty_count) || 0) + 1) * 2)
+    + (labelLength >= 2 && labelLength <= 6 ? 15 : 0);
+}
+
 function graphNode({ id, name, kind, detail, evidence, status = '', signal = '', symbolSize = 30 }) {
   return {
     id,
@@ -332,6 +418,19 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
     ? null
     : graphNeighborhoodIds(model, focusNodeId, focusDepth);
   const revealUnresolved = activeCategory === 'unresolved';
+  const preferredBusinessFieldIds = new Set();
+  if (model.mode === 'semantic' && viewMode === 'business' && !revealUnresolved) {
+    const fieldsByObject = new Map();
+    model.nodes.filter((node) => node.entityType === 'field' && !node.technicalOnly).forEach((node) => {
+      const fields = fieldsByObject.get(node.objectId) || [];
+      fields.push(node);
+      fieldsByObject.set(node.objectId, fields);
+    });
+    fieldsByObject.forEach((fields) => fields
+      .sort((left, right) => right.businessScore - left.businessScore || left.name.localeCompare(right.name, 'zh-CN'))
+      .slice(0, 4)
+      .forEach((field) => preferredBusinessFieldIds.add(field.id)));
+  }
   const nodes = model.nodes.filter((node) => {
     if (activeCategory !== 'all' && node.kind !== 'dataset' && node.kind !== activeCategory) return false;
     if (
@@ -340,6 +439,13 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
       && !revealUnresolved
       && node.kind !== 'dataset'
       && (node.kind === 'unresolved' || node.technicalOnly)
+    ) return false;
+    if (
+      model.mode === 'semantic'
+      && viewMode === 'business'
+      && !revealUnresolved
+      && node.entityType === 'field'
+      && !preferredBusinessFieldIds.has(node.id)
     ) return false;
     if (localIds && !localIds.has(node.id)) return false;
     return true;
@@ -369,7 +475,7 @@ function semanticPipelineItems(stage, understanding, nodeById) {
     return understanding.objects.map((object) => ({
       id: `${stage.id}:${object.id}`,
       nodeId: object.id,
-      label: object.label,
+      label: nodeById.get(object.id)?.name || semanticObjectDisplayLabel(object),
       meta: semanticStatusLabel(object.status),
       detail: object.description || `覆盖 ${object.coverage_count} 条记录`,
       evidence: semanticEvidenceText(object.evidence_refs),
@@ -380,7 +486,7 @@ function semanticPipelineItems(stage, understanding, nodeById) {
     return understanding.fields.map((field) => ({
       id: `${stage.id}:${field.id}`,
       nodeId: field.id,
-      label: field.status === 'unresolved' ? '待解释字段' : field.label,
+      label: nodeById.get(field.id)?.name || '待解释字段',
       meta: `${semanticStatusLabel(field.status)} · ${field.semantic_role}`,
       detail: `${field.value_type} · 非空 ${field.non_empty_count} · 去重 ${field.distinct_count}`,
       evidence: semanticEvidenceText(field.evidence_refs),
@@ -433,10 +539,11 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
 
   understanding.objects.forEach((object) => {
     const group = sourceGroupByObject.get(object.id);
+    const displayLabel = semanticObjectDisplayLabel(object);
     nodes.push({
       ...graphNode({
         id: object.id,
-        name: object.status === 'unresolved' ? '待解释对象' : object.label,
+        name: displayLabel,
         kind: object.status === 'unresolved' ? 'unresolved' : 'object',
         detail: object.description || `系统从 ${object.kind} 中识别出的业务对象。`,
         evidence: semanticEvidenceText(object.evidence_refs),
@@ -445,6 +552,7 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
         symbolSize: semanticNodeSize(object.coverage_count, 32, 54),
       }),
       entityType: 'object',
+      rawLabel: object.label,
       sourceKind: object.kind,
       technicalName: object.technical_name,
       labelSource: object.label_source,
@@ -453,16 +561,21 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
       evidenceRefs: object.evidence_refs,
       groupId: group?.id || '',
       groupLabel: group?.label || '',
-      technicalOnly: !/\p{Script=Han}/u.test(object.label),
+      technicalOnly: !conciseChineseLabel(object.label),
     });
   });
 
+  const objectDisplayLabels = new Map(nodes
+    .filter((node) => node.entityType === 'object')
+    .map((node) => [node.id, node.name]));
+
   understanding.fields.forEach((field) => {
     const unresolved = field.status === 'unresolved';
+    const displayLabel = semanticFieldDisplayLabel(field, objectDisplayLabels.get(field.object_id));
     nodes.push({
       ...graphNode({
         id: field.id,
-        name: unresolved ? '待解释字段' : field.label,
+        name: displayLabel,
         kind: unresolved ? 'unresolved' : 'field',
         detail: unresolved
           ? '该字段已识别结构和值域，但业务含义尚未确认。'
@@ -473,6 +586,7 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
         symbolSize: unresolved ? 16 : semanticNodeSize(field.non_empty_count, 19, 31),
       }),
       entityType: 'field',
+      rawLabel: field.label,
       objectId: field.object_id,
       technicalName: field.technical_name,
       semanticRole: field.semantic_role,
@@ -483,7 +597,8 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
       labelSource: field.label_source,
       confidence: field.confidence,
       evidenceRefs: field.evidence_refs,
-      technicalOnly: unresolved || !/\p{Script=Han}/u.test(field.label),
+      technicalOnly: unresolved || !trustedBusinessFieldLabel(field),
+      businessScore: fieldBusinessScore(field),
     });
   });
 
@@ -588,18 +703,22 @@ function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
     understanding: {
       summary: understanding.summary.headline,
       keyConcepts: cleanList([
-        ...understanding.objects.filter((object) => object.status !== 'unresolved').map((object) => object.label),
-        ...resolvedFields.filter((field) => /\p{Script=Han}/u.test(field.label)).map((field) => field.label),
+        ...understanding.objects.filter((object) => object.status !== 'unresolved')
+          .map((object) => nodeById.get(object.id)?.name),
+        ...resolvedFields.filter((field) => trustedBusinessFieldLabel(field))
+          .map((field) => nodeById.get(field.id)?.name),
       ], 16),
       keyFields: cleanList(
-        resolvedFields.filter((field) => /\p{Script=Han}/u.test(field.label)).map((field) => field.label),
+        resolvedFields.filter((field) => trustedBusinessFieldLabel(field))
+          .map((field) => nodeById.get(field.id)?.name),
         16,
       ),
       technicalIdentifiers: cleanList([
         ...understanding.objects.filter((object) => object.status === 'unresolved').map((object) => object.technical_name),
         ...unresolvedFields.map((field) => field.technical_name),
       ], 40),
-      structurePath: understanding.objects.filter((object) => object.status !== 'unresolved').map((object) => object.label),
+      structurePath: understanding.objects.filter((object) => object.status !== 'unresolved')
+        .map((object) => nodeById.get(object.id)?.name),
       strategies: understanding.pipeline.map((stage) => stage.label),
       retrievalCoverage: { ready: retrievalCount, total: documentCount },
     },

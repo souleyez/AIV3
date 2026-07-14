@@ -279,6 +279,7 @@ function NodeInspector({ model, node, onSelectLink }) {
       <p>{node.detail || '点击图谱节点查看系统为什么展示这条信息。'}</p>
       {node.entityType === 'object' ? (
         <dl>
+          {node.rawLabel && node.rawLabel !== node.name ? <div><dt>原始标签</dt><dd>{node.rawLabel}</dd></div> : null}
           <div><dt>技术来源</dt><dd>{node.technicalName || '未返回'}</dd></div>
           <div><dt>来源类型</dt><dd>{sourceKindLabel(node.sourceKind)}{node.groupLabel ? ` · ${sourceKindLabel(node.groupLabel)}` : ''}</dd></div>
           <div><dt>覆盖量</dt><dd>{compactNumber(node.coverageCount)} 条</dd></div>
@@ -288,6 +289,7 @@ function NodeInspector({ model, node, onSelectLink }) {
         </dl>
       ) : node.entityType === 'field' ? (
         <dl>
+          {node.rawLabel && node.rawLabel !== node.name ? <div><dt>原始标签</dt><dd>{node.rawLabel}</dd></div> : null}
           <div><dt>原始字段名</dt><dd>{node.technicalName || '未返回'}</dd></div>
           <div><dt>类型 / 角色</dt><dd>{node.valueType || '未知'} · {semanticRoleLabel(node.semanticRole)}</dd></div>
           <div><dt>非空率</dt><dd>{nonEmptyRate === null ? '分母未返回' : `${nonEmptyRate}%`}（{compactNumber(node.nonEmptyCount)} 条）</dd></div>
@@ -392,18 +394,25 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     ? model.nodes.find((node) => node.id === selectedLink.target) || null
     : null;
   const selectedStage = model.pipeline.find((stage) => stage.key === selectedStageKey) || null;
+  const overviewGraph = useMemo(() => filterDatasetUnderstandingGraph(model, {
+    activeCategory: 'all',
+    activeRelationType: 'all',
+    viewMode,
+    focusDepth: 'all',
+  }), [model, viewMode]);
   const categoryCounts = useMemo(() => Object.fromEntries(
     DATASET_GRAPH_CATEGORIES.map((category) => [
       category.key,
-      model.nodes.filter((node) => node.kind === category.key).length,
+      (category.key === 'unresolved' ? model.nodes : overviewGraph.nodes)
+        .filter((node) => node.kind === category.key).length,
     ]),
-  ), [model.nodes]);
+  ), [model.nodes, overviewGraph.nodes]);
   const relationCounts = useMemo(() => ({
-    all: model.links.length,
-    confirmed: model.metrics.confirmedRelationCount || 0,
-    observed: model.metrics.observedRelationCount,
-    inferred: model.metrics.inferredRelationCount,
-  }), [model.links.length, model.metrics.confirmedRelationCount, model.metrics.observedRelationCount, model.metrics.inferredRelationCount]);
+    all: overviewGraph.links.length,
+    confirmed: overviewGraph.links.filter((link) => link.type === 'confirmed').length,
+    observed: overviewGraph.links.filter((link) => link.type === 'observed').length,
+    inferred: overviewGraph.links.filter((link) => link.type === 'inferred').length,
+  }), [overviewGraph.links]);
   const chartOption = useMemo(
     () => optionForModel(model, {
       activeCategory,
@@ -567,7 +576,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           className={activeCategory === 'all' ? 'active' : ''}
           onClick={() => setActiveCategory('all')}
         >
-          全部 <small>{Math.max(0, model.nodes.length - 1)}</small>
+          全部 <small>{Math.max(0, overviewGraph.nodes.length - 1)}</small>
         </button>
         {DATASET_GRAPH_CATEGORIES.filter((category) => (
           category.key !== 'dataset'
@@ -642,7 +651,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} 知识连接图`} />
           {chartState === 'loading' ? <div className="dataset-understanding-chart-state">正在生成理解图谱…</div> : null}
           {chartState === 'error' ? <div className="dataset-understanding-chart-state">图谱画布加载失败，可使用右侧证据详情和下方清单。</div> : null}
-          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 可切换一跳/两跳' : ''}</div>
+          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 每个对象优先展示 4 个中文字段' : ''}</div>
         </div>
 
         <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">

@@ -319,9 +319,84 @@ test('semantic snapshot is the primary graph input and keeps technical names out
   assert.equal(model.nodes.some((node) => node.name === '客户清单.pdf'), false);
   assert.ok(model.nodes.some((node) => node.kind === 'object' && node.name === '租赁合同'));
   assert.ok(model.nodes.some((node) => node.kind === 'field' && node.name === '门店名称'));
-  assert.ok(model.nodes.some((node) => node.kind === 'unresolved' && node.name === '待解释字段'));
+  assert.ok(model.nodes.some((node) => node.kind === 'unresolved' && node.name === '合同待解释'));
   assert.ok(model.nodes.every((node) => node.name !== 'BA_LEASE_CONTRACT'));
   assert.equal(model.understanding.technicalIdentifiers.includes('CARDPARENTNAME'), true);
+});
+
+test('semantic graph replaces mixed technical and numbered labels with concise Chinese display labels', () => {
+  const noisyUnderstanding = {
+    ...semanticUnderstanding,
+    objects: [
+      ...semanticUnderstanding.objects,
+      {
+        ...semanticUnderstanding.objects[0],
+        id: 'object:weekly-report',
+        kind: 'document',
+        label: '李想周报0511-0515',
+        technical_name: 'c6b4a43f-fab5-4b39-bc2d-c954ac600cf4',
+      },
+    ],
+    fields: [
+      ...semanticUnderstanding.fields,
+      {
+        ...semanticUnderstanding.fields[0],
+        id: 'field:numbered',
+        object_id: 'object:lease',
+        label: '0 5 11 0 5 15',
+        technical_name: '0 5 11 --0 5 15',
+        semantic_role: 'identifier',
+        status: 'confirmed',
+      },
+      {
+        ...semanticUnderstanding.fields[0],
+        id: 'field:mixed',
+        object_id: 'object:lease',
+        label: '继续在NBase为Lease创建应用及应用菜单、权限等基础数据',
+        technical_name: 'content',
+        semantic_role: 'text',
+        status: 'confirmed',
+      },
+    ],
+  };
+  const model = buildDatasetUnderstandingGraph(dataset, documents, noisyUnderstanding);
+
+  assert.equal(model.nodes.find((node) => node.id === 'object:weekly-report')?.name, '李想周报');
+  assert.equal(model.nodes.find((node) => node.id === 'field:numbered')?.name, '合同标识');
+  assert.equal(model.nodes.find((node) => node.id === 'field:mixed')?.name, '合同要点');
+  assert.equal(model.nodes.find((node) => node.id === 'field:mixed')?.rawLabel, noisyUnderstanding.fields.at(-1).label);
+  assert.ok(model.nodes.filter((node) => node.id === 'field:numbered' || node.id === 'field:mixed')
+    .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
+});
+
+test('business graph keeps at most four trusted Chinese fields per object', () => {
+  const extraFields = ['合同编号', '合同状态', '合同日期', '合同金额', '签约门店', '租赁分类']
+    .map((label, index) => ({
+      ...semanticUnderstanding.fields[0],
+      id: `field:lease:${index}`,
+      object_id: 'object:lease',
+      label,
+      technical_name: `LEASE_FIELD_${index}`,
+      semantic_role: index === 3 ? 'amount' : 'name',
+      non_empty_count: 320 - index,
+      status: 'confirmed',
+      label_source: 'confirmed_dictionary',
+      confidence: 1,
+    }));
+  const model = buildDatasetUnderstandingGraph(dataset, documents, {
+    ...semanticUnderstanding,
+    fields: [...semanticUnderstanding.fields, ...extraFields],
+  });
+  const business = filterDatasetUnderstandingGraph(model, {
+    viewMode: 'business',
+    activeCategory: 'all',
+    activeRelationType: 'all',
+    focusDepth: 'all',
+  });
+
+  assert.equal(business.nodes.filter((node) => node.entityType === 'field' && node.objectId === 'object:lease').length, 4);
+  assert.ok(business.nodes.filter((node) => node.entityType === 'field')
+    .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
 });
 
 test('semantic graph forms object-field neighborhoods and only uses backend relations for cross-object meaning', () => {
