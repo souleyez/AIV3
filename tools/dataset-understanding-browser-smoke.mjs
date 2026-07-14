@@ -459,6 +459,7 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
   const selectionStartedAt = await page.evaluate(() => performance.now());
   await item.click();
   await understandingResponse;
+  const understandingResponseAt = await page.evaluate(() => performance.now());
 
   await page.waitForFunction(
     (title) => document.querySelector('.dataset-understanding-head h3')?.textContent?.trim() === title,
@@ -502,6 +503,8 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
     understandingDatasetTitle: understanding.datasetTitle,
     snapshotStatus: understanding.snapshotStatus,
     firstInteractiveMs: rounded(firstInteractiveMs),
+    understandingResponseMs: rounded(understandingResponseAt - selectionStartedAt),
+    responseToFinishedMs: rounded(renderState.finishedAt - understandingResponseAt),
     renderState,
   };
 }
@@ -974,6 +977,7 @@ async function liveBrowserSmoke(targetUrl) {
     const navigationSamples = navigation.targetDataset?.firstInteractiveMs
       ? [navigation.targetDataset.firstInteractiveMs]
       : [];
+    const navigationBreakdowns = navigation.targetDataset ? [navigation.targetDataset] : [];
     const pageReadySamples = [navigation.pageReadyMs];
     for (let index = 1; index < sampleCount; index += 1) {
       const previousPage = page;
@@ -982,6 +986,7 @@ async function liveBrowserSmoke(targetUrl) {
       if (navigation.targetDataset?.firstInteractiveMs) {
         navigationSamples.push(navigation.targetDataset.firstInteractiveMs);
       }
+      if (navigation.targetDataset) navigationBreakdowns.push(navigation.targetDataset);
       pageReadySamples.push(navigation.pageReadyMs);
       await previousPage.close();
     }
@@ -1074,7 +1079,13 @@ async function liveBrowserSmoke(targetUrl) {
         }
       : { status: 'skipped', reason: 'requires --performance-runs >=5 and --dataset-id' };
     if (firstInteractive.status === 'measured') {
-      assert.ok(firstInteractive.p95Ms <= 1500, `first-interactive p95 was ${firstInteractive.p95Ms.toFixed(2)}ms`);
+      assert.ok(
+        firstInteractive.p95Ms <= 1500,
+        `first-interactive p95 was ${firstInteractive.p95Ms.toFixed(2)}ms (`
+          + `total=${navigationSamples.map(rounded).join(',')}; `
+          + `response=${navigationBreakdowns.map((sample) => sample.understandingResponseMs).join(',')}; `
+          + `render=${navigationBreakdowns.map((sample) => sample.responseToFinishedMs).join(',')})`,
+      );
     }
     const dragZoomPerformance = await measureLiveDragZoomFps(chart);
     const cachedApiPerformance = await measureCachedApi(page, requestBody);

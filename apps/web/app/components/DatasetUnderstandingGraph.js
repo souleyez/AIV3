@@ -118,7 +118,9 @@ function optionForModel(model, filters, projectedGraph = null) {
     } : node;
   });
   const force = datasetUnderstandingForceConfig(layoutBaseNodes.length);
-  const staticLayout = model.mode === 'cross' || layoutBaseNodes.length > 120;
+  const staticLayout = model.mode === 'fallback'
+    || model.mode === 'cross'
+    || layoutBaseNodes.length > 120;
   const seriesNodes = staticLayout
     ? [...positionedNodes, ...staticLayoutExtentAnchors(layoutBaseNodes)]
     : positionedNodes;
