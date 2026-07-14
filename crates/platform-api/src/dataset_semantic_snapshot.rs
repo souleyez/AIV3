@@ -1570,7 +1570,7 @@ mod tests {
             SemanticSnapshotBuildAction::UseExisting
         );
         assert_eq!(
-            semantic_snapshot_build_action(Some(&existing), &"a".repeat(64), "semantic_profile_v3"),
+            semantic_snapshot_build_action(Some(&existing), &"a".repeat(64), "semantic_profile_v4"),
             SemanticSnapshotBuildAction::Rebuild
         );
     }

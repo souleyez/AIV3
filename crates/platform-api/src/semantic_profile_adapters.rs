@@ -118,7 +118,7 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let sheet = string_at(&input.metadata, "sheet_name")
-        .unwrap_or_else(|| business_source_title(&input.title));
+        .unwrap_or_else(|| spreadsheet_business_title(&input.title));
     let mut output = vec![observation(
         input,
         "object",
@@ -222,7 +222,7 @@ fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         "asset_profile",
         &object_key,
         &input.title,
-        Some(input.title.clone()),
+        Some(business_source_title(&input.title)),
         "asset_profile",
         SemanticStatus::Observed,
         0.9,
@@ -341,6 +341,19 @@ fn business_source_title(title: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+fn spreadsheet_business_title(title: &str) -> String {
+    let trimmed = title.trim();
+    let delimiter_count = trimmed
+        .chars()
+        .filter(|character| matches!(character, ',' | '\t' | '|'))
+        .count();
+    if trimmed.chars().count() > 80 || delimiter_count >= 4 {
+        "表格数据".to_string()
+    } else {
+        business_source_title(trimmed)
+    }
 }
 
 fn adapt_web_api(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
@@ -617,6 +630,21 @@ mod tests {
         assert!(observations
             .iter()
             .any(|item| item.technical_name == "销售额"));
+    }
+
+    #[test]
+    fn spreadsheet_row_like_titles_do_not_become_business_object_labels() {
+        let mut fixture = input("spreadsheet", json!({}));
+        fixture.title =
+            "2026-03-31,Douyin,华东仓,智能穿戴,旗舰手表X1,180,12,168,117,111,154.3".to_string();
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("spreadsheet object");
+
+        assert_eq!(object.label_hint.as_deref(), Some("表格数据"));
+        assert_eq!(spreadsheet_business_title("经营分析.xlsx"), "经营分析");
     }
 
     #[test]
