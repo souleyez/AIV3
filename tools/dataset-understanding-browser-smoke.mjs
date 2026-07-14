@@ -403,7 +403,12 @@ async function loadApiBody() {
   return JSON.parse(await readFile(resolve(apiBodyFile), 'utf8'));
 }
 
-async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatasetTitle = '') {
+async function selectAndVerifyTargetDataset(
+  page,
+  targetDatasetId,
+  expectedDatasetTitle = '',
+  { expectUnderstandingResponse = true } = {},
+) {
   const catalogDataset = await page.evaluate(async (requestedId) => {
     const response = await fetch('/api/v3/datasets', {
       method: 'GET',
@@ -450,16 +455,32 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
   assert.equal(await clearSelection.count(), 1, 'catalog smoke requires the normal dataset-selection mode');
   await clearSelection.click();
   await page.waitForFunction(() => !document.querySelector('.dataset-list .dataset-item:not(.ordinary-chat-item).active'));
+  await page.waitForFunction(
+    ({ title, key }) => [...document.querySelectorAll('.dataset-list .dataset-item:not(.ordinary-chat-item)')]
+      .some((element) => {
+        const itemTitle = String(element.querySelector('.dataset-item-title')?.textContent || '')
+          .replace(/\s*已选\s*$/u, '')
+          .trim();
+        const itemMeta = String(element.querySelector('.dataset-item-meta')?.textContent || '').trim();
+        return itemTitle === title && (!key || itemMeta.startsWith(`${key} ·`)) && !element.disabled;
+      }),
+    { title: target.title, key: target.key },
+    { timeout: 15_000 },
+  );
 
-  const understandingResponse = page.waitForResponse((response) => {
-    const path = new URL(response.url()).pathname;
-    return path === `/api/v3/datasets/${encodeURIComponent(targetDatasetId)}/understanding`
-      && [200, 304].includes(response.status());
-  }, { timeout: 15_000 });
+  const understandingResponse = expectUnderstandingResponse
+    ? page.waitForResponse((response) => {
+        const path = new URL(response.url()).pathname;
+        return path === `/api/v3/datasets/${encodeURIComponent(targetDatasetId)}/understanding`
+          && [200, 304].includes(response.status());
+      }, { timeout: 15_000 })
+    : null;
   const selectionStartedAt = await page.evaluate(() => performance.now());
   await item.click();
-  await understandingResponse;
-  const understandingResponseAt = await page.evaluate(() => performance.now());
+  if (understandingResponse) await understandingResponse;
+  const understandingResponseAt = expectUnderstandingResponse
+    ? await page.evaluate(() => performance.now())
+    : selectionStartedAt;
 
   await page.waitForFunction(
     (title) => document.querySelector('.dataset-understanding-head h3')?.textContent?.trim() === title,
@@ -505,6 +526,7 @@ async function selectAndVerifyTargetDataset(page, targetDatasetId, expectedDatas
     firstInteractiveMs: rounded(firstInteractiveMs),
     understandingResponseMs: rounded(understandingResponseAt - selectionStartedAt),
     responseToFinishedMs: rounded(renderState.finishedAt - understandingResponseAt),
+    requestMode: expectUnderstandingResponse ? 'cold-api' : 'warm-client-cache',
     renderState,
   };
 }
@@ -966,10 +988,14 @@ async function liveBrowserSmoke(targetUrl) {
       headless: true,
       ...(browserExecutable ? { executablePath: browserExecutable } : {}),
     });
-    context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    if (authentication.cookie) {
-      await context.addCookies([contextCookie(authentication.cookie, targetUrl)]);
-    }
+    const createContext = async () => {
+      const nextContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+      if (authentication.cookie) {
+        await nextContext.addCookies([contextCookie(authentication.cookie, targetUrl)]);
+      }
+      return nextContext;
+    };
+    context = await createContext();
     const requestBody = await loadApiBody();
     let page = await context.newPage();
     const sampleCount = performanceRuns || 1;
@@ -980,12 +1006,17 @@ async function liveBrowserSmoke(targetUrl) {
     const navigationBreakdowns = navigation.targetDataset ? [navigation.targetDataset] : [];
     const pageReadySamples = [navigation.pageReadyMs];
     for (let index = 1; index < sampleCount; index += 1) {
-      navigation = await navigateToReadyChart(page, targetUrl);
-      if (navigation.targetDataset?.firstInteractiveMs) {
-        navigationSamples.push(navigation.targetDataset.firstInteractiveMs);
-      }
-      if (navigation.targetDataset) navigationBreakdowns.push(navigation.targetDataset);
-      pageReadySamples.push(navigation.pageReadyMs);
+      const targetDataset = datasetId
+        ? await selectAndVerifyTargetDataset(
+            page,
+            datasetId,
+            datasetTitle,
+            { expectUnderstandingResponse: false },
+          )
+        : null;
+      if (targetDataset?.firstInteractiveMs) navigationSamples.push(targetDataset.firstInteractiveMs);
+      if (targetDataset) navigationBreakdowns.push(targetDataset);
+      navigation = { ...navigation, targetDataset };
     }
     const chart = navigation.chart;
 

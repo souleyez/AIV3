@@ -428,6 +428,7 @@ export default function HomePageClient() {
   });
 
   const datasetLoadIdRef = useRef(0);
+  const workspaceLoadingIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
   const reportDetailLoadIdRef = useRef(0);
   const fileInputRef = useRef(null);
@@ -1967,6 +1968,7 @@ export default function HomePageClient() {
     datasetLoadIdRef.current = loadId;
 
     if (!silent) {
+      workspaceLoadingIdRef.current = loadId;
       setWorkspaceLoading(true);
     }
 
@@ -2006,7 +2008,8 @@ export default function HomePageClient() {
       }
       setError(loadError instanceof Error ? loadError.message : '数据集工作区加载失败');
     } finally {
-      if (datasetLoadIdRef.current === loadId && !silent) {
+      if (!silent && workspaceLoadingIdRef.current === loadId) {
+        workspaceLoadingIdRef.current = 0;
         setWorkspaceLoading(false);
       }
     }
@@ -4126,6 +4129,9 @@ export default function HomePageClient() {
       return;
     }
     if (!selectedDatasetId) {
+      datasetLoadIdRef.current += 1;
+      workspaceLoadingIdRef.current = 0;
+      setWorkspaceLoading(false);
       startTransition(() => {
         setSessions([]);
         setOutputs([]);
