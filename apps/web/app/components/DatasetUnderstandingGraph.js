@@ -10,6 +10,13 @@ import {
   graphBudgetStatusText,
   graphDensityForContainerWidth,
 } from '../lib/dataset-understanding-graph-budget';
+import {
+  datasetUnderstandingForceConfig,
+  graphNodeLabelVisible,
+  layoutDatasetUnderstandingGraph,
+} from '../lib/dataset-understanding-graph-layout';
+
+const DATASET_GRAPH_SERIES_ID = 'dataset-understanding-graph';
 
 function compactNumber(value) {
   const number = Number(value) || 0;
@@ -64,10 +71,14 @@ function semanticRoleLabel(value) {
 function optionForModel(model, filters, projectedGraph = null) {
   const { nodes: visibleNodes, links: visibleLinks } = projectedGraph
     || filterDatasetUnderstandingGraph(model, filters);
+  const positionedNodes = layoutDatasetUnderstandingGraph(visibleNodes);
+  const force = datasetUnderstandingForceConfig(positionedNodes.length);
+  const zoom = Number(filters?.zoom) || 1;
+  const selectedNodeId = filters?.focusNodeId || '';
 
   return {
-    animationDuration: 650,
-    animationDurationUpdate: 420,
+    animationDuration: force.layoutAnimation ? 650 : 0,
+    animationDurationUpdate: force.layoutAnimation ? 420 : 0,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
@@ -89,6 +100,7 @@ function optionForModel(model, filters, projectedGraph = null) {
       },
     },
     series: [{
+      id: DATASET_GRAPH_SERIES_ID,
       type: 'graph',
       layout: 'force',
       roam: true,
@@ -98,10 +110,9 @@ function optionForModel(model, filters, projectedGraph = null) {
         name: category.name,
         itemStyle: { color: category.color },
       })),
-      data: visibleNodes.map((node) => ({
+      data: positionedNodes.map((node) => ({
         ...node,
         label: {
-          show: true,
           fontSize: node.kind === 'dataset' ? 11 : 9,
           fontWeight: node.kind === 'dataset' ? 800 : 650,
           color: node.signal === 'identifier' ? '#8794a8' : '#dce6f4',
@@ -134,10 +145,7 @@ function optionForModel(model, filters, projectedGraph = null) {
         },
       })),
       force: {
-        repulsion: model.mode === 'semantic' ? 235 : 182,
-        gravity: model.mode === 'semantic' ? 0.055 : 0.085,
-        edgeLength: model.mode === 'semantic' ? [74, 148] : [58, 126],
-        friction: 0.24,
+        ...force,
       },
       label: {
         show: true,
@@ -148,10 +156,12 @@ function optionForModel(model, filters, projectedGraph = null) {
         textBorderColor: 'rgba(2, 8, 18, 0.92)',
         textBorderWidth: 3,
         formatter(params) {
-          return String(params.data?.shortLabel || '').slice(0, 5);
+          return graphNodeLabelVisible(params.data, zoom, selectedNodeId)
+            ? String(params.data?.shortLabel || '').slice(0, 5)
+            : '';
         },
       },
-      labelLayout: { hideOverlap: false },
+      labelLayout: { hideOverlap: true },
       edgeLabel: {
         show: false,
         color: '#e5edf8',
@@ -171,6 +181,22 @@ function optionForModel(model, filters, projectedGraph = null) {
       },
     }],
   };
+}
+
+function updateChartLabelLod(chart, zoom, selectedNodeId) {
+  if (!chart || chart.isDisposed?.()) return;
+  chart.setOption({
+    series: [{
+      id: DATASET_GRAPH_SERIES_ID,
+      label: {
+        formatter(params) {
+          return graphNodeLabelVisible(params.data, zoom, selectedNodeId)
+            ? String(params.data?.shortLabel || '').slice(0, 5)
+            : '';
+        },
+      },
+    }],
+  }, { lazyUpdate: true });
 }
 
 function PipelineStage({ stage, index, last, active, onSelect }) {
@@ -403,7 +429,13 @@ function StageInspector({ stage, onSelectNode }) {
 }
 
 export default function DatasetUnderstandingGraph({ dataset, documents = [], understandingState = null }) {
+  const panelRef = useRef(null);
   const chartRef = useRef(null);
+  const chartInstanceRef = useRef(null);
+  const chartOptionRef = useRef(null);
+  const selectedNodeIdRef = useRef('');
+  const graphZoomRef = useRef(1);
+  const resizeFrameRef = useRef(null);
   const model = useMemo(
     () => buildDatasetUnderstandingGraph(dataset, documents, understandingState?.data || null),
     [dataset, documents, understandingState?.data],
@@ -418,6 +450,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const [chartState, setChartState] = useState('loading');
   const [densityPreference, setDensityPreference] = useState('auto');
   const [chartContainerWidth, setChartContainerWidth] = useState(1024);
+  const [focusMode, setFocusMode] = useState(false);
   const responsiveDensity = graphDensityForContainerWidth(chartContainerWidth);
   const graphDensity = densityPreference === 'auto' ? responsiveDensity : densityPreference;
   const selectedNode = model.nodes.find((node) => node.id === selectedNodeId) || model.nodes[0] || null;
@@ -485,7 +518,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       activeGraph,
     ],
   );
-  const chartSignature = JSON.stringify(chartOption, (key, value) => typeof value === 'function' ? String(value) : value);
+  chartOptionRef.current = chartOption;
+  selectedNodeIdRef.current = selectedNodeId;
 
   useEffect(() => {
     setSelectedNodeId(model.nodes[0]?.id || '');
@@ -496,6 +530,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setViewMode('business');
     setFocusDepth('all');
     setDensityPreference('auto');
+    setFocusMode(false);
+    graphZoomRef.current = 1;
   }, [model.datasetId]);
 
   useEffect(() => {
@@ -503,22 +539,43 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   }, [activeCategory, activeRelationType]);
 
   useEffect(() => {
+    if (!focusMode) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setFocusMode(false);
+    };
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [focusMode]);
+
+  useEffect(() => {
     if (!model.hasDataset || !chartRef.current || !model.nodes.length) {
       setChartState('empty');
       return undefined;
     }
 
-    let chart = null;
-    let disposed = false;
+    let cancelled = false;
     let observer = null;
     setChartState('loading');
 
     import('echarts').then((echarts) => {
-      if (disposed || !chartRef.current) return;
-      echarts.getInstanceByDom(chartRef.current)?.dispose();
-      chart = echarts.init(chartRef.current, null, { renderer: 'canvas' });
-      chart.setOption(chartOption, true);
-      chart.on('click', (params) => {
+      if (cancelled || !chartRef.current) return;
+      const chart = echarts.getInstanceByDom(chartRef.current)
+        || echarts.init(chartRef.current, null, { renderer: 'canvas' });
+      chartInstanceRef.current = chart;
+      chartRef.current.dataset.echartsInstanceId = chart.id;
+      chartRef.current.dataset.echartsInitCount = String(
+        (Number(chartRef.current.dataset.echartsInitCount) || 0) + 1,
+      );
+      chart.setOption(chartOptionRef.current, {
+        replaceMerge: ['series'],
+        lazyUpdate: true,
+      });
+      const handleClick = (params) => {
         if (params.dataType === 'node' && params.data?.id) {
           setSelectedNodeId(params.data.id);
           setSelectedLinkId('');
@@ -528,28 +585,76 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           setSelectedLinkId(params.data.id);
           setSelectedStageKey('');
         }
-      });
-      const syncChartContainer = () => {
-        const width = Math.round(chartRef.current?.getBoundingClientRect?.().width || 0);
-        if (width > 0) setChartContainerWidth((current) => current === width ? current : width);
-        chart?.resize();
       };
+      const handleGraphRoam = () => {
+        const zoom = Number(chart.getOption()?.series?.[0]?.zoom) || graphZoomRef.current;
+        graphZoomRef.current = zoom;
+        updateChartLabelLod(chart, zoom, selectedNodeIdRef.current);
+      };
+      const scheduleChartResize = () => {
+        if (resizeFrameRef.current !== null) return;
+        resizeFrameRef.current = window.requestAnimationFrame(() => {
+          resizeFrameRef.current = null;
+          if (cancelled || !chartRef.current || chart.isDisposed?.()) return;
+          const width = Math.round(chartRef.current.getBoundingClientRect().width || 0);
+          if (width > 0) setChartContainerWidth((current) => current === width ? current : width);
+          chart.resize();
+        });
+      };
+      chart.on('click', handleClick);
+      chart.on('graphRoam', handleGraphRoam);
       observer = typeof ResizeObserver === 'undefined'
         ? null
-        : new ResizeObserver(syncChartContainer);
+        : new ResizeObserver(scheduleChartResize);
       observer?.observe(chartRef.current);
-      syncChartContainer();
+      scheduleChartResize();
       setChartState('ready');
+
+      chartRef.current.dataset.echartsReady = 'true';
+      chartRef.current.__datasetGraphCleanup = () => {
+        chart.off('click', handleClick);
+        chart.off('graphRoam', handleGraphRoam);
+      };
     }).catch(() => {
-      if (!disposed) setChartState('error');
+      if (!cancelled) setChartState('error');
     });
 
     return () => {
-      disposed = true;
+      cancelled = true;
       observer?.disconnect();
-      chart?.dispose();
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      chartRef.current?.__datasetGraphCleanup?.();
+      if (chartInstanceRef.current && !chartInstanceRef.current.isDisposed?.()) {
+        chartInstanceRef.current.dispose();
+      }
+      chartInstanceRef.current = null;
     };
-  }, [model.hasDataset, model.datasetId, model.nodes.length, chartSignature]);
+  }, [model.hasDataset]);
+
+  useEffect(() => {
+    const chart = chartInstanceRef.current;
+    if (!model.hasDataset || !chart || chart.isDisposed?.()) return;
+    const option = {
+      ...chartOption,
+      series: chartOption.series.map((series) => ({
+        ...series,
+        zoom: graphZoomRef.current,
+      })),
+    };
+    chart.setOption(option, {
+      replaceMerge: ['series'],
+      lazyUpdate: true,
+    });
+    if (chartRef.current) {
+      chartRef.current.dataset.echartsUpdateCount = String(
+        (Number(chartRef.current.dataset.echartsUpdateCount) || 0) + 1,
+      );
+    }
+    updateChartLabelLod(chart, graphZoomRef.current, selectedNodeId);
+  }, [model.hasDataset, chartOption, selectedNodeId]);
 
   if (!model.hasDataset) {
     return (
@@ -569,7 +674,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   }
 
   return (
-    <section className="dataset-understanding-panel" aria-label={`${model.title} 数据集理解图谱`}>
+    <section
+      ref={panelRef}
+      className={`dataset-understanding-panel ${focusMode ? 'focus-mode' : ''}`.trim()}
+      aria-label={`${model.title} 数据集理解图谱`}
+    >
       <header className="dataset-understanding-head">
         <div>
           <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}</span>
@@ -733,6 +842,14 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           </button>
         ))}
         <small>{graphBudgetStatusText(activeGraph.stats)}</small>
+        <button
+          type="button"
+          className={`dataset-understanding-focus-toggle ${focusMode ? 'active' : ''}`.trim()}
+          aria-pressed={focusMode}
+          onClick={() => setFocusMode((current) => !current)}
+        >
+          {focusMode ? '退出专注' : '专注图谱'}
+        </button>
       </div>
 
       <div className="dataset-understanding-canvas-grid">

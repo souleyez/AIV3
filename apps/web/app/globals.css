@@ -5290,6 +5290,8 @@ body {
 .dataset-understanding-panel {
   position: relative;
   min-width: 0;
+  container-type: inline-size;
+  container-name: dataset-understanding;
   display: grid;
   gap: 14px;
   padding: 20px;
@@ -5819,16 +5821,20 @@ body {
   font-size: 9px;
 }
 
+.dataset-understanding-focus-toggle {
+  margin-left: 4px;
+}
+
 .dataset-understanding-canvas-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 12px;
 }
 
 .dataset-understanding-chart-shell {
   position: relative;
   min-width: 0;
-  min-height: 560px;
+  min-height: clamp(680px, 72vh, 820px);
   border-radius: 17px;
   overflow: hidden;
   background:
@@ -5841,7 +5847,7 @@ body {
 
 .dataset-understanding-chart {
   width: 100%;
-  height: 560px;
+  height: clamp(680px, 72vh, 820px);
 }
 
 .dataset-understanding-chart-state {
@@ -5880,7 +5886,7 @@ body {
 }
 
 .dataset-understanding-inspector {
-  max-height: 560px;
+  max-height: clamp(680px, 72vh, 820px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(94, 234, 212, 0.28) transparent;
@@ -6275,7 +6281,7 @@ body {
   font-size: 9px;
 }
 
-@media (max-width: 1180px) {
+@container dataset-understanding (max-width: 1080px) {
   .dataset-understanding-head {
     display: grid;
   }
@@ -6346,6 +6352,20 @@ body {
 }
 
 @media (max-width: 760px) {
+  .dataset-understanding-panel {
+    max-width: 100%;
+    overflow-x: hidden;
+    padding: 14px;
+  }
+
+  .dataset-understanding-panel > *,
+  .dataset-understanding-canvas-grid,
+  .dataset-understanding-chart-shell,
+  .dataset-understanding-chart,
+  .dataset-understanding-evidence {
+    max-width: 100%;
+  }
+
   .dataset-understanding-panel.empty {
     grid-template-columns: 1fr;
   }
@@ -6375,8 +6395,8 @@ body {
 
   .dataset-understanding-chart-shell,
   .dataset-understanding-chart {
-    min-height: 340px;
-    height: 340px;
+    min-height: 380px;
+    height: 380px;
   }
 
   .dataset-understanding-evidence {
@@ -6391,6 +6411,41 @@ body {
     grid-column: 1;
     grid-row: auto;
   }
+}
+
+.dataset-understanding-panel.focus-mode {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  padding: 14px;
+  border-radius: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.dataset-understanding-panel.focus-mode .dataset-understanding-head,
+.dataset-understanding-panel.focus-mode .dataset-understanding-snapshot-state,
+.dataset-understanding-panel.focus-mode .dataset-understanding-pipeline,
+.dataset-understanding-panel.focus-mode .dataset-understanding-semantic-brief,
+.dataset-understanding-panel.focus-mode .dataset-understanding-ledger {
+  display: none;
+}
+
+.dataset-understanding-panel.focus-mode .dataset-understanding-canvas-grid {
+  min-height: calc(100dvh - 208px);
+}
+
+.dataset-understanding-panel.focus-mode .dataset-understanding-chart-shell,
+.dataset-understanding-panel.focus-mode .dataset-understanding-chart {
+  height: calc(100dvh - 208px);
+  min-height: 520px;
+}
+
+.dataset-understanding-panel.focus-mode .dataset-understanding-inspector {
+  max-height: calc(100dvh - 208px);
 }
 
 .directory-batch-bar {
