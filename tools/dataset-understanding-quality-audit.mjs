@@ -225,6 +225,11 @@ export function auditDatasetUnderstandingGraph(model, fixture = 'custom') {
   const countLabels = (pattern) => labels.filter((label) => pattern.test(label)).length;
   const publicPayloadMeasured = Object.hasOwn(model || {}, 'auditPayload');
   const payloadValues = publicPayloadMeasured ? collectStringValues(model.auditPayload) : [];
+  const contractMetadataValues = new Set([
+    text(model?.auditPayload?.schema_version),
+    text(model?.auditPayload?.generation_version),
+  ].filter(Boolean));
+  const userFacingPayloadValues = payloadValues.filter((value) => !contractMetadataValues.has(value));
   const standardProjection = projectGraph(model, 'standard');
   const expandedProjection = projectGraph(model, 'expanded');
   const positioned = layoutDatasetUnderstandingGraph(nodes);
@@ -274,7 +279,7 @@ export function auditDatasetUnderstandingGraph(model, fixture = 'custom') {
       suspectedDataRows: publicPayloadMeasured ? countMatches(payloadValues, /\t|(?:\d[\s,|;，；]+){3,}\d/u) : null,
       sqlOrComments: publicPayloadMeasured ? countMatches(payloadValues, /\/\*|\*\/|--|\b(?:select|from|where|date_add|datediff|case\s+when|as\s+[a-z_]+)\b/iu) : null,
       mimeValues: publicPayloadMeasured ? countMatches(payloadValues, /^(?:application|audio|image|text|video)\/[a-z0-9.+-]+/iu) : null,
-      strategyIdentifiers: publicPayloadMeasured ? countMatches(payloadValues, /(?:paragraph_aware|noun_terms|profile|parser|strategy)(?:_[a-z0-9]+)*/iu) : null,
+      strategyIdentifiers: publicPayloadMeasured ? countMatches(userFacingPayloadValues, /(?:paragraph_aware|noun_terms|profile|parser|strategy)(?:_[a-z0-9]+)*/iu) : null,
       internalPaths: publicPayloadMeasured ? countMatches(payloadValues, /(?:[A-Za-z]:\\|\/(?:etc|home|opt|srv|tmp|var)\/)/u) : null,
       connectionStrings: publicPayloadMeasured ? countMatches(payloadValues, /(?:jdbc|mongodb|oracle|postgres(?:ql)?|redis):\/\/|(?:host|password|server|user\s*id)\s*=/iu) : null,
       hex64: publicPayloadMeasured ? countMatches(payloadValues, /\b[a-f0-9]{64}\b/iu) : null,
