@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
+use crate::semantic_label_resolver::{
+    safe_semantic_business_label, semantic_evidence_label_is_safe,
+};
 use crate::semantic_understanding::{
     stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticSourceIdentity,
     SemanticStatus, MAX_EVIDENCE_REFS, MAX_EXAMPLES,
@@ -118,8 +121,8 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 }
 
 fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
-    let sheet = string_at(&input.metadata, "sheet_name")
-        .unwrap_or_else(|| spreadsheet_business_title(&input.title));
+    let raw_sheet = string_at(&input.metadata, "sheet_name").unwrap_or_else(|| input.title.clone());
+    let sheet = spreadsheet_business_title(&raw_sheet);
     let mut output = vec![observation(
         input,
         "object",
@@ -136,6 +139,9 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let formulas = object_at(&input.metadata, "formulas");
     let candidates = string_array_at(&input.metadata, "candidate_keys");
     for header in string_array_at(&input.metadata, "headers") {
+        let Some(safe_header) = safe_semantic_business_label(&header) else {
+            continue;
+        };
         let mut attributes = Map::new();
         if let Some(value_type) = value_types.and_then(|values| values.get(&header)).cloned() {
             attributes.insert("value_type".to_string(), value_type);
@@ -152,11 +158,36 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
             input,
             "spreadsheet_table",
             &sheet,
-            &header,
-            None,
+            &safe_header,
+            Some(safe_header.clone()),
             None,
             attributes,
         );
+    }
+    for (index, fact) in input.facts.iter().enumerate() {
+        let raw_name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let Some(name) = safe_semantic_business_label(&raw_name) else {
+            continue;
+        };
+        let mut item = observation(
+            input,
+            "fact",
+            "spreadsheet_table",
+            &sheet,
+            &name,
+            Some(name.clone()),
+            "document_fact",
+            SemanticStatus::Confirmed,
+            1.0,
+            fact.clone(),
+        );
+        item.value_type = string_at(fact, "value_type");
+        item.observed_values = ["value_text", "value_number", "value_date", "value"]
+            .into_iter()
+            .filter_map(|key| fact.get(key).and_then(value_string))
+            .take(MAX_EXAMPLES)
+            .collect();
+        output.push(item);
     }
     output
 }
@@ -353,7 +384,8 @@ fn spreadsheet_business_title(title: &str) -> String {
     if trimmed.chars().count() > 80 || delimiter_count >= 4 {
         "表格数据".to_string()
     } else {
-        business_source_title(trimmed)
+        let title = business_source_title(trimmed);
+        safe_semantic_business_label(&title).unwrap_or_else(|| "表格数据".to_string())
     }
 }
 
@@ -538,7 +570,7 @@ fn evidence_refs(input: &SemanticProfileInput) -> Vec<SemanticEvidenceRef> {
         .evidence_labels
         .iter()
         .map(|label| label.trim())
-        .filter(|label| !label.is_empty())
+        .filter(|label| semantic_evidence_label_is_safe(label))
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
     if labels.is_empty() {
@@ -729,6 +761,89 @@ mod tests {
 
         assert_eq!(object.label_hint.as_deref(), Some("表格数据"));
         assert_eq!(spreadsheet_business_title("经营分析.xlsx"), "经营分析");
+    }
+
+    #[test]
+    fn newbai_spreadsheet_noise_never_becomes_object_or_field_main_label() {
+        let mut fixture = input(
+            "spreadsheet",
+            json!({
+                "sheet_name": "1001\t新街口门店\t2026\t123456.78",
+                "headers": [
+                    "项目名称",
+                    "合同金额",
+                    "2026",
+                    "HT-2026-000001",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "select * from lease_contract",
+                    "paragraph_aware_noun_terms_v1",
+                    "C:\\internal\\newbai\\source.xlsx",
+                    "technical_report_alpha.xlsx",
+                    "1001,新街口门店,2026,123456.78"
+                ]
+            }),
+        );
+        fixture.title = "technical_report_alpha.xlsx".to_string();
+        fixture.facts = vec![json!({
+            "name": "租赁面积",
+            "fact_type": "metric",
+            "value_type": "number"
+        })];
+        fixture.evidence_labels = vec![
+            "新百脱敏表头".to_string(),
+            "C:\\internal\\newbai\\raw.xlsx".to_string(),
+            "postgres://example.invalid/newbai".to_string(),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("spreadsheet object");
+        assert_eq!(object.label_hint.as_deref(), Some("表格数据"));
+        assert_eq!(object.technical_name, "表格数据");
+
+        let field_names = observations
+            .iter()
+            .filter(|item| matches!(item.observation_kind.as_str(), "field" | "fact"))
+            .map(|item| item.technical_name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            field_names,
+            BTreeSet::from(["合同金额", "租赁面积", "项目名称"])
+        );
+        assert!(observations.iter().all(|item| {
+            item.evidence_refs
+                .iter()
+                .all(|reference| reference.label == "新百脱敏表头")
+        }));
+    }
+
+    #[test]
+    fn newbai_facts_only_spreadsheet_builds_fields_without_chunk_headers() {
+        let mut fixture = input("spreadsheet", json!({"parse_metadata": {}}));
+        fixture.title = "Data_Buddy_AI经营分析5个重点场景.xlsx".to_string();
+        fixture.facts = vec![
+            json!({"name": "项目名称", "value_type": "text"}),
+            json!({"name": "固定与提成取高预警V1", "value_type": "text"}),
+            json!({"name": "2026", "value_type": "number"}),
+            json!({"name": "select * from lease_contract", "value_type": "text"}),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("facts-only spreadsheet object");
+        assert_eq!(object.label_hint.as_deref(), Some("经营分析重点场景"));
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|item| item.observation_kind == "fact")
+                .map(|item| item.technical_name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["固定与提成取高预警", "项目名称"])
+        );
     }
 
     #[test]

@@ -3,10 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use domain_model::{DatasetId, DocumentId, TenantId};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use storage::{NewDatasetSemanticSnapshot, PgStorage};
 
-use crate::semantic_label_resolver::{resolve_semantic_label, LabelCandidate, SemanticLabelInput};
+use crate::semantic_label_resolver::{
+    classify_semantic_primary_label, resolve_semantic_label, safe_semantic_business_label,
+    LabelCandidate, SemanticLabelInput, SemanticPrimaryLabelClass, SAFE_GENERIC_OBJECT_LABEL,
+};
 use crate::semantic_relation_builder::{
     build_semantic_relations, ExplicitRelationEvidence, ExplicitRelationKind, RelationFieldProfile,
 };
@@ -75,6 +79,113 @@ pub struct DatasetSemanticSnapshotPreview {
     pub source_asset_count: i64,
     pub source_record_count: i64,
     pub snapshot: DatasetSemanticUnderstanding,
+}
+
+pub const MAX_SEMANTIC_SNAPSHOT_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SemanticSnapshotQualityReport {
+    pub business_label_count: usize,
+    pub chinese_business_label_count: usize,
+    pub chinese_label_ratio: f64,
+    pub raw_row_hit_count: usize,
+    pub sql_or_mime_hit_count: usize,
+    pub strategy_hit_count: usize,
+    pub path_or_connection_hit_count: usize,
+    pub technical_filename_hit_count: usize,
+    pub numeric_identifier_hit_count: usize,
+    pub manifest_bytes: usize,
+    pub quality_gate_passed: bool,
+}
+
+pub fn audit_semantic_snapshot_quality(
+    snapshot: &DatasetSemanticUnderstanding,
+) -> SemanticSnapshotQualityReport {
+    let mut report = SemanticSnapshotQualityReport {
+        business_label_count: 0,
+        chinese_business_label_count: 0,
+        chinese_label_ratio: 0.0,
+        raw_row_hit_count: 0,
+        sql_or_mime_hit_count: 0,
+        strategy_hit_count: 0,
+        path_or_connection_hit_count: 0,
+        technical_filename_hit_count: 0,
+        numeric_identifier_hit_count: 0,
+        manifest_bytes: serde_json::to_vec(snapshot)
+            .map(|manifest| manifest.len())
+            .unwrap_or(usize::MAX),
+        quality_gate_passed: false,
+    };
+
+    for (label, technical_name) in snapshot
+        .objects
+        .iter()
+        .map(|object| (object.label.as_str(), object.technical_name.as_str()))
+        .chain(
+            snapshot
+                .fields
+                .iter()
+                .map(|field| (field.label.as_str(), field.technical_name.as_str())),
+        )
+    {
+        let quality = classify_semantic_primary_label(label);
+        if quality.business_label {
+            report.business_label_count += 1;
+            if quality.chinese_business_label {
+                report.chinese_business_label_count += 1;
+            }
+        }
+        record_snapshot_noise_hit(&mut report, quality.class);
+        if technical_name != label {
+            record_snapshot_noise_hit(
+                &mut report,
+                classify_semantic_primary_label(technical_name).class,
+            );
+        }
+    }
+    report.chinese_label_ratio = if report.business_label_count == 0 {
+        0.0
+    } else {
+        report.chinese_business_label_count as f64 / report.business_label_count as f64
+    };
+    let noise_free = report.raw_row_hit_count == 0
+        && report.sql_or_mime_hit_count == 0
+        && report.strategy_hit_count == 0
+        && report.path_or_connection_hit_count == 0
+        && report.technical_filename_hit_count == 0
+        && report.numeric_identifier_hit_count == 0;
+    report.quality_gate_passed = !snapshot.objects.is_empty()
+        && !snapshot.fields.is_empty()
+        && !snapshot.relations.is_empty()
+        && report.business_label_count > 0
+        && report.chinese_label_ratio >= 0.95
+        && noise_free
+        && report.manifest_bytes < MAX_SEMANTIC_SNAPSHOT_MANIFEST_BYTES;
+    report
+}
+
+fn record_snapshot_noise_hit(
+    report: &mut SemanticSnapshotQualityReport,
+    class: SemanticPrimaryLabelClass,
+) {
+    match class {
+        SemanticPrimaryLabelClass::RawRow => report.raw_row_hit_count += 1,
+        SemanticPrimaryLabelClass::SqlOrMime => report.sql_or_mime_hit_count += 1,
+        SemanticPrimaryLabelClass::Strategy => report.strategy_hit_count += 1,
+        SemanticPrimaryLabelClass::PathOrConnection => {
+            report.path_or_connection_hit_count += 1;
+        }
+        SemanticPrimaryLabelClass::TechnicalFilename => {
+            report.technical_filename_hit_count += 1;
+        }
+        SemanticPrimaryLabelClass::NumericIdentifier => {
+            report.numeric_identifier_hit_count += 1;
+        }
+        SemanticPrimaryLabelClass::Business
+        | SemanticPrimaryLabelClass::SafeGenericFallback
+        | SemanticPrimaryLabelClass::Empty
+        | SemanticPrimaryLabelClass::TechnicalIdentifier => {}
+    }
 }
 
 pub async fn preview_dataset_semantic_snapshot_from_storage(
@@ -416,12 +527,29 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
     dataset_id: DatasetId,
     generated_at: DateTime<Utc>,
 ) -> Result<DatasetSemanticRebuildOutcome> {
-    let preview = preview_dataset_semantic_snapshot_from_storage(
+    rebuild_dataset_semantic_snapshot_from_storage_with_limit(
         storage,
         tenant_id,
         dataset_id,
         generated_at,
         10_000,
+    )
+    .await
+}
+
+pub async fn rebuild_dataset_semantic_snapshot_from_storage_with_limit(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    generated_at: DateTime<Utc>,
+    limit: usize,
+) -> Result<DatasetSemanticRebuildOutcome> {
+    let preview = preview_dataset_semantic_snapshot_from_storage(
+        storage,
+        tenant_id,
+        dataset_id,
+        generated_at,
+        limit,
     )
     .await?;
     let latest_ready = storage
@@ -465,16 +593,21 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
         });
     };
 
-    let manifest = serde_json::to_value(&preview.snapshot)?;
-    let manifest_bytes = serde_json::to_vec(&manifest)?.len();
-    if manifest_bytes > 2 * 1024 * 1024 {
+    let quality_report = audit_semantic_snapshot_quality(&preview.snapshot);
+    if !quality_report.quality_gate_passed {
+        let failure_code = if quality_report.manifest_bytes >= MAX_SEMANTIC_SNAPSHOT_MANIFEST_BYTES
+        {
+            "manifest_too_large"
+        } else {
+            "semantic_quality_gate_failed"
+        };
         storage
             .dataset_semantic_snapshots()
             .mark_failed(
                 tenant_id,
                 dataset_id,
                 build_record.id,
-                "manifest_too_large",
+                failure_code,
                 generated_at,
             )
             .await?;
@@ -483,12 +616,11 @@ pub async fn rebuild_dataset_semantic_snapshot_from_storage(
             source_fingerprint: preview.source_fingerprint,
             snapshot: latest_ready
                 .and_then(|item| serde_json::from_value(item.manifest).ok())
-                .and_then(|item| {
-                    semantic_snapshot_failure_fallback(Some(item), "manifest_too_large")
-                }),
-            failure_code: Some("manifest_too_large".to_string()),
+                .and_then(|item| semantic_snapshot_failure_fallback(Some(item), failure_code)),
+            failure_code: Some(failure_code.to_string()),
         });
     }
+    let manifest = serde_json::to_value(&preview.snapshot)?;
     storage
         .dataset_semantic_snapshots()
         .mark_ready(
@@ -554,30 +686,40 @@ pub fn build_dataset_semantic_snapshot(
         let object_id = stable_semantic_id("object", &[&input.tenant_id.to_string(), group_key]);
         object_ids.insert(group_key.clone(), object_id.clone());
         let confirmed_object_label =
-            dictionary_candidate(&input.dictionary_entries, representative, "*").filter(
-                |candidate| candidate.status == "confirmed" && !candidate.label.trim().is_empty(),
-            );
+            dictionary_candidate(&input.dictionary_entries, representative, "*")
+                .filter(|candidate| candidate.status == "confirmed")
+                .and_then(|candidate| {
+                    safe_semantic_business_label(&candidate.label)
+                        .map(|safe_label| (candidate, safe_label))
+                });
         let (label, label_source, status, confidence, dictionary_description) =
-            if let Some(candidate) = confirmed_object_label.as_ref() {
+            if let Some((candidate, safe_label)) = confirmed_object_label.as_ref() {
                 (
-                    candidate.label.trim().to_string(),
+                    safe_label.clone(),
                     "confirmed_dictionary".to_string(),
                     SemanticStatus::Confirmed,
                     candidate.confidence.clamp(0.0, 1.0),
                     candidate.description.clone(),
                 )
-            } else {
+            } else if let Some(safe_label) = representative
+                .label_hint
+                .as_deref()
+                .and_then(safe_semantic_business_label)
+                .or_else(|| safe_semantic_business_label(&public_technical_name))
+            {
                 (
-                    representative
-                        .label_hint
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or(&public_technical_name)
-                        .trim()
-                        .to_string(),
+                    safe_label,
                     representative.label_source.clone(),
                     representative.status,
                     representative.confidence,
+                    None,
+                )
+            } else {
+                (
+                    SAFE_GENERIC_OBJECT_LABEL.to_string(),
+                    "safe_generic_fallback".to_string(),
+                    SemanticStatus::Unresolved,
+                    0.0,
                     None,
                 )
             };
@@ -703,11 +845,10 @@ pub fn build_dataset_semantic_snapshot(
                 .and_then(|item| {
                     item.label_hint
                         .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
+                        .and_then(safe_semantic_business_label)
                         .map(|label| {
                             (
-                                label.to_string(),
+                                label,
                                 SemanticStatus::Observed,
                                 item.label_source.clone(),
                                 item.confidence,
@@ -1695,6 +1836,126 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["source", "structure", "labels", "relations", "facts"]
         );
+    }
+
+    #[test]
+    fn semantic_snapshot_quality_report_counts_noise_and_enforces_gate() {
+        let clean = build_dataset_semantic_snapshot(&fixture_input());
+        let clean_report = audit_semantic_snapshot_quality(&clean);
+        assert!(clean_report.business_label_count >= 3);
+        assert_eq!(
+            clean_report.business_label_count,
+            clean_report.chinese_business_label_count
+        );
+        assert_eq!(clean_report.chinese_label_ratio, 1.0);
+        assert_eq!(clean_report.raw_row_hit_count, 0);
+        assert_eq!(clean_report.sql_or_mime_hit_count, 0);
+        assert_eq!(clean_report.strategy_hit_count, 0);
+        assert_eq!(clean_report.path_or_connection_hit_count, 0);
+        assert_eq!(clean_report.technical_filename_hit_count, 0);
+        assert!(clean_report.manifest_bytes > 0);
+        assert!(clean_report.quality_gate_passed);
+
+        let mut noisy = clean;
+        noisy.objects[0].label = "1001,新街口门店,2026,123456.78".to_string();
+        noisy.fields[0].label = "select * from lease_contract".to_string();
+        noisy.fields[1].label =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string();
+        for (id, label) in [
+            ("strategy", "paragraph_aware_noun_terms_v1"),
+            ("path", "C:\\internal\\newbai\\source.xlsx"),
+            ("filename", "technical_report_alpha.xlsx"),
+            ("identifier", "HT-2026-000001"),
+        ] {
+            let mut field = noisy.fields[0].clone();
+            field.id = format!("field:{id}");
+            field.label = label.to_string();
+            noisy.fields.push(field);
+        }
+        let report = audit_semantic_snapshot_quality(&noisy);
+        assert_eq!(report.raw_row_hit_count, 1);
+        assert_eq!(report.sql_or_mime_hit_count, 2);
+        assert_eq!(report.strategy_hit_count, 1);
+        assert_eq!(report.path_or_connection_hit_count, 1);
+        assert_eq!(report.technical_filename_hit_count, 1);
+        assert_eq!(report.numeric_identifier_hit_count, 1);
+        assert!(!report.quality_gate_passed);
+
+        let json = serde_json::to_value(report).expect("quality report serializable");
+        for key in [
+            "business_label_count",
+            "chinese_business_label_count",
+            "chinese_label_ratio",
+            "raw_row_hit_count",
+            "sql_or_mime_hit_count",
+            "strategy_hit_count",
+            "path_or_connection_hit_count",
+            "technical_filename_hit_count",
+            "manifest_bytes",
+            "quality_gate_passed",
+        ] {
+            assert!(json.get(key).is_some(), "missing report key {key}");
+        }
+    }
+
+    #[test]
+    fn sanitized_newbai_fixture_builds_ready_quality_contract_without_noise() {
+        let source = SemanticProfileInput {
+            source_id: "newbai:sanitized:workbook".to_string(),
+            source_kind: "spreadsheet".to_string(),
+            title: "Data_Buddy_AI新百经营分析5个重点场景.xlsx".to_string(),
+            metadata: json!({"parse_metadata": {}}),
+            facts: vec![
+                json!({"name": "项目名称", "value_type": "text"}),
+                json!({"name": "合同金额", "value_type": "number"}),
+                json!({"name": "经营状态", "value_type": "text"}),
+                json!({"name": "租赁面积", "fact_type": "metric", "value_type": "number"}),
+                json!({"name": "固定与提成取高预警V1", "value_type": "text"}),
+                json!({"name": "2026", "value_type": "number"}),
+                json!({"name": "HT-2026-000001", "value_type": "text"}),
+                json!({"name": "select * from lease_contract", "value_type": "text"}),
+                json!({
+                    "name": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "value_type": "text"
+                }),
+                json!({"name": "paragraph_aware_noun_terms_v1", "value_type": "text"}),
+                json!({"name": "C:\\internal\\newbai\\source.xlsx", "value_type": "text"}),
+                json!({"name": "technical_report_alpha.xlsx", "value_type": "text"}),
+                json!({"name": "1001,新街口门店,2026,123456.78", "value_type": "text"}),
+            ],
+            evidence_labels: vec!["新百脱敏结构".to_string()],
+        };
+        let mut input = fixture_input();
+        input.dataset.title = "新百项目资料".to_string();
+        input.observations = adapt_semantic_profile(&source);
+        input.dictionary_entries.clear();
+        input.coverage.document_count = 1;
+        input.coverage.record_count = 0;
+        input.coverage.confirmed_fact_count = 1;
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let report = audit_semantic_snapshot_quality(&snapshot);
+        assert!(!snapshot.objects.is_empty());
+        assert!(!snapshot.fields.is_empty());
+        assert!(!snapshot.relations.is_empty());
+        assert!(report.quality_gate_passed, "report={report:?}");
+
+        let public_manifest = serde_json::to_string(&snapshot).expect("serializable snapshot");
+        for noise in [
+            "1001,新街口门店,2026,123456.78",
+            "HT-2026-000001",
+            "select * from lease_contract",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "paragraph_aware_noun_terms_v1",
+            "C:\\internal\\newbai\\source.xlsx",
+            "technical_report_alpha.xlsx",
+        ] {
+            assert!(!public_manifest.contains(noise), "leaked noise: {noise}");
+        }
+        assert!(public_manifest.contains("新百经营分析重点场景"));
+        assert!(public_manifest.contains("合同金额"));
+        assert!(public_manifest.contains("租赁面积"));
+        assert!(public_manifest.contains("固定与提成取高预警"));
     }
 
     #[test]
