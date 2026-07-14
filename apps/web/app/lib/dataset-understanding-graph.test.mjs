@@ -6,6 +6,12 @@ import {
   filterDatasetUnderstandingGraph,
   graphNeighborhoodIds,
 } from './dataset-understanding-graph.js';
+import {
+  newbaiProjectMaterialsNoisyFallback,
+} from './fixtures/newbai-project-materials-noisy-fallback.js';
+import {
+  auditDatasetUnderstandingGraph,
+} from '../../../../tools/dataset-understanding-quality-audit.mjs';
 
 const dataset = {
   id: 'dataset-main',
@@ -54,6 +60,40 @@ const documents = [
     parse_quality_status: 'ok',
   },
 ];
+
+test('captures the sanitized newbai project fallback noise baseline', () => {
+  const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
+  const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);
+
+  assert.equal(model.mode, 'fallback');
+  assert.equal(model.snapshotStatus, 'empty');
+  assert.equal(model.nodes.length, 49);
+  assert.equal(model.nodes.filter((node) => node.kind === 'document').length, 18);
+  assert.ok(model.nodes.some((node) => node.name === '示例经营分析场景.xlsx'));
+  assert.ok(model.nodes.some((node) => node.name === '示例经营分析场景'));
+  assert.ok(model.nodes.some((node) => /^\d+$/.test(node.name)));
+  assert.ok(model.nodes.some((node) => node.name.includes('\t')));
+  assert.ok(model.nodes.some((node) => /select\s+|\/\*/i.test(node.name)));
+  assert.ok(model.nodes.some((node) => /paragraph_aware_noun_terms_v1/i.test(node.name)));
+});
+
+test('quality audit reports only aggregate noise counts', () => {
+  const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
+  const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);
+  const report = auditDatasetUnderstandingGraph(model, 'newbai-project-materials');
+  const serialized = JSON.stringify(report);
+
+  assert.equal(report.totalNodes, 49);
+  assert.equal(report.categoryCounts.document, 18);
+  assert.equal(report.noise.normalizedDuplicateDocumentTitles, 9);
+  assert.ok(report.noise.numericStarted > 0);
+  assert.ok(report.noise.suspectedDataRows > 0);
+  assert.ok(report.noise.sqlOrComments > 0);
+  assert.ok(report.noise.mimeValues > 0);
+  assert.ok(report.noise.strategyIdentifiers > 0);
+  assert.equal(report.missingEvidenceEdges, 0);
+  assert.doesNotMatch(serialized, /1001|sample_table|paragraph_aware|technical_report_alpha/i);
+});
 
 test('buildDatasetUnderstandingGraph scopes documents and exposes honest pipeline counts', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
