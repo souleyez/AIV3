@@ -980,15 +980,12 @@ async function liveBrowserSmoke(targetUrl) {
     const navigationBreakdowns = navigation.targetDataset ? [navigation.targetDataset] : [];
     const pageReadySamples = [navigation.pageReadyMs];
     for (let index = 1; index < sampleCount; index += 1) {
-      const previousPage = page;
-      page = await context.newPage();
       navigation = await navigateToReadyChart(page, targetUrl);
       if (navigation.targetDataset?.firstInteractiveMs) {
         navigationSamples.push(navigation.targetDataset.firstInteractiveMs);
       }
       if (navigation.targetDataset) navigationBreakdowns.push(navigation.targetDataset);
       pageReadySamples.push(navigation.pageReadyMs);
-      await previousPage.close();
     }
     const chart = navigation.chart;
 

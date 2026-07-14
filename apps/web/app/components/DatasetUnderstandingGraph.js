@@ -19,6 +19,14 @@ import {
 } from '../lib/dataset-understanding-graph-layout';
 
 const DATASET_GRAPH_SERIES_ID = 'dataset-understanding-graph';
+let echartsModulePromise = null;
+
+function loadEchartsModule() {
+  if (!echartsModulePromise) echartsModulePromise = import('echarts');
+  return echartsModulePromise;
+}
+
+if (typeof window !== 'undefined') void loadEchartsModule();
 
 function compactNumber(value) {
   const number = Number(value) || 0;
@@ -807,7 +815,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     let observer = null;
     setChartState('loading');
 
-    import('echarts').then((echarts) => {
+    loadEchartsModule().then((echarts) => {
       if (cancelled || !chartRef.current) return;
       const chart = echarts.getInstanceByDom(chartRef.current)
         || echarts.init(chartRef.current, null, { renderer: 'canvas' });
