@@ -1,5 +1,8 @@
 export const DATASET_GRAPH_CATEGORIES = [
   { key: 'dataset', name: '数据集', color: '#f8fbff' },
+  { key: 'object', name: '业务对象', color: '#38bdf8' },
+  { key: 'field', name: '关键字段', color: '#5eead4' },
+  { key: 'unresolved', name: '待解释', color: '#94a3b8' },
   { key: 'document', name: '原始文档', color: '#5eead4' },
   { key: 'knowledge', name: '知识词', color: '#fbbf24' },
   { key: 'section', name: '章节结构', color: '#93c5fd' },
@@ -216,6 +219,9 @@ function graphNode({ id, name, kind, detail, evidence, status = '', signal = '',
 function selectionModel() {
   return {
     hasDataset: false,
+    mode: 'empty',
+    snapshotStatus: 'idle',
+    statusMessage: '',
     datasetId: '',
     title: '',
     categories: DATASET_GRAPH_CATEGORIES,
@@ -228,12 +234,18 @@ function selectionModel() {
       knowledgeCount: 0,
       observedRelationCount: 0,
       inferredRelationCount: 0,
+      confirmedRelationCount: 0,
       crossNodeRelationCount: 0,
+      sourceCount: 0,
+      objectCount: 0,
+      fieldCount: 0,
+      unresolvedFieldCount: 0,
     },
     pipeline: [],
     understanding: {
       summary: '',
       keyConcepts: [],
+      keyFields: [],
       technicalIdentifiers: [],
       structurePath: [],
       strategies: [],
@@ -245,8 +257,370 @@ function selectionModel() {
   };
 }
 
-export function buildDatasetUnderstandingGraph(dataset, documents = []) {
+function semanticEvidenceText(references, fallback = '') {
+  const labels = cleanList((Array.isArray(references) ? references : []).map((reference) => reference?.label), 3);
+  return labels.join(' · ') || fallback || '语义快照';
+}
+
+function semanticStatusLabel(status) {
+  return {
+    confirmed: '已确认',
+    observed: '已观察',
+    inferred: '推断',
+    unresolved: '待解释',
+  }[status] || status || '状态未返回';
+}
+
+function semanticNodeSize(count, minimum, maximum) {
+  const value = Math.max(0, Number(count) || 0);
+  return Math.min(maximum, minimum + Math.log2(value + 1) * 3.4);
+}
+
+function withSemanticNeighborhoods(nodes, links) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  nodes.forEach((node) => {
+    node.incoming = [];
+    node.outgoing = [];
+  });
+  links.forEach((link) => {
+    const source = nodeById.get(link.source);
+    const target = nodeById.get(link.target);
+    if (!source || !target) return;
+    source.outgoing.push({ linkId: link.id, nodeId: target.id, relation: link.relation, type: link.type });
+    target.incoming.push({ linkId: link.id, nodeId: source.id, relation: link.relation, type: link.type });
+  });
+  nodes.forEach((node) => {
+    node.incoming.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+    node.outgoing.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  });
+  return nodes;
+}
+
+export function graphNeighborhoodIds(model, focusNodeId, depth = 1) {
+  const validNodeIds = new Set((Array.isArray(model?.nodes) ? model.nodes : []).map((node) => node.id));
+  const focusId = cleanText(focusNodeId);
+  if (!focusId || !validNodeIds.has(focusId)) return new Set();
+  const boundedDepth = Math.max(0, Math.min(2, Number(depth) || 0));
+  const adjacency = new Map([...validNodeIds].map((id) => [id, new Set()]));
+  (Array.isArray(model?.links) ? model.links : []).forEach((link) => {
+    if (!validNodeIds.has(link.source) || !validNodeIds.has(link.target)) return;
+    adjacency.get(link.source).add(link.target);
+    adjacency.get(link.target).add(link.source);
+  });
+  const visible = new Set([focusId]);
+  let frontier = new Set([focusId]);
+  for (let level = 0; level < boundedDepth; level += 1) {
+    const next = new Set();
+    frontier.forEach((id) => adjacency.get(id)?.forEach((neighbor) => {
+      if (!visible.has(neighbor)) next.add(neighbor);
+      visible.add(neighbor);
+    }));
+    frontier = next;
+  }
+  return visible;
+}
+
+export function filterDatasetUnderstandingGraph(model, options = {}) {
+  const {
+    activeCategory = 'all',
+    activeRelationType = 'all',
+    viewMode = 'business',
+    focusNodeId = '',
+    focusDepth = 'all',
+  } = options;
+  const localIds = focusDepth === 'all'
+    ? null
+    : graphNeighborhoodIds(model, focusNodeId, focusDepth);
+  const revealUnresolved = activeCategory === 'unresolved';
+  const nodes = model.nodes.filter((node) => {
+    if (activeCategory !== 'all' && node.kind !== 'dataset' && node.kind !== activeCategory) return false;
+    if (
+      model.mode === 'semantic'
+      && viewMode === 'business'
+      && !revealUnresolved
+      && node.kind !== 'dataset'
+      && (node.kind === 'unresolved' || node.technicalOnly)
+    ) return false;
+    if (localIds && !localIds.has(node.id)) return false;
+    return true;
+  });
+  const visibleIds = new Set(nodes.map((node) => node.id));
+  const links = model.links.filter((link) => (
+    visibleIds.has(link.source)
+      && visibleIds.has(link.target)
+      && (activeRelationType === 'all' || link.type === activeRelationType)
+  ));
+  return { nodes, links };
+}
+
+function semanticPipelineItems(stage, understanding, nodeById) {
+  if (stage.id === 'source') {
+    return understanding.source_groups.flatMap((group) => group.object_ids.map((objectId) => ({
+      id: `${stage.id}:${group.id}:${objectId}`,
+      nodeId: objectId,
+      label: nodeById.get(objectId)?.name || group.label,
+      meta: group.label || group.kind,
+      detail: `覆盖 ${group.coverage_count} 条来源信号`,
+      evidence: '语义快照 source_groups',
+      status: 'complete',
+    })));
+  }
+  if (stage.id === 'structure') {
+    return understanding.objects.map((object) => ({
+      id: `${stage.id}:${object.id}`,
+      nodeId: object.id,
+      label: object.label,
+      meta: semanticStatusLabel(object.status),
+      detail: object.description || `覆盖 ${object.coverage_count} 条记录`,
+      evidence: semanticEvidenceText(object.evidence_refs),
+      status: object.status === 'unresolved' ? 'attention' : 'complete',
+    }));
+  }
+  if (stage.id === 'labels') {
+    return understanding.fields.map((field) => ({
+      id: `${stage.id}:${field.id}`,
+      nodeId: field.id,
+      label: field.status === 'unresolved' ? '待解释字段' : field.label,
+      meta: `${semanticStatusLabel(field.status)} · ${field.semantic_role}`,
+      detail: `${field.value_type} · 非空 ${field.non_empty_count} · 去重 ${field.distinct_count}`,
+      evidence: semanticEvidenceText(field.evidence_refs),
+      status: field.status === 'unresolved' ? 'attention' : 'complete',
+    }));
+  }
+  if (stage.id === 'relations') {
+    return understanding.relations.map((relation) => ({
+      id: `${stage.id}:${relation.id}`,
+      nodeId: relation.source_id,
+      label: relation.label,
+      meta: semanticStatusLabel(relation.evidence_class),
+      detail: relation.reason,
+      evidence: semanticEvidenceText(relation.evidence_refs),
+      status: relation.evidence_class === 'inferred' ? 'attention' : 'complete',
+    }));
+  }
+  if (stage.id === 'facts') {
+    return understanding.relations
+      .filter((relation) => relation.evidence_class === 'confirmed')
+      .map((relation) => ({
+        id: `${stage.id}:${relation.id}`,
+        nodeId: relation.source_id,
+        label: relation.label,
+        meta: '已确认关系',
+        detail: relation.reason,
+        evidence: semanticEvidenceText(relation.evidence_refs),
+        status: 'complete',
+      }));
+  }
+  return [];
+}
+
+function buildSemanticDatasetUnderstandingGraph(dataset, understanding) {
+  const datasetId = String(dataset?.id || understanding.dataset.id);
+  const rootId = `dataset:${datasetId}`;
+  const sourceGroupByObject = new Map();
+  understanding.source_groups.forEach((group) => group.object_ids.forEach((objectId) => {
+    sourceGroupByObject.set(objectId, { id: group.id, label: group.label, kind: group.kind });
+  }));
+  const nodes = [graphNode({
+    id: rootId,
+    name: cleanText(dataset?.title) || understanding.dataset.title || '当前数据集',
+    kind: 'dataset',
+    detail: understanding.summary.headline,
+    evidence: 'dataset_semantic_understanding_v1',
+    status: understanding.stale ? '上一版可用快照' : '最新可用快照',
+    symbolSize: 68,
+  })];
+
+  understanding.objects.forEach((object) => {
+    const group = sourceGroupByObject.get(object.id);
+    nodes.push({
+      ...graphNode({
+        id: object.id,
+        name: object.status === 'unresolved' ? '待解释对象' : object.label,
+        kind: object.status === 'unresolved' ? 'unresolved' : 'object',
+        detail: object.description || `系统从 ${object.kind} 中识别出的业务对象。`,
+        evidence: semanticEvidenceText(object.evidence_refs),
+        status: semanticStatusLabel(object.status),
+        signal: object.status,
+        symbolSize: semanticNodeSize(object.coverage_count, 32, 54),
+      }),
+      entityType: 'object',
+      sourceKind: object.kind,
+      technicalName: object.technical_name,
+      labelSource: object.label_source,
+      confidence: object.confidence,
+      coverageCount: object.coverage_count,
+      evidenceRefs: object.evidence_refs,
+      groupId: group?.id || '',
+      groupLabel: group?.label || '',
+      technicalOnly: !/\p{Script=Han}/u.test(object.label),
+    });
+  });
+
+  understanding.fields.forEach((field) => {
+    const unresolved = field.status === 'unresolved';
+    nodes.push({
+      ...graphNode({
+        id: field.id,
+        name: unresolved ? '待解释字段' : field.label,
+        kind: unresolved ? 'unresolved' : 'field',
+        detail: unresolved
+          ? '该字段已识别结构和值域，但业务含义尚未确认。'
+          : `${field.semantic_role} · ${field.value_type}`,
+        evidence: semanticEvidenceText(field.evidence_refs),
+        status: semanticStatusLabel(field.status),
+        signal: field.status,
+        symbolSize: unresolved ? 16 : semanticNodeSize(field.non_empty_count, 19, 31),
+      }),
+      entityType: 'field',
+      objectId: field.object_id,
+      technicalName: field.technical_name,
+      semanticRole: field.semantic_role,
+      valueType: field.value_type,
+      nonEmptyCount: field.non_empty_count,
+      distinctCount: field.distinct_count,
+      examples: field.examples,
+      labelSource: field.label_source,
+      confidence: field.confidence,
+      evidenceRefs: field.evidence_refs,
+      technicalOnly: unresolved || !/\p{Script=Han}/u.test(field.label),
+    });
+  });
+
+  const links = [];
+  understanding.objects.forEach((object, index) => links.push({
+    id: `structural:dataset:${object.id}`,
+    source: rootId,
+    target: object.id,
+    relation: '包含业务对象',
+    type: 'observed',
+    confidence: 1,
+    evidence: '语义快照 dataset / objects 归属',
+    rootRelation: true,
+    structural: true,
+    order: index,
+  }));
+
+  understanding.relations.forEach((relation) => links.push({
+    id: relation.id,
+    source: relation.source_id,
+    target: relation.target_id,
+    relation: relation.label,
+    relationType: relation.relation_type,
+    type: relation.evidence_class,
+    confidence: relation.confidence,
+    evidence: relation.reason || semanticEvidenceText(relation.evidence_refs),
+    evidenceRefs: relation.evidence_refs,
+    rootRelation: false,
+    structural: relation.relation_type === 'contains' || relation.relation_type === 'membership',
+  }));
+
+  const relationPairs = new Set(understanding.relations.map((relation) => `${relation.source_id}|${relation.target_id}`));
+  understanding.fields.forEach((field) => {
+    if (relationPairs.has(`${field.object_id}|${field.id}`)) return;
+    links.push({
+      id: `structural:field:${field.id}`,
+      source: field.object_id,
+      target: field.id,
+      relation: '包含字段',
+      type: 'observed',
+      confidence: 1,
+      evidence: '语义快照 fields.object_id 归属',
+      rootRelation: false,
+      structural: true,
+    });
+  });
+  withSemanticNeighborhoods(nodes, links);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const pipeline = understanding.pipeline.map((stage) => {
+    const items = semanticPipelineItems(stage, understanding, nodeById);
+    const attention = items.some((item) => item.status === 'attention');
+    return {
+      key: stage.id,
+      label: stage.label,
+      value: `${stage.evidence_count} 条信号`,
+      detail: stage.detail,
+      status: attention ? 'attention' : stage.status === 'completed' || stage.status === 'complete' ? 'complete' : 'empty',
+      source: 'dataset_semantic_understanding_v1.pipeline',
+      summary: `${stage.label}：${stage.detail}`,
+      items,
+    };
+  });
+  const confirmedRelations = understanding.relations.filter((relation) => relation.evidence_class === 'confirmed');
+  const observedRelations = understanding.relations.filter((relation) => relation.evidence_class === 'observed');
+  const inferredRelations = understanding.relations.filter((relation) => relation.evidence_class === 'inferred');
+  const resolvedFields = understanding.fields.filter((field) => field.status !== 'unresolved');
+  const unresolvedFields = understanding.fields.filter((field) => field.status === 'unresolved');
+  const documentCount = understanding.coverage.document_count;
+  const retrievalCount = understanding.coverage.retrieval_evidence_count;
+
+  return {
+    hasDataset: true,
+    mode: 'semantic',
+    snapshotStatus: understanding.status,
+    statusMessage: understanding.stale ? '当前展示上一版可用理解快照，后台最新重建尚未成功完成。' : '当前展示最新可用语义理解快照。',
+    stale: understanding.stale,
+    generatedAt: understanding.generated_at,
+    limitations: understanding.summary.limitations,
+    datasetId,
+    title: cleanText(dataset?.title) || understanding.dataset.title || '当前数据集',
+    categories: DATASET_GRAPH_CATEGORIES,
+    metrics: {
+      documentCount,
+      estimatedWordCount: numericValue(dataset?.estimated_word_count ?? dataset?.estimatedWordCount),
+      parsedDocumentCount: documentCount,
+      readyDocumentCount: retrievalCount,
+      attentionDocumentCount: unresolvedFields.length,
+      knowledgeCount: understanding.objects.length + resolvedFields.length,
+      confirmedRelationCount: confirmedRelations.length,
+      observedRelationCount: observedRelations.length,
+      inferredRelationCount: inferredRelations.length,
+      crossNodeRelationCount: understanding.relations.length,
+      sourceCount: understanding.coverage.source_count,
+      objectCount: understanding.objects.length,
+      fieldCount: understanding.fields.length,
+      unresolvedFieldCount: unresolvedFields.length,
+      confirmedFactCount: understanding.coverage.confirmed_fact_count,
+      recordCount: understanding.coverage.record_count,
+      assetCount: understanding.coverage.asset_count,
+    },
+    pipeline,
+    understanding: {
+      summary: understanding.summary.headline,
+      keyConcepts: cleanList([
+        ...understanding.objects.filter((object) => object.status !== 'unresolved').map((object) => object.label),
+        ...resolvedFields.filter((field) => /\p{Script=Han}/u.test(field.label)).map((field) => field.label),
+      ], 16),
+      keyFields: cleanList(
+        resolvedFields.filter((field) => /\p{Script=Han}/u.test(field.label)).map((field) => field.label),
+        16,
+      ),
+      technicalIdentifiers: cleanList([
+        ...understanding.objects.filter((object) => object.status === 'unresolved').map((object) => object.technical_name),
+        ...unresolvedFields.map((field) => field.technical_name),
+      ], 40),
+      structurePath: understanding.objects.filter((object) => object.status !== 'unresolved').map((object) => object.label),
+      strategies: understanding.pipeline.map((stage) => stage.label),
+      retrievalCoverage: { ready: retrievalCount, total: documentCount },
+    },
+    nodes,
+    links,
+    emptyKnowledgeMessage: resolvedFields.length || understanding.objects.length
+      ? ''
+      : '当前语义快照尚未返回可解释业务对象或字段。',
+  };
+}
+
+export function buildDatasetUnderstandingGraph(dataset, documents = [], semanticUnderstanding = null) {
   if (!dataset?.id) return selectionModel();
+
+  if (
+    semanticUnderstanding?.status === 'ready'
+    && Array.isArray(semanticUnderstanding.objects)
+    && semanticUnderstanding.objects.length
+  ) {
+    return buildSemanticDatasetUnderstandingGraph(dataset, semanticUnderstanding);
+  }
 
   const datasetId = String(dataset.id);
   const scopedDocuments = (Array.isArray(documents) ? documents : [])
@@ -559,6 +933,7 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
   const understanding = {
     summary: `系统基于现有接口字段，在 ${documentCount} 份资料中识别出 ${knowledgeTerms.length} 个知识词和 ${sectionTitles.length} 个结构线索；${readyCount}/${documentCount || 0} 份已进入检索。`,
     keyConcepts: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'concept'),
+    keyFields: [],
     technicalIdentifiers: knowledgeTerms.filter((term) => knowledgeSignal(term) === 'identifier'),
     structurePath: sectionTitles,
     strategies: understandingStrategies,
@@ -629,6 +1004,11 @@ export function buildDatasetUnderstandingGraph(dataset, documents = []) {
 
   return {
     hasDataset: true,
+    mode: 'fallback',
+    snapshotStatus: semanticUnderstanding?.status || 'unavailable',
+    statusMessage: semanticUnderstanding?.status === 'empty'
+      ? '语义快照尚未生成，当前展示由数据集摘要和可见资料组成的基础视图。'
+      : '当前展示基础理解视图；统一语义快照可用后会自动切换。',
     datasetId,
     title: cleanText(dataset.title) || cleanText(dataset.key) || '当前数据集',
     categories: DATASET_GRAPH_CATEGORIES,

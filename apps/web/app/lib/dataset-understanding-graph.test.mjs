@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildDatasetUnderstandingGraph } from './dataset-understanding-graph.js';
+import {
+  buildDatasetUnderstandingGraph,
+  filterDatasetUnderstandingGraph,
+  graphNeighborhoodIds,
+} from './dataset-understanding-graph.js';
 
 const dataset = {
   id: 'dataset-main',
@@ -206,4 +210,195 @@ test('buildDatasetUnderstandingGraph returns a selection state without a dataset
   assert.equal(model.metrics.crossNodeRelationCount, 0);
   assert.deepEqual(model.nodes, []);
   assert.deepEqual(model.links, []);
+});
+
+const semanticUnderstanding = {
+  schema_version: '1.0.0',
+  generation_version: 'semantic_profile_v1',
+  status: 'ready',
+  dataset: { id: 'dataset-main', title: '新百经营分析' },
+  coverage: {
+    source_count: 7,
+    document_count: 486,
+    record_count: 485,
+    asset_count: 0,
+    retrieval_evidence_count: 485,
+    confirmed_fact_count: 0,
+    unresolved_field_count: 1,
+  },
+  summary: {
+    headline: '系统识别到租赁合同、门店与租售明细。',
+    limitations: ['尚无已确认事实快照。'],
+  },
+  objects: [
+    {
+      id: 'object:lease',
+      kind: 'database_table',
+      label: '租赁合同',
+      technical_name: 'BA_LEASE_CONTRACT',
+      description: '承载合同与门店租赁信息',
+      label_source: 'source_comment',
+      confidence: 0.98,
+      coverage_count: 320,
+      status: 'confirmed',
+      evidence_refs: [{ source_kind: 'database_table', source_id: 'table:lease', label: '源表注释' }],
+    },
+    {
+      id: 'object:shop',
+      kind: 'database_table',
+      label: '门店',
+      technical_name: 'BA_SHOP',
+      description: '门店主数据',
+      label_source: 'dictionary',
+      confidence: 1,
+      coverage_count: 85,
+      status: 'confirmed',
+      evidence_refs: [{ source_kind: 'semantic_dictionary', source_id: 'dictionary:shop', label: '人工确认' }],
+    },
+  ],
+  fields: [
+    {
+      id: 'field:shop-name',
+      object_id: 'object:shop',
+      label: '门店名称',
+      technical_name: 'SHOP_NAME',
+      semantic_role: 'name',
+      value_type: 'text',
+      non_empty_count: 84,
+      distinct_count: 80,
+      examples: ['新百一店'],
+      status: 'observed',
+      label_source: 'source_comment',
+      confidence: 0.94,
+      evidence_refs: [{ source_kind: 'database_column', source_id: 'column:shop-name', label: '字段注释' }],
+    },
+    {
+      id: 'field:code',
+      object_id: 'object:lease',
+      label: 'CARDPARENTNAME',
+      technical_name: 'CARDPARENTNAME',
+      semantic_role: 'unknown',
+      value_type: 'text',
+      non_empty_count: 300,
+      distinct_count: 4,
+      examples: ['A'],
+      status: 'unresolved',
+      label_source: 'raw_identifier',
+      confidence: 0,
+      evidence_refs: [{ source_kind: 'database_column', source_id: 'column:code', label: '原始字段' }],
+    },
+  ],
+  relations: [{
+    id: 'relation:lease-shop',
+    source_id: 'object:lease',
+    target_id: 'object:shop',
+    relation_type: 'shared_key',
+    label: '关联门店',
+    evidence_class: 'observed',
+    confidence: 0.91,
+    reason: '共享门店编号，覆盖率与值域重叠通过门禁',
+    evidence_refs: [{ source_kind: 'database_profile', source_id: 'profile:1', label: '值域重叠' }],
+  }],
+  source_groups: [{
+    id: 'source:database',
+    kind: 'database_table',
+    label: '经营数据库',
+    object_ids: ['object:lease', 'object:shop'],
+    coverage_count: 405,
+  }],
+  pipeline: [{ id: 'profile', label: '结构识别', status: 'complete', detail: '识别 2 个业务对象', evidence_count: 5 }],
+  generated_at: '2026-07-13T12:00:00Z',
+  stale: false,
+  truncated: { objects: 0, fields: 0, relations: 0 },
+};
+
+test('semantic snapshot is the primary graph input and keeps technical names out of main labels', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents, semanticUnderstanding);
+
+  assert.equal(model.mode, 'semantic');
+  assert.equal(model.nodes.some((node) => node.name === '客户清单.pdf'), false);
+  assert.ok(model.nodes.some((node) => node.kind === 'object' && node.name === '租赁合同'));
+  assert.ok(model.nodes.some((node) => node.kind === 'field' && node.name === '门店名称'));
+  assert.ok(model.nodes.some((node) => node.kind === 'unresolved' && node.name === '待解释字段'));
+  assert.ok(model.nodes.every((node) => node.name !== 'BA_LEASE_CONTRACT'));
+  assert.equal(model.understanding.technicalIdentifiers.includes('CARDPARENTNAME'), true);
+});
+
+test('semantic graph forms object-field neighborhoods and only uses backend relations for cross-object meaning', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents, semanticUnderstanding);
+  const objectRelation = model.links.find((link) => link.id === 'relation:lease-shop');
+  const fieldMembership = model.links.find((link) => (
+    link.source === 'object:shop' && link.target === 'field:shop-name'
+  ));
+
+  assert.equal(objectRelation?.type, 'observed');
+  assert.equal(objectRelation?.relation, '关联门店');
+  assert.match(objectRelation?.evidence, /共享门店编号/);
+  assert.equal(fieldMembership?.structural, true);
+  assert.equal(model.links.some((link) => link.relation === '同组线索'), false);
+});
+
+test('semantic graph exposes incoming and outgoing neighborhoods for local focus', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents, semanticUnderstanding);
+  const lease = model.nodes.find((node) => node.id === 'object:lease');
+  const shop = model.nodes.find((node) => node.id === 'object:shop');
+
+  assert.ok(lease.outgoing.some((item) => item.nodeId === 'object:shop'));
+  assert.ok(shop.incoming.some((item) => item.nodeId === 'object:lease'));
+  assert.ok(shop.outgoing.some((item) => item.nodeId === 'field:shop-name'));
+});
+
+test('empty semantic status falls back honestly to existing dataset hints', () => {
+  const empty = {
+    ...semanticUnderstanding,
+    status: 'empty',
+    objects: [],
+    fields: [],
+    relations: [],
+  };
+  const model = buildDatasetUnderstandingGraph(dataset, documents, empty);
+
+  assert.equal(model.mode, 'fallback');
+  assert.equal(model.snapshotStatus, 'empty');
+  assert.ok(model.nodes.some((node) => node.name === '客户清单.pdf'));
+  assert.match(model.statusMessage, /基础视图/);
+});
+
+test('local graph focus returns stable one-hop and two-hop neighborhoods', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents, semanticUnderstanding);
+
+  const oneHop = graphNeighborhoodIds(model, 'object:lease', 1);
+  const twoHop = graphNeighborhoodIds(model, 'object:lease', 2);
+
+  assert.deepEqual([...oneHop].sort(), [
+    'dataset:dataset-main',
+    'field:code',
+    'object:lease',
+    'object:shop',
+  ]);
+  assert.ok(twoHop.has('field:shop-name'));
+  assert.ok(twoHop.size > oneHop.size);
+});
+
+test('business view hides technical noise while an explicit unresolved filter can reveal it', () => {
+  const model = buildDatasetUnderstandingGraph(dataset, documents, semanticUnderstanding);
+  const business = filterDatasetUnderstandingGraph(model, {
+    viewMode: 'business',
+    activeCategory: 'all',
+    activeRelationType: 'all',
+    focusDepth: 'all',
+  });
+  const unresolved = filterDatasetUnderstandingGraph(model, {
+    viewMode: 'business',
+    activeCategory: 'unresolved',
+    activeRelationType: 'all',
+    focusDepth: 'all',
+  });
+
+  assert.equal(business.nodes.some((node) => node.id === 'field:code'), false);
+  assert.equal(unresolved.nodes.some((node) => node.id === 'field:code'), true);
+  assert.ok(business.links.every((link) => (
+    business.nodes.some((node) => node.id === link.source)
+      && business.nodes.some((node) => node.id === link.target)
+  )));
 });

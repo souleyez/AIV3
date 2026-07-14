@@ -51,9 +51,11 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
     const headers = new Headers();
     const incomingContentType = request.headers.get('content-type');
     const accept = request.headers.get('accept');
+    const ifNoneMatch = request.headers.get('if-none-match');
 
     if (incomingContentType) headers.set('content-type', incomingContentType);
     if (accept) headers.set('accept', accept);
+    if (ifNoneMatch) headers.set('if-none-match', ifNoneMatch);
     const cookie = request.headers.get('cookie');
     if (cookie) {
       headers.set('cookie', cookie);
@@ -104,6 +106,13 @@ export async function proxyPlatformApiRequest(request, pathSegments) {
 
     if (contentType.includes('text/event-stream')) {
       return new Response(response.body, {
+        status: response.status,
+        headers: forwardedHeaders,
+      });
+    }
+
+    if (request.method === 'HEAD' || [204, 205, 304].includes(response.status)) {
+      return new Response(null, {
         status: response.status,
         headers: forwardedHeaders,
       });

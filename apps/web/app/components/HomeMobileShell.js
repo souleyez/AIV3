@@ -166,6 +166,7 @@ export default function HomeMobileShell({
   staticPageEditorOpen,
   onStaticPageEditorOpenChange,
   onApplyStaticPageOperation,
+  onOpenDatasetUnderstanding,
 }) {
   const [datasetOpen, setDatasetOpen] = useState(false);
   const [resultsOpen, setResultsOpen] = useState(false);
@@ -262,6 +263,15 @@ export default function HomeMobileShell({
 
       <div className="mobile-home-status-strip">
         <span>{selectedScopeLabel || '普通聊天 · 未选数据集'}</span>
+        {selectedScope.length ? (
+          <button
+            type="button"
+            className="mobile-understanding-button"
+            onClick={onOpenDatasetUnderstanding}
+          >
+            理解图谱
+          </button>
+        ) : null}
         <button
           type="button"
           className="mobile-report-summary-button"

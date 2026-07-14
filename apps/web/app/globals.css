@@ -5592,6 +5592,55 @@ body {
   font-size: 9px;
 }
 
+.dataset-understanding-snapshot-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(52, 211, 153, 0.15);
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.07);
+  color: #a7f3d0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.dataset-understanding-snapshot-state i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.8);
+}
+
+.dataset-understanding-snapshot-state.loading,
+.dataset-understanding-snapshot-state.empty,
+.dataset-understanding-snapshot-state.stale {
+  border-color: rgba(251, 191, 36, 0.16);
+  background: rgba(251, 191, 36, 0.07);
+  color: #fde68a;
+}
+
+.dataset-understanding-snapshot-state.loading i,
+.dataset-understanding-snapshot-state.empty i,
+.dataset-understanding-snapshot-state.stale i {
+  background: #fbbf24;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.7);
+}
+
+.dataset-understanding-snapshot-state.failed {
+  border-color: rgba(248, 113, 113, 0.18);
+  background: rgba(239, 68, 68, 0.07);
+  color: #fecaca;
+}
+
+.dataset-understanding-snapshot-state.failed i {
+  background: #f87171;
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.68);
+}
+
 .dataset-understanding-filter {
   display: flex;
   flex-wrap: wrap;
@@ -5648,6 +5697,7 @@ body {
 }
 
 .dataset-understanding-relation-filter,
+.dataset-understanding-view-switch,
 .dataset-understanding-relation-legend,
 .dataset-understanding-relation-legend span {
   display: flex;
@@ -5656,6 +5706,36 @@ body {
 
 .dataset-understanding-relation-filter {
   gap: 6px;
+}
+
+.dataset-understanding-view-switch {
+  gap: 5px;
+}
+
+.dataset-understanding-view-switch > span {
+  margin-right: 3px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dataset-understanding-view-switch button,
+.dataset-understanding-local-toolbar button {
+  min-height: 25px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #7c8ba3;
+  font-size: 10px;
+}
+
+.dataset-understanding-view-switch button.active,
+.dataset-understanding-local-toolbar button.active {
+  border-color: rgba(56, 189, 248, 0.34);
+  background: rgba(14, 165, 233, 0.12);
+  color: #d8f3ff;
 }
 
 .dataset-understanding-relation-filter > span {
@@ -5710,6 +5790,35 @@ body {
   border-top-style: dashed;
 }
 
+.dataset-understanding-relation-legend i.confirmed {
+  border-top-color: #34d399;
+}
+
+.dataset-understanding-local-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.27);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.07);
+}
+
+.dataset-understanding-local-toolbar > span {
+  margin-right: 3px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dataset-understanding-local-toolbar small {
+  margin-left: auto;
+  color: #708099;
+  font-size: 9px;
+}
+
 .dataset-understanding-canvas-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -5723,6 +5832,8 @@ body {
   border-radius: 17px;
   overflow: hidden;
   background:
+    radial-gradient(circle at 25% 20%, rgba(56, 189, 248, 0.08), transparent 28%),
+    radial-gradient(circle at 78% 72%, rgba(52, 211, 153, 0.07), transparent 26%),
     radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.46), transparent 62%),
     rgba(2, 8, 18, 0.46);
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.09);
@@ -5781,6 +5892,14 @@ body {
 
 .dataset-understanding-node-kind.overview i {
   background: #5eead4;
+}
+
+.dataset-understanding-node-kind.overview.semantic {
+  color: #7dd3fc;
+}
+
+.dataset-understanding-node-kind.overview.semantic i {
+  background: #38bdf8;
 }
 
 .dataset-understanding-stage-badge {
@@ -5936,6 +6055,10 @@ body {
   border-top-style: dashed;
 }
 
+.dataset-understanding-connection-list button > i.confirmed {
+  border-top-color: #34d399;
+}
+
 .dataset-understanding-connection-list button > span {
   min-width: 0;
   display: grid;
@@ -6000,12 +6123,20 @@ body {
   border-top-style: dashed;
 }
 
+.dataset-understanding-node-kind.relation.confirmed i {
+  border-top-color: #34d399;
+}
+
 .dataset-understanding-node-kind.relation.observed {
   color: #99f6e4;
 }
 
 .dataset-understanding-node-kind.relation.inferred {
   color: #fde68a;
+}
+
+.dataset-understanding-node-kind.relation.confirmed {
+  color: #a7f3d0;
 }
 
 .dataset-understanding-evidence p {
@@ -6117,6 +6248,10 @@ body {
   border-top-style: dashed;
 }
 
+.dataset-understanding-ledger button i.relation.confirmed {
+  border-top-color: #34d399;
+}
+
 .dataset-understanding-ledger button span {
   min-width: 0;
   display: grid;
@@ -6152,6 +6287,11 @@ body {
   .dataset-understanding-relationship-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .dataset-understanding-local-toolbar small {
+    width: 100%;
+    margin-left: 0;
   }
 
   .dataset-understanding-pipeline {
@@ -6224,6 +6364,7 @@ body {
   }
 
   .dataset-understanding-relation-filter,
+  .dataset-understanding-view-switch,
   .dataset-understanding-relation-legend {
     flex-wrap: wrap;
   }
@@ -7119,6 +7260,7 @@ body {
 
 .mobile-home-status-strip span,
 .mobile-home-status-strip strong,
+.mobile-understanding-button,
 .mobile-report-summary-button {
   min-width: 0;
   overflow: hidden;
@@ -7127,8 +7269,19 @@ body {
 }
 
 .mobile-home-status-strip strong,
+.mobile-understanding-button,
 .mobile-report-summary-button {
   color: #e5eefb;
+}
+
+.mobile-understanding-button {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.16);
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .mobile-report-summary-button {

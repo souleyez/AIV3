@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildDatasetUnderstandingGraph,
   DATASET_GRAPH_CATEGORIES,
+  filterDatasetUnderstandingGraph,
 } from '../lib/dataset-understanding-graph';
 
 function compactNumber(value) {
@@ -16,16 +17,48 @@ function graphCategory(model, key) {
   return model.categories.find((category) => category.key === key) || model.categories[0];
 }
 
-function optionForModel(model, activeCategory, activeRelationType) {
-  const visibleNodes = activeCategory === 'all'
-    ? model.nodes
-    : model.nodes.filter((node) => node.kind === 'dataset' || node.kind === activeCategory);
-  const visibleIds = new Set(visibleNodes.map((node) => node.id));
-  const visibleLinks = model.links.filter((link) => (
-    visibleIds.has(link.source)
-      && visibleIds.has(link.target)
-      && (activeRelationType === 'all' || link.type === activeRelationType)
-  ));
+function relationClassLabel(value) {
+  return {
+    confirmed: '已确认',
+    observed: '已观察',
+    inferred: '推断',
+  }[value] || '关系';
+}
+
+function sourceKindLabel(value) {
+  return {
+    database: '数据库',
+    database_table: '数据库表',
+    spreadsheet: '表格',
+    spreadsheet_table: '工作表',
+    document: '文档',
+    document_section: '文档结构',
+    asset: '资产',
+    asset_profile: '资产画像',
+    media: '音视频',
+    media_segment: '媒体片段',
+    web_api: '网页 / API',
+    api_resource: 'API 资源',
+  }[value] || value || '未返回';
+}
+
+function semanticRoleLabel(value) {
+  return {
+    identifier: '标识符',
+    name: '名称',
+    date: '日期',
+    amount: '金额',
+    quantity: '数量',
+    category: '分类',
+    status: '状态',
+    location: '位置',
+    text: '文本',
+    unknown: '待判断',
+  }[value] || value || '待判断';
+}
+
+function optionForModel(model, filters) {
+  const { nodes: visibleNodes, links: visibleLinks } = filterDatasetUnderstandingGraph(model, filters);
 
   return {
     animationDuration: 650,
@@ -39,7 +72,7 @@ function optionForModel(model, activeCategory, activeRelationType) {
       textStyle: { color: '#e5edf8', fontSize: 12 },
       formatter(params) {
         if (params.dataType === 'edge') {
-          const relationType = params.data?.type === 'inferred' ? '推断关系' : '事实关系';
+          const relationType = relationClassLabel(params.data?.type);
           const confidence = Math.round((Number(params.data?.confidence) || 0) * 100);
           return [
             params.data?.relation || '关联',
@@ -79,12 +112,16 @@ function optionForModel(model, activeCategory, activeRelationType) {
       })),
       links: visibleLinks.map((link) => ({
         ...link,
+        symbol: model.mode === 'semantic' && !link.rootRelation ? ['none', 'arrow'] : ['none', 'none'],
+        symbolSize: 7,
         lineStyle: {
           color: link.rootRelation
             ? 'rgba(148, 163, 184, 0.32)'
             : link.type === 'inferred'
               ? 'rgba(251, 191, 36, 0.78)'
-              : 'rgba(94, 234, 212, 0.84)',
+              : link.type === 'confirmed'
+                ? 'rgba(52, 211, 153, 0.94)'
+                : 'rgba(94, 234, 212, 0.84)',
           type: link.type === 'inferred' ? 'dashed' : 'solid',
           width: link.rootRelation ? 0.75 : link.type === 'inferred' ? 1.35 : 1.8,
           opacity: link.rootRelation ? 0.24 : link.type === 'inferred' ? 0.62 : 0.76,
@@ -92,9 +129,9 @@ function optionForModel(model, activeCategory, activeRelationType) {
         },
       })),
       force: {
-        repulsion: 182,
-        gravity: 0.085,
-        edgeLength: [58, 126],
+        repulsion: model.mode === 'semantic' ? 235 : 182,
+        gravity: model.mode === 'semantic' ? 0.055 : 0.085,
+        edgeLength: model.mode === 'semantic' ? [74, 148] : [58, 126],
         friction: 0.24,
       },
       label: {
@@ -155,8 +192,8 @@ function UnderstandingOverview({ model }) {
   return (
     <>
       <span>系统理解摘要</span>
-      <div className="dataset-understanding-node-kind overview">
-        <i />基于现有字段
+      <div className={`dataset-understanding-node-kind overview ${model.mode}`.trim()}>
+        <i />{model.mode === 'semantic' ? '真实语义快照' : '基础理解视图'}
       </div>
       <h4>系统已经理解到什么</h4>
       <p>{understanding.summary}</p>
@@ -178,7 +215,127 @@ function UnderstandingOverview({ model }) {
           <p>{understanding.technicalIdentifiers.join(' · ')}</p>
         </div>
       ) : null}
-      <small className="dataset-understanding-honesty-note">摘要只归纳接口已返回的知识词、结构线索和检索状态，不补写业务结论。</small>
+      {model.limitations?.length ? (
+        <div className="dataset-understanding-insight-group muted">
+          <strong>理解边界</strong>
+          <p>{model.limitations.join('；')}</p>
+        </div>
+      ) : null}
+      <small className="dataset-understanding-honesty-note">
+        {model.mode === 'semantic'
+          ? '摘要、对象、字段和关系均来自版本化语义快照；推断关系不等同于已确认事实。'
+          : '基础视图只归纳现有摘要字段和可见资料，不补写业务结论。'}
+      </small>
+    </>
+  );
+}
+
+function ConnectionGroup({ title, items, model, onSelectLink, direction }) {
+  return (
+    <div className="dataset-understanding-insight-group connections">
+      <strong>{title}</strong>
+      <div className="dataset-understanding-connection-list">
+        {items.length ? items.map(({ link, node }) => (
+          <button key={`${direction}:${link.id}`} type="button" onClick={() => onSelectLink(link.id)}>
+            <i className={link.type} />
+            <span>
+              <strong>{direction === 'incoming' ? `${node?.name || '关联节点'} → ` : ''}{link.relation}{direction === 'outgoing' ? ` → ${node?.name || '关联节点'}` : ''}</strong>
+              <small>{relationClassLabel(link.type)} · {Math.round(link.confidence * 100)}% · {link.evidence}</small>
+            </span>
+          </button>
+        )) : <small>当前没有这类直接关系。</small>}
+      </div>
+    </div>
+  );
+}
+
+function NodeInspector({ model, node, onSelectLink }) {
+  if (!node) return null;
+  const incoming = model.links
+    .filter((link) => link.target === node.id)
+    .map((link) => ({ link, node: model.nodes.find((candidate) => candidate.id === link.source) || null }));
+  const outgoing = model.links
+    .filter((link) => link.source === node.id)
+    .map((link) => ({ link, node: model.nodes.find((candidate) => candidate.id === link.target) || null }));
+  const objectFields = node.entityType === 'object'
+    ? model.nodes.filter((candidate) => candidate.objectId === node.id)
+    : [];
+  const parentObject = node.entityType === 'field'
+    ? model.nodes.find((candidate) => candidate.id === node.objectId) || null
+    : null;
+  const nonEmptyRate = parentObject?.coverageCount
+    ? Math.min(100, Math.round((node.nonEmptyCount / parentObject.coverageCount) * 100))
+    : null;
+  const objectExamples = [...new Set(objectFields.flatMap((field) => field.examples || []))].slice(0, 5);
+
+  return (
+    <>
+      <span>{node.entityType === 'field' ? '字段理解详情' : node.entityType === 'object' ? '业务对象详情' : '当前节点证据'}</span>
+      <div className="dataset-understanding-node-kind">
+        <i style={{ background: graphCategory(model, node.kind).color }} />
+        {graphCategory(model, node.kind).name}
+      </div>
+      <h4>{node.name}</h4>
+      <p>{node.detail || '点击图谱节点查看系统为什么展示这条信息。'}</p>
+      {node.entityType === 'object' ? (
+        <dl>
+          <div><dt>技术来源</dt><dd>{node.technicalName || '未返回'}</dd></div>
+          <div><dt>来源类型</dt><dd>{sourceKindLabel(node.sourceKind)}{node.groupLabel ? ` · ${sourceKindLabel(node.groupLabel)}` : ''}</dd></div>
+          <div><dt>覆盖量</dt><dd>{compactNumber(node.coverageCount)} 条</dd></div>
+          <div><dt>业务标签</dt><dd>{node.labelSource || '未返回'} · {node.status}</dd></div>
+          <div><dt>可信度</dt><dd>{Math.round((node.confidence || 0) * 100)}%</dd></div>
+          <div><dt>证据来源</dt><dd>{node.evidence || '语义快照'}</dd></div>
+        </dl>
+      ) : node.entityType === 'field' ? (
+        <dl>
+          <div><dt>原始字段名</dt><dd>{node.technicalName || '未返回'}</dd></div>
+          <div><dt>类型 / 角色</dt><dd>{node.valueType || '未知'} · {semanticRoleLabel(node.semanticRole)}</dd></div>
+          <div><dt>非空率</dt><dd>{nonEmptyRate === null ? '分母未返回' : `${nonEmptyRate}%`}（{compactNumber(node.nonEmptyCount)} 条）</dd></div>
+          <div><dt>去重数</dt><dd>{compactNumber(node.distinctCount)}</dd></div>
+          <div><dt>标签来源</dt><dd>{node.labelSource || '未返回'} · {node.status}</dd></div>
+          <div><dt>可信度</dt><dd>{Math.round((node.confidence || 0) * 100)}%</dd></div>
+          <div><dt>证据来源</dt><dd>{node.evidence || '语义快照'}</dd></div>
+        </dl>
+      ) : (
+        <dl>
+          <div><dt>数据来源</dt><dd>{node.evidence || '数据集摘要接口'}</dd></div>
+          <div><dt>处理状态</dt><dd>{node.status || '已返回'}</dd></div>
+          <div><dt>估算字数</dt><dd>{model.metrics.estimatedWordCount ? compactNumber(model.metrics.estimatedWordCount) : '接口未返回'}</dd></div>
+        </dl>
+      )}
+      {node.examples?.length ? (
+        <div className="dataset-understanding-insight-group">
+          <strong>安全示例</strong>
+          <div className="dataset-understanding-insight-tags">
+            {node.examples.map((example) => <span key={example}>{example}</span>)}
+          </div>
+        </div>
+      ) : null}
+      {node.entityType === 'object' && objectExamples.length ? (
+        <div className="dataset-understanding-insight-group">
+          <strong>字段安全示例</strong>
+          <div className="dataset-understanding-insight-tags">
+            {objectExamples.map((example) => <span key={example}>{example}</span>)}
+          </div>
+        </div>
+      ) : null}
+      {objectFields.length ? (
+        <div className="dataset-understanding-insight-group">
+          <strong>已理解字段</strong>
+          <div className="dataset-understanding-insight-tags">
+            {objectFields.slice(0, 12).map((field) => <span key={field.id}>{field.name}</span>)}
+          </div>
+        </div>
+      ) : null}
+      {model.mode === 'semantic' ? (
+        <>
+          <ConnectionGroup title="上游依据 / 入向关系" items={incoming} model={model} onSelectLink={onSelectLink} direction="incoming" />
+          <ConnectionGroup title="下游理解 / 出向关系" items={outgoing} model={model} onSelectLink={onSelectLink} direction="outgoing" />
+        </>
+      ) : (
+        <ConnectionGroup title="直接关联" items={[...incoming, ...outgoing].slice(0, 12)} model={model} onSelectLink={onSelectLink} direction="outgoing" />
+      )}
+      {model.emptyKnowledgeMessage ? <small className="dataset-understanding-honesty-note">{model.emptyKnowledgeMessage}</small> : null}
     </>
   );
 }
@@ -212,14 +369,16 @@ function StageInspector({ stage, onSelectNode }) {
   );
 }
 
-export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
+export default function DatasetUnderstandingGraph({ dataset, documents = [], understandingState = null }) {
   const chartRef = useRef(null);
   const model = useMemo(
-    () => buildDatasetUnderstandingGraph(dataset, documents),
-    [dataset, documents],
+    () => buildDatasetUnderstandingGraph(dataset, documents, understandingState?.data || null),
+    [dataset, documents, understandingState?.data],
   );
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeRelationType, setActiveRelationType] = useState('all');
+  const [viewMode, setViewMode] = useState('business');
+  const [focusDepth, setFocusDepth] = useState('all');
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [selectedLinkId, setSelectedLinkId] = useState('');
   const [selectedStageKey, setSelectedStageKey] = useState('overview');
@@ -233,21 +392,6 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
     ? model.nodes.find((node) => node.id === selectedLink.target) || null
     : null;
   const selectedStage = model.pipeline.find((stage) => stage.key === selectedStageKey) || null;
-  const selectedNodeConnections = useMemo(() => {
-    if (!selectedNode) return [];
-    return model.links
-      .filter((link) => link.source === selectedNode.id || link.target === selectedNode.id)
-      .map((link) => {
-        const connectedId = link.source === selectedNode.id ? link.target : link.source;
-        return { link, node: model.nodes.find((node) => node.id === connectedId) || null };
-      })
-      .sort((left, right) => (
-        Number(left.link.rootRelation) - Number(right.link.rootRelation)
-        || Number(left.link.type === 'inferred') - Number(right.link.type === 'inferred')
-        || right.link.confidence - left.link.confidence
-      ))
-      .slice(0, 12);
-  }, [model.links, model.nodes, selectedNode]);
   const categoryCounts = useMemo(() => Object.fromEntries(
     DATASET_GRAPH_CATEGORIES.map((category) => [
       category.key,
@@ -256,12 +400,19 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
   ), [model.nodes]);
   const relationCounts = useMemo(() => ({
     all: model.links.length,
+    confirmed: model.metrics.confirmedRelationCount || 0,
     observed: model.metrics.observedRelationCount,
     inferred: model.metrics.inferredRelationCount,
-  }), [model.links.length, model.metrics.observedRelationCount, model.metrics.inferredRelationCount]);
+  }), [model.links.length, model.metrics.confirmedRelationCount, model.metrics.observedRelationCount, model.metrics.inferredRelationCount]);
   const chartOption = useMemo(
-    () => optionForModel(model, activeCategory, activeRelationType),
-    [model, activeCategory, activeRelationType],
+    () => optionForModel(model, {
+      activeCategory,
+      activeRelationType,
+      viewMode,
+      focusNodeId: selectedNodeId,
+      focusDepth,
+    }),
+    [model, activeCategory, activeRelationType, viewMode, selectedNodeId, focusDepth],
   );
   const chartSignature = JSON.stringify(chartOption, (key, value) => typeof value === 'function' ? String(value) : value);
 
@@ -271,6 +422,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
     setSelectedStageKey('overview');
     setActiveCategory('all');
     setActiveRelationType('all');
+    setViewMode('business');
+    setFocusDepth('all');
   }, [model.datasetId]);
 
   useEffect(() => {
@@ -341,20 +494,33 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
     <section className="dataset-understanding-panel" aria-label={`${model.title} 数据集理解图谱`}>
       <header className="dataset-understanding-head">
         <div>
-          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · 基于现有数据</span>
+          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {model.mode === 'semantic' ? '真实语义快照' : '基础视图'}</span>
           <h3>{model.title}</h3>
-          <p>实线表示已有字段可证实关系；虚线表示同组共现或文本亲和推断，可点击连线核对依据。</p>
+          <p>{model.mode === 'semantic'
+            ? '业务对象、字段与关系来自版本化语义快照；点击节点可查看入向依据、出向理解和原始字段。'
+            : '当前按已有摘要与可见资料展示基础连线；虚线推断不等同于已确认业务关系。'}</p>
         </div>
         <div className="dataset-understanding-metrics" aria-label="数据集理解指标">
-          <span><small>资料</small><strong>{model.metrics.documentCount}</strong></span>
-          <span><small>知识线索</small><strong>{model.metrics.knowledgeCount}</strong></span>
-          <span className="relations"><small>交叉关系</small><strong>{model.metrics.crossNodeRelationCount}</strong></span>
-          <span><small>可检索</small><strong>{model.metrics.readyDocumentCount}</strong></span>
+          <span><small>{model.mode === 'semantic' ? '来源' : '资料'}</small><strong>{model.mode === 'semantic' ? model.metrics.sourceCount : model.metrics.documentCount}</strong></span>
+          <span><small>{model.mode === 'semantic' ? '业务对象' : '知识线索'}</small><strong>{model.mode === 'semantic' ? model.metrics.objectCount : model.metrics.knowledgeCount}</strong></span>
+          <span className="relations"><small>{model.mode === 'semantic' ? '语义关系' : '交叉关系'}</small><strong>{model.metrics.crossNodeRelationCount}</strong></span>
+          <span><small>{model.mode === 'semantic' ? '已确认事实' : '可检索'}</small><strong>{model.mode === 'semantic' ? model.metrics.confirmedFactCount : model.metrics.readyDocumentCount}</strong></span>
           <span className={model.metrics.attentionDocumentCount ? 'attention' : ''}>
-            <small>待关注</small><strong>{model.metrics.attentionDocumentCount}</strong>
+            <small>{model.mode === 'semantic' ? '待解释' : '待关注'}</small><strong>{model.mode === 'semantic' ? model.metrics.unresolvedFieldCount : model.metrics.attentionDocumentCount}</strong>
           </span>
         </div>
       </header>
+
+      <div className={`dataset-understanding-snapshot-state ${understandingState?.status || model.snapshotStatus} ${model.stale ? 'stale' : ''}`.trim()}>
+        <i />
+        <span>
+          {understandingState?.status === 'loading'
+            ? '正在读取真实语义理解快照；暂时保留当前可用视图。'
+            : understandingState?.status === 'failed'
+              ? '真实语义快照暂时不可用；当前展示可追溯的基础视图。'
+              : model.statusMessage}
+        </span>
+      </div>
 
       <div className="dataset-understanding-pipeline" aria-label="数据处理链路">
         {model.pipeline.map((stage, index) => (
@@ -373,24 +539,24 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
       </div>
 
       <div className="dataset-understanding-semantic-brief" aria-label="系统理解概览">
-        <button type="button" onClick={() => setSelectedStageKey('knowledge')}>
-          <span>核心概念</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'structure' : 'knowledge')}>
+          <span>{model.mode === 'semantic' ? '业务对象' : '核心概念'}</span>
           <strong>{model.understanding.keyConcepts.slice(0, 4).join(' · ') || '待识别'}</strong>
           <small>{model.understanding.keyConcepts.length} 个业务语义词</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey('structure')}>
-          <span>结构主线</span>
-          <strong>{model.understanding.structurePath.slice(0, 4).join(' → ') || '待识别'}</strong>
-          <small>{model.understanding.structurePath.length} 个结构线索</small>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'labels' : 'structure')}>
+          <span>{model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
+          <strong>{(model.mode === 'semantic' ? model.understanding.keyFields : model.understanding.structurePath).slice(0, 4).join(' → ') || '待识别'}</strong>
+          <small>{model.mode === 'semantic' ? `${model.metrics.fieldCount} 个字段，${model.metrics.unresolvedFieldCount} 个待解释` : `${model.understanding.structurePath.length} 个结构线索`}</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey('ready')}>
-          <span>检索覆盖</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'source' : 'ready')}>
+          <span>可检索覆盖</span>
           <strong>{model.understanding.retrievalCoverage.ready} / {model.understanding.retrievalCoverage.total}</strong>
-          <small>明确进入检索的资料</small>
+          <small>{model.mode === 'semantic' ? '可追溯覆盖情况' : '明确进入检索的资料'}</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey('overview')}>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'relations' : 'overview')}>
           <span>关系理解</span>
-          <strong>{model.metrics.observedRelationCount} 实 · {model.metrics.inferredRelationCount} 推</strong>
+          <strong>{model.metrics.confirmedRelationCount || 0} 确 · {model.metrics.observedRelationCount} 观 · {model.metrics.inferredRelationCount} 推</strong>
           <small>点击图中节点查看关联依据</small>
         </button>
       </div>
@@ -403,7 +569,12 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
         >
           全部 <small>{Math.max(0, model.nodes.length - 1)}</small>
         </button>
-        {DATASET_GRAPH_CATEGORIES.filter((category) => category.key !== 'dataset').map((category) => (
+        {DATASET_GRAPH_CATEGORIES.filter((category) => (
+          category.key !== 'dataset'
+            && (model.mode === 'semantic'
+              ? ['object', 'field', 'unresolved'].includes(category.key)
+              : ['document', 'knowledge', 'section', 'material', 'strategy'].includes(category.key))
+        )).map((category) => (
           <button
             key={category.key}
             type="button"
@@ -418,11 +589,18 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
       </div>
 
       <div className="dataset-understanding-relationship-toolbar">
+        {model.mode === 'semantic' ? (
+          <div className="dataset-understanding-view-switch" aria-label="业务与技术视图切换">
+            <span>显示</span>
+            <button type="button" className={viewMode === 'business' ? 'active' : ''} onClick={() => setViewMode('business')}>业务视图</button>
+            <button type="button" className={viewMode === 'technical' ? 'active' : ''} onClick={() => setViewMode('technical')}>技术视图</button>
+          </div>
+        ) : null}
         <div className="dataset-understanding-relation-filter" aria-label="关系可信度筛选">
           <span>关系视图</span>
           {[
             ['all', '全部关系'],
-            ['observed', '事实关系'],
+            ...(model.mode === 'semantic' ? [['confirmed', '已确认'], ['observed', '已观察']] : [['observed', '事实关系']]),
             ['inferred', '推断关系'],
           ].map(([key, label]) => (
             <button
@@ -436,17 +614,35 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
           ))}
         </div>
         <div className="dataset-understanding-relation-legend" aria-label="关系图例">
-          <span><i className="observed" />实线 · 可证实</span>
+          {model.mode === 'semantic' ? <span><i className="confirmed" />绿线 · 已确认</span> : null}
+          <span><i className="observed" />实线 · 已观察</span>
           <span><i className="inferred" />虚线 · 待验证</span>
         </div>
       </div>
+
+      {model.mode === 'semantic' ? (
+        <div className="dataset-understanding-local-toolbar" aria-label="局部图深度">
+          <span>图谱范围</span>
+          {[['all', '全局'], [1, '一跳'], [2, '两跳']].map(([depth, label]) => (
+            <button
+              key={depth}
+              type="button"
+              className={focusDepth === depth ? 'active' : ''}
+              onClick={() => setFocusDepth(depth)}
+            >
+              {label}
+            </button>
+          ))}
+          <small>{focusDepth === 'all' ? '查看全部业务网络' : `以“${selectedNode?.name || model.title}”为中心聚焦`}</small>
+        </div>
+      ) : null}
 
       <div className="dataset-understanding-canvas-grid">
         <div className="dataset-understanding-chart-shell">
           <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} 知识连接图`} />
           {chartState === 'loading' ? <div className="dataset-understanding-chart-state">正在生成理解图谱…</div> : null}
           {chartState === 'error' ? <div className="dataset-understanding-chart-state">图谱画布加载失败，可使用右侧证据详情和下方清单。</div> : null}
-          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据</div>
+          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 可切换一跳/两跳' : ''}</div>
         </div>
 
         <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">
@@ -466,12 +662,13 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
               <span>当前关系依据</span>
               <div className={`dataset-understanding-node-kind relation ${selectedLink.type}`.trim()}>
                 <i />
-                {selectedLink.type === 'inferred' ? '推断关系' : '事实关系'}
+                {relationClassLabel(selectedLink.type)}关系
               </div>
               <h4>{selectedLinkSource?.name || '来源节点'} <em>{selectedLink.relation}</em> {selectedLinkTarget?.name || '目标节点'}</h4>
               <p>{selectedLink.evidence}</p>
               <dl>
-                <div><dt>关系类型</dt><dd>{selectedLink.type === 'inferred' ? '前端推断，待后端关系抽取验证' : '现有接口字段可直接证实'}</dd></div>
+                <div><dt>证据等级</dt><dd>{relationClassLabel(selectedLink.type)}</dd></div>
+                <div><dt>关系类型</dt><dd>{selectedLink.relationType || (selectedLink.structural ? '结构归属' : '相关关系')}</dd></div>
                 <div><dt>置信度</dt><dd>{Math.round(selectedLink.confidence * 100)}%</dd></div>
                 <div><dt>节点范围</dt><dd>{selectedLink.rootRelation ? '数据集归属关系' : '知识网络交叉关系'}</dd></div>
               </dl>
@@ -479,37 +676,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [] }) {
                 <small className="dataset-understanding-honesty-note">虚线不等同于已确认的业务因果或实体关系。</small>
               ) : null}
             </>
-          ) : (
-            <>
-              <span>当前节点证据</span>
-              <div className="dataset-understanding-node-kind">
-                <i style={{ background: graphCategory(model, selectedNode?.kind).color }} />
-                {graphCategory(model, selectedNode?.kind).name}
-              </div>
-              <h4>{selectedNode?.name || model.title}</h4>
-              <p>{selectedNode?.detail || '点击图谱节点查看系统为什么展示这条信息。'}</p>
-              <dl>
-                <div><dt>数据来源</dt><dd>{selectedNode?.evidence || '数据集摘要接口'}</dd></div>
-                <div><dt>处理状态</dt><dd>{selectedNode?.status || '已返回'}</dd></div>
-                <div><dt>估算字数</dt><dd>{model.metrics.estimatedWordCount ? compactNumber(model.metrics.estimatedWordCount) : '接口未返回'}</dd></div>
-              </dl>
-              <div className="dataset-understanding-insight-group connections">
-                <strong>直接关联</strong>
-                <div className="dataset-understanding-connection-list">
-                  {selectedNodeConnections.length ? selectedNodeConnections.map(({ link, node }) => (
-                    <button key={link.id} type="button" onClick={() => setSelectedLinkId(link.id)}>
-                      <i className={link.type} />
-                      <span>
-                        <strong>{link.relation} · {node?.name || '关联节点'}</strong>
-                        <small>{link.type === 'inferred' ? `推断 ${Math.round(link.confidence * 100)}%` : '事实关系'} · {link.evidence}</small>
-                      </span>
-                    </button>
-                  )) : <small>当前节点没有接口可证实或前端标注的直接关系。</small>}
-                </div>
-              </div>
-              {model.emptyKnowledgeMessage ? <small className="dataset-understanding-honesty-note">{model.emptyKnowledgeMessage}</small> : null}
-            </>
-          )}
+          ) : <NodeInspector model={model} node={selectedNode} onSelectLink={setSelectedLinkId} />}
         </aside>
       </div>
 

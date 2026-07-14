@@ -832,6 +832,7 @@ function DatasetsPage({
   datasets,
   selectedDatasetId,
   selectedDatasetIds = [],
+  datasetUnderstandingState,
   documents,
   documentsLoading,
   documentSearch,
@@ -886,7 +887,11 @@ function DatasetsPage({
 
   return (
     <div className="dataset-page-stack">
-      <DatasetUnderstandingGraph dataset={selectedDataset} documents={documents} />
+      <DatasetUnderstandingGraph
+        dataset={selectedDataset}
+        documents={documents}
+        understandingState={datasetUnderstandingState}
+      />
 
       <section className="directory-card dataset-page-documents-card">
         <div className="directory-section-head">
@@ -1313,6 +1318,7 @@ export default function WorkspaceDirectoryPanel({
   onRefreshAssetLibraries,
   selectedDatasetId,
   selectedDatasetIds = [],
+  datasetUnderstandingState,
   onSelectDataset,
   onClearDatasetSelection,
   datasetDraft,
@@ -1376,6 +1382,7 @@ export default function WorkspaceDirectoryPanel({
           onRefreshAssetLibraries={onRefreshAssetLibraries}
           selectedDatasetId={selectedDatasetId}
           selectedDatasetIds={selectedDatasetIds}
+          datasetUnderstandingState={datasetUnderstandingState}
           onSelectDataset={onSelectDataset}
           onClearDatasetSelection={onClearDatasetSelection}
           datasetDraft={datasetDraft}

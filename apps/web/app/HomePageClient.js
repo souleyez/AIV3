@@ -79,6 +79,7 @@ import {
 } from './lib/codex-customer-artifacts';
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
+import { fetchDatasetUnderstanding } from './lib/dataset-understanding-api';
 import {
   datasetSelectionStateAfterToggle,
   datasetIdsAfterCatalogRefresh,
@@ -406,6 +407,12 @@ export default function HomePageClient() {
   const [documentSearch, setDocumentSearch] = useState('');
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [selectedDocumentDetail, setSelectedDocumentDetail] = useState(null);
+  const [datasetUnderstandingState, setDatasetUnderstandingState] = useState({
+    datasetId: '',
+    status: 'idle',
+    data: null,
+    error: '',
+  });
 
   const datasetLoadIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
@@ -417,11 +424,61 @@ export default function HomePageClient() {
   const assistantRunCustomerCodexPollRef = useRef(0);
   const codexCustomerChatMessageKeysRef = useRef(new Set());
   const uiNoticeMessageKeysRef = useRef(new Set());
+  const datasetUnderstandingCacheRef = useRef(new Map());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
     [datasets, selectedDatasetId],
   );
+
+  useEffect(() => {
+    const datasetId = String(selectedDatasetId || '').trim();
+    if (!datasetId) {
+      setDatasetUnderstandingState({ datasetId: '', status: 'idle', data: null, error: '' });
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+    const cached = datasetUnderstandingCacheRef.current.get(datasetId) || null;
+    setDatasetUnderstandingState({
+      datasetId,
+      status: 'loading',
+      data: cached?.data || null,
+      error: '',
+    });
+
+    fetchDatasetUnderstanding(datasetId, {
+      signal: controller.signal,
+      etag: cached?.etag || '',
+    }).then((result) => {
+      if (!active) return;
+      const resolved = result.notModified ? cached : { data: result.data, etag: result.etag };
+      if (!resolved?.data) {
+        throw new Error('语义理解接口返回 304，但浏览器没有可复用快照。');
+      }
+      datasetUnderstandingCacheRef.current.set(datasetId, resolved);
+      setDatasetUnderstandingState({
+        datasetId,
+        status: resolved.data.status === 'empty' ? 'empty' : 'ready',
+        data: resolved.data,
+        error: '',
+      });
+    }).catch((loadError) => {
+      if (!active || loadError?.name === 'AbortError') return;
+      setDatasetUnderstandingState({
+        datasetId,
+        status: 'failed',
+        data: cached?.data || null,
+        error: loadError instanceof Error ? loadError.message : '数据集语义理解加载失败',
+      });
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selectedDatasetId]);
   const selectedAssetLibrary = useMemo(
     () => selectedAssetLibraryView(assetLibraries, selectedAssetLibraryId),
     [assetLibraries, selectedAssetLibraryId],
@@ -4606,6 +4663,7 @@ export default function HomePageClient() {
     onRefreshAssetLibraries: () => refreshAssetLibraries({ silent: false }),
     selectedDatasetId,
     selectedDatasetIds,
+    datasetUnderstandingState,
     onSelectDataset: sidebarProps.onSelectDataset,
     onClearDatasetSelection: sidebarProps.onClearDatasetSelection,
     datasetDraft,
@@ -4650,7 +4708,7 @@ export default function HomePageClient() {
     />
   );
 
-  if (mobileViewport) {
+  if (mobileViewport && activePage === 'home') {
     return (
       <>
         <HomeMobileShell
@@ -4674,6 +4732,7 @@ export default function HomePageClient() {
           staticPageEditorOpen={staticPageEditorOpen}
           onStaticPageEditorOpenChange={setStaticPageEditorOpen}
           onApplyStaticPageOperation={handleApplyStaticPageOperation}
+          onOpenDatasetUnderstanding={() => handlePageChange('datasets')}
         />
         {uploadInput}
       </>
