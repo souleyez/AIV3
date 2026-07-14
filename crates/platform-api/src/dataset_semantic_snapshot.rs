@@ -448,15 +448,20 @@ pub fn build_dataset_semantic_snapshot(
             .iter()
             .flat_map(|item| item.evidence_refs.clone())
             .collect();
+        let source_count = group
+            .iter()
+            .map(|item| item.source_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
         objects.push(SemanticObject {
             id: object_id,
             kind: representative.object_kind.clone(),
             label,
             technical_name: representative.object_key.clone(),
-            description: format!("由 {} 条可追溯结构观察归纳。", group.len()),
+            description: format!("由 {source_count} 个来源记录的可追溯结构观察归纳。"),
             label_source: representative.label_source.clone(),
             confidence: representative.confidence,
-            coverage_count: group.len() as u64,
+            coverage_count: source_count,
             status: representative.status,
             evidence_refs,
         });
@@ -465,11 +470,22 @@ pub fn build_dataset_semantic_snapshot(
     let mut fields = Vec::new();
     let mut relation_fields = Vec::new();
     let mut containment = Vec::new();
+    let mut field_ids = BTreeMap::<(String, String), String>::new();
+    let mut field_observations = BTreeMap::<(String, String), Vec<&SemanticObservation>>::new();
     for observation in observations
         .iter()
         .filter(|item| matches!(item.observation_kind.as_str(), "field" | "fact"))
     {
-        let group_key = object_group_key(observation);
+        field_observations
+            .entry((
+                object_group_key(observation),
+                observation.technical_name.trim().to_ascii_lowercase(),
+            ))
+            .or_default()
+            .push(observation);
+    }
+    for ((group_key, _), group) in field_observations {
+        let observation = group[0];
         let Some(object_id) = object_ids.get(&group_key) else {
             continue;
         };
@@ -478,37 +494,76 @@ pub fn build_dataset_semantic_snapshot(
             observation.object_key.trim().to_ascii_lowercase(),
             observation.technical_name.trim().to_ascii_lowercase(),
         );
-        let resolution = resolve_semantic_label(&SemanticLabelInput {
-            raw_field_key: observation.technical_name.clone(),
-            confirmed_dictionary: dictionary.get(&dictionary_key).cloned(),
-            source_comment: if observation.label_source == "source_comment" {
-                observation.label_hint.clone()
-            } else {
-                None
-            },
-            reviewed_template: if observation.label_source == "reviewed_template" {
-                observation.label_hint.clone()
-            } else {
-                None
-            },
-            model_suggestion: if observation.status == SemanticStatus::Inferred {
-                observation.label_hint.as_ref().map(|label| LabelCandidate {
+        let observed_values = group
+            .iter()
+            .flat_map(|item| item.observed_values.iter().cloned())
+            .collect::<Vec<_>>();
+        let source_comment = group
+            .iter()
+            .find(|item| item.label_source == "source_comment")
+            .and_then(|item| item.label_hint.clone());
+        let reviewed_template = group
+            .iter()
+            .find(|item| item.label_source == "reviewed_template")
+            .and_then(|item| item.label_hint.clone());
+        let model_suggestion = group
+            .iter()
+            .filter(|item| item.status == SemanticStatus::Inferred)
+            .max_by(|left, right| {
+                left.confidence
+                    .partial_cmp(&right.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| right.id.cmp(&left.id))
+            })
+            .and_then(|item| {
+                item.label_hint.as_ref().map(|label| LabelCandidate {
                     label: label.clone(),
                     description: None,
                     status: "suggested".to_string(),
-                    confidence: observation.confidence,
+                    confidence: item.confidence,
                 })
-            } else {
-                None
-            },
-            observed_values: observation.observed_values.clone(),
-            declared_value_type: observation.value_type.clone(),
+            });
+        let declared_value_type = dominant_value_type(&group);
+        let resolution = resolve_semantic_label(&SemanticLabelInput {
+            raw_field_key: observation.technical_name.clone(),
+            confirmed_dictionary: dictionary.get(&dictionary_key).cloned(),
+            source_comment,
+            reviewed_template,
+            model_suggestion,
+            observed_values: observed_values.clone(),
+            declared_value_type,
         });
         let field_id = stable_semantic_id(
             "field",
             &[object_id, &observation.technical_name.to_ascii_lowercase()],
         );
-        let distinct_count = resolution.examples.iter().collect::<BTreeSet<_>>().len() as u64;
+        field_ids.insert(
+            (
+                group_key.clone(),
+                observation.technical_name.trim().to_ascii_lowercase(),
+            ),
+            field_id.clone(),
+        );
+        let distinct_count = observed_values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
+        let non_empty_count = observed_values
+            .iter()
+            .filter(|value| !value.trim().is_empty())
+            .count() as u64;
+        let total_count = group
+            .iter()
+            .map(|item| item.source_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
+        let is_fact = group.iter().any(|item| item.observation_kind == "fact");
+        let evidence_refs = group
+            .iter()
+            .flat_map(|item| item.evidence_refs.clone())
+            .collect::<Vec<_>>();
         fields.push(SemanticField {
             id: field_id.clone(),
             object_id: object_id.clone(),
@@ -516,25 +571,21 @@ pub fn build_dataset_semantic_snapshot(
             technical_name: resolution.technical_name.clone(),
             semantic_role: resolution.semantic_role.as_str().to_string(),
             value_type: resolution.value_type.clone(),
-            non_empty_count: observation.observed_values.len() as u64,
+            non_empty_count,
             distinct_count,
             examples: resolution.examples.clone(),
-            status: if observation.observation_kind == "fact" {
+            status: if is_fact {
                 SemanticStatus::Confirmed
             } else {
                 resolution.status
             },
-            label_source: if observation.observation_kind == "fact" {
+            label_source: if is_fact {
                 "document_fact".to_string()
             } else {
                 resolution.label_source.clone()
             },
-            confidence: if observation.observation_kind == "fact" {
-                1.0
-            } else {
-                resolution.confidence
-            },
-            evidence_refs: observation.evidence_refs.clone(),
+            confidence: if is_fact { 1.0 } else { resolution.confidence },
+            evidence_refs: evidence_refs.clone(),
         });
         relation_fields.push(RelationFieldProfile {
             id: field_id.clone(),
@@ -542,23 +593,28 @@ pub fn build_dataset_semantic_snapshot(
             technical_name: resolution.technical_name,
             value_type: resolution.value_type,
             semantic_role: resolution.semantic_role,
-            non_empty_count: observation.observed_values.len() as u64,
-            total_count: observation.observed_values.len().max(1) as u64,
+            non_empty_count,
+            total_count: total_count.max(1),
             distinct_count,
             examples: resolution.examples,
             sensitive: false,
-            evidence_refs: observation.evidence_refs.clone(),
+            evidence_refs: evidence_refs.clone(),
         });
         containment.push(ExplicitRelationEvidence::new(
             object_id,
             &field_id,
             ExplicitRelationKind::Contains,
             "解析结构直接表明该字段或事实属于此业务对象。",
-            observation.evidence_refs.clone(),
+            evidence_refs,
         ));
     }
 
     let mut explicit_relations = input.explicit_relations.clone();
+    explicit_relations.extend(constraint_relations(
+        &observations,
+        &object_observations,
+        &field_ids,
+    ));
     explicit_relations.extend(containment);
     let relations = build_semantic_relations(&explicit_relations, &relation_fields);
 
@@ -636,10 +692,101 @@ pub fn semantic_snapshot_failure_fallback(
 }
 
 fn object_group_key(observation: &SemanticObservation) -> String {
-    format!(
-        "{}|{}|{}",
-        observation.object_kind, observation.source_id, observation.object_key
-    )
+    if observation.object_kind == "database_table" {
+        format!("{}|{}", observation.object_kind, observation.object_key)
+    } else {
+        format!(
+            "{}|{}|{}",
+            observation.object_kind, observation.source_id, observation.object_key
+        )
+    }
+}
+
+fn dominant_value_type(observations: &[&SemanticObservation]) -> Option<String> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for value_type in observations
+        .iter()
+        .filter_map(|item| item.value_type.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+    {
+        *counts.entry(value_type).or_default() += 1;
+    }
+    let mut selected = None;
+    for (value_type, count) in counts {
+        if selected
+            .as_ref()
+            .is_none_or(|(_, selected_count)| count > *selected_count)
+        {
+            selected = Some((value_type, count));
+        }
+    }
+    selected.map(|(value_type, _)| value_type)
+}
+
+fn constraint_relations(
+    observations: &[SemanticObservation],
+    object_observations: &BTreeMap<String, Vec<&SemanticObservation>>,
+    field_ids: &BTreeMap<(String, String), String>,
+) -> Vec<ExplicitRelationEvidence> {
+    let database_groups = object_observations
+        .iter()
+        .filter_map(|(group_key, group)| {
+            let observation = group.first()?;
+            (observation.object_kind == "database_table").then_some((
+                group_key.as_str(),
+                observation.object_key.trim().to_ascii_lowercase(),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    observations
+        .iter()
+        .filter(|item| item.observation_kind == "constraint")
+        .filter_map(|constraint| {
+            let reference = constraint
+                .attributes
+                .get("references")
+                .and_then(Value::as_str)
+                .or(constraint.label_hint.as_deref())?
+                .trim();
+            let (target_object_key, target_field_key) = reference.rsplit_once('.')?;
+            let target_table = target_object_key
+                .rsplit('.')
+                .next()
+                .unwrap_or(target_object_key)
+                .trim()
+                .to_ascii_lowercase();
+            let target_group = database_groups
+                .iter()
+                .find(|(_, object_key)| {
+                    object_key.as_str() == target_object_key.trim().to_ascii_lowercase()
+                })
+                .or_else(|| {
+                    database_groups
+                        .iter()
+                        .find(|(_, object_key)| object_key.as_str() == target_table)
+                })?
+                .0;
+            let source_group = object_group_key(constraint);
+            let source_id = field_ids.get(&(
+                source_group,
+                constraint.technical_name.trim().to_ascii_lowercase(),
+            ))?;
+            let target_id = field_ids.get(&(
+                target_group.to_string(),
+                target_field_key.trim().to_ascii_lowercase(),
+            ))?;
+            Some(ExplicitRelationEvidence::new(
+                source_id,
+                target_id,
+                ExplicitRelationKind::ForeignKey,
+                "源数据库外键约束明确关联这两个字段。",
+                constraint.evidence_refs.clone(),
+            ))
+        })
+        .collect()
 }
 
 fn build_source_groups(
@@ -823,6 +970,13 @@ mod tests {
         assert!(!left.objects.is_empty());
         assert!(!left.fields.is_empty());
         assert!(!left.relations.is_empty());
+        assert_eq!(
+            left.pipeline
+                .iter()
+                .map(|stage| stage.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["source", "structure", "labels", "relations", "facts"]
+        );
     }
 
     #[test]
@@ -837,6 +991,122 @@ mod tests {
 
         assert!(!snapshot.summary.headline.contains("cardparentname"));
         assert!(snapshot.summary.headline.contains("1 类来源"));
+    }
+
+    #[test]
+    fn database_rows_collapse_into_one_business_object_and_aggregate_field_coverage() {
+        let mut input = fixture_input();
+        input.observations = [
+            (
+                "row-1",
+                json!({"contract_id": "C-001", "rent_amount": 1200}),
+            ),
+            (
+                "row-2",
+                json!({"contract_id": "C-002", "rent_amount": 1800}),
+            ),
+            ("row-3", json!({"contract_id": null, "rent_amount": 1800})),
+        ]
+        .into_iter()
+        .flat_map(|(source_id, fields)| {
+            adapt_semantic_profile(&SemanticProfileInput {
+                source_id: source_id.to_string(),
+                source_kind: "database".to_string(),
+                title: "租赁合同".to_string(),
+                metadata: json!({"parse_metadata": {
+                    "source_table": "lease_contract",
+                    "fields": fields,
+                    "field_comments": {
+                        "contract_id": "合同编号",
+                        "rent_amount": "租金金额"
+                    }
+                }}),
+                facts: Vec::new(),
+                evidence_labels: vec![format!("结构解析:{source_id}")],
+            })
+        })
+        .collect();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let contract_id = snapshot
+            .fields
+            .iter()
+            .find(|field| field.technical_name == "contract_id")
+            .expect("aggregated contract id field");
+        let rent_amount = snapshot
+            .fields
+            .iter()
+            .find(|field| field.technical_name == "rent_amount")
+            .expect("aggregated rent field");
+
+        assert_eq!(snapshot.objects.len(), 1);
+        assert_eq!(snapshot.objects[0].coverage_count, 3);
+        assert_eq!(snapshot.fields.len(), 2);
+        assert_eq!(contract_id.non_empty_count, 2);
+        assert_eq!(contract_id.distinct_count, 2);
+        assert_eq!(contract_id.examples, vec!["C-001", "C-002"]);
+        assert_eq!(rent_amount.non_empty_count, 3);
+        assert_eq!(rent_amount.distinct_count, 2);
+        assert_eq!(snapshot.relations.len(), 2);
+    }
+
+    #[test]
+    fn database_foreign_key_constraint_becomes_a_confirmed_field_relation() {
+        let mut input = fixture_input();
+        let contract = SemanticProfileInput {
+            source_id: "db:lease_contract".to_string(),
+            source_kind: "database".to_string(),
+            title: "租赁合同".to_string(),
+            metadata: json!({"parse_metadata": {
+                "source_table": "lease_contract",
+                "fields": {"contract_id": "C-001", "store_id": "S-01"},
+                "field_comments": {"contract_id": "合同编号", "store_id": "门店编号"},
+                "foreign_keys": [{"field": "store_id", "references": "store.id"}]
+            }}),
+            facts: Vec::new(),
+            evidence_labels: vec!["租赁合同约束".to_string()],
+        };
+        let store = SemanticProfileInput {
+            source_id: "db:store".to_string(),
+            source_kind: "database".to_string(),
+            title: "门店".to_string(),
+            metadata: json!({"parse_metadata": {
+                "source_table": "store",
+                "fields": {"id": "S-01", "name": "中环店"},
+                "field_comments": {"id": "门店编号", "name": "门店名称"}
+            }}),
+            facts: Vec::new(),
+            evidence_labels: vec!["门店结构".to_string()],
+        };
+        input.observations = adapt_semantic_profile(&contract)
+            .into_iter()
+            .chain(adapt_semantic_profile(&store))
+            .collect();
+
+        let snapshot = build_dataset_semantic_snapshot(&input);
+        let relation = snapshot
+            .relations
+            .iter()
+            .find(|relation| relation.relation_type == "foreign_key")
+            .expect("confirmed foreign-key relation");
+        let source = snapshot
+            .fields
+            .iter()
+            .find(|field| field.id == relation.source_id)
+            .expect("source field");
+        let target = snapshot
+            .fields
+            .iter()
+            .find(|field| field.id == relation.target_id)
+            .expect("target field");
+
+        assert_eq!(
+            relation.evidence_class,
+            crate::semantic_understanding::SemanticEvidenceClass::Confirmed
+        );
+        assert_eq!(relation.confidence, 1.0);
+        assert_eq!(source.technical_name, "store_id");
+        assert_eq!(target.technical_name, "id");
     }
 
     #[test]

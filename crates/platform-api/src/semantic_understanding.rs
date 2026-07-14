@@ -280,9 +280,24 @@ pub fn normalize_semantic_understanding(
     model
         .source_groups
         .dedup_by(|left, right| left.id == right.id);
-    model.pipeline.sort_by(|left, right| left.id.cmp(&right.id));
+    model.pipeline.sort_by(|left, right| {
+        pipeline_stage_rank(&left.id)
+            .cmp(&pipeline_stage_rank(&right.id))
+            .then_with(|| left.id.cmp(&right.id))
+    });
     model.pipeline.dedup_by(|left, right| left.id == right.id);
     model
+}
+
+fn pipeline_stage_rank(id: &str) -> u8 {
+    match id {
+        "source" => 0,
+        "structure" => 1,
+        "labels" => 2,
+        "relations" => 3,
+        "facts" => 4,
+        _ => 5,
+    }
 }
 
 fn normalized_confidence(value: f64) -> f64 {
