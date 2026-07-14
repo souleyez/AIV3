@@ -186,18 +186,28 @@ pub fn stable_semantic_id(prefix: &str, parts: &[&str]) -> String {
 }
 
 pub fn build_semantic_summary_headline(objects: &[SemanticObject], source_count: u64) -> String {
-    let labels = objects
-        .iter()
-        .filter(|object| {
-            matches!(
-                object.status,
-                SemanticStatus::Confirmed | SemanticStatus::Observed
-            )
-        })
-        .map(|object| object.label.trim())
-        .filter(|label| !label.is_empty() && label.chars().any(is_cjk))
-        .collect::<BTreeSet<_>>()
+    let mut ranked_labels = BTreeMap::<String, u8>::new();
+    for object in objects.iter().filter(|object| {
+        matches!(
+            object.status,
+            SemanticStatus::Confirmed | SemanticStatus::Observed
+        )
+    }) {
+        let label = object.label.trim();
+        if label.is_empty() || !label.chars().any(is_cjk) {
+            continue;
+        }
+        let rank = status_rank(object.status);
+        ranked_labels
+            .entry(label.to_string())
+            .and_modify(|current| *current = (*current).min(rank))
+            .or_insert(rank);
+    }
+    let mut labels = ranked_labels.into_iter().collect::<Vec<_>>();
+    labels.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    let labels = labels
         .into_iter()
+        .map(|(label, _)| label)
         .take(4)
         .collect::<Vec<_>>();
 
@@ -536,6 +546,26 @@ mod tests {
         assert!(headline.contains("租赁合同"));
         assert!(!headline.contains("cardparentname"));
         assert!(!headline.contains("technical_2"));
+    }
+
+    #[test]
+    fn semantic_summary_headline_prioritizes_confirmed_business_labels() {
+        let mut objects = ["北京门店", "广州门店", "上海门店", "深圳门店"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| SemanticObject {
+                label: label.to_string(),
+                ..object("document_section", index, SemanticStatus::Observed)
+            })
+            .collect::<Vec<_>>();
+        objects.push(SemanticObject {
+            label: "租赁合同".to_string(),
+            ..object("database_table", 9, SemanticStatus::Confirmed)
+        });
+
+        let headline = build_semantic_summary_headline(&objects, 5);
+
+        assert!(headline.contains("租赁合同"));
     }
 
     #[test]

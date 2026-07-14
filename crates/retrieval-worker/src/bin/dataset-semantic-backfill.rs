@@ -93,6 +93,12 @@ async fn main() -> Result<()> {
                 SemanticEvidenceClass::Inferred => (confirmed, observed, inferred + 1),
             },
         );
+        let database_source_object_count = preview
+            .snapshot
+            .objects
+            .iter()
+            .filter(|object| object.kind == "database_table")
+            .count();
         let manifest_bytes = serde_json::to_vec(&preview.snapshot)?.len();
         json!({
             "dry_run": true,
@@ -104,6 +110,8 @@ async fn main() -> Result<()> {
             "deduplicated_document_count": preview.source_document_count,
             "asset_count": preview.source_asset_count,
             "source_object_count": preview.snapshot.objects.len(),
+            "database_source_object_count": database_source_object_count,
+            "auxiliary_source_object_count": preview.snapshot.objects.len().saturating_sub(database_source_object_count),
             "field_count": preview.snapshot.fields.len(),
             "relation_count": preview.snapshot.relations.len(),
             "confirmed_relation_count": relation_counts.0,

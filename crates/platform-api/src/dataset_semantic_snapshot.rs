@@ -805,6 +805,11 @@ fn asset_is_derived_from_documents(
     asset: &storage::AssetItemRecord,
     scoped_document_ids: &BTreeSet<String>,
 ) -> bool {
+    if asset.asset_kind.eq_ignore_ascii_case("document")
+        || asset.source_kind.eq_ignore_ascii_case("document")
+    {
+        return true;
+    }
     let metadata_document_id = asset
         .metadata
         .get("document_id")
@@ -1387,6 +1392,7 @@ mod tests {
         assert!(asset_is_derived_from_documents(&asset, &scoped));
 
         let mut standalone = asset;
+        standalone.asset_kind = "image".to_string();
         standalone.source_kind = "asset_import".to_string();
         standalone.source_id = None;
         standalone.metadata = json!({});
