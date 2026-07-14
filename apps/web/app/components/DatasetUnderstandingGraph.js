@@ -1259,7 +1259,9 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <section>
             <h5>节点证据</h5>
             <div>
-              {model.nodes.slice(1).map((node) => (
+              {model.nodes.filter((node, index) => (
+                model.mode === 'cross' ? !node.rootDataset : index > 0
+              )).map((node) => (
                 <button
                   key={node.id}
                   type="button"
