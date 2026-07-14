@@ -340,6 +340,10 @@ fn reviewed_field_alias(raw: &str) -> Option<&'static str> {
         "origin id" => Some("来源记录标识"),
         "zlqj s" => Some("租赁期间开始"),
         "zlqj e" => Some("租赁期间结束"),
+        "business date" => Some("业务日期"),
+        "sales amount" => Some("销售金额"),
+        "store id" => Some("门店标识"),
+        "visitor count" => Some("客流数量"),
         _ => None,
     }
 }
@@ -732,6 +736,10 @@ mod tests {
             ("originId", "来源记录标识"),
             ("zlqj_s", "租赁期间开始"),
             ("zlqj_e", "租赁期间结束"),
+            ("business_date", "业务日期"),
+            ("salesAmount", "销售金额"),
+            ("store_id", "门店标识"),
+            ("visitor-count", "客流数量"),
         ] {
             let mut value = input();
             value.raw_field_key = raw.to_string();
