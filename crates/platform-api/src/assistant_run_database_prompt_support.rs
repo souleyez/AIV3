@@ -67,6 +67,28 @@ pub(crate) fn assistant_run_database_schema_mappings_for_prompt<'a>(
 }
 
 pub(crate) fn assistant_run_database_schema_overview_requested(prompt: &str) -> bool {
+    let concept_or_tutorial = prompt_has_any(
+        prompt,
+        &[
+            "什么是",
+            "是什么意思",
+            "怎么做",
+            "如何做",
+            "怎么查看",
+            "如何查看",
+            "设计原则",
+            "最佳实践",
+            "how to",
+            "what is",
+            "what does",
+            "tutorial",
+            "best practice",
+            "design principle",
+        ],
+    );
+    if concept_or_tutorial {
+        return false;
+    }
     let explicit_listing = prompt_has_any(
         prompt,
         &[
@@ -1055,10 +1077,20 @@ mod tests {
             "what is database schema",
             "how to design a database schema",
             "什么是数据库结构",
+            "what is a schema overview",
+            "how to list tables",
+            "schema overview best practices",
+            "怎么查看数据库结构",
         ] {
             assert!(
                 !assistant_run_database_schema_overview_requested(prompt),
                 "schema concept/tutorial question must not receive configured-table overview: {prompt}"
+            );
+        }
+        for prompt in ["请查看数据库结构", "请列出表", "schema overview"] {
+            assert!(
+                assistant_run_database_schema_overview_requested(prompt),
+                "explicit schema listing request should remain supported: {prompt}"
             );
         }
         for prompt in ["sales topic", "sales upgrade", "sales admin guide"] {
