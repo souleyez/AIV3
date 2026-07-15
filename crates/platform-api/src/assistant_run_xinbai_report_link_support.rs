@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use crate::{
     ascii_prompt_contains_any, external_channel_static_page_download_exports, prompt_contains_any,
     static_page_artifact_sibling_url, static_page_prompt_generated_artifact_urls,
+    static_page_prompt_negates_artifact_generation,
     static_page_prompt_requests_existing_artifact_revision,
 };
 
@@ -29,6 +30,75 @@ pub(crate) fn assistant_run_xinbai_published_report_link_answer(prompt: &str) ->
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>();
     if compact.is_empty() {
+        return None;
+    }
+    let lower_prompt = compact.to_ascii_lowercase();
+    let rejects_link_delivery = prompt_contains_any(
+        &compact,
+        &[
+            "不要返回",
+            "不用返回",
+            "别返回",
+            "不要发",
+            "不用发",
+            "别发",
+            "不要给",
+            "不用给",
+            "别给",
+            "不要提供",
+            "不用提供",
+            "别提供",
+            "不要打开",
+            "不用打开",
+            "别打开",
+            "不要查看",
+            "不用查看",
+            "别查看",
+            "不要展示",
+            "不用展示",
+            "别展示",
+            "不需要链接",
+            "不想要链接",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "do not send",
+            "don't send",
+            "do not return",
+            "don't return",
+            "no link",
+        ],
+    );
+    let asks_about_link = prompt.trim_end().ends_with('?')
+        || prompt.trim_end().ends_with('？')
+        || prompt.trim_end().ends_with('吗')
+        || prompt.trim_end().ends_with('么')
+        || prompt.trim_end().ends_with('呢')
+        || prompt_contains_any(
+            &compact,
+            &[
+                "为什么",
+                "为何",
+                "是什么",
+                "什么格式",
+                "打不开",
+                "权限",
+                "状态",
+                "是否",
+                "能不能",
+                "怎么",
+                "如何",
+            ],
+        )
+        || ascii_prompt_contains_any(
+            &lower_prompt,
+            &["why", "what", "how", "status", "permission"],
+        );
+    if static_page_prompt_negates_artifact_generation(prompt)
+        || rejects_link_delivery
+        || asks_about_link
+    {
         return None;
     }
     let strong_revision_signal = prompt_contains_any(
@@ -65,10 +135,7 @@ pub(crate) fn assistant_run_xinbai_published_report_link_answer(prompt: &str) ->
     }
     let compact_without_soft_punctuation =
         compact.replace(['/', '\\', '"', '\'', '“', '”', '‘', '’'], "");
-    let lower_prompt = compact.to_ascii_lowercase();
     let lower_without_soft_punctuation = compact_without_soft_punctuation.to_ascii_lowercase();
-    let exact_request = compact.contains("昨天/之前生成的新百报表链接")
-        || compact_without_soft_punctuation.contains("昨天之前生成的新百报表链接");
     let has_xinbai_signal = compact.contains("新百")
         || lower_prompt.contains("xinbai")
         || lower_prompt.contains("xin bai");
@@ -100,24 +167,25 @@ pub(crate) fn assistant_run_xinbai_published_report_link_answer(prompt: &str) ->
     let has_link_request = prompt_contains_any(
         &compact,
         &[
-            "链接",
             "地址",
-            "发",
+            "发我",
+            "发给",
             "给我",
             "给客户",
             "查看",
             "打开",
             "看看",
             "哪里",
+            "返回链接",
+            "提供链接",
+            "展示链接",
         ],
     ) || ascii_prompt_contains_any(
         &lower_without_soft_punctuation,
-        &["link", "url", "open", "send"],
+        &["open", "send", "where is", "give me"],
     );
 
-    if !(exact_request
-        || (has_xinbai_signal && has_report_signal && has_previous_signal && has_link_request))
-    {
+    if !(has_xinbai_signal && has_report_signal && has_previous_signal && has_link_request) {
         return None;
     }
 
@@ -211,9 +279,10 @@ mod tests {
 
     #[test]
     fn xinbai_report_link_artifacts_include_export_urls_and_external_card() {
-        let answer =
-            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
-                .expect("known customer phrase should return the published report link");
+        let answer = assistant_run_xinbai_published_report_link_answer(
+            "昨天/之前生成的新百报表链接发我看看",
+        )
+        .expect("known customer phrase should return the published report link");
         let artifacts = assistant_run_xinbai_report_link_output_artifacts(&answer, true);
 
         assert_eq!(artifacts.len(), 3);

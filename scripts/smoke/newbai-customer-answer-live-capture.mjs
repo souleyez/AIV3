@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -413,16 +415,38 @@ function collectStrings(value, keys, found = []) {
 }
 
 function extractArtifactLinks(response) {
-  return [...new Set(collectStrings(response, [
-    'artifact_links',
-    'artifactLinks',
-    'public_url',
-    'publicUrl',
+  const reply = response?.reply && typeof response.reply === 'object' ? response.reply : {};
+  const card = reply?.card && typeof reply.card === 'object' ? reply.card : {};
+  const explicitKind = `${reply.reply_type || reply.replyType || ''} ${reply.task_status || reply.taskStatus || ''} ${card.type || ''} ${card.status || ''}`;
+  const links = [
+    ...collectStrings({
+      artifact_links: reply.artifact_links,
+      artifactLinks: reply.artifactLinks,
+    }, ['artifact_links', 'artifactLinks']),
+  ];
+  if (/artifact|static[_-]?page|report_render|database-static-pages/i.test(explicitKind)) {
+    links.push(...collectStrings(card, [
+      'public_url',
+      'publicUrl',
+      'generated_artifact_url',
+      'generatedArtifactUrl',
+      'download_url',
+      'downloadUrl',
+    ]));
+  }
+  links.push(...collectStrings(response, [
     'generated_artifact_url',
     'generatedArtifactUrl',
-    'download_url',
-    'downloadUrl',
-  ]).filter((value) => /^https?:\/\//.test(value) || value.startsWith('/')))];
+  ]));
+  return [...new Set(links.filter((value) =>
+    (typeof value === 'string')
+    && (/^https?:\/\//.test(value) || value.startsWith('/'))
+    && (
+      /\/generated-artifacts\//i.test(value)
+      || /\/database-static-pages\//i.test(value)
+      || /artifact|static[_-]?page|report_render|database-static-pages/i.test(explicitKind)
+      || (reply.artifact_links || reply.artifactLinks)
+    )))];
 }
 
 function extractEvidence(response) {
@@ -475,18 +499,115 @@ function sideEffectsFromResponse(response) {
   };
 }
 
+function valuesForResponseKey(response, key) {
+  return findObjectsWithKey(response, key).map((container) => container[key]);
+}
+
+function recursivelyReportsSideEffect(value, insideSideEffectContainer = false) {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => recursivelyReportsSideEffect(item, insideSideEffectContainer));
+  }
+  return Object.entries(value).some(([key, nestedValue]) => {
+    const normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const nextInsideSideEffectContainer = insideSideEffectContainer
+      || normalizedKey === 'sideeffects';
+    const sideEffectKey = /(sideeffect|trigger|triggered|artifact|publish|enqueue|queued|workflow|job|draft|mutation|mutated|write|written|create|created|start|started|generate|generated|render|rendered|export|exported|update|updated)/i
+      .test(normalizedKey);
+    if (nestedValue === true && (nextInsideSideEffectContainer || sideEffectKey)) {
+      return true;
+    }
+    const statusLikeKey = normalizedKey === 'status' || normalizedKey.endsWith('status');
+    if (
+      typeof nestedValue === 'string'
+      && nestedValue.trim()
+      && (nextInsideSideEffectContainer || statusLikeKey)
+      && /(queued|enqueued|processing|started|published|generated|rendered|exported|created|written|mutated)/i
+        .test(nestedValue)
+    ) {
+      return true;
+    }
+    const executionIdentifierKey = /(execution|jobexecution|workflowexecution)(run)?id$/i
+      .test(normalizedKey);
+    if (
+      executionIdentifierKey
+      && ((typeof nestedValue === 'string' && nestedValue.trim()) || Number.isFinite(nestedValue))
+    ) {
+      return true;
+    }
+    return recursivelyReportsSideEffect(nestedValue, nextInsideSideEffectContainer);
+  });
+}
+
+function explicitSideEffectObservation(response) {
+  const artifactArrayCounts = valuesForResponseKey(response, 'artifacts')
+    .filter(Array.isArray)
+    .map((items) => items.length);
+  const artifactCounts = [
+    ...valuesForResponseKey(response, 'artifact_count'),
+    ...valuesForResponseKey(response, 'artifactCount'),
+  ]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const reportTriggered = [
+    ...valuesForResponseKey(response, 'report_triggered'),
+    ...valuesForResponseKey(response, 'reportTriggered'),
+  ].some((value) => value === true);
+  const sideEffectReported = recursivelyReportsSideEffect(response);
+  return {
+    artifact_count: Math.max(0, ...artifactArrayCounts, ...artifactCounts),
+    report_triggered: reportTriggered,
+    side_effect_reported: sideEffectReported,
+  };
+}
+
 function resultFromResponse(fixture, response) {
   const artifactLinks = extractArtifactLinks(response);
+  const explicitObservation = explicitSideEffectObservation(response);
+  const artifactCount = Math.max(artifactLinks.length, explicitObservation.artifact_count);
+  const artifacts = artifactLinks.map((url) => ({ url }));
+  while (artifacts.length < artifactCount) {
+    artifacts.push({ detected: true });
+  }
+  const sideEffects = sideEffectsFromResponse(response);
+  sideEffects.explicit_side_effect_reported = explicitObservation.side_effect_reported;
   return {
     case_id: fixture.case_id,
     answer: replyText(response),
     evidence: extractEvidence(response),
-    artifacts: artifactLinks.map((url) => ({ url })),
-    side_effects: sideEffectsFromResponse(response),
-    report_triggered: artifactLinks.length > 0
+    artifacts,
+    artifact_count: artifactCount,
+    side_effects: sideEffects,
+    report_triggered: explicitObservation.report_triggered
+      || artifactCount > 0
       || /artifact|static_page|report/i.test(
         `${response?.reply?.reply_type || ''} ${response?.reply?.task_status || ''} ${response?.reply?.card?.type || ''}`,
       ),
+  };
+}
+
+function hasCapturedSideEffect(item) {
+  const artifacts = Array.isArray(item?.artifacts) ? item.artifacts : [];
+  const artifactCount = Number(item?.artifact_count || artifacts.length || 0);
+  const sideEffects = item?.side_effects && typeof item.side_effects === 'object'
+    ? item.side_effects
+    : {};
+  return item?.report_triggered === true
+    || artifactCount > 0
+    || recursivelyReportsSideEffect(sideEffects, true);
+}
+
+function summarizeCapturedSideEffects(items) {
+  const capturedItems = items.filter(hasCapturedSideEffect);
+  return {
+    detected: capturedItems.length > 0,
+    case_count: capturedItems.length,
+    artifact_count: capturedItems.reduce((sum, item) => {
+      const artifacts = Array.isArray(item?.artifacts) ? item.artifacts : [];
+      return sum + Number(item?.artifact_count || artifacts.length || 0);
+    }, 0),
   };
 }
 
@@ -495,8 +616,29 @@ async function writeJsonl(path, rows) {
   await writeFile(path, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8');
 }
 
+function evaluatorReceiptIntegrity(receipt, selectedCases) {
+  const expectedCaseIds = selectedCases.map((fixture) => fixture.case_id).sort();
+  const receiptCases = Array.isArray(receipt?.cases) ? receipt.cases : [];
+  const receiptCaseIds = receiptCases.map((item) => item?.case_id).filter(Boolean).sort();
+  const caseSetOk = JSON.stringify(receiptCaseIds) === JSON.stringify(expectedCaseIds);
+  const failedCaseCount = receiptCases.filter((item) => item?.passed !== true).length;
+  const passedCaseCount = receiptCases.filter((item) => item?.passed === true).length;
+  const allCasesPassed = receiptCases.length === expectedCaseIds.length
+    && receiptCases.every((item) => item?.passed === true);
+  const countConsistencyOk = Number(receipt?.failed_case_count) === failedCaseCount
+    && Number(receipt?.passed_case_count) === passedCaseCount
+    && Number(receipt?.case_count) === receiptCases.length;
+  return {
+    caseSetOk,
+    allCasesPassed,
+    countConsistencyOk,
+    failedCaseCount,
+    passedCaseCount,
+  };
+}
+
 function runEvaluator(args, resultJsonl, runId, selectedCases) {
-  const evaluatorDir = join(args.outputDir, 'evaluator');
+  const evaluatorDir = join(args.outputDir, 'evaluator', runId);
   const command = [
     'scripts/smoke/newbai-customer-answer.mjs',
     '--fixture',
@@ -516,10 +658,60 @@ function runEvaluator(args, resultJsonl, runId, selectedCases) {
     cwd: process.cwd(),
     encoding: 'utf8',
   });
+  let receipt = null;
+  let receiptPath = null;
+  let receiptError = null;
+  try {
+    const receiptNames = readdirSync(evaluatorDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => entry.name);
+    if (receiptNames.length !== 1) {
+      throw new Error(`expected exactly one evaluator JSON receipt, found ${receiptNames.length}`);
+    }
+    receiptPath = join(evaluatorDir, receiptNames[0]);
+    receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+  } catch (error) {
+    receiptError = error instanceof Error ? error.message : String(error);
+  }
+  const processOk = result.status === 0 && !result.error;
+  const reportOk = receipt?.ok === true;
+  const diagnosticMatch = receipt?.diagnostic_match === true;
+  const permanentlyNonDecision = receipt?.decision_eligible === false;
+  const evaluationClassOk = receipt?.evaluation_class === EVALUATION_CLASS;
+  const receiptIntegrity = evaluatorReceiptIntegrity(receipt, selectedCases);
   return {
     run: true,
-    ok: result.status === 0,
+    ok: processOk
+      && reportOk
+      && diagnosticMatch
+      && permanentlyNonDecision
+      && evaluationClassOk
+      && receiptIntegrity.caseSetOk
+      && receiptIntegrity.allCasesPassed
+      && receiptIntegrity.countConsistencyOk,
     status: result.status,
+    process_ok: processOk,
+    process_error: result.error
+      ? result.error instanceof Error ? result.error.message : String(result.error)
+      : null,
+    report_ok: reportOk,
+    diagnostic_match: diagnosticMatch,
+    evaluation_class_ok: evaluationClassOk,
+    case_set_ok: receiptIntegrity.caseSetOk,
+    all_cases_passed: receiptIntegrity.allCasesPassed,
+    count_consistency_ok: receiptIntegrity.countConsistencyOk,
+    decision_eligible: receipt?.decision_eligible ?? null,
+    evaluation_class: receipt?.evaluation_class || null,
+    failed_cases: Array.isArray(receipt?.cases)
+      ? receipt.cases
+        .filter((item) => item?.passed === false)
+        .map((item) => ({
+          case_id: item.case_id,
+          failure_reasons: Array.isArray(item.failure_reasons) ? item.failure_reasons : [],
+        }))
+      : [],
+    receipt_json: receiptPath,
+    receipt_error: receiptError,
     command: `${process.execPath} ${command.join(' ')}`,
     stdout: String(result.stdout || '').slice(0, 1000),
     stderr: String(result.stderr || '').slice(0, 1000),
@@ -543,6 +735,8 @@ function renderMarkdown(report) {
     `- Execution safety evidence: ${report.execution_safety_evidence_status}`,
     `- Result JSONL: ${report.result_jsonl || 'none'}`,
     `- Legacy evaluator: ${report.evaluator?.run ? (report.evaluator.ok ? 'passed' : 'failed') : 'not run'}`,
+    `- Evaluator diagnostic match: ${report.evaluator?.run ? report.evaluator.diagnostic_match : 'not run'}`,
+    `- Captured template/report side effect: ${report.safety?.captured_side_effect_detected ?? false}`,
     `- Promotion blockers: ${report.promotion_blockers.join(', ')}`,
     '',
     '## Cases',
@@ -557,20 +751,22 @@ function renderMarkdown(report) {
 
 function buildSummary(report) {
   const cases = Array.isArray(report.cases) ? report.cases : [];
+  const mode = String(report.mode || '');
   const evaluatorRun = report.evaluator?.run === true;
-  const evaluatorOk = !evaluatorRun || report.evaluator?.ok === true;
+  const evaluatorOk = evaluatorRun ? report.evaluator?.ok === true : mode !== 'live';
   const failedCaseCount = cases.filter((item) => item.status === 'failed').length;
   const capturedCaseCount = cases.filter((item) => item.status === 'captured').length;
   const sampleCaseCount = cases.filter((item) => item.status === 'sample_result').length;
   const plannedCaseCount = cases.filter((item) =>
     item.status === 'planned' || item.status === 'template_guard_requires_explicit_live_approval',
   ).length;
-  const mode = String(report.mode || '');
+  const capturedSideEffects = summarizeCapturedSideEffects(cases);
   const checks = {
     baseOkPreserved: report.ok === true,
     selectedCasesPresent: Number(report.selected_case_count || 0) > 0
       && cases.length === Number(report.selected_case_count || 0),
     evaluatorPassedWhenRun: evaluatorOk,
+    evaluatorRequiredForLiveQuality: mode !== 'live' || evaluatorRun,
     noFailedLiveCases: mode !== 'live' || failedCaseCount === 0,
     liveResultJsonlPresent: mode !== 'live' || Boolean(report.result_jsonl),
     selfTestResultJsonlPresent: mode !== 'self-test' || Boolean(report.result_jsonl),
@@ -583,6 +779,7 @@ function buildSummary(report) {
         && report.safety?.provider_live_allowed === true
       ),
     noStaticPagePublishRequested: report.safety?.static_page_publish_requested === false,
+    noCapturedTemplateOrReportSideEffects: mode !== 'live' || !capturedSideEffects.detected,
     bearerNotIncludedInReport: report.safety?.bearer_included_in_report === false,
     orchestrationFieldsAbsent: cases.every((item) => item.orchestration_field_count === 0),
     permanentlyNonDecision: report.decision_eligible === false
@@ -605,6 +802,8 @@ function buildSummary(report) {
     evaluator_run: evaluatorRun,
     evaluator_ok: evaluatorOk,
     result_jsonl_present: Boolean(report.result_jsonl),
+    captured_side_effect_case_count: capturedSideEffects.case_count,
+    captured_artifact_count: capturedSideEffects.artifact_count,
     evaluation_class: EVALUATION_CLASS,
     decision_eligible: false,
   };
@@ -618,6 +817,262 @@ async function runSelfTest(args, fixtures, selectedCases, runId) {
   const evaluator = args.evaluate
     ? runEvaluator({ ...args, requireReady: true }, resultJsonl, runId, selectedCases)
     : { run: false };
+
+  const mixedFixture = fixtures.find((fixture) => fixture.case_id === 'newbai-customer-012');
+  assert(mixedFixture, 'self-test requires the mixed database/document fixture');
+  const failClosedResultJsonl = join(outputDir, `${runId}.fail-closed.results.jsonl`);
+  await writeJsonl(failClosedResultJsonl, [{
+    case_id: mixedFixture.case_id,
+    answer: mixedFixture.sample_result.answer,
+    evidence: [],
+    artifacts: [{ url: '/generated-artifacts/self-test' }],
+    report_triggered: true,
+    side_effects: {
+      static_page_published: true,
+      report_generation_enqueued: true,
+      new_template_generated: false,
+      html_fallback_used: false,
+    },
+  }]);
+  const failClosedEvaluator = args.evaluate
+    ? runEvaluator(
+      { ...args, requireReady: false },
+      failClosedResultJsonl,
+      `${runId}-fail-closed`,
+      [mixedFixture],
+    )
+    : { run: false };
+  const capturedSideEffectSummary = buildSummary({
+    ok: true,
+    mode: 'live',
+    run_id: `${runId}-captured-side-effect`,
+    result_jsonl: failClosedResultJsonl,
+    selected_case_count: 1,
+    total_fixture_case_count: fixtures.length,
+    decision_eligible: false,
+    evaluation_class: EVALUATION_CLASS,
+    promotion_blockers: [...PROMOTION_BLOCKERS],
+    evaluator: { run: true, ok: true },
+    safety: {
+      network_calls_run: true,
+      provider_live_allowed: true,
+      static_page_publish_requested: false,
+      bearer_included_in_report: false,
+    },
+    cases: [{
+      case_id: mixedFixture.case_id,
+      category: mixedFixture.category,
+      status: 'captured',
+      orchestration_field_count: 0,
+      artifact_count: 1,
+      report_triggered: true,
+      side_effects: {
+        static_page_published: true,
+        report_generation_enqueued: true,
+      },
+    }],
+  });
+  const liveWithoutEvaluatorSummary = buildSummary({
+    ok: true,
+    mode: 'live',
+    run_id: `${runId}-missing-evaluator`,
+    result_jsonl: failClosedResultJsonl,
+    selected_case_count: 1,
+    total_fixture_case_count: fixtures.length,
+    decision_eligible: false,
+    evaluation_class: EVALUATION_CLASS,
+    promotion_blockers: [...PROMOTION_BLOCKERS],
+    evaluator: { run: false },
+    safety: {
+      network_calls_run: true,
+      provider_live_allowed: true,
+      static_page_publish_requested: false,
+      bearer_included_in_report: false,
+    },
+    cases: [{
+      case_id: mixedFixture.case_id,
+      category: mixedFixture.category,
+      status: 'captured',
+      orchestration_field_count: 0,
+      artifact_count: 0,
+      report_triggered: false,
+      side_effects: {},
+    }],
+  });
+  const citationOnlyResult = resultFromResponse(mixedFixture, {
+    reply: {
+      reply_type: 'text',
+      text: '普通文档引用',
+      card: {
+        type: 'document_citation',
+        download_url: '/documents/example/download',
+      },
+    },
+    citations: [{ source: '/documents/example/download' }],
+  });
+  const explicitSideEffectResult = resultFromResponse(mixedFixture, {
+    reply: {
+      reply_type: 'text',
+      text: '看似普通的回答',
+    },
+    diagnostics: {
+      report_triggered: true,
+      artifact_count: 1,
+      artifacts: [{ kind: 'hidden-test-artifact' }],
+      side_effects: { workflow_enqueued: true },
+    },
+  });
+  const topLevelEnqueueResult = resultFromResponse(mixedFixture, {
+    reply: { reply_type: 'text', text: '普通回答' },
+    workflow_enqueued: true,
+  });
+  const nestedEnqueueResult = resultFromResponse(mixedFixture, {
+    reply: { reply_type: 'text', text: '普通回答' },
+    side_effects: { workflow: { enqueued: true } },
+  });
+  const canonicalGeneratedFlagsResult = resultFromResponse(mixedFixture, {
+    reply: { reply_type: 'text', text: '普通回答' },
+    diagnostics: {
+      new_template_generated: true,
+      report_rendered: true,
+      artifact_exported: true,
+      database_updated: true,
+      notification_triggered: true,
+    },
+  });
+  const queuedWorkflowReceiptResult = resultFromResponse(mixedFixture, {
+    reply: {
+      reply_type: 'card',
+      task_status: 'data_ingestion_analysis_queued',
+      card: { status: 'processing' },
+    },
+    codex_host_workflow_execution_id: 'workflow-execution-self-test',
+  });
+  const contradictoryReceiptIntegrity = evaluatorReceiptIntegrity({
+    ok: true,
+    diagnostic_match: true,
+    decision_eligible: false,
+    evaluation_class: EVALUATION_CLASS,
+    case_count: 1,
+    passed_case_count: 1,
+    failed_case_count: 0,
+    cases: [{ case_id: mixedFixture.case_id, passed: false }],
+  }, [mixedFixture]);
+  const postSideEffectFixture = fixtures.find((fixture) => fixture.case_id !== mixedFixture.case_id);
+  assert(postSideEffectFixture, 'self-test requires a second fixture for safety-abort coverage');
+  let safetyAbortSenderCallCount = 0;
+  const safetyAbortCapture = await captureLiveCases(
+    args,
+    [mixedFixture, postSideEffectFixture],
+    `${runId}-safety-abort`,
+    async () => {
+      safetyAbortSenderCallCount += 1;
+      return {
+        assistant_run_id: 'self-test-run',
+        reply: {
+          reply_type: 'artifact_link',
+          task_status: 'static_page_published',
+          artifact_links: ['/generated-artifacts/self-test/index.html'],
+        },
+      };
+    },
+  );
+  let uncertainAbortSenderCallCount = 0;
+  const uncertainAbortCapture = await captureLiveCases(
+    args,
+    [mixedFixture, postSideEffectFixture],
+    `${runId}-uncertain-abort`,
+    async () => {
+      uncertainAbortSenderCallCount += 1;
+      throw new Error('simulated request timeout after possible server acceptance');
+    },
+  );
+  let nestedSideEffectAbortSenderCallCount = 0;
+  const nestedSideEffectAbortCapture = await captureLiveCases(
+    args,
+    [mixedFixture, postSideEffectFixture],
+    `${runId}-nested-side-effect-abort`,
+    async () => {
+      nestedSideEffectAbortSenderCallCount += 1;
+      return {
+        reply: { reply_type: 'text', text: '普通回答' },
+        side_effects: { workflow: { enqueued: true } },
+      };
+    },
+  );
+  const regressionChecks = {
+    evaluatorProcessZeroInnerFailureIsNotGreen:
+      !args.evaluate
+      || (
+        failClosedEvaluator.status === 0
+        && failClosedEvaluator.process_ok === true
+        && failClosedEvaluator.report_ok === false
+        && failClosedEvaluator.diagnostic_match === false
+        && failClosedEvaluator.decision_eligible === false
+        && failClosedEvaluator.receipt_error === null
+        && failClosedEvaluator.receipt_json.includes(`${runId}-fail-closed`)
+        && failClosedEvaluator.ok === false
+        && failClosedEvaluator.failed_cases.some((item) =>
+          item.case_id === mixedFixture.case_id
+          && item.failure_reasons.includes('missing_required_evidence')
+          && item.failure_reasons.includes('template_or_report_side_effect'))
+      ),
+    capturedArtifactSideEffectIsNotGreen:
+      capturedSideEffectSummary.ok === false
+      && capturedSideEffectSummary.checks.noCapturedTemplateOrReportSideEffects === false,
+    liveWithoutEvaluatorIsNotQualityGreen:
+      liveWithoutEvaluatorSummary.ok === false
+      && liveWithoutEvaluatorSummary.checks.evaluatorRequiredForLiveQuality === false,
+    documentDownloadCitationIsNotArtifact:
+      citationOnlyResult.artifacts.length === 0
+      && citationOnlyResult.report_triggered === false,
+    explicitNestedSideEffectFlagsAreNotMissed:
+      explicitSideEffectResult.report_triggered === true
+      && explicitSideEffectResult.artifact_count === 1
+      && explicitSideEffectResult.artifacts.length === 1
+      && explicitSideEffectResult.side_effects.explicit_side_effect_reported === true,
+    topLevelAndDeepEnqueueFlagsAreNotMissed:
+      topLevelEnqueueResult.side_effects.explicit_side_effect_reported === true
+      && nestedEnqueueResult.side_effects.explicit_side_effect_reported === true,
+    generatedRenderedExportedAndQueuedReceiptsAreNotMissed:
+      canonicalGeneratedFlagsResult.side_effects.explicit_side_effect_reported === true
+      && queuedWorkflowReceiptResult.side_effects.explicit_side_effect_reported === true,
+    contradictoryEvaluatorReceiptIsNotGreen:
+      contradictoryReceiptIntegrity.caseSetOk === true
+      && contradictoryReceiptIntegrity.allCasesPassed === false
+      && contradictoryReceiptIntegrity.countConsistencyOk === false,
+    capturedSideEffectStopsLaterProviderCalls:
+      safetyAbortSenderCallCount === 1
+      && safetyAbortCapture.rows.length === 1
+      && safetyAbortCapture.safetyAborted === true
+      && safetyAbortCapture.cases.some((item) =>
+        item.case_id === postSideEffectFixture.case_id
+        && item.status === 'safety_aborted'),
+    requestErrorStopsLaterProviderCalls:
+      uncertainAbortSenderCallCount === 1
+      && uncertainAbortCapture.rows.length === 1
+      && uncertainAbortCapture.safetyAborted === true
+      && uncertainAbortCapture.safetyAbortReason === 'request_error_uncertain_side_effect'
+      && uncertainAbortCapture.cases.some((item) =>
+        item.case_id === postSideEffectFixture.case_id
+        && item.status === 'safety_aborted_uncertain_side_effect'),
+    nestedSideEffectStopsLaterProviderCalls:
+      nestedSideEffectAbortSenderCallCount === 1
+      && nestedSideEffectAbortCapture.rows.length === 1
+      && nestedSideEffectAbortCapture.safetyAborted === true
+      && nestedSideEffectAbortCapture.cases.some((item) =>
+        item.case_id === postSideEffectFixture.case_id
+        && item.status === 'safety_aborted'),
+  };
+  const failedRegressionChecks = Object.entries(regressionChecks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  assert.deepEqual(
+    failedRegressionChecks,
+    [],
+    `live capture fail-closed regressions failed: ${failedRegressionChecks.join(', ')}`,
+  );
+
   const report = {
     ok: !evaluator.run || evaluator.ok,
     mode: 'self-test',
@@ -626,6 +1081,26 @@ async function runSelfTest(args, fixtures, selectedCases, runId) {
     result_jsonl: resultJsonl,
     selected_case_count: selectedCases.length,
     total_fixture_case_count: fixtures.length,
+    self_test: {
+      checks: regressionChecks,
+      fail_closed_evaluator: args.evaluate ? {
+        process_ok: failClosedEvaluator.process_ok,
+        report_ok: failClosedEvaluator.report_ok,
+        diagnostic_match: failClosedEvaluator.diagnostic_match,
+        decision_eligible: failClosedEvaluator.decision_eligible,
+        ok: failClosedEvaluator.ok,
+        failed_cases: failClosedEvaluator.failed_cases,
+        receipt_json: failClosedEvaluator.receipt_json,
+        receipt_error: failClosedEvaluator.receipt_error,
+      } : { run: false },
+      captured_side_effect: {
+        ok: capturedSideEffectSummary.ok,
+        case_count: capturedSideEffectSummary.captured_side_effect_case_count,
+        artifact_count: capturedSideEffectSummary.captured_artifact_count,
+        no_captured_template_or_report_side_effects:
+          capturedSideEffectSummary.checks.noCapturedTemplateOrReportSideEffects,
+      },
+    },
     safety: {
       network_calls_run: false,
       provider_live_allowed: false,
@@ -682,14 +1157,16 @@ async function runPreflight(args, fixtures, selectedCases, runId) {
   return writeReport(args, report, runId);
 }
 
-async function runLive(args, fixtures, selectedCases, runId) {
+async function captureLiveCases(args, selectedCases, runId, sender = sendMessage) {
   const rows = [];
   const cases = [];
+  let safetyAborted = false;
+  let safetyAbortReason = null;
   for (const fixture of selectedCases) {
     const payload = buildPayload(args, fixture, runId);
     const startedAt = Date.now();
     try {
-      const response = await sendMessage(args, payload);
+      const response = await sender(args, payload);
       const row = resultFromResponse(fixture, response);
       rows.push(row);
       cases.push({
@@ -699,9 +1176,15 @@ async function runLive(args, fixtures, selectedCases, runId) {
         assistant_run_id_present: Boolean(response?.assistant_run_id),
         answer_chars: row.answer.length,
         evidence_count: row.evidence.length,
-        artifact_count: row.artifacts.length,
+        artifact_count: row.artifact_count,
+        report_triggered: row.report_triggered,
         side_effects: row.side_effects,
       });
+      if (hasCapturedSideEffect(row)) {
+        safetyAborted = true;
+        safetyAbortReason = 'captured_template_or_report_side_effect';
+        break;
+      }
     } catch (error) {
       rows.push({
         case_id: fixture.case_id,
@@ -722,9 +1205,40 @@ async function runLive(args, fixtures, selectedCases, runId) {
         latency_ms: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
+      safetyAborted = true;
+      safetyAbortReason = 'request_error_uncertain_side_effect';
+      break;
     }
   }
 
+  if (safetyAborted) {
+    const attemptedCaseIds = new Set(cases.map((item) => item.case_id));
+    for (const fixture of selectedCases) {
+      if (attemptedCaseIds.has(fixture.case_id)) {
+        continue;
+      }
+      cases.push({
+        case_id: fixture.case_id,
+        category: fixture.category,
+        prompt_sha256: sha256(fixture.prompt),
+        orchestration_field_count: 0,
+        status: safetyAbortReason === 'request_error_uncertain_side_effect'
+          ? 'safety_aborted_uncertain_side_effect'
+          : 'safety_aborted',
+        reason: safetyAbortReason,
+      });
+    }
+  }
+
+  return { rows, cases, safetyAborted, safetyAbortReason };
+}
+
+async function runLive(args, fixtures, selectedCases, runId) {
+  const { rows, cases, safetyAborted, safetyAbortReason } = await captureLiveCases(
+    args,
+    selectedCases,
+    runId,
+  );
   const outputDir = join(process.cwd(), args.outputDir);
   const resultJsonl = join(outputDir, `${runId}.results.jsonl`);
   await writeJsonl(resultJsonl, rows);
@@ -732,8 +1246,11 @@ async function runLive(args, fixtures, selectedCases, runId) {
     ? runEvaluator(args, resultJsonl, runId, selectedCases)
     : { run: false };
   const failedCaseCount = cases.filter((item) => item.status === 'failed').length;
+  const capturedSideEffects = summarizeCapturedSideEffects(cases);
   const report = {
-    ok: failedCaseCount === 0 && (!evaluator.run || evaluator.ok),
+    ok: failedCaseCount === 0
+      && (!evaluator.run || evaluator.ok)
+      && !capturedSideEffects.detected,
     mode: 'live',
     run_id: runId,
     fixture_path: args.fixturePath,
@@ -753,6 +1270,14 @@ async function runLive(args, fixtures, selectedCases, runId) {
       mutation_status: 'unknown',
       linked_execution_safety_receipt: false,
       static_page_publish_requested: false,
+      captured_side_effect_detected: capturedSideEffects.detected,
+      captured_side_effect_case_count: capturedSideEffects.case_count,
+      captured_artifact_count: capturedSideEffects.artifact_count,
+      aborted_after_captured_side_effect:
+        safetyAbortReason === 'captured_template_or_report_side_effect',
+      aborted_after_uncertain_request_error:
+        safetyAbortReason === 'request_error_uncertain_side_effect',
+      safety_abort_reason: safetyAbortReason,
       bearer_included_in_report: false,
     },
     evaluator,
@@ -786,6 +1311,7 @@ async function writeReport(args, report, runId) {
     report: reportPath,
     markdown: markdownPath,
     evaluator_ok: report.evaluator?.run ? report.evaluator.ok : null,
+    captured_side_effect_detected: report.safety?.captured_side_effect_detected ?? false,
   }, null, 2));
   if (!report.ok) {
     process.exitCode = 1;

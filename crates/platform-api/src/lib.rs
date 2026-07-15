@@ -22100,10 +22100,11 @@ async fn maybe_persist_external_channel_template_html_artifact(
     connection_id: &str,
     run_id: AssistantRunId,
     message: &ExternalBotMessageView,
+    prompt: &str,
     output_text: &str,
     now: DateTime<Utc>,
 ) -> std::result::Result<Option<ExternalChannelTemplateHtmlArtifact>, ApiError> {
-    if !external_channel_message_requests_template_html_artifact(message) {
+    if !external_channel_message_authorizes_template_html_artifact(message, prompt) {
         return Ok(None);
     }
     let Some(html) = extract_external_template_html_from_model_output(output_text) else {
@@ -22232,11 +22233,22 @@ fn external_channel_message_requests_template_html_artifact(
         })
 }
 
+fn external_channel_message_authorizes_template_html_artifact(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    external_channel_message_requests_template_html_artifact(message)
+        && external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+}
+
 fn external_channel_message_requests_static_page_artifact(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> bool {
     if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
+    if !external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
         return false;
     }
     if message.artifact_type.as_deref() == Some("static_page") {
@@ -22301,8 +22313,21 @@ fn external_channel_message_requests_static_page_artifact(
     )
 }
 
+fn external_channel_message_authorizes_static_page_template_prewarm(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+        && !external_channel_message_requests_static_page_artifact(message, prompt)
+        && !external_channel_message_requests_template_html_artifact(message)
+        && !external_channel_message_requests_data_ingestion_analysis(prompt)
+}
+
 pub(crate) fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) -> bool {
     if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
+    if !external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
         return false;
     }
     let compact = prompt
@@ -23281,9 +23306,10 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
     if !platform_env_flag("STATIC_PAGE_TEMPLATE_PREWARM_ENABLED", false) {
         return Ok(());
     }
-    if external_channel_message_requests_static_page_artifact(message, &assistant_request.prompt)
-        || external_channel_message_requests_data_ingestion_analysis(&assistant_request.prompt)
-    {
+    if !external_channel_message_authorizes_static_page_template_prewarm(
+        message,
+        &assistant_request.prompt,
+    ) {
         return Ok(());
     }
 
@@ -23452,34 +23478,7 @@ fn external_channel_static_page_template_stability_key(
 }
 
 pub(crate) fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    external_channel_text_has_any(
-        &compact,
-        prompt,
-        &[
-            "数据接入",
-            "入库",
-            "建表",
-            "字段映射",
-            "数据源",
-            "同步",
-            "数据库分析",
-            "导入",
-            "清洗",
-            "schema",
-            "etl",
-            "import",
-            "mapping",
-            "data ingestion",
-            "data-ingestion",
-            "staging plan",
-            "staging_plan",
-        ],
-    )
+    external_channel_prompt_explicitly_authorizes_data_ingestion(prompt)
 }
 
 fn collect_external_data_ingestion_database_source_ids(
@@ -23732,17 +23731,14 @@ async fn maybe_enqueue_external_channel_data_ingestion_analysis(
     force_tool_request: Option<&Value>,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
     let forced_by_model_tool = force_tool_request.is_some();
-    if !forced_by_model_tool
-        && !external_channel_message_requests_data_ingestion_analysis(&run.user_prompt)
-    {
-        return Ok(None);
-    }
-
     let prompt = if forced_by_model_tool {
         assistant_request.prompt.as_str()
     } else {
         run.user_prompt.as_str()
     };
+    if !external_channel_message_requests_data_ingestion_analysis(prompt) {
+        return Ok(None);
+    }
     let mut fixed_task = external_channel_data_ingestion_fixed_task(
         state.tenant_id,
         connection_id,
@@ -27449,23 +27445,499 @@ fn external_channel_model_tool_request(
     })
 }
 
+fn external_channel_output_contains_model_tool_request_tag(output_text: &str) -> bool {
+    let normalized = output_text
+        .to_ascii_lowercase()
+        .replace("&#95;", "_")
+        .replace("&#x5f;", "_");
+    let compact = normalized
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    compact
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-'))
+        .collect::<String>()
+        .contains("v3toolrequest")
+}
+
+fn external_channel_prompt_explicitly_authorizes_capability_action(
+    prompt: &str,
+    action_terms: &[&str],
+    required_target_terms: &[&str],
+) -> bool {
+    let prompt_ends_with_question =
+        prompt.trim_end().ends_with('?') || prompt.trim_end().ends_with('？');
+    let mut phrases = prompt.to_ascii_lowercase();
+    for separator in [
+        " and then ",
+        " then ",
+        " and ",
+        "同时",
+        "然后",
+        "并且",
+        "并",
+        "，",
+        ",",
+        "。",
+        ".",
+        "；",
+        ";",
+        "！",
+        "!",
+        "？",
+        "?",
+    ] {
+        phrases = phrases.replace(separator, "\n");
+    }
+
+    phrases.lines().any(|phrase| {
+        let compact = phrase
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        let term_position =
+            |term: &str| external_channel_phrase_term_position(phrase, &compact, term);
+        let Some(action_position) = action_terms
+            .iter()
+            .filter_map(|term| term_position(term))
+            .min()
+        else {
+            return false;
+        };
+        if !required_target_terms.is_empty()
+            && !required_target_terms
+                .iter()
+                .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if external_channel_phrase_is_action_completion_status(&compact, action_position) {
+            return false;
+        }
+        if ["有哪些", "howto", "tutorial"]
+            .iter()
+            .any(|term| term_position(term).is_some())
+            || ["方法", "教程", "做法", "流程", "示例", "例子"]
+                .iter()
+                .filter_map(|term| term_position(term))
+                .any(|position| position >= action_position)
+        {
+            return false;
+        }
+        if [
+            "不用了",
+            "不要了",
+            "算了",
+            "别做了",
+            "不做了",
+            "停止执行",
+            "取消执行",
+            "nevermind",
+            "cancelit",
+            "stopit",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+            || compact.ends_with("取消")
+        {
+            return false;
+        }
+        let explicitly_commanded = [
+            "请",
+            "帮我",
+            "麻烦",
+            "需要",
+            "我要",
+            "我想",
+            "我们要",
+            "我们想",
+            "想要",
+            "把",
+            "将",
+            "给我",
+            "开始",
+            "重新",
+            "立即",
+            "现在",
+            "please",
+            "i want",
+            "we need",
+            "let's",
+            "lets",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position);
+        if prompt_ends_with_question
+            || ["还是", "行不行", "要不要"]
+                .iter()
+                .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "查看",
+            "看看",
+            "了解",
+            "解释",
+            "说明",
+            "介绍",
+            "请问",
+            "问一下",
+            "想问",
+            "检查",
+            "核对",
+            "汇总",
+            "比较",
+            "盘点",
+            "回顾",
+            "分析",
+            "讨论",
+            "评估",
+            "研究",
+            "考虑",
+            "梳理",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position)
+        {
+            return false;
+        }
+        if [
+            "了解",
+            "状态",
+            "记录",
+            "进度",
+            "历史",
+            "结果",
+            "内容",
+            "说明",
+            "建议",
+            "计划",
+            "方案",
+            "步骤",
+            "规则",
+            "日志",
+            "详情",
+            "模板",
+            "的消息",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "为什么",
+            "为何",
+            "怎么",
+            "如何",
+            "是什么",
+            "什么意思",
+            "含义",
+            "原因",
+            "能不能",
+            "可不可以",
+            "是否",
+            "why",
+            "how",
+            "what",
+            "whether",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "不要", "不用", "无需", "无须", "不必", "别", "禁止", "do not", "don't", "dont",
+            "never", "without", "not",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position)
+        {
+            return false;
+        }
+        if [
+            "已经",
+            "之前",
+            "上次",
+            "曾经",
+            "已",
+            "already",
+            "previously",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position < action_position)
+        {
+            return false;
+        }
+
+        let failure_status = ["失败", "failed", "failure"]
+            .iter()
+            .any(|term| term_position(term).is_some());
+        if failure_status && !explicitly_commanded {
+            return false;
+        }
+
+        action_position == 0 || explicitly_commanded
+    })
+}
+
+fn external_channel_data_ingestion_actions_are_only_read_only_mentions(prompt: &str) -> bool {
+    let mut phrases = prompt.to_ascii_lowercase();
+    for separator in [
+        " and then ",
+        " then ",
+        " and ",
+        "同时",
+        "然后",
+        "并且",
+        "并",
+        "，",
+        ",",
+        "。",
+        ".",
+        "；",
+        ";",
+        "！",
+        "!",
+        "？",
+        "?",
+    ] {
+        phrases = phrases.replace(separator, "\n");
+    }
+
+    let action_terms = [
+        "导入数据",
+        "导入到",
+        "入库",
+        "建表",
+        "同步到",
+        "同步进",
+        "配置字段映射",
+        "创建字段映射",
+        "接入",
+        "导入",
+        "同步",
+        "清洗",
+        "createstaging",
+        "importdata",
+        "ingestdata",
+        "import",
+        "ingest",
+        "sync",
+    ];
+    let read_only_markers = [
+        "状态", "结果", "历史", "记录", "日志", "计划", "方案", "步骤", "规则", "方法", "教程",
+        "流程", "示例", "进度", "说明", "内容", "详情", "status", "result", "history", "log",
+        "plan", "method", "tutorial", "example",
+    ];
+    let mut saw_action = false;
+    for phrase in phrases.lines() {
+        let compact = phrase
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        if !action_terms.iter().any(|term| compact.contains(term)) {
+            continue;
+        }
+        saw_action = true;
+        if !read_only_markers
+            .iter()
+            .any(|marker| compact.contains(marker))
+        {
+            return false;
+        }
+    }
+    saw_action
+}
+
+fn external_channel_prompt_explicitly_authorizes_data_ingestion(prompt: &str) -> bool {
+    if external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
+        return false;
+    }
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let normalized = compact.to_ascii_lowercase();
+    if external_channel_data_ingestion_actions_are_only_read_only_mentions(prompt) {
+        return false;
+    }
+    if external_channel_text_has_any(&normalized, &compact, &["接入", "connect", "integrate"])
+        && external_channel_text_has_any(
+            &normalized,
+            &compact,
+            &[
+                "权限",
+                "授权",
+                "认证",
+                "账号",
+                "系统",
+                "oa",
+                "文档库",
+                "接口",
+                "permission",
+                "auth",
+                "system",
+            ],
+        )
+    {
+        return false;
+    }
+
+    external_channel_prompt_explicitly_authorizes_capability_action(
+        prompt,
+        &[
+            "导入数据",
+            "导入到",
+            "入库",
+            "建表",
+            "同步到",
+            "同步进",
+            "配置字段映射",
+            "创建字段映射",
+            "createstaging",
+            "importdata",
+            "ingestdata",
+        ],
+        &[],
+    ) || external_channel_prompt_explicitly_authorizes_capability_action(
+        prompt,
+        &["接入", "导入", "同步", "清洗", "import", "ingest", "sync"],
+        &[
+            "数据",
+            "这份表",
+            "这张表",
+            "数据表",
+            "表格",
+            "文件",
+            "数据库",
+            "数据源",
+            "schema",
+            "data",
+            "dataset",
+            "table",
+            "file",
+            "database",
+            "datasource",
+        ],
+    )
+}
+
+fn external_channel_model_tool_request_is_authorized_by_prompt(
+    tool_request: &ExternalChannelModelToolRequest,
+    prompt: &str,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let normalized = compact.to_ascii_lowercase();
+    let negated = external_channel_text_has_any(
+        &normalized,
+        &compact,
+        &[
+            "不要", "不用", "无需", "无须", "不必", "别", "donot", "don't", "dont",
+        ],
+    );
+    if negated {
+        return false;
+    }
+    match tool_request.tool {
+        ExternalChannelModelToolCapability::StaticPageArtifact => {
+            external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+        }
+        ExternalChannelModelToolCapability::DataIngestionAnalysis => {
+            external_channel_prompt_explicitly_authorizes_data_ingestion(prompt)
+        }
+        ExternalChannelModelToolCapability::DocumentProcessing => {
+            external_channel_prompt_explicitly_authorizes_document_processing(tool_request, prompt)
+        }
+        ExternalChannelModelToolCapability::CollectionSetupAnalysis => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &[
+                    "规划采集",
+                    "创建采集",
+                    "配置采集",
+                    "开始采集",
+                    "接入采集",
+                    "抓取",
+                    "爬取",
+                    "采集公开",
+                    "沉淀到资料库",
+                    "setupcollection",
+                    "startcollection",
+                    "crawl",
+                    "scrape",
+                ],
+                &[],
+            )
+        }
+        ExternalChannelModelToolCapability::IntegrationSetupAnalysis => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &["接入", "对接", "集成", "连接", "integrate", "connect"],
+                &[
+                    "系统",
+                    "oa",
+                    "api",
+                    "接口",
+                    "文档库",
+                    "数据库",
+                    "数据源",
+                    "权限",
+                    "system",
+                    "documentlibrary",
+                    "database",
+                ],
+            )
+        }
+        ExternalChannelModelToolCapability::MessageChannelOutreach => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &[
+                    "发消息",
+                    "发送消息",
+                    "主动联系",
+                    "通知店",
+                    "通知用户",
+                    "通知客户",
+                    "推送给",
+                    "发给",
+                    "sendmessage",
+                    "notifyuser",
+                    "notifycustomer",
+                ],
+                &[],
+            )
+        }
+    }
+}
+
 fn external_channel_model_tool_capability_guidance_lines(first_visible_turn: bool) -> Vec<String> {
     let mut lines = vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/API/表/文件接入需求并生成待确认 staging plan，接入结果必须明确一个目标 DataMax 数据集或提出一个待创建/绑定的数据集；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
-        "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
-        "经营数据问题中提到取高、经营状况、风险识别、销售缺口、需要助推的门店、统计/汇总/排行、临时合同面积/坪效、客流统计/客流同比时，可能需要同步生成或更新经营报表；如果客户同时在问具体名单、原因或统计结论，仍必须正常回答客户问题，不要用“已收到/正在处理”截断答案，宿主会旁路挂载报表产物。".to_string(),
+        "只有用户原话明确要求创建、生成、修改、渲染、导出或发布报表/页面/看板时，才可提出 `static_page_artifact`；查看、解释、引用、分析现有报告，询问模板、指标、名单、原因或统计结论，都属于普通问答，能力字段和模型判断不能替代用户授权。".to_string(),
+        "经营数据问题中提到取高、经营状况、风险识别、销售缺口、门店、统计/汇总/排行、合同面积/坪效、客流或同比时，必须正常回答客户问题；不要自行追加报表动作，不要用“已收到/正在处理”截断答案，也不要因为数据问题本身输出工具标签。".to_string(),
         "客户上传合同、客流表或模板文件并要求用于报表/静态页时，应把这些文件视为当前授权范围内的临时参考材料，用于补充坪效、客流同比、模板风格或模块排序；不要把它误判为 `document_processing`，除非用户明确要求解析状态、重解析、深解析或说资料无法读取。".to_string(),
         "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级解析或事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
     ];
     if first_visible_turn {
         lines.push(
-            "首轮能力触发规则：即使判断用户需要 DataMax 执行平台能力，也必须先给自然语言回复；本轮不要只输出 `<V3_TOOL_REQUEST>`。如果需要生成报表/静态页，正常回答业务结论和处理计划，宿主会旁路挂载或排队产物。"
+            "首轮能力触发规则：即使用户原话明确要求 DataMax 执行平台能力，也必须先给自然语言回复；本轮不要只输出 `<V3_TOOL_REQUEST>`。未获用户明确授权的动作不得提出或排队。"
                 .to_string(),
         );
     } else {
         lines.push(
-            "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。"
+            "只有用户原话明确要求 DataMax 执行上述能力时，才可只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"...\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`；`document_processing` 只允许与原话一致的 `status` 或 `reparse_request`，不得用通用 `create_or_update` 替代；普通问答不得提出工具请求，宿主仍会独立校验用户授权、权限和确认条件。"
                 .to_string(),
         );
     }
@@ -27545,6 +28017,99 @@ fn external_channel_document_processing_intent_requests_reparse(intent: &str) ->
             | "vlm_reparse"
             | "ocr_reparse"
     )
+}
+
+fn external_channel_document_processing_intent_requests_status(intent: &str) -> bool {
+    matches!(
+        intent,
+        "status" | "parse_status" | "check_status" | "inspect_status" | "query_status"
+    )
+}
+
+fn external_channel_prompt_explicitly_requests_document_parse_status(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let Some(status_position) = ["解析状态", "parsestatus"]
+        .iter()
+        .filter_map(|term| compact.find(term))
+        .min()
+    else {
+        return false;
+    };
+    if [
+        "不要", "不用", "无需", "无须", "不必", "别", "禁止", "donot", "don't", "dont", "never",
+        "without", "not",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+    {
+        return false;
+    }
+    if [
+        "解释",
+        "说明",
+        "介绍",
+        "为什么",
+        "为何",
+        "原因",
+        "含义",
+        "why",
+        "reason",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+    {
+        return false;
+    }
+    [
+        "查看",
+        "看看",
+        "查询",
+        "检查",
+        "确认",
+        "告诉我",
+        "给我",
+        "show",
+        "check",
+        "inspect",
+        "query",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+}
+
+fn external_channel_prompt_explicitly_authorizes_document_processing(
+    tool_request: &ExternalChannelModelToolRequest,
+    prompt: &str,
+) -> bool {
+    let intent = external_channel_document_processing_intent(tool_request);
+    if external_channel_document_processing_intent_requests_reparse(&intent) {
+        return external_channel_prompt_explicitly_authorizes_capability_action(
+            prompt,
+            &[
+                "重新解析",
+                "重解析",
+                "深解析",
+                "升级解析",
+                "ocr重解析",
+                "vlm重解析",
+                "reparse",
+                "deepparse",
+                "upgradeparse",
+            ],
+            &[],
+        );
+    }
+    if external_channel_document_processing_intent_requests_status(&intent) {
+        return external_channel_prompt_explicitly_requests_document_parse_status(prompt);
+    }
+    false
 }
 
 fn external_channel_document_processing_reparse_enabled() -> bool {
@@ -28093,6 +28658,22 @@ fn external_channel_document_processing_answer_retry_provider_input(base_input: 
     )
 }
 
+fn external_channel_unauthorized_tool_answer_retry_provider_input(
+    base_input: &str,
+    tool: ExternalChannelModelToolCapability,
+) -> String {
+    format!(
+        "{base_input}\n\n[宿主动作授权纠偏]\n上一轮模型提出了未经用户原话明确授权的 `{}` 能力请求。请基于原始问题和当前已授权供料给出自然语言答案；不要输出 <V3_TOOL_REQUEST>，不要创建、修改、发布、入库、重解析、采集、接入或发送消息，也不要替用户推断动作意图。",
+        tool.as_str()
+    )
+}
+
+fn external_channel_invalid_tool_answer_retry_provider_input(base_input: &str) -> String {
+    format!(
+        "{base_input}\n\n[宿主输出安全纠偏]\n上一轮输出包含无法识别、缺失闭合或不在允许目录中的内部工具标签。请基于原始问题和当前已授权供料给出自然语言答案；不要输出 <V3_TOOL_REQUEST>，不要暴露内部标签，也不要创建、修改、发布、入库、重解析、采集、接入或发送消息。"
+    )
+}
+
 fn external_channel_capability_text_from_payload(payload: &Value, keys: &[&str]) -> String {
     keys.iter()
         .filter_map(|key| payload.get(*key).and_then(Value::as_str))
@@ -28602,6 +29183,13 @@ async fn external_channel_dispatch_model_tool_request(
     runtime_manifest: &Value,
     tool_request: ExternalChannelModelToolRequest,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    if !external_channel_model_tool_request_is_authorized_by_prompt(
+        &tool_request,
+        &assistant_request.prompt,
+    ) {
+        return Ok(None);
+    }
+
     match tool_request.tool {
         ExternalChannelModelToolCapability::StaticPageArtifact => {
             let mut tool_message = message.clone();
@@ -29036,6 +29624,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
     let direct_reply_started_at = Instant::now();
     let direct_reply_total_budget = external_channel_direct_reply_total_budget();
     let mut document_processing_answer_retry_used = false;
+    let mut unauthorized_tool_answer_retry_used = false;
 
     let mut attempt_index = 0usize;
     while attempt_index < attempts.len() {
@@ -29489,7 +30078,107 @@ async fn external_channel_chat_model_or_acceptance_reply(
             .await?;
         }
 
-        if let Some(tool_request) = external_channel_model_tool_request(&output_text) {
+        let model_tool_request = external_channel_model_tool_request(&output_text);
+        if external_channel_output_contains_model_tool_request_tag(&output_text)
+            && model_tool_request.is_none()
+        {
+            rejected_attempts.push(json!({
+                "attempt": attempt.label.as_str(),
+                "runtime_mode": attempt.runtime.mode.as_str(),
+                "provider": attempt.runtime.provider.as_str(),
+                "model": attempt.runtime.model.as_str(),
+                "reason": "model_tool_request_invalid_or_unknown",
+                "runtime": runtime_manifest.clone(),
+            }));
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_rejected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt.label.as_str(),
+                            "reason": "invalid_or_unknown_internal_tool_tag",
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            if !unauthorized_tool_answer_retry_used {
+                unauthorized_tool_answer_retry_used = true;
+                if let Some(sink) = answer_delta_sink.as_ref() {
+                    sink.emit_answer_retrying("invalid_model_tool_request");
+                }
+                let mut retry_attempt = attempt.clone();
+                retry_attempt.label = format!("{}_safe_answer_retry", retry_attempt.label);
+                attempts.insert(attempt_index, retry_attempt);
+                provider_input =
+                    external_channel_invalid_tool_answer_retry_provider_input(&provider_input);
+            }
+            continue;
+        }
+        if let Some(tool_request) = model_tool_request {
+            if !external_channel_model_tool_request_is_authorized_by_prompt(
+                &tool_request,
+                &assistant_request.prompt,
+            ) {
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label.as_str(),
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": "model_tool_request_not_authorized_by_user_prompt",
+                    "tool": tool_request.tool.as_str(),
+                    "runtime": runtime_manifest.clone(),
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name:
+                                "assistant_run.external_channel_model_tool_request_rejected"
+                                    .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label.as_str(),
+                                "tool": tool_request.tool.as_str(),
+                                "reason": "user_prompt_did_not_authorize_action",
+                                "runtime": runtime_manifest.clone(),
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                if !unauthorized_tool_answer_retry_used {
+                    unauthorized_tool_answer_retry_used = true;
+                    if let Some(sink) = answer_delta_sink.as_ref() {
+                        sink.emit_answer_retrying("unauthorized_model_tool_request");
+                    }
+                    let mut retry_attempt = attempt.clone();
+                    retry_attempt.label =
+                        format!("{}_authorized_answer_retry", retry_attempt.label);
+                    attempts.insert(attempt_index, retry_attempt);
+                    provider_input = external_channel_unauthorized_tool_answer_retry_provider_input(
+                        &provider_input,
+                        tool_request.tool,
+                    );
+                }
+                continue;
+            }
             if external_channel_document_processing_tool_request_should_retry_as_answer(
                 &tool_request,
                 assistant_request,
@@ -29638,6 +30327,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
             connection_id,
             run_id,
             message,
+            &assistant_request.prompt,
             &output_text,
             now,
         )
@@ -41274,6 +41964,7 @@ async fn build_assistant_run_database_aggregate_supply(
         };
         let aggregate_plans = assistant_run_database_aggregate_dimension_plans(mapping, prompt);
         let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
+        let count_requested = assistant_run_database_count_aggregation_requested(prompt);
         let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
         supplied_items.push(assistant_run_database_schema_context_item(
             dataset,
@@ -41283,6 +41974,9 @@ async fn build_assistant_run_database_aggregate_supply(
             &metrics,
             scan_limit,
         ));
+        if metrics.is_empty() && !count_requested {
+            continue;
+        }
         let metric_requests = if metrics.is_empty() {
             vec![None]
         } else {
@@ -51497,9 +52191,10 @@ mod tests {
 
     #[test]
     fn xinbai_published_report_link_answer_matches_customer_phrase() {
-        let answer =
-            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
-                .expect("customer phrase should reuse published report");
+        let answer = assistant_run_xinbai_published_report_link_answer(
+            "昨天/之前生成的新百报表链接发我看看",
+        )
+        .expect("customer phrase should reuse published report");
         assert!(answer.contains("新世界百货经营管理月报表已生成"));
         assert!(answer.contains("[新世界百货经营管理月报表]("));
         assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
@@ -51744,6 +52439,29 @@ mod tests {
         assert!(
             assistant_run_xinbai_published_report_link_answer("新百报表怎么重新设计").is_none()
         );
+        assert!(
+            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
+                .is_none()
+        );
+        for prompt in [
+            "不要返回之前的新百报表链接",
+            "之前生成的新百报表链接不要发给我",
+            "之前的新百报表链接为什么打不开？",
+            "之前的新百报表链接是什么格式？",
+            "之前的新百报表链接有权限吗？",
+            "之前的新百报表链接可以打开吗？",
+            "之前生成的新百报告打开了吗？",
+            "不要打开之前的新百报表链接",
+        ] {
+            assert!(
+                assistant_run_xinbai_published_report_link_answer(prompt).is_none(),
+                "negated or explanatory link question must stay ordinary QA: {prompt}"
+            );
+        }
+        assert!(assistant_run_xinbai_published_report_link_answer(
+            "把之前生成的新百报表链接发我看看"
+        )
+        .is_some());
         assert!(assistant_run_xinbai_published_report_link_answer(
             "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 DataMax 产物链接，不覆盖旧页面。"
         )
@@ -51923,34 +52641,32 @@ mod tests {
         let prompt = "取高机会最大的店铺是哪几个，分别差多少";
 
         assert!(assistant_run_database_aggregate_requested(prompt));
-        assert_eq!(
-            assistant_run_database_aggregate_metrics(&mapping, prompt),
-            vec!["xuzengxiaoshou".to_string(), "quekou".to_string()]
-        );
+        assert!(assistant_run_database_aggregate_metrics(&mapping, prompt).is_empty());
         let plans = assistant_run_database_aggregate_dimension_plans(&mapping, prompt);
         assert!(plans.iter().any(|plan| {
             plan.role == "ranking" && plan.dimensions == vec!["shopdesc".to_string()]
         }));
         assert_eq!(
             assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
-            "asc"
+            "desc"
         );
         assert_eq!(
-            assistant_run_database_aggregate_sort_semantics(Some("xuzengxiaoshou"), "asc"),
-            Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
+            assistant_run_database_aggregate_sort_semantics(Some("xuzengxiaoshou"), "desc"),
+            None
         );
-        assert!(assistant_run_database_aggregate_summary(
+        let summary = assistant_run_database_aggregate_summary(
             &mapping,
             "ranking",
             &["shopdesc".to_string()],
             Some("xuzengxiaoshou"),
             "sum",
-            "asc",
+            "desc",
             Some("txdate"),
             5,
             Some(5000),
-        )
-        .contains("机会越靠前"));
+        );
+        assert!(!summary.contains("机会越靠前"));
+        assert!(!summary.contains("高分成线"));
         assert_eq!(
             assistant_run_database_aggregate_latest_time_column(
                 &mapping,
@@ -57867,7 +58583,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_reuses_accepted_dataset_artifact_baseline() {
+    async fn external_channel_static_page_keeps_existing_artifact_link_request_as_qa() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -57984,7 +58700,7 @@ mod tests {
             )
             .await
             .expect("baseline run should be created");
-        let baseline_draft = state
+        let _baseline_draft = state
             .storage
             .static_page_drafts()
             .create(
@@ -58043,22 +58759,12 @@ mod tests {
             now,
         )
         .await
-        .expect("static-page pipeline should complete")
-        .expect("static-page reply should be returned");
+        .expect("static-page pipeline gate should complete");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        let card = reply.card.expect("stable artifact card");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["download_url"], json!(public_url));
-        assert_eq!(card["html_download_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["draft_id"], json!(baseline_draft.id.to_string()));
-        assert_eq!(card["dataset_artifact_key"], json!(dataset_artifact_key));
-        assert_eq!(card["image2_skipped"], json!(true));
+        assert!(
+            reply.is_none(),
+            "a request to resend an existing artifact link must stay ordinary QA"
+        );
 
         let new_run_drafts = state
             .storage
@@ -58068,7 +58774,7 @@ mod tests {
             .expect("drafts should list");
         assert!(
             new_run_drafts.is_empty(),
-            "baseline reuse should not create a new draft or Image2 job"
+            "ordinary link request should not create a new draft or Image2 job"
         );
         let events = state
             .storage
@@ -58076,26 +58782,11 @@ mod tests {
             .list_events(state.tenant_id, run.id)
             .await
             .expect("events should list");
-        let reused = events
-            .iter()
-            .find(|event| {
-                event.event_name
-                    == "assistant_run.external_channel_static_page_stable_artifact_reused"
-            })
-            .expect("reuse event should be recorded");
-        let status_reply = external_channel_static_page_reply_from_events(
-            &events,
-            &message.conversation_external_id,
-        )
-        .expect("status reply should reuse baseline");
-        assert_eq!(
-            status_reply.task_status.as_deref(),
-            Some("static_page_published")
-        );
-        assert_eq!(
-            reused.payload["image2_skip_reason"],
-            json!("accepted_dataset_artifact_baseline")
-        );
+        assert!(!events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+        }));
     }
 
     #[tokio::test]
@@ -59173,8 +59864,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request(
-    ) {
+    async fn external_channel_static_page_dataset_template_overlap_keeps_view_request_as_qa() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -59356,23 +60046,11 @@ mod tests {
             now,
         )
         .await
-        .expect("static-page pipeline should complete")
-        .expect("static-page reply should be returned");
+        .expect("static-page pipeline gate should complete");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        let card = reply.card.expect("card should be returned");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["download_url"], json!(public_url));
-        assert_eq!(card["html_download_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
-        assert_eq!(
-            card["image2_skip_reason"],
-            json!("accepted_dataset_overlap_template_baseline")
+        assert!(
+            reply.is_none(),
+            "a view-only report request must stay ordinary QA"
         );
 
         let new_run_drafts = state
@@ -59383,7 +60061,7 @@ mod tests {
             .expect("drafts should list");
         assert!(
             new_run_drafts.is_empty(),
-            "view request should not create a new draft"
+            "ordinary view request should not create a new draft"
         );
         let workflows = state
             .storage
@@ -59396,7 +60074,7 @@ mod tests {
                 execution.kind != WorkflowKind::StaticPageImageGeneration
                     && execution.kind != WorkflowKind::CodexHostTask
             }),
-            "view request should not enqueue Image2 or Codex"
+            "ordinary view request should not enqueue Image2 or Codex"
         );
         let events = state
             .storage
@@ -59404,12 +60082,9 @@ mod tests {
             .list_events(state.tenant_id, run.id)
             .await
             .expect("events should list");
-        assert!(events.iter().any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
-                && event.payload["artifact_links"] == json!([public_url])
-        }));
         assert!(!events.iter().any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
                 || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
                 || event.event_name.starts_with("codex_host.fixed_task.")
         }));
@@ -60226,8 +60901,7 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
-        let prompt =
-            "我不喜欢这个风格的报表，最好暗黑一点的背景，并且适合手机端展示，重点突出最近可取高门店。";
+        let prompt = "请把这个报表重新设计成暗黑背景的移动端版本，重点突出最近可取高门店。";
 
         assert!(external_channel_message_requests_static_page_artifact(
             &message, prompt
@@ -60254,6 +60928,8 @@ mod tests {
         assert!(provider_input.contains("integration_setup_analysis"));
         assert!(provider_input.contains("message_channel_outreach"));
         assert!(provider_input.contains("不要用“已收到/正在处理”截断答案"));
+        assert!(provider_input.contains("能力字段和模型判断不能替代用户授权"));
+        assert!(!provider_input.contains("可能需要同步生成或更新经营报表"));
         assert!(provider_input.contains("不要因为提到附件、PDF、简历、表格或文档就输出"));
         assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
         assert!(provider_input.contains("retrieve_evidence"));
@@ -60931,36 +61607,78 @@ mod tests {
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_short_report_title_without_artifact_mode() {
+    fn external_channel_model_tool_request_tags_are_detected_even_when_unparseable() {
+        for output in [
+            r#"<V3_TOOL_REQUEST>{not json}</V3_TOOL_REQUEST>"#,
+            r#"<V3_TOOL_REQUEST>{"tool":"unknown_internal_tool"}</V3_TOOL_REQUEST>"#,
+            r#"<v3_tool_request>{"tool":"static_page_artifact"}</v3_tool_request>"#,
+            r#"<V3_TOOL_REQUEST >{"tool":"static_page_artifact"}</V3_TOOL_REQUEST >"#,
+            r#"< V3_TOOL_REQUEST>{"tool":"static_page_artifact"}</ V3_TOOL_REQUEST>"#,
+            r#"<  V3_TOOL_REQUEST >{"tool":"static_page_artifact"}< / V3_TOOL_REQUEST >"#,
+            r#"V3_TOOL_REQUEST>{"tool":"static_page_artifact"}</V3_TOOL_REQUEST>"#,
+            r#"[V3_TOOL_REQUEST]{"tool":"static_page_artifact"}[/V3_TOOL_REQUEST]"#,
+            r#"&lt;V3_TOOL_REQUEST&gt;{"tool":"static_page_artifact"}&lt;/V3_TOOL_REQUEST&gt;"#,
+            r#"<V3 TOOL REQUEST>{"tool":"static_page_artifact"}</V3 TOOL REQUEST>"#,
+            r#"<V3-TOOL-REQUEST>{"tool":"static_page_artifact"}</V3-TOOL-REQUEST>"#,
+            r#"V3&#95;TOOL_REQUEST>{"tool":"static_page_artifact"}"#,
+            r#"natural text </V3_TOOL_REQUEST>"#,
+        ] {
+            assert!(external_channel_output_contains_model_tool_request_tag(
+                output
+            ));
+            assert!(external_channel_model_tool_request(output).is_none());
+        }
+        assert!(!external_channel_output_contains_model_tool_request_tag(
+            "普通自然语言回答"
+        ));
+        let retry =
+            external_channel_invalid_tool_answer_retry_provider_input("base provider input");
+        assert!(retry.contains("无法识别、缺失闭合或不在允许目录"));
+        assert!(retry.contains("不要暴露内部标签"));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_keeps_short_report_title_as_qa() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
 
-        assert!(external_channel_message_requests_static_page_artifact(
+        assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "经营健康度报表"
         ));
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_short_report_listing_request() {
+    fn external_channel_static_page_artifact_keeps_short_report_listing_request_as_qa() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
 
         for prompt in ["可以列一个报表出来吗", "相关报表"] {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "prompt should request a static-page report workflow: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "listing/view wording should stay ordinary QA: {prompt}"
             );
         }
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_xinbai_business_report_modules() {
+    fn external_channel_static_page_artifact_requires_explicit_action_for_xinbai_modules() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。",
+            "我临时上传了合同，帮新百经营报表补充门店面积和坪效。",
+            "上传了客流统计，帮经营健康度报表增加客流同比。",
+        ] {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "explicit business-report mutation should request an artifact: {prompt}"
+            );
+        }
 
         for prompt in [
             "我想看看五月份最新的取高机会",
@@ -60982,15 +61700,12 @@ mod tests {
             "月度销售趋势",
             "看月度销售趋势",
             "客流降低预警",
-            "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。",
-            "我临时上传了合同，帮新百经营报表补充门店面积和坪效。",
-            "上传了客流统计，帮经营健康度报表增加客流同比。",
             "经营健康度评分",
             "看一下收入趋势和计划完成",
         ] {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "prompt should request a focused business-report module: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "noun-only/view business question should stay ordinary QA: {prompt}"
             );
         }
     }
@@ -61003,9 +61718,7 @@ mod tests {
 
         for prompt in [
             "帮我对门店销售数据做一次全面数据分析，输出详细结论和图表",
-            "对新百经营数据做多维分析，整理销售趋势、风险门店、助推清单",
-            "把各门店销售、客流、租金数据做完整分析，给一份报告",
-            "做一下新百的经营工作分析",
+            "把各门店销售、客流、租金数据做完整分析，生成一份报告",
             "Please run a data analysis over sales and traffic metrics and generate an analytics report.",
         ] {
             assert!(
@@ -61013,10 +61726,19 @@ mod tests {
                 "large data analysis should create a side report artifact: {prompt}"
             );
         }
+        for prompt in [
+            "对新百经营数据做多维分析，整理销售趋势、风险门店、助推清单",
+            "做一下新百的经营工作分析",
+        ] {
+            assert!(
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "analysis without an explicit artifact action should stay ordinary QA: {prompt}"
+            );
+        }
     }
 
     #[test]
-    fn external_channel_static_page_artifact_defaults_report_terms_to_side_report() {
+    fn external_channel_static_page_artifact_keeps_report_terms_as_qa_without_action() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
@@ -61024,8 +61746,8 @@ mod tests {
         for prompt in ["新百经营最近的取高报表", "门店经营看板", "请看当前销售报告"]
         {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "report artifact terms should create a side report artifact unless this is an explanation question: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "report nouns and view wording should stay ordinary QA without an explicit action: {prompt}"
             );
         }
     }
@@ -61047,6 +61769,219 @@ mod tests {
                 "explanatory analysis should stay ordinary QA: {prompt}"
             );
         }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_keeps_mixed_evidence_question_as_qa() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+
+        assert!(
+            !external_channel_prompt_requests_static_page_report_workflow(prompt),
+            "mixed database/document evidence question must not authorize an artifact workflow"
+        );
+        assert!(
+            !external_channel_message_requests_static_page_artifact(&message, prompt),
+            "mixed database/document evidence question must stay evidence-supplied QA"
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_structured_fields_do_not_replace_user_action_authorization() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("artifact".to_string());
+        message.output_format = Some("image_text".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+
+        assert!(
+            !external_channel_message_requests_static_page_artifact(&message, prompt),
+            "structured capability fields must not replace an explicit user action request"
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_model_tool_request_cannot_expand_user_authorization() {
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"static_page_artifact","intent":"create_or_update","reason":"引用报告中的风险描述"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(
+            tool_request.tool,
+            ExternalChannelModelToolCapability::StaticPageArtifact
+        );
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(&tool_request, prompt),
+            "a model tool request must not expand the authorization expressed by the user prompt"
+        );
+        let retry_input = external_channel_unauthorized_tool_answer_retry_provider_input(
+            "base provider input",
+            tool_request.tool,
+        );
+        assert!(retry_input.contains("未经用户原话明确授权"));
+        assert!(retry_input.contains("不要替用户推断动作意图"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_requests_require_capability_specific_user_authorization() {
+        let cases = [
+            (
+                "data_ingestion_analysis",
+                "create_or_update",
+                "解释一下数据源是什么",
+                "把这个表导入到数据集并建表",
+            ),
+            (
+                "document_processing",
+                "reparse_request",
+                "总结附件里的项目经历",
+                "刚上传的 PDF 问不出来，请重新解析",
+            ),
+            (
+                "collection_setup_analysis",
+                "create_or_update",
+                "介绍公开资料采集是什么",
+                "帮我规划采集公开网站的政策更新",
+            ),
+            (
+                "integration_setup_analysis",
+                "create_or_update",
+                "解释 API 权限字段",
+                "我们要接入客户自己的 OA 权限和文档库，并确认接口字段。",
+            ),
+            (
+                "message_channel_outreach",
+                "create_or_update",
+                "任务完成通知模板是什么",
+                "请发消息通知店总登录系统查看",
+            ),
+        ];
+        for (tool, intent, ordinary_prompt, explicit_prompt) in cases {
+            let raw = format!(
+                "<V3_TOOL_REQUEST>{{\"tool\":\"{tool}\",\"intent\":\"{intent}\"}}</V3_TOOL_REQUEST>"
+            );
+            let request = external_channel_model_tool_request(&raw).expect("tool request parses");
+            assert!(
+                !external_channel_model_tool_request_is_authorized_by_prompt(
+                    &request,
+                    ordinary_prompt,
+                ),
+                "ordinary prompt must not authorize {tool}"
+            );
+            assert!(
+                external_channel_model_tool_request_is_authorized_by_prompt(
+                    &request,
+                    explicit_prompt,
+                ),
+                "explicit prompt should authorize {tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_model_tool_requests_reject_read_only_or_historical_word_collisions() {
+        let cases = [
+            (
+                "data_ingestion_analysis",
+                "解释为什么导入数据失败，以及失败原因",
+            ),
+            ("data_ingestion_analysis", "我想了解导入数据结果"),
+            ("data_ingestion_analysis", "导入数据步骤"),
+            ("data_ingestion_analysis", "导入数据完成了吗"),
+            ("data_ingestion_analysis", "导入数据已经完成"),
+            ("data_ingestion_analysis", "导入数据完成时间"),
+            ("data_ingestion_analysis", "导入数据历史"),
+            ("data_ingestion_analysis", "导入数据的方法"),
+            ("data_ingestion_analysis", "导入数据还是不导入"),
+            ("data_ingestion_analysis", "请给我导入数据计划"),
+            ("data_ingestion_analysis", "请讨论导入数据"),
+            ("collection_setup_analysis", "介绍抓取公开资料为什么失败"),
+            ("collection_setup_analysis", "抓取规则"),
+            ("collection_setup_analysis", "抓取历史"),
+            ("collection_setup_analysis", "抓取教程"),
+            ("collection_setup_analysis", "请给我公开资料抓取规则"),
+            ("collection_setup_analysis", "请讨论抓取公开资料"),
+            ("integration_setup_analysis", "数据库接入失败原因是什么"),
+            ("integration_setup_analysis", "我想了解接入系统进度"),
+            ("integration_setup_analysis", "接入系统说明"),
+            ("integration_setup_analysis", "接入系统历史"),
+            ("integration_setup_analysis", "接入系统流程"),
+            ("integration_setup_analysis", "请给我系统接入方案"),
+            ("integration_setup_analysis", "请评估接入客户系统"),
+            ("message_channel_outreach", "解释之前发给客户的消息内容"),
+            ("message_channel_outreach", "发给客户的消息内容"),
+            ("message_channel_outreach", "发给客户的消息"),
+            ("message_channel_outreach", "通知客户模板"),
+            ("message_channel_outreach", "发消息示例"),
+            ("message_channel_outreach", "请给我通知客户模板"),
+            ("message_channel_outreach", "请考虑通知客户"),
+            ("document_processing", "解释上次解析失败原因"),
+            ("document_processing", "重新解析已经完成"),
+            ("document_processing", "重新解析？"),
+            ("document_processing", "请给我重新解析步骤"),
+            ("document_processing", "请研究重新解析这个文档"),
+        ];
+        for (tool, prompt) in cases {
+            let intent = if tool == "document_processing" {
+                "reparse_request"
+            } else {
+                "create_or_update"
+            };
+            let raw = format!(
+                "<V3_TOOL_REQUEST>{{\"tool\":\"{tool}\",\"intent\":\"{intent}\"}}</V3_TOOL_REQUEST>"
+            );
+            let request = external_channel_model_tool_request(&raw).expect("tool request parses");
+            assert!(
+                !external_channel_model_tool_request_is_authorized_by_prompt(&request, prompt),
+                "read-only or historical wording must not authorize {tool}: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_document_processing_authorization_binds_prompt_to_tool_intent() {
+        let status = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"status"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("status request parses");
+        let reparse = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("reparse request parses");
+        let unsupported = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"create_or_update"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("unsupported intent still parses as a tool envelope");
+
+        assert!(external_channel_model_tool_request_is_authorized_by_prompt(
+            &status,
+            "请查看这个文档的解析状态"
+        ));
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &reparse,
+                "请查看这个文档的解析状态"
+            )
+        );
+        assert!(external_channel_model_tool_request_is_authorized_by_prompt(
+            &reparse,
+            "请重新解析这个失败的 PDF"
+        ));
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &reparse,
+                "解释上次解析失败的原因"
+            )
+        );
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &unsupported,
+                "请重新解析这个 PDF"
+            )
+        );
     }
 
     #[test]
@@ -61752,10 +62687,37 @@ mod tests {
         assert!(external_channel_message_requests_template_html_artifact(
             &message
         ));
+        assert!(external_channel_message_authorizes_template_html_artifact(
+            &message,
+            "按模板生成 HTML 人员月报"
+        ));
+        for prompt in [
+            "解释 HTML 人员说明报告",
+            "上次生成 HTML 人员说明报告",
+            "HTML 人员说明报告生成完成时间",
+        ] {
+            assert!(
+                !external_channel_message_authorizes_template_html_artifact(&message, prompt),
+                "legacy capability metadata must not replace prompt authorization: {prompt}"
+            );
+        }
         assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "按模板生成 HTML 人员说明报告"
         ));
+        assert!(
+            !external_channel_message_authorizes_static_page_template_prewarm(
+                &message,
+                "解释 HTML 人员说明报告"
+            )
+        );
+        assert!(
+            !external_channel_message_authorizes_static_page_template_prewarm(
+                &message,
+                "按模板生成 HTML 人员月报"
+            ),
+            "legacy HTML artifact routing must not also enqueue a static-page prewarm"
+        );
     }
 
     #[test]
@@ -61764,14 +62726,40 @@ mod tests {
             "帮我接入这份表并入库分析字段"
         ));
         assert!(external_channel_message_requests_data_ingestion_analysis(
-            "这个数据库怎么建表，字段怎么映射？"
+            "请导入数据并返回结果"
         ));
         assert!(external_channel_message_requests_data_ingestion_analysis(
-            "Return read-only data-ingestion analysis plus a staging_plan."
+            "please import data"
         ));
-        assert!(!external_channel_message_requests_data_ingestion_analysis(
-            "邓工是谁？"
-        ));
+        for prompt in [
+            "这个数据库怎么建表，字段怎么映射？",
+            "Return read-only data-ingestion analysis plus a staging_plan.",
+            "我想了解数据源同步结果",
+            "导入数据历史",
+            "不要导入这份表",
+            "我们要接入客户自己的 OA 权限和文档库，并确认接口字段。",
+            "同步更新报表",
+            "请检查数据同步状态",
+            "请汇总数据导入结果",
+            "请比较数据导入方案",
+            "请生成数据同步报表",
+            "请接入客户数据库权限系统",
+            "请给我数据导入结果",
+            "请提供数据同步状态",
+            "请规划数据同步方案",
+            "帮我梳理数据导入方案",
+            "请提供数据导入任务的结果",
+            "请提供数据库同步任务的状态",
+            "请给我数据清洗作业的结果",
+            "important data quality considerations",
+            "synchronization data status",
+            "邓工是谁？",
+        ] {
+            assert!(
+                !external_channel_message_requests_data_ingestion_analysis(prompt),
+                "read-only, historical, or negated wording must not enqueue data ingestion: {prompt}"
+            );
+        }
     }
 
     #[test]
@@ -61919,11 +62907,11 @@ mod tests {
         message.conversation_external_id = "conv-data-tool".to_string();
         message.message_external_id = "msg-data-tool-001".to_string();
         message.idempotency_key = "generic:tenant-ext-001:msg-data-tool-001".to_string();
-        message.text = Some("请看看这份材料后续可以怎样组织使用。".to_string());
+        message.text = Some("请把这份材料导入到 DataMax 数据集。".to_string());
         message.attachment_refs = Vec::new();
         let assistant_request =
             external_bot_message_to_assistant_run_request("generic-chat-main", &message);
-        assert!(!external_channel_message_requests_data_ingestion_analysis(
+        assert!(external_channel_message_requests_data_ingestion_analysis(
             &assistant_request.prompt
         ));
         let now = Utc::now();
@@ -62232,12 +63220,14 @@ mod tests {
             r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户要求重新解析"}</V3_TOOL_REQUEST>"#,
         )
         .expect("tool request should parse");
+        let mut reparse_assistant_request = assistant_request.clone();
+        reparse_assistant_request.prompt = "请重新解析这个失败文档".to_string();
         let reparse_reply = external_channel_dispatch_model_tool_request(
             &state,
             "generic-chat-main",
             &connection,
             run.id,
-            &assistant_request,
+            &reparse_assistant_request,
             &message,
             now,
             "scripted",
@@ -70822,7 +71812,7 @@ mod tests {
     #[test]
     fn assistant_run_answer_quality_autofix_collects_missing_report_link_case() {
         let request = CreateAssistantRunRequest {
-            prompt: "看看最新的门店取高报表".to_string(),
+            prompt: "请生成一份门店取高机会可视化报表".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
@@ -70865,7 +71855,7 @@ mod tests {
     #[test]
     fn assistant_run_answer_quality_autofix_does_not_collect_report_case_with_link() {
         let request = CreateAssistantRunRequest {
-            prompt: "看看最新的门店取高报表".to_string(),
+            prompt: "请生成一份门店取高机会可视化报表".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
@@ -81550,7 +82540,7 @@ retrieve_evidence:
     }
 
     #[test]
-    fn external_channel_business_analysis_provider_input_prefers_structured_metrics() {
+    fn external_channel_business_analysis_provider_input_supplies_metrics_without_forcing_report() {
         let dataset_id = DatasetId::new();
         let input = build_assistant_run_provider_input_with_evidence(
             &CreateAssistantRunRequest {
@@ -81584,12 +82574,11 @@ retrieve_evidence:
             })),
         );
 
-        assert!(input.contains("外部通道经营/数据分析要求"));
-        assert!(input.contains("优先使用 database_schema_context、database_aggregate"));
-        assert!(input.contains("不要只复述文档内容"));
-        assert!(input.contains("直接的自然语言分析结论"));
-        assert!(input.contains("直答控制为 800-1200 字以内的简明经营摘要"));
-        assert!(input.contains("详细图表和大篇幅分析由右侧报表承载"));
+        assert!(input.contains("供料提示（供你参考，不是回答模板）"));
+        assert!(input.contains("database_aggregate"));
+        assert!(!input.contains("外部通道经营/数据分析要求"));
+        assert!(!input.contains("直答控制为 800-1200 字以内的简明经营摘要"));
+        assert!(!input.contains("详细图表和大篇幅分析由右侧报表承载"));
     }
 
     #[test]
@@ -81729,7 +82718,8 @@ retrieve_evidence:
         );
 
         assert!(!input.contains("首轮对话策略"));
-        assert!(input.contains("请只输出一行 `<V3_TOOL_REQUEST>"));
+        assert!(input.contains("才可只输出一行 `<V3_TOOL_REQUEST>"));
+        assert!(input.contains("只有用户原话明确要求 DataMax 执行上述能力时"));
     }
 
     #[test]
@@ -83350,7 +84340,7 @@ retrieve_evidence:
 
     #[test]
     fn assistant_run_provider_input_truncates_long_history_messages() {
-        let long_history = "A".repeat(2000);
+        let long_history = "A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT + 2000);
         let request = CreateAssistantRunRequest {
             prompt: "继续回答".to_string(),
             local_thread_id: None,

@@ -17,6 +17,8 @@ const INTERNAL_LEAK_PATTERNS = [
   'provider_payload',
   'tool_call',
   'runtime manifest',
+  '<V3_TOOL_REQUEST>',
+  'static_page_artifact',
 ];
 
 const REPORT_FALSE_CLAIM_PATTERNS = [
@@ -335,6 +337,15 @@ function buildSyntheticGuardFixtures() {
       fixture: baseFixture,
       result: {
         answer: '租售比答案如下。evidence_state={}',
+        evidence: [{ type: 'database_aggregate', text: '租售比' }],
+      },
+      expectedReason: 'internal_leak',
+    },
+    {
+      name: 'model tool request leak detection',
+      fixture: baseFixture,
+      result: {
+        answer: '<V3_TOOL_REQUEST>{"tool":"static_page_artifact"}</V3_TOOL_REQUEST>',
         evidence: [{ type: 'database_aggregate', text: '租售比' }],
       },
       expectedReason: 'internal_leak',

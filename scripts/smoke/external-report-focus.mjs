@@ -9,20 +9,33 @@ const PRIMARY_XINBAI_TEMPLATE_ID = 'xinbai-functional-modular-template-20260604'
 const PRIMARY_PUBLIC_URL = `https://v3.elepcloud.com/generated-artifacts/database-static-pages/${PRIMARY_XINBAI_TEMPLATE_ID}/index.html`;
 
 const REPORT_CASES = [
-  { id: 'take_high', prompt: '取高', expectedFocus: '取高机会' },
-  { id: 'business_status', prompt: '经营状况', expectedFocus: '经营总览' },
-  { id: 'business_health', prompt: '经营健康度', expectedFocus: '经营总览' },
-  { id: 'risk_identification', prompt: '风险识别', expectedFocus: '风险店铺' },
+  { id: 'take_high', prompt: '生成取高机会报表', expectedFocus: '取高机会' },
+  { id: 'business_status', prompt: '生成经营状况报表', expectedFocus: '经营总览' },
+  { id: 'business_health', prompt: '生成经营健康度报表', expectedFocus: '经营总览' },
+  { id: 'risk_identification', prompt: '生成风险识别报表', expectedFocus: '风险店铺' },
   {
     id: 'sales_gap_boost',
-    prompt: '销售缺口统计一下，哪些门店需要助推？',
+    prompt: '生成销售缺口助推门店报表',
     expectedFocus: '取高机会',
   },
-  { id: 'boost_stores', prompt: '哪些门店需要助推', expectedFocus: '取高机会' },
-  { id: 'operations_report', prompt: '统计经营报表', expectedFocus: null },
+  { id: 'boost_stores', prompt: '生成需要助推门店报表', expectedFocus: '取高机会' },
+  { id: 'operations_report', prompt: '生成经营报表', expectedFocus: null },
 ];
 
 const ORDINARY_GUARD_CASES = [
+  { id: 'take_high_noun', prompt: '取高' },
+  { id: 'business_status_noun', prompt: '经营状况' },
+  { id: 'business_health_noun', prompt: '经营健康度' },
+  { id: 'overall_operation_view', prompt: '看看整体经营情况' },
+  { id: 'risk_identification_noun', prompt: '风险识别' },
+  { id: 'store_operation_risk_view', prompt: '看看新街口店经营风险' },
+  { id: 'sales_gap_question', prompt: '销售缺口统计一下，哪些门店需要助推？' },
+  { id: 'sales_trend_view', prompt: '看月度销售趋势' },
+  { id: 'traffic_warning_noun', prompt: '客流降低预警' },
+  { id: 'mixed_evidence_explanation', prompt: '解释销售缺口最大的门店，同时引用报告里的风险描述。' },
+  { id: 'report_output_meaning', prompt: '报告输出是什么' },
+  { id: 'page_generation_failure', prompt: '页面生成为什么失败' },
+  { id: 'report_delete', prompt: '删除这份报表' },
   { id: 'take_high_meaning', prompt: '取高是什么意思？' },
   { id: 'risk_system_resume', prompt: '风险识别系统有哪些项目经历？' },
   { id: 'unrelated_general_question', prompt: '与新百经营数据无关的普通知识问答' },
@@ -80,92 +93,51 @@ function containsAny(text, values) {
 }
 
 function promptRequestsReport(prompt) {
-  const compact = compactText(prompt);
-  if (!compact) {
-    return false;
-  }
-  if (
-    containsAny(compact, ['什么', '怎么', '如何', '为什么', '是否', '能不能', '可不可以', '吗', '介绍', '说明', '含义', '口径', '问题', '原因'])
-    || (containsAny(compact, ['哪些', '有哪些']) && containsAny(compact, ['问题', '口径', '原因', '含义', '意思', '是什么', '项目经历']))
-  ) {
-    return false;
-  }
-  if (
-    [
-      '取高',
-      '经营状况',
-      '经营情况',
-      '经营状态',
-      '经营健康度',
-      '整体经营情况',
-      '整体经营状况',
-      '销售缺口',
-      '销售额缺口',
-      '风险识别',
-      '经营风险',
-      '经营总览',
-      '助推门店',
-      '门店助推',
-    ].includes(compact)
-  ) {
-    return true;
-  }
-  const hasRiskIdentificationModule = !compact.includes('风险识别系统')
-    && compact.includes('风险识别')
-    && containsAny(compact, ['经营', '门店', '店铺', '品牌', '销售', '租金', '取高', '报表', '看板', '统计', '汇总', '排行', '排名', '新百', '新世界']);
-  const hasBusinessModule = hasRiskIdentificationModule || containsAny(compact, [
-    '取高',
-    '取高机会',
-    '高分成',
-    '经营总览',
-    '经营状况',
-    '经营情况',
-    '整体经营',
-    '经营风险',
-    '经营健康',
-    '经营健康度',
-    '销售趋势',
-    '销售额缺口',
-    '销售缺口',
-    '助推',
-    '需要助推',
-    '需助推',
-    '助推门店',
-    '销售统计',
-    '门店统计',
-    '品牌统计',
-    '经营统计',
-    '经营报表',
-    '经营月报',
-    '新百经营',
-  ]);
-  if (!hasBusinessModule) {
-    return false;
-  }
-  return containsAny(compact, [
-    '看看',
-    '看',
-    '查看',
-    '哪些',
-    '列',
-    '列出',
-    '统计',
-    '汇总',
-    '排行',
-    '排名',
-    '报表',
-    '月报',
-    '生成',
-    '制作',
-    '取高',
-    '经营状况',
-    '经营情况',
-    '销售缺口',
-    '销售额缺口',
-    '需要助推',
-    '需助推',
-    '助推',
-  ]);
+  const phrases = String(prompt || '')
+    .toLowerCase()
+    .replace(/ and then | then | and |同时|然后|并且|并|[，,。.;；！!？?]/g, '\n')
+    .split('\n')
+    .map(compactText)
+    .filter(Boolean);
+  const artifactTargets = [
+    '静态页', '静态页面', '报表页', '可视化报表', '经营分析报表', '经营分析页', '报表', '报告',
+    '月报', '周报', '日报', '看板', '仪表盘', '大屏', '页面', '网页', '网站', '图表',
+    'dashboard', 'report', 'page', 'webpage', 'html', 'artifact', 'chart',
+  ];
+  const explicitActions = [
+    '重新生成', '生成', '创建', '制作', '做出来', '做成', '做一个', '做一份', '做个',
+    '输出', '发布', '上线', '渲染', '导出', '重新设计', '重做', '改版', '修改', '修复',
+    '更新', '调整', '补充', '增加', '添加', '替换', '出页面', '出报表', '出报告', '出看板',
+    'create', 'generate', 'build', 'make', 'publish', 'render', 'export', 'redesign',
+    'revise', 'modify', 'update',
+  ];
+  const referenceOnlyMarkers = [
+    '解释', '引用', '查看', '请看', '读取', '阅读', '说明', '介绍', '比较', '对比', '概括',
+    '总结', '复述', '什么', '为什么', '为何', '怎么', '如何', '是否', '能不能', '可不可以',
+    '状态', '记录', '进度', '历史', '结果', '原因', '含义', '是什么意思', '提到', '写着',
+    '建议', '计划', '方案', '步骤', '规则', '日志', '详情', 'explain', 'quote', 'cite', 'view',
+    'read', 'inspect', 'compare', 'summarize', 'why', 'how', 'what', 'whether', 'mentioned',
+    'suggest',
+  ];
+  const negationMarkers = [
+    '不要', '不用', '无需', '无须', '不必', '别', '禁止', '不是要', '不是让你', '不',
+    'donot', "don't", 'dont', 'never', 'without', 'not',
+  ];
+  return phrases.some((phrase) => {
+    const actionPosition = explicitActions
+      .map((term) => phrase.indexOf(term))
+      .filter((position) => position >= 0)
+      .sort((left, right) => left - right)[0];
+    if (actionPosition === undefined
+      || !containsAny(phrase, artifactTargets)
+      || containsAny(phrase, referenceOnlyMarkers)) {
+      return false;
+    }
+    return !negationMarkers.some((term) => {
+      const position = phrase.indexOf(term);
+      return position >= 0 && position <= actionPosition;
+    });
+  });
 }
 
 function focusForPrompt(prompt) {

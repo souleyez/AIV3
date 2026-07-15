@@ -46852,3 +46852,48 @@ Data-ingestion external fixed-task smoke:
   - final credential-pattern scan passed;
   - no raw local key, Cookie, bearer token, activation token, database URL, provider payload, file contents, raw dataset/library IDs, or customer data was recorded in the shared receipt;
   - 10 server and 120 server were not touched.
+
+## 2026-07-15 Answer Quality P0 Safety Local Candidate Verification
+
+- Scope and baseline:
+  - branch: `codex/dataset-understanding-mvp`;
+  - unchanged Git baseline: `a8171c468d4e339bd10cbb03765f1038301f9d88`;
+  - source RED evidence: `target/qa-quality-extended-20260715T065735Z/qa-quality-live-manual-review-20260715.md`;
+  - scope was limited to local fail-closed safety for ordinary-question artifact routing, automatic database mapping/aggregation, and live QA receipt integrity.
+- Implemented local safety boundary:
+  - static-page/report action paths now require explicit same-phrase user authorization; capability fields and model tool proposals cannot expand the unchanged user prompt;
+  - noun-only, historical, status, tutorial, conditional, negated, and cognitive-review wording remains ordinary QA, including the Xinbai published-link and WeChat video handoff shortcuts;
+  - schema fallback is limited to explicit overview requests; automatic table mapping ignores low-information one-character mappings and generic identity/title/time/version matches;
+  - connector and Assistant layers reject identifier-like and unsafe non-additive SUM metrics; `quekou` and `xuzengxiaoshou` no longer receive invented unit, direction, threshold, or additive semantics;
+  - the live-capture harness requires one internally consistent evaluator receipt, recursively detects boolean/string status and execution-id side-effect evidence, and aborts subsequent provider calls after an observed or uncertain side effect.
+- Focused deterministic verification:
+  - `cargo test -p platform-api --lib external_channel_action_prompt_support::tests -- --nocapture`: passed 7/7;
+  - `cargo test -p platform-api --lib assistant_run_database_prompt_support::tests -- --nocapture`: passed 5/5;
+  - the data-ingestion, capability fixture, capability authorization, malformed tool-tag, Xinbai link, and WeChat handoff focused filters all passed;
+  - `cargo test -p external-source-connectors --lib aggregate_query -- --nocapture`: passed 11/11;
+  - `npm run smoke:newbai-customer-answer-live-capture -- --self-test`: passed 12/12 with receipt `target/newbai-customer-answer-live-capture/20260715110346706-18496.json`;
+  - `npm run smoke:external-report-focus -- --self-test --pretty`: passed `reportCases=7`, `ordinaryGuards=17`, receipt `target/external-report-focus-smoke/external-report-focus-self-test-20260715110351.json`;
+  - `npm run smoke:newbai-customer-answer -- --self-test`: passed the 12-case diagnostic fixture, remained `decision_eligible=false`.
+- Full local regression:
+  - `cargo test -p platform-api --lib`: passed 2898, failed 0, ignored 2, discovered 2900;
+  - a separate `--nocapture` count found 182 PostgreSQL fixture tests returning early because `PLATFORM_DATABASE_URL` pointed at non-disposable `ai_data_platform_v3`; these counted test functions are not PostgreSQL integration evidence;
+  - 2 additional mock-gateway test functions returned early because `EXTERNAL_THIRD_PARTY_MOCK_DISPATCH_URL` and `EXTERNAL_THIRD_PARTY_MOCK_RESULT_HELPER_URL` were unset;
+  - `bash scripts/run-assistant-chat-contract-smoke.sh`: passed, receipt `target/assistant-chat-contract-smoke/assistant-chat-contract-smoke-20260715T110626Z.json`;
+  - `bash scripts/run-external-direct-reply-smoke.sh`: passed, receipt `target/external-direct-reply-smoke/external-direct-reply-smoke-20260715T110626Z.json`;
+  - `bash scripts/run-retrieval-quality-smoke.sh --baseline`: passed, receipt `target/retrieval-quality-smoke/retrieval-quality-smoke-20260715T110626Z.json`;
+  - `bash scripts/run-newbai-customer-answer-smoke.sh`: passed against fixture `sample_result`, receipt `target/newbai-customer-answer-smoke/newbai-customer-answer-smoke-20260715110626.json`.
+- Evidence classification:
+  - the Rust route tests are deterministic local route evidence;
+  - `external-report-focus` and NewBai fixture results are JavaScript fixture/oracle self-tests, not end-to-end runtime or real-answer evidence;
+  - the live-capture self-test made no network/provider calls and remains diagnostic-only and explicitly non-decision-eligible;
+  - the DCF/arbitrary-schema pollution failure is locally unit-closed, but has not been rerun through a disposable PostgreSQL-backed route.
+- Open gates and intentional fail-closed behavior:
+  - no disposable PostgreSQL integration run and no controlled real-provider/live answer-quality run were performed;
+  - NewBai case 012 still cannot receive a real `quekou`/`xuzengxiaoshou` aggregate until a persisted per-column type, unit, additivity, allowed-aggregation, confidence, and source contract authorizes it; offline `sample_result` success does not close that live gap;
+  - broader claim-level traceability remains open;
+  - direct image structured extraction remains read-only provider-backed preprocessing outside this mutating artifact-action P0; this candidate does not prove that every provider/model preprocessing route is disabled;
+  - graph-assisted supply remains feature-off/visual-only and contributes no fact or citation.
+- Safety and release state:
+  - no provider call, live write, disposable database, source sync, migration, config or feature-flag change, static-page generation, service restart, server access, commit, push, deployment, or cleanup was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, source payload, or raw provider payload was recorded;
+  - current status is `LOCAL P0 SAFETY CANDIDATE GREEN — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING`, not release completion.

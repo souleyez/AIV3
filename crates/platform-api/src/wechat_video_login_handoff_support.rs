@@ -29,11 +29,116 @@ pub(crate) fn wechat_video_login_handoff_artifact_from_prompt(
     let wants_slide_output = lower.contains("ppt")
         || lower.contains("powerpoint")
         || prompt.contains("课件")
-        || prompt.contains("幻灯片")
-        || (prompt.contains("提取") && prompt.contains("视频"));
+        || prompt.contains("幻灯片");
+    let explicitly_requests_extraction = [
+        "提取",
+        "抽取",
+        "生成",
+        "制作",
+        "整理成",
+        "转成",
+        "转换成",
+        "导出",
+        "extract",
+        "generate",
+        "convert",
+        "export",
+    ]
+    .iter()
+    .any(|action| lower.contains(action));
+    let read_only_or_negated = [
+        "不要",
+        "不用",
+        "无需",
+        "无须",
+        "不必",
+        "不提取",
+        "不抽取",
+        "不生成",
+        "不制作",
+        "不整理",
+        "不转换",
+        "不导出",
+        "不",
+        "别",
+        "禁止",
+        "取消",
+        "方法",
+        "教程",
+        "做法",
+        "流程",
+        "历史",
+        "之前",
+        "上次",
+        "已经",
+        "已提取",
+        "提取过",
+        "去年",
+        "过去",
+        "曾经",
+        "状态",
+        "记录",
+        "结果",
+        "说明",
+        "示例",
+        "为什么",
+        "是什么",
+        "怎么",
+        "如何",
+        "有哪些",
+        "能不能",
+        "是否",
+        "行不行",
+        "要不要",
+        "还是",
+        "如果",
+        "假如",
+        "假设",
+        "若",
+        "讨论",
+        "评估",
+        "研究",
+        "考虑",
+        "梳理",
+    ]
+    .iter()
+    .any(|marker| prompt.contains(marker))
+        || prompt.trim_end().ends_with('?')
+        || prompt.trim_end().ends_with('？')
+        || prompt.trim_end().ends_with('吗')
+        || prompt.trim_end().ends_with('么')
+        || prompt.trim_end().ends_with('呢')
+        || [
+            "do not",
+            "don't",
+            "never",
+            "without",
+            " not ",
+            " no ",
+            "how to",
+            "tutorial",
+            "history",
+            "status",
+            "previously",
+            "already",
+            "if ",
+            "when ",
+            "would ",
+            "discuss",
+            "evaluate",
+            "consider",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+        || lower.trim_start().starts_with("not ")
+        || lower.trim_start().starts_with("no ");
     // Login-gated acquisition, QR login, cookies, and recording bypasses are out of scope.
     // This path only supports uploaded video files or directly/publicly resolvable video URLs.
-    if mentions_wechat_video && wants_slide_output {
+    if mentions_wechat_video
+        && wants_slide_output
+        && explicitly_requests_extraction
+        && !read_only_or_negated
+    {
         let run_id_text = run_id.to_string();
         let short_code =
             wechat_video_short_code_from_prompt(prompt).unwrap_or_else(|| "未识别".to_string());
@@ -191,6 +296,36 @@ mod tests {
             Utc::now(),
         )
         .is_none());
+        for prompt in [
+            "视频号提取 PPT 的方法是什么？",
+            "视频号 PPT 提取历史",
+            "不要从视频号提取 PPT",
+            "不从视频号提取 PPT",
+            "不抽取视频号 PPT",
+            "不制作视频号 PPT",
+            "不导出视频号 PPT",
+            "不生成视频号 PPT",
+            "never extract PPT from this channels link",
+            "not extract PPT from 视频号",
+            "without extracting PPT from 视频号",
+            "之前从视频号提取过的 PPT",
+            "视频号提取 PPT 可以吗",
+            "如果从视频号提取 PPT，需要多久",
+            "讨论从视频号提取 PPT",
+            "评估从视频号提取 PPT",
+            "考虑从视频号提取 PPT",
+            "视频号 PPT 状态",
+        ] {
+            assert!(
+                wechat_video_login_handoff_artifact_from_prompt(
+                    AssistantRunId::new(),
+                    prompt,
+                    Utc::now(),
+                )
+                .is_none(),
+                "read-only, historical, or negated wording must not create a handoff artifact: {prompt}"
+            );
+        }
         assert!(wechat_video_login_handoff_artifact_from_prompt(
             AssistantRunId::new(),
             "这个视频号内容讲的是什么",

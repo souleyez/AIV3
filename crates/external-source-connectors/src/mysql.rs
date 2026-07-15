@@ -1206,8 +1206,10 @@ fn is_boolean_type(data_type: &str, column_type: &str, name: &str) -> bool {
 
 fn looks_like_identifier(name: &str) -> bool {
     name == "id"
+        || name == "key"
         || (name.len() > 2 && name.ends_with("id"))
         || (name.len() > 4 && name.ends_with("code"))
+        || (name.len() > 3 && name.ends_with("key"))
         || name.ends_with("_id")
         || name.ends_with("_code")
         || name.ends_with("_no")
@@ -1218,9 +1220,9 @@ fn looks_like_metric(name: &str) -> bool {
     name_has_any(
         name,
         &[
-            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value", "price",
-            "cost", "traffic", "flow", "volume", "qty", "avg", "min", "max", "duration",
-            "distance", "area",
+            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "price", "cost",
+            "traffic", "flow", "volume", "qty", "avg", "min", "max", "duration", "distance",
+            "area",
         ],
     )
 }
@@ -1439,6 +1441,9 @@ pub fn build_mysql_aggregate_query(
     }
     if let Some(metric) = metric.as_deref() {
         validate_allowed_query_column("metric", metric, &allowed_columns)?;
+        if aggregation != "count" {
+            validate_numeric_aggregate_metric(mapping, metric, &aggregation)?;
+        }
     }
 
     let mut projections = Vec::new();
@@ -1950,6 +1955,125 @@ fn validate_allowed_query_column(
             reason: format!("column `{column}` is not in the configured table mapping"),
         })
     }
+}
+
+fn validate_numeric_aggregate_metric(
+    mapping: &MySqlTableMapping,
+    metric: &str,
+    aggregation: &str,
+) -> Result<(), DatabaseSourceError> {
+    let normalized = metric.trim().to_ascii_lowercase();
+    let identity_column = mapping_identity_columns(mapping)
+        .iter()
+        .any(|column| column.eq_ignore_ascii_case(metric));
+    if identity_column || looks_like_identifier(&normalized) {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "metric",
+            reason: format!(
+                "identity-like column `{metric}` cannot be used for numeric aggregation"
+            ),
+        });
+    }
+    if mapping
+        .title_column
+        .as_deref()
+        .is_some_and(|column| column.eq_ignore_ascii_case(metric))
+        || mapping
+            .updated_at_column
+            .as_deref()
+            .is_some_and(|column| column.eq_ignore_ascii_case(metric))
+        || mapping
+            .version_column
+            .as_deref()
+            .is_some_and(|column| column.eq_ignore_ascii_case(metric))
+    {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "metric",
+            reason: format!("non-metric column `{metric}` cannot be numerically aggregated"),
+        });
+    }
+    if !looks_like_numeric_metric(&normalized) {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "metric",
+            reason: format!(
+                "column `{metric}` has no recognized numeric metric semantics; explicit field policy is required"
+            ),
+        });
+    }
+    if matches!(normalized.as_str(), "quekou" | "xuzengxiaoshou") {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "metric",
+            reason: format!(
+                "column `{metric}` requires an explicit type, unit, and allowed-aggregation policy"
+            ),
+        });
+    }
+    if aggregation == "sum" && looks_like_non_additive_metric(&normalized) {
+        return Err(DatabaseSourceError::InvalidField {
+            field: "aggregation",
+            reason: format!(
+                "sum is not allowed for non-additive metric `{metric}` without an explicit field policy"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn looks_like_numeric_metric(name: &str) -> bool {
+    matches!(
+        name,
+        "up" | "down"
+            | "amttotal"
+            | "amtsold"
+            | "salenum"
+            | "quekou"
+            | "xuzengxiaoshou"
+            | "yuezujin"
+            | "tichengzujin"
+            | "htzj"
+            | "fdxshje"
+            | "yze"
+            | "rdj"
+    ) || database_field_name_has_any_segment(
+        name,
+        &[
+            "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "price", "cost",
+            "traffic", "flow", "volume", "qty", "avg", "duration", "amt", "sale", "sales", "sold",
+            "rent", "fee", "zujin", "xiaoshou", "quekou", "jine", "ticheng", "dayamt", "yuezu",
+            "fdxshje", "yze", "rdj",
+        ],
+    )
+}
+
+fn looks_like_non_additive_metric(name: &str) -> bool {
+    database_field_name_has_any_segment(
+        name,
+        &[
+            "rate",
+            "ratio",
+            "percent",
+            "percentage",
+            "pct",
+            "share",
+            "score",
+            "index",
+            "average",
+            "avg",
+            "price",
+            "cost",
+            "duration",
+            "distance",
+            "area",
+            "fee",
+            "rent",
+        ],
+    )
+}
+
+fn database_field_name_has_any_segment(name: &str, segments: &[&str]) -> bool {
+    name.split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .any(|segment| segments.contains(&segment))
 }
 
 fn normalize_aggregate(value: &str) -> Result<String, DatabaseSourceError> {
@@ -2960,7 +3084,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_query_supports_ascending_order_for_gap_metrics() {
+    fn aggregate_query_rejects_uncontracted_gap_metrics() {
         let raw = json!({
             "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
             "database": "hy_sql",
@@ -2985,11 +3109,9 @@ mod tests {
             scan_limit: Some(5000),
         };
 
-        let plan = build_mysql_aggregate_query(&config, &request).expect("aggregate query builds");
-
-        assert!(plan.sql.contains(
-            "group by `shopdesc` order by coalesce(sum(cast(nullif(`xuzengxiaoshou`, '') as decimal(30,6))), 0) asc limit 8"
-        ));
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("gap metrics require an explicit field aggregation policy");
+        assert!(error.to_string().contains("explicit type, unit"));
     }
 
     #[test]
@@ -3045,6 +3167,198 @@ mod tests {
         assert!(error
             .to_string()
             .contains("not in the configured table mapping"));
+    }
+
+    #[test]
+    fn aggregate_query_rejects_identity_metric_even_when_mapped() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_contract_warning",
+                "id_column": "parentcode",
+                "id_columns": ["parentcode", "storecode"],
+                "title_column": "shopdesc",
+                "content_columns": ["shopdesc", "parentcode", "yuezujin"],
+                "metadata_columns": ["parentcode", "storecode", "yuezujin"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_contract_warning".to_string(),
+            dimensions: vec!["shopdesc".to_string()],
+            metric: Some("parentcode".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: None,
+            limit: Some(8),
+            scan_limit: Some(5_000),
+        };
+
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("identity columns must never be numerically aggregated");
+        assert!(error.to_string().contains("identity"));
+    }
+
+    #[test]
+    fn aggregate_query_rejects_unknown_single_letter_metric() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "s",
+                "id_column": "a",
+                "content_columns": ["a"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "s".to_string(),
+            dimensions: Vec::new(),
+            metric: Some("a".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: None,
+            limit: Some(8),
+            scan_limit: Some(5_000),
+        };
+
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("single-letter identity fields must not become metrics");
+        assert!(error.to_string().contains("identity"));
+    }
+
+    #[test]
+    fn aggregate_query_rejects_sum_for_ratio_metric() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_rent_health",
+                "id_column": "storecode",
+                "title_column": "shopdesc",
+                "content_columns": ["shopdesc", "rent_sales_ratio"],
+                "metadata_columns": ["rent_sales_ratio"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_rent_health".to_string(),
+            dimensions: vec!["shopdesc".to_string()],
+            metric: Some("rent_sales_ratio".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: None,
+            limit: Some(8),
+            scan_limit: Some(5_000),
+        };
+
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("ratio metrics require an explicitly safe non-sum aggregation");
+        assert!(error.to_string().contains("non-additive"));
+    }
+
+    #[test]
+    fn aggregate_query_rejects_key_metrics_and_uncontracted_unit_values() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_prices",
+                "id_column": "row_id",
+                "content_columns": ["price_key", "unit_price", "monthly_rent"],
+                "metadata_columns": ["price_key", "unit_price", "monthly_rent"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        for (metric, expected) in [
+            ("price_key", "identity"),
+            ("unit_price", "non-additive"),
+            ("monthly_rent", "non-additive"),
+        ] {
+            let request = MySqlAggregateRequest {
+                table: "bi_prices".to_string(),
+                dimensions: Vec::new(),
+                metric: Some(metric.to_string()),
+                aggregation: "sum".to_string(),
+                order_direction: None,
+                latest_time_column: None,
+                limit: Some(8),
+                scan_limit: Some(5_000),
+            };
+            let error = build_mysql_aggregate_query(&config, &request)
+                .expect_err("uncontracted or key-like fields must not be summed");
+            assert!(
+                error.to_string().contains(expected),
+                "{metric} should fail as {expected}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_query_rejects_near_collision_metric_name() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_status",
+                "id_column": "id",
+                "content_columns": ["currentstatus"],
+                "metadata_columns": ["currentstatus"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_status".to_string(),
+            dimensions: Vec::new(),
+            metric: Some("currentstatus".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: None,
+            limit: Some(8),
+            scan_limit: Some(5_000),
+        };
+
+        let error = build_mysql_aggregate_query(&config, &request)
+            .expect_err("embedded `rent` must not make currentstatus a numeric metric");
+        assert!(error
+            .to_string()
+            .contains("no recognized numeric metric semantics"));
+
+        let status_value_raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_status",
+                "id_column": "id",
+                "content_columns": ["status_value"],
+                "metadata_columns": ["status_value"]
+            }]
+        });
+        let status_value_config =
+            MySqlSourceConfig::from_value(&status_value_raw).expect("config parses");
+        let status_value_request = MySqlAggregateRequest {
+            table: "bi_status".to_string(),
+            dimensions: Vec::new(),
+            metric: Some("status_value".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: None,
+            limit: Some(8),
+            scan_limit: Some(5_000),
+        };
+        let error = build_mysql_aggregate_query(&status_value_config, &status_value_request)
+            .expect_err("generic value fields require an explicit numeric policy");
+        assert!(error
+            .to_string()
+            .contains("no recognized numeric metric semantics"));
     }
 
     #[test]
