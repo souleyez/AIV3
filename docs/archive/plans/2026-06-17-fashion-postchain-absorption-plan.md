@@ -1,4 +1,4 @@
-> **ARCHIVED 2026-07-10:** 历史设计参考，不能覆盖当前任务顺序、授权边界或发布门禁。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
+> **ARCHIVED 2026-07-10 — NON-EXECUTABLE:** 历史设计参考，不能覆盖当前任务顺序、授权边界或发布门禁；禁止继续其中 Task。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
 
 # Fashion Postchain Absorption Plan
 

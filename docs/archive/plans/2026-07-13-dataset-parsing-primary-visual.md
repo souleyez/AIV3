@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 仅作历史设计与验收证据；禁止继续 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # Dataset Parsing Primary Visual Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use executing-plans to implement this plan task by task.
@@ -50,4 +52,3 @@
 1. 运行图谱模型测试。
 2. 运行 Web 全量模型测试与生产构建。
 3. 本地启动真实页面，验证主体内不再出现资产库和重复数据集列表、图谱全宽居首、节点标签常显且最多 5 个字。
-

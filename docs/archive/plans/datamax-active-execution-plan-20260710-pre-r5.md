@@ -1,4 +1,4 @@
-> **ARCHIVED 2026-07-10:** 历史执行账本，仅供查证。禁止从本文继续执行、追加状态或恢复旧优先级。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
+> **ARCHIVED 2026-07-10 — NON-EXECUTABLE:** 历史执行账本，仅供查证。禁止从本文继续执行、追加状态或恢复旧优先级。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
 
 # DataMax 主线缺口补齐 Implementation Plan
 

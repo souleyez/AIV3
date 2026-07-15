@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 仅作历史设计与验收证据；禁止继续 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # DataMax V3 Remaining Release Train Implementation Plan (R5 Completed)
 
 > **For Codex:** REQUIRED SUB-SKILL: Use `@executing-plans` to implement this plan task-by-task. Do not combine live-write tasks, skip approval gates, or continue after a failed gate.

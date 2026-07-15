@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 仅作历史设计与验收证据；禁止继续 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # Dataset Understanding Explainability Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
@@ -64,4 +66,3 @@
 2. 运行 Web 全量测试和生产构建。
 3. 使用真实公开数据集验证五个阶段点击内容、节点连接说明、无重复列表、无资产库模块和图谱可读性。
 4. 截图检查主视觉、右侧检查器和节点文字是否清晰。
-

@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 本计划 Task 1–6 已部署，其未闭合的 disposable PostgreSQL、真实 provider QA 与字段语义契约已完整转入新计划；禁止继续旧 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # DataMax Answer Quality P0 Safety Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

@@ -5,7 +5,7 @@
 本账本对应：
 
 ```text
-docs/plans/2026-07-15-datamax-knowledge-graph-assisted-supply-answer-quality-plan.md
+docs/archive/plans/2026-07-15-datamax-knowledge-graph-assisted-supply-answer-quality-plan.md
 ```
 
 目标是验证现有语义图谱能否通过选择、排序和补充真实证据提高问答质量。核心原则是：**只编排授权、可追溯的供料，不编排对话、意图、答案、路由或动作**。图谱不得决定答案结构、模型结论、措辞、报表或静态页；模型继续自行理解问题、组织答案并决定表达方式。
