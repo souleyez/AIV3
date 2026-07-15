@@ -1,6 +1,6 @@
 # DataMax V3 Active Execution Plan
 
-**Status:** LOCAL P0 SAFETY CANDIDATE GREEN — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING
+**Status:** DEPLOYED P0 SAFETY CANDIDATE — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING
 
 Current independent plan:
 
@@ -14,12 +14,15 @@ Current goal:
 - make the live answer-quality harness fail closed on inner evaluator failures and captured side effects;
 - preserve the principle that DataMax supplies authorized evidence but does not orchestrate conversation, answer structure, conclusions, wording, routes or actions.
 
-Current local receipt:
+Current release receipt:
 
 - the deterministic P0 action, database-selection, connector, evaluator, and offline wrapper gates pass;
 - `platform-api` discovered 2900 library tests and reported 2898 passed, 0 failed, and 2 ignored;
 - 182 PostgreSQL-backed test bodies returned early because no disposable database was configured, so this is not a database integration pass;
-- no real provider/live quality run, commit, push, deployment, feature change, service restart, or server operation was performed;
+- implementation commits `a81fcca11ab5f9023adc811632245f8a72f48f52` and `1deca3aa5e6bfc22af5ff66cdf45292520a42818` are pushed to `origin/codex/dataset-understanding-mvp`;
+- 8-server `/srv/aiv3/repo` fast-forwarded from `a8171c468d4e339bd10cbb03765f1038301f9d88` to `1deca3aa5e6bfc22af5ff66cdf45292520a42818`; only `aiv3-platform-api.service` and `aiv3-assistant-run-worker.service` were rebuilt and restarted;
+- both services are active with zero restarts and zero warning-priority journal entries since deployment; platform health/ready are green and both public Web entry points return HTTP 200;
+- no real provider/live quality run, disposable database run, migration, source write, configuration edit, feature enablement, or Web deployment was performed;
 - the next gates are disposable PostgreSQL verification, controlled real-provider quality evidence, and the P1 field semantic contract. Case 012 remains intentionally fail-closed for the uncontracted sales-gap aggregate.
 
 The previous graph-assisted supply plan completed on 2026-07-15 with `keep_graph_visual_only`; it is frozen at `docs/plans/2026-07-15-datamax-knowledge-graph-assisted-supply-answer-quality-plan.md`. Its feature remains off and it provides no promotion candidate. The new P0 plan is independent and responds to the extended live QA evidence; it does not reopen graph rollout, shadow execution, or provider authorization.

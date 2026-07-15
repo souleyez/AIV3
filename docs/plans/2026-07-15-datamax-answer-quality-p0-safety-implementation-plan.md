@@ -10,15 +10,15 @@
 
 ---
 
-**Status:** LOCAL P0 SAFETY CANDIDATE GREEN — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING
+**Status:** DEPLOYED P0 SAFETY CANDIDATE — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING
 
 **Design:** `docs/plans/2026-07-15-datamax-answer-quality-p0-safety-design.md`
 
 **Baseline:** `a8171c468d4e339bd10cbb03765f1038301f9d88`
 
-**Local gate date:** 2026-07-15
+**Local gate and 8-server deployment date:** 2026-07-15
 
-The three proven P0 failure classes now have local fail-closed guards and green deterministic regression coverage. This status is deliberately not `COMPLETE`: no real provider/live answer run or disposable PostgreSQL integration run was executed, and case 012 cannot recover a sales-gap aggregate until a persisted field semantic contract authorizes the relevant aggregation.
+The three proven P0 failure classes now have deployed fail-closed guards and green deterministic regression coverage. This status is deliberately not `COMPLETE`: no real provider/live answer run or disposable PostgreSQL integration run was executed, and case 012 cannot recover a sales-gap aggregate until a persisted field semantic contract authorizes the relevant aggregation.
 
 ## Task 1: Freeze the live failures as regression cases
 
@@ -223,6 +223,27 @@ Do not commit, push, deploy, change flags, restart services, call a provider, or
 - No provider call, live write, disposable PostgreSQL run, commit, push, deployment, flag change, service restart, or server access was performed.
 
 Open gates remain the disposable PostgreSQL integration run, a controlled real-provider answer-quality run, persisted per-column type/unit/additivity/allowed-aggregation contracts, and broader claim-level traceability. The direct image structured-extraction path remains a read-only evidence preprocessing path outside this mutating artifact-action P0; this receipt does not claim that every provider/model preprocessing route is disabled.
+
+### 2026-07-15 GitHub and 8-server deployment receipt
+
+- GitHub implementation commits:
+  - `a81fcca11ab5f9023adc811632245f8a72f48f52` (`fix: make answer quality safety gates fail closed`);
+  - `1deca3aa5e6bfc22af5ff66cdf45292520a42818` (`fix: reject schema tutorial prompts`).
+- Both commits were pushed to `origin/codex/dataset-understanding-mvp`; local HEAD and the remote branch matched `1deca3aa5e6bfc22af5ff66cdf45292520a42818`. No GitHub Actions workflow run was created for that commit, so CI is not claimed as evidence.
+- 8-server `/srv/aiv3/repo` clean-fast-forwarded from `a8171c468d4e339bd10cbb03765f1038301f9d88` to exact `1deca3aa5e6bfc22af5ff66cdf45292520a42818`.
+- Rollback backup: `/srv/aiv3/backups/datamax-answer-quality-p0-20260715T120806Z-a8171c46`; it contains the prior `platform-api` and `assistant-run-worker` binaries, baseline/target SHAs, and both systemd unit definitions.
+- Server focused gates passed: schema/prompt 5/5, external action authorization 7/7, connector aggregate 11/11, `cargo fmt --all -- --check`, and live-capture self-test 12/12.
+- Release build passed with `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker`; only `aiv3-platform-api.service` and `aiv3-assistant-run-worker.service` were restarted because those are the two runtime paths that execute the changed code.
+- Both running process hashes matched their new on-disk binaries. Both units remained `active/running`, `Result=success`, `NRestarts=0`; warning-priority journal counts since restart were zero.
+- `http://127.0.0.1:3000/healthz` returned `status=ok`; `readyz` returned `status=ready`; `https://gm.goods-editor.com/` and `https://v3.elepcloud.com/` returned HTTP 200.
+- The six related dark-release flags were disabled or unset in the running API process. No configuration, environment file, systemd unit, schema, migration, or Web asset was changed.
+- Server official offline wrappers passed with receipts under:
+  - `target/assistant-chat-contract-smoke/assistant-chat-contract-smoke-20260715T122056Z.json`;
+  - `target/external-direct-reply-smoke/external-direct-reply-smoke-20260715T122318Z.json`;
+  - `target/retrieval-quality-smoke/retrieval-quality-smoke-20260715T122404Z.json`;
+  - `target/newbai-customer-answer-smoke/newbai-customer-answer-smoke-20260715122406.json`;
+  - `target/newbai-customer-answer-live-capture/20260715121209452-2107116.json`.
+- The live-capture receipt is still a no-network self-test and non-decision-eligible. No provider call, customer/source database query, disposable PostgreSQL integration run, source sync, static-page generation, business-data write, or cleanup was performed.
 
 ## Deferred P1: Persist per-column semantic contracts
 

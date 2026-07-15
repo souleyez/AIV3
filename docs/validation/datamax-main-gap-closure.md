@@ -46897,3 +46897,38 @@ Data-ingestion external fixed-task smoke:
   - no provider call, live write, disposable database, source sync, migration, config or feature-flag change, static-page generation, service restart, server access, commit, push, deployment, or cleanup was performed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, source payload, or raw provider payload was recorded;
   - current status is `LOCAL P0 SAFETY CANDIDATE GREEN — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING`, not release completion.
+
+## 2026-07-15 Answer Quality P0 Safety GitHub and 8-Server Deployment
+
+- GitHub release line:
+  - implementation commit `a81fcca11ab5f9023adc811632245f8a72f48f52` added the fail-closed action, database, connector, evaluator, and fixture guards;
+  - follow-up commit `1deca3aa5e6bfc22af5ff66cdf45292520a42818` rejected schema tutorial/concept wording while preserving explicit schema-list requests;
+  - both commits were pushed to `origin/codex/dataset-understanding-mvp`; local and remote heads matched `1deca3aa5e6bfc22af5ff66cdf45292520a42818`;
+  - `gh run list --commit 1deca3aa` returned no workflow run, so GitHub Actions is not acceptance evidence for this release.
+- 8-server synchronization and rollback:
+  - `/srv/aiv3/repo` clean-fast-forwarded from `a8171c468d4e339bd10cbb03765f1038301f9d88` to exact `1deca3aa5e6bfc22af5ff66cdf45292520a42818`;
+  - rollback backup `/srv/aiv3/backups/datamax-answer-quality-p0-20260715T120806Z-a8171c46` contains both prior binaries, unit definitions, and baseline/target SHA records;
+  - no migration, environment edit, feature enablement, daemon reload, Web build, or unrelated service restart occurred.
+- 8-server deterministic gates:
+  - `cargo fmt --all -- --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api --lib assistant_run_database_prompt_support::tests`: passed 5/5;
+  - `CC=clang CXX=clang++ cargo test -p platform-api --lib external_channel_action_prompt_support::tests`: passed 7/7;
+  - `CC=clang CXX=clang++ cargo test -p external-source-connectors --lib aggregate_query`: passed 11/11;
+  - `npm run smoke:newbai-customer-answer-live-capture -- --self-test`: passed 12/12 with `evaluator_ok=true` and `captured_side_effect_detected=false`, receipt `target/newbai-customer-answer-live-capture/20260715121209452-2107116.json`.
+- Build and runtime:
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker`: passed;
+  - only `aiv3-platform-api.service` and `aiv3-assistant-run-worker.service` were restarted;
+  - both services remained `active/running`, `Result=success`, `NRestarts=0`, and their running executable hashes matched the newly built binaries;
+  - warning-priority journal counts since restart were zero for both units;
+  - API `healthz` returned `status=ok`, `readyz` returned `status=ready`, and `https://gm.goods-editor.com/` plus `https://v3.elepcloud.com/` returned HTTP 200;
+  - all six related dark-release flags were disabled or unset in the running API process.
+- 8-server official offline wrapper receipts:
+  - assistant chat contract: `target/assistant-chat-contract-smoke/assistant-chat-contract-smoke-20260715T122056Z.json`;
+  - external direct reply: `target/external-direct-reply-smoke/external-direct-reply-smoke-20260715T122318Z.json`;
+  - retrieval quality baseline: `target/retrieval-quality-smoke/retrieval-quality-smoke-20260715T122404Z.json`;
+  - NewBai customer answer fixture: `target/newbai-customer-answer-smoke/newbai-customer-answer-smoke-20260715122406.json`.
+- Evidence boundary and remaining gates:
+  - no real provider call, customer/source database query, disposable PostgreSQL integration run, source sync, static-page generation, business-data mutation, or cleanup was performed;
+  - the live-capture self-test is no-network, diagnostic-only, and non-decision-eligible;
+  - case 012 still fails closed for uncontracted `quekou`/`xuzengxiaoshou` aggregation until the P1 persisted field semantic contract exists;
+  - current status is `DEPLOYED P0 SAFETY CANDIDATE — REAL LIVE QUALITY, DISPOSABLE DB, AND FIELD SEMANTIC CONTRACT PENDING`, not full answer-quality completion.
