@@ -18,6 +18,9 @@ args=(--self-test --pretty --fixture "${fixture_path}" --output-dir "${output_di
 if [[ -n "${NEWBAI_CUSTOMER_ANSWER_RESULTS_JSONL:-}" ]]; then
   args+=(--results-jsonl "${NEWBAI_CUSTOMER_ANSWER_RESULTS_JSONL}")
 fi
+if [[ -n "${NEWBAI_CUSTOMER_ANSWER_SELECTED_CASE_IDS:-}" ]]; then
+  args+=(--selected-case-ids "${NEWBAI_CUSTOMER_ANSWER_SELECTED_CASE_IDS}")
+fi
 
 echo "NewBai customer answer smoke started"
 echo "Repository: ${repo_root}"

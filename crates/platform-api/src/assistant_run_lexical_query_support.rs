@@ -393,8 +393,19 @@ pub(crate) fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
 }
 
 pub(crate) fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
+    lexical_term_weights(lexical_query_tokens(query))
+}
+
+/// Produces literal surface-form weights without the domain-hint expansion
+/// used by the general retrieval ranker. Semantic graph matching uses this
+/// narrower form so inferred synonyms cannot create a graph supply match.
+pub(crate) fn lexical_surface_term_weights(content: &str) -> BTreeMap<String, f64> {
+    lexical_term_weights(lexical_surface_tokens(content))
+}
+
+fn lexical_term_weights(tokens: Vec<String>) -> BTreeMap<String, f64> {
     let mut frequencies: BTreeMap<String, f64> = BTreeMap::new();
-    for token in lexical_query_tokens(query) {
+    for token in tokens {
         *frequencies.entry(token).or_insert(0.0) += 1.0;
     }
 
@@ -408,6 +419,12 @@ pub(crate) fn lexical_query_term_weights(query: &str) -> BTreeMap<String, f64> {
 }
 
 pub(crate) fn lexical_query_tokens(content: &str) -> Vec<String> {
+    let mut tokens = lexical_surface_tokens(content);
+    extend_lexical_domain_hint_tokens(content, &mut tokens);
+    tokens
+}
+
+fn lexical_surface_tokens(content: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut ascii_token = String::new();
     let mut cjk_chars = Vec::new();
@@ -428,7 +445,6 @@ pub(crate) fn lexical_query_tokens(content: &str) -> Vec<String> {
     flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
     flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
     extend_lexical_ascii_connector_tokens(content, &mut tokens);
-    extend_lexical_domain_hint_tokens(content, &mut tokens);
     tokens
 }
 

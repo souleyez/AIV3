@@ -217,6 +217,64 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_public_citation_keeps_real_source_and_drops_semantic_internals() {
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "dataset_id": "dataset-visible",
+                "document_id": "document-visible",
+                "document_chunk_id": "chunk-visible",
+                "retrieval_evidence_id": "evidence-visible",
+                "source_locator": "documents/real-policy.pdf#page=3&chunk=4",
+                "summary": "真实制度资料摘要",
+                "semantic_score": 0.12,
+                "snapshot_id": "citation-semantic-snapshot-secret",
+                "matched_node_ids": ["citation-semantic-node-secret"],
+                "query_aliases": ["citation-semantic-alias-secret"],
+                "semantic_supply_trace": {
+                    "match_ids": ["citation-semantic-match-secret"],
+                    "visible_source_document_ids": ["citation-hidden-document-secret"],
+                    "answer_template": "citation-answer-template-secret",
+                    "intent": "citation-intent-secret",
+                    "route": "citation-route-secret",
+                    "action": "citation-action-secret"
+                }
+            }]
+        });
+
+        let citations = external_channel_public_citations_from_evidence_state(&evidence_state);
+        let serialized = serde_json::to_string(&citations).unwrap();
+
+        assert_eq!(
+            citations,
+            vec![json!({
+                "type": "retrieval_evidence",
+                "source": "documents/real-policy.pdf#page=3&chunk=4",
+                "text": "真实制度资料摘要",
+            })]
+        );
+        assert_eq!(citations[0].as_object().unwrap().len(), 3);
+        for secret in [
+            "citation-semantic-snapshot-secret",
+            "citation-semantic-node-secret",
+            "citation-semantic-alias-secret",
+            "citation-semantic-match-secret",
+            "citation-hidden-document-secret",
+            "citation-answer-template-secret",
+            "citation-intent-secret",
+            "citation-route-secret",
+            "citation-action-secret",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "internal semantic value leaked into public citation: {secret}"
+            );
+        }
+    }
+
+    #[test]
     fn public_citations_keep_existing_card_without_overwriting_citations() {
         let reply = text_reply(Some(json!({
             "type": "existing_card",

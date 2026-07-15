@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -54,6 +55,9 @@ function parseArgs(argv) {
     requireReady: parseBoolean(process.env.NEWBAI_CUSTOMER_ANSWER_REQUIRE_READY),
     fixturePath: process.env.NEWBAI_CUSTOMER_ANSWER_FIXTURE || DEFAULT_FIXTURE_PATH,
     resultsJsonl: process.env.NEWBAI_CUSTOMER_ANSWER_RESULTS_JSONL || null,
+    selectedCaseIds: parseCaseIdCsv(
+      process.env.NEWBAI_CUSTOMER_ANSWER_SELECTED_CASE_IDS || '',
+    ),
     outputDir: process.env.NEWBAI_CUSTOMER_ANSWER_SMOKE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -61,7 +65,7 @@ function parseArgs(argv) {
     const next = argv[index + 1];
     if (arg === '--self-test') {
       args.selfTest = true;
-    } else if (arg === '--require-ready') {
+    } else if (arg === '--require-diagnostic-match' || arg === '--require-ready') {
       args.requireReady = true;
     } else if (arg === '--pretty') {
       args.pretty = true;
@@ -70,6 +74,9 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--results-jsonl') {
       args.resultsJsonl = requireValue(arg, next);
+      index += 1;
+    } else if (arg === '--selected-case-ids') {
+      args.selectedCaseIds = parseCaseIdCsv(requireValue(arg, next));
       index += 1;
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
@@ -95,12 +102,19 @@ function printHelp() {
   console.log(`Usage:
   node scripts/smoke/newbai-customer-answer.mjs --self-test
   node scripts/smoke/newbai-customer-answer.mjs --results-jsonl target/live-results.jsonl
-  node scripts/smoke/newbai-customer-answer.mjs --results-jsonl target/live-results.jsonl --require-ready
+  node scripts/smoke/newbai-customer-answer.mjs --results-jsonl target/live-results.jsonl \
+    --selected-case-ids newbai-customer-001,newbai-customer-002 --require-diagnostic-match
+
+This is a legacy lexical diagnostic. A match never authorizes promotion,
+prescribes model wording, or proves execution safety. --require-ready remains
+accepted only as a backward-compatible alias.
 
 This deterministic smoke evaluates NewBai customer-facing answer quality from
 local fixture data or supplied result JSONL. It does not call DataMax, does not
 call a model provider, does not enqueue report rendering, and does not publish
-static pages.
+static pages. Fixture self-test evaluates every fixture. Supplied result JSONL
+must exactly match either the full fixture or the explicit --selected-case-ids
+set; unselected fixtures are recorded as skipped.
 `);
 }
 
@@ -154,6 +168,34 @@ async function readJsonl(path) {
 
 function resultCaseId(result) {
   return result.case_id || result.caseId || result.id;
+}
+
+function resolveDeclaredCaseIds(fixtures, results, requestedCaseIds) {
+  const fixtureIds = fixtures.map((fixture) => fixture.case_id);
+  const fixtureSet = new Set(fixtureIds);
+  const declared = requestedCaseIds.length > 0 ? requestedCaseIds : fixtureIds;
+  const declaredSet = new Set(declared);
+  const unknownDeclared = declared.filter((caseId) => !fixtureSet.has(caseId));
+  if (unknownDeclared.length > 0) {
+    throw new Error(`selected case IDs are not registered: ${unknownDeclared.join(',')}`);
+  }
+
+  const resultIds = results.map(resultCaseId);
+  if (resultIds.some((caseId) => typeof caseId !== 'string' || !caseId)) {
+    throw new Error('every result row requires a registered case ID');
+  }
+  if (new Set(resultIds).size !== resultIds.length) {
+    throw new Error('result JSONL contains duplicate case IDs');
+  }
+  const resultSet = new Set(resultIds);
+  const missing = declared.filter((caseId) => !resultSet.has(caseId));
+  const extra = resultIds.filter((caseId) => !declaredSet.has(caseId));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `result case set does not match declared set: missing=${missing.join(',') || 'none'} extra=${extra.join(',') || 'none'}`,
+    );
+  }
+  return fixtureIds.filter((caseId) => declaredSet.has(caseId));
 }
 
 function evidenceCorpus(result) {
@@ -257,6 +299,7 @@ function evaluateCase(fixture, result) {
     category: fixture.category,
     prompt: fixture.prompt,
     passed: failureReasons.length === 0,
+    diagnostic_matched: failureReasons.length === 0,
     failure_reasons: failureReasons,
     answer_pattern_matched: missingAnswerPatterns.length === 0 && matchedForbiddenAnswerPatterns.length === 0,
     evidence_use_ok: missingEvidenceTypes.length === 0 && missingEvidencePhrases.length === 0,
@@ -353,8 +396,14 @@ function makeRunId() {
   return new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
 }
 
-function buildReport(fixtures, resultsByCaseId, sourceMode) {
-  const caseResults = fixtures.map((fixture) => {
+function buildReport(fixtures, resultsByCaseId, sourceMode, declaredCaseIds) {
+  const selectedSet = new Set(declaredCaseIds);
+  const evaluatedFixtures = fixtures.filter((fixture) => selectedSet.has(fixture.case_id));
+  const selectedCaseIds = evaluatedFixtures.map((fixture) => fixture.case_id);
+  const skippedCaseIds = fixtures
+    .filter((fixture) => !evaluatedFixtures.includes(fixture))
+    .map((fixture) => fixture.case_id);
+  const caseResults = evaluatedFixtures.map((fixture) => {
     const result = resultsByCaseId.get(fixture.case_id);
     if (!result) {
       return {
@@ -389,14 +438,16 @@ function buildReport(fixtures, resultsByCaseId, sourceMode) {
   const ordinaryQuestionMisrouteCount = caseResults.filter((item) =>
     item.failure_reasons.includes('ordinary_question_misroute'),
   ).length;
-  const ready = caseResults.every((item) => item.passed);
+  const ready = caseResults.length > 0 && caseResults.every((item) => item.passed);
+  const fixtureOnlyExecution = sourceMode === 'fixture_sample';
   const safety = {
-    dataMaxCalled: false,
-    providerCalled: false,
-    databaseMutated: false,
-    staticPagePublished: false,
-    reportRenderEnqueued: false,
-    postgresLexicalEnabled: false,
+    dataMaxCalled: fixtureOnlyExecution ? false : null,
+    providerCalled: fixtureOnlyExecution ? false : null,
+    databaseMutated: fixtureOnlyExecution ? false : null,
+    staticPagePublished: fixtureOnlyExecution ? false : null,
+    reportRenderEnqueued: fixtureOnlyExecution ? false : null,
+    postgresLexicalEnabled: fixtureOnlyExecution ? false : null,
+    status: fixtureOnlyExecution ? 'offline_fixture_no_execution' : 'unknown_without_linked_execution_receipt',
   };
   const summary = buildSummary({
     caseResults,
@@ -413,8 +464,24 @@ function buildReport(fixtures, resultsByCaseId, sourceMode) {
     generated_at: new Date().toISOString(),
     ok: summary.ok,
     ready,
+    diagnostic_match: ready,
+    evaluation_class: 'legacy_answer_pattern_diagnostic',
+    decision_eligible: false,
+    status_semantics: 'legacy_pattern_match_only_not_quality_readiness_or_promotion',
+    promotion_blockers: [
+      'answer_wording_and_route_oracles_are_diagnostic_only',
+      'claim_source_binding_not_implemented',
+      'linked_execution_safety_receipt_not_implemented',
+    ],
     summary,
     source_mode: sourceMode,
+    fixture_sha256: sha256Json(fixtures),
+    selected_case_ids: selectedCaseIds,
+    selected_case_set_sha256: sha256Json(selectedCaseIds),
+    total_fixture_case_count: fixtures.length,
+    selected_case_count: caseResults.length,
+    skipped_case_count: skippedCaseIds.length,
+    skipped_case_ids: skippedCaseIds,
     case_count: caseResults.length,
     passed_case_count: caseResults.filter((item) => item.passed).length,
     failed_case_count: caseResults.filter((item) => !item.passed).length,
@@ -433,6 +500,108 @@ function buildReport(fixtures, resultsByCaseId, sourceMode) {
     safety,
     cases: caseResults,
   };
+}
+
+function parseCaseIdCsv(value) {
+  const caseIds = String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+  if (new Set(caseIds).size !== caseIds.length) {
+    throw new Error('selected case IDs must be unique');
+  }
+  return caseIds;
+}
+
+function sha256Json(value) {
+  return createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+}
+
+function assertSelectedCaseEvaluation() {
+  const fixtures = [
+    {
+      case_id: 'selected-case',
+      category: 'business_answer',
+      prompt: 'selected',
+      expectations: { required_answer_patterns: ['selected'] },
+    },
+    {
+      case_id: 'newbai-customer-009',
+      category: 'template_reuse_guard',
+      prompt: 'skipped template guard',
+      expectations: { required_answer_patterns: ['template'] },
+    },
+    {
+      case_id: 'newbai-customer-010',
+      category: 'template_reuse_guard',
+      prompt: 'skipped template guard',
+      expectations: { required_answer_patterns: ['template'] },
+    },
+  ];
+  const selectedResultRows = [
+    { case_id: 'selected-case', answer: 'selected', evidence: [] },
+  ];
+  const selectedCaseIds = resolveDeclaredCaseIds(fixtures, selectedResultRows, ['selected-case']);
+  const selectedResults = new Map(selectedResultRows.map((result) => [result.case_id, result]));
+
+  const selectedReport = buildReport(
+    fixtures,
+    selectedResults,
+    'results_jsonl',
+    selectedCaseIds,
+  );
+  assert.equal(selectedReport.ready, true, 'selected result should pass independently of skipped fixtures');
+  assert.equal(selectedReport.case_count, 1, 'only executed result cases should be evaluated');
+  assert.deepEqual(
+    selectedReport.skipped_case_ids,
+    ['newbai-customer-009', 'newbai-customer-010'],
+    'unexecuted template guards should be reported as skipped',
+  );
+  assert.equal(
+    selectedReport.cases.some((item) => item.failure_reasons.includes('missing_result')),
+    false,
+    'unexecuted template guards must not be reported as missing results',
+  );
+  assert.deepEqual(selectedReport.selected_case_ids, ['selected-case']);
+  assert.equal(selectedReport.selected_case_set_sha256, sha256Json(['selected-case']));
+  assert.equal(selectedReport.decision_eligible, false);
+  assert.equal(selectedReport.safety.providerCalled, null);
+  assert.equal(
+    selectedReport.safety.status,
+    'unknown_without_linked_execution_receipt',
+    'captured results must not invent a no-provider or no-mutation receipt',
+  );
+
+  const fullResultRows = fixtures.map((fixture) => ({
+    case_id: fixture.case_id,
+    answer: fixture.case_id === 'selected-case' ? 'selected' : 'template',
+    evidence: [],
+  }));
+  const fullCaseIds = resolveDeclaredCaseIds(fixtures, fullResultRows, []);
+  const fullReport = buildReport(
+    fixtures,
+    new Map(fullResultRows.map((result) => [result.case_id, result])),
+    'results_jsonl',
+    fullCaseIds,
+  );
+  assert.equal(fullReport.ready, true, 'the implicit declaration should bind the complete fixture corpus');
+  assert.deepEqual(
+    fullReport.selected_case_ids,
+    fixtures.map((fixture) => fixture.case_id),
+    'the implicit declaration should preserve fixture order',
+  );
+
+  assert.throws(
+    () => resolveDeclaredCaseIds(fixtures, selectedResultRows, []),
+    /missing=newbai-customer-009,newbai-customer-010 extra=none/,
+    'a result subset without an explicit declaration must fail as incomplete',
+  );
+  assert.throws(
+    () => resolveDeclaredCaseIds(
+      fixtures,
+      [...selectedResultRows, { case_id: 'newbai-customer-009', answer: 'template', evidence: [] }],
+      ['selected-case'],
+    ),
+    /missing=none extra=newbai-customer-009/,
+    'results outside the explicit declaration must fail as extra',
+  );
 }
 
 function buildSummary({
@@ -459,16 +628,20 @@ function buildSummary({
     noForbiddenFalseClaims: forbiddenClaimCount === 0,
     noTemplateOrReportSideEffects: templateSideEffectCount === 0,
     noOrdinaryQuestionMisroute: ordinaryQuestionMisrouteCount === 0,
-    noLiveMutation: safety.dataMaxCalled === false
-      && safety.providerCalled === false
-      && safety.databaseMutated === false
-      && safety.staticPagePublished === false
-      && safety.reportRenderEnqueued === false
-      && safety.postgresLexicalEnabled === false,
+    noLiveMutation: sourceMode === 'fixture_sample'
+      ? safety.dataMaxCalled === false
+        && safety.providerCalled === false
+        && safety.databaseMutated === false
+        && safety.staticPagePublished === false
+        && safety.reportRenderEnqueued === false
+        && safety.postgresLexicalEnabled === false
+      : null,
   };
   return {
-    ok: Object.values(checks).every(Boolean),
+    ok: Object.values(checks).filter((value) => value !== null).every(Boolean),
     checks,
+    decision_eligible: false,
+    execution_safety_status: safety.status,
     source_mode: sourceMode,
     case_count: caseCount,
     passed_case_count: passedCaseCount,
@@ -488,11 +661,16 @@ function markdownReport(report, jsonPath) {
   const lines = [
     '# NewBai Customer Answer Smoke',
     '',
-    `- Status: ${report.ready ? 'passed' : 'failed'}`,
+    `- Legacy diagnostic match: ${report.diagnostic_match}`,
+    `- Evaluation class: ${report.evaluation_class}`,
+    `- Decision eligible: ${report.decision_eligible}`,
     `- Source mode: ${report.source_mode}`,
     `- Generated: ${report.generated_at}`,
     `- JSON report: ${jsonPath}`,
-    `- Cases: ${report.passed_case_count}/${report.case_count} passed`,
+    `- Cases matching legacy diagnostic: ${report.passed_case_count}/${report.case_count}`,
+    `- Total fixture cases: ${report.total_fixture_case_count}`,
+    `- Selected/executed cases: ${report.selected_case_count}`,
+    `- Skipped cases: ${report.skipped_case_count}`,
     `- Answer pattern match rate: ${report.answer_pattern_match_rate}`,
     `- Evidence use rate: ${report.evidence_use_rate}`,
     `- Internal leak count: ${report.internal_leak_count}`,
@@ -532,22 +710,34 @@ async function main() {
     printHelp();
     throw new Error('--self-test or --results-jsonl is required');
   }
+  if (args.selectedCaseIds.length > 0 && !args.resultsJsonl) {
+    throw new Error('--selected-case-ids requires --results-jsonl');
+  }
 
   assertSyntheticGuards();
+  assertSelectedCaseEvaluation();
 
   const fixtures = await readJsonl(args.fixturePath);
   const results = args.resultsJsonl
     ? await readJsonl(args.resultsJsonl)
     : fixtures.map((fixture) => ({ ...fixture.sample_result, case_id: fixture.case_id }));
+  const declaredCaseIds = args.resultsJsonl
+    ? resolveDeclaredCaseIds(fixtures, results, args.selectedCaseIds)
+    : fixtures.map((fixture) => fixture.case_id);
   const resultsByCaseId = new Map(results.map((result) => [resultCaseId(result), result]));
-  const report = buildReport(fixtures, resultsByCaseId, args.resultsJsonl ? 'results_jsonl' : 'fixture_sample');
+  const report = buildReport(
+    fixtures,
+    resultsByCaseId,
+    args.resultsJsonl ? 'results_jsonl' : 'fixture_sample',
+    declaredCaseIds,
+  );
 
   if ((args.selfTest || args.requireReady) && !report.ready) {
     const failed = report.cases
       .filter((item) => !item.passed)
       .map((item) => `${item.case_id}:${item.failure_reasons.join('|')}`)
       .join(', ');
-    throw new Error(`NewBai customer answer smoke did not pass required readiness: ${failed}`);
+    throw new Error(`NewBai legacy diagnostic did not match the declared case set: ${failed}`);
   }
 
   await mkdir(args.outputDir, { recursive: true });
@@ -558,7 +748,7 @@ async function main() {
   await writeFile(mdPath, markdownReport(report, jsonPath), 'utf8');
 
   console.log(
-    `OK newbai customer answer smoke: ready=${report.ready} cases=${report.case_count} report=${jsonPath} summary=${mdPath}`,
+    `OK newbai legacy diagnostic: diagnostic_match=${report.diagnostic_match} decision_eligible=false cases=${report.case_count} report=${jsonPath} summary=${mdPath}`,
   );
 }
 

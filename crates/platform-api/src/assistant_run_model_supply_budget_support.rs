@@ -581,6 +581,80 @@ mod tests {
     }
 
     #[test]
+    fn semantic_supply_model_autonomy_budget_keeps_only_attributable_retrieval_fields() {
+        let items = vec![json!({
+            "type": "retrieval_evidence",
+            "source": "document_chunk_fallback",
+            "dataset_id": "dataset-visible",
+            "document_id": "document-visible",
+            "document_chunk_id": "chunk-visible",
+            "retrieval_evidence_id": "evidence-visible",
+            "source_locator": "documents/real-policy.pdf#chunk=4",
+            "summary": "真实制度资料摘要",
+            "content_excerpt": "真实制度资料正文。",
+            "semantic_score": 0.12,
+            "snapshot_id": "budget-semantic-snapshot-secret",
+            "matched_node_ids": ["budget-semantic-node-secret"],
+            "query_aliases": ["budget-semantic-alias-secret"],
+            "semantic_supply_trace": {
+                "match_ids": ["budget-semantic-match-secret"],
+                "answer_template": "budget-answer-template-secret",
+                "intent": "budget-intent-secret",
+                "route": "budget-route-secret",
+                "action": "budget-action-secret"
+            }
+        })];
+
+        let (model_items, budget) = assistant_run_model_budgeted_supply_items(&items);
+        let model_item = &model_items[0];
+        let serialized = serde_json::to_string(&json!({
+            "model_items": model_items,
+            "budget": budget,
+        }))
+        .unwrap();
+
+        assert_eq!(model_item["type"], json!("retrieval_evidence"));
+        assert_eq!(model_item["source"], json!("document_chunk_fallback"));
+        assert_eq!(model_item["document_id"], json!("document-visible"));
+        assert_eq!(model_item["document_chunk_id"], json!("chunk-visible"));
+        assert_eq!(
+            model_item["retrieval_evidence_id"],
+            json!("evidence-visible")
+        );
+        assert_eq!(
+            model_item["source_locator"],
+            json!("documents/real-policy.pdf#chunk=4")
+        );
+        for internal_key in [
+            "semantic_score",
+            "snapshot_id",
+            "matched_node_ids",
+            "query_aliases",
+            "semantic_supply_trace",
+        ] {
+            assert!(
+                model_item.get(internal_key).is_none(),
+                "internal semantic field must not survive model budgeting: {internal_key}"
+            );
+        }
+        for secret in [
+            "budget-semantic-snapshot-secret",
+            "budget-semantic-node-secret",
+            "budget-semantic-alias-secret",
+            "budget-semantic-match-secret",
+            "budget-answer-template-secret",
+            "budget-intent-secret",
+            "budget-route-secret",
+            "budget-action-secret",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "internal semantic value leaked through model budgeting: {secret}"
+            );
+        }
+    }
+
+    #[test]
     fn budget_preserves_original_order_after_bucket_selection() {
         let items = vec![
             item("database_aggregate", 0),

@@ -50,6 +50,40 @@ run_check() {
   checks+=("${name}")
 }
 
+run_cargo_test_check() {
+  local name="$1"
+  shift
+  local output=""
+  local status=0
+  local executed_count=0
+  echo ""
+  echo "== ${name} =="
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "${output}"
+  if (( status != 0 )); then
+    return "${status}"
+  fi
+  executed_count="$(
+    printf '%s\n' "${output}" | awk '
+/test result:/ {
+  for (field_index = 1; field_index <= NF; field_index += 1) {
+    if ($field_index == "passed;") passed += $(field_index - 1);
+    if ($field_index == "failed;") failed += $(field_index - 1);
+  }
+}
+END { print passed + failed + 0 }
+'
+  )"
+  if (( executed_count < 1 )); then
+    echo "cargo test check matched zero executed tests: ${name}" >&2
+    return 1
+  fi
+  checks+=("${name}")
+}
+
 run_check "ordinary external chat returns provider-authored answered text" \
   "${cargo_bin}" test -p platform-api generic_chat_page_event_returns_provider_model_text_when_configured --lib
 run_check "ordinary external chat falls back when primary output is rejected" \
@@ -70,8 +104,8 @@ run_check "external provider input forbids orchestration acknowledgements" \
   "${cargo_bin}" test -p platform-api assistant_run_provider_input_enforces_external_channel_direct_reply_contract --lib
 run_check "external temporary document scope keeps direct reply contract" \
   "${cargo_bin}" test -p platform-api external_channel_temporary_scope_keeps_direct_reply_contract --lib
-run_check "external temporary document memberships expire without moving documents" \
-  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_expire_without_moving_documents --lib
+run_cargo_test_check "external temporary document memberships persist for the conversation without moving documents" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_persist_for_conversation_without_moving_documents --lib
 run_check "OpenAI-compatible provider timeout is enforced" \
   "${cargo_bin}" test -p llm-gateway openai_compatible_provider_applies_configured_timeout --lib
 run_check "MiniMax global env builds OpenAI-compatible provider" \

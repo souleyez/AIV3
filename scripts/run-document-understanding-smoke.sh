@@ -50,6 +50,40 @@ run_check() {
   checks+=("${name}")
 }
 
+run_cargo_test_check() {
+  local name="$1"
+  shift
+  local output=""
+  local status=0
+  local executed_count=0
+  echo ""
+  echo "== ${name} =="
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "${output}"
+  if (( status != 0 )); then
+    return "${status}"
+  fi
+  executed_count="$(
+    printf '%s\n' "${output}" | awk '
+/test result:/ {
+  for (field_index = 1; field_index <= NF; field_index += 1) {
+    if ($field_index == "passed;") passed += $(field_index - 1);
+    if ($field_index == "failed;") failed += $(field_index - 1);
+  }
+}
+END { print passed + failed + 0 }
+'
+  )"
+  if (( executed_count < 1 )); then
+    echo "cargo test check matched zero executed tests: ${name}" >&2
+    return 1
+  fi
+  checks+=("${name}")
+}
+
 run_check "PaddleOCR parser contract tests" \
   "${cargo_bin}" test -p ingest-worker paddleocr --lib
 run_check "one-character PDF extraction is low quality" \
@@ -84,8 +118,8 @@ run_check "external chat document scope builds temporary dataset range" \
   "${cargo_bin}" test -p platform-api external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents --lib
 run_check "external temporary document scope preserves canonical document owner" \
   "${cargo_bin}" test -p platform-api external_channel_temporary_scope_does_not_mutate_document_dataset --lib
-run_check "external temporary document memberships expire without moving documents" \
-  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_expire_without_moving_documents --lib
+run_cargo_test_check "external temporary document memberships persist for the conversation without moving documents" \
+  "${cargo_bin}" test -p platform-api external_channel_temporary_dataset_memberships_persist_for_conversation_without_moving_documents --lib
 run_check "dataset document memberships support multi-dataset read scopes" \
   "${cargo_bin}" test -p platform-api dataset_document_memberships_allow_document_in_multiple_dataset_scopes --lib
 run_check "external temporary document scope limits retrieval to selected documents" \

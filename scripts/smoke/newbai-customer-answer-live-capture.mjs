@@ -12,8 +12,19 @@ const DEFAULT_FIXTURE_PATH = 'fixtures/newbai-customer-answer/cases.jsonl';
 const DEFAULT_OUTPUT_DIR = 'target/newbai-customer-answer-live-capture';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_PROMPT =
-  '请只输出自然语言答案。不要生成、发布或排队任何报表页、静态页面、HTML兜底或新模板；如果用户提到已有模板，只说明应复用已有模板并回答问题。';
+const EVALUATION_CLASS = 'legacy_answer_pattern_diagnostic';
+const PROMOTION_BLOCKERS = [
+  'answer_pattern_oracles_are_not_promotion_gates',
+  'no_per_claim_document_chunk_locator_binding',
+  'no_linked_execution_safety_receipt',
+];
+const ORCHESTRATION_PAYLOAD_FIELDS = [
+  'default_prompt',
+  'output_format',
+  'render_mode',
+  'render_options',
+  'requested_skills',
+];
 const ACTIVE_REPLY_STATUSES = new Set(['accepted', 'queued', 'processing', 'running']);
 
 function parseArgs(argv) {
@@ -39,7 +50,6 @@ function parseArgs(argv) {
     botExternalId: process.env.NEWBAI_CUSTOMER_ANSWER_LIVE_BOT_EXTERNAL_ID || 'bot-v3',
     senderExternalId:
       process.env.NEWBAI_CUSTOMER_ANSWER_LIVE_SENDER_EXTERNAL_ID || 'user-newbai-customer-answer-smoke',
-    defaultPrompt: process.env.NEWBAI_CUSTOMER_ANSWER_LIVE_DEFAULT_PROMPT || DEFAULT_PROMPT,
     timeoutMs: Number(process.env.NEWBAI_CUSTOMER_ANSWER_LIVE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     pollIntervalMs: Number(
       process.env.NEWBAI_CUSTOMER_ANSWER_LIVE_POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS,
@@ -99,9 +109,6 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--sender-external-id') {
       args.senderExternalId = requireValue(arg, next);
-      index += 1;
-    } else if (arg === '--default-prompt') {
-      args.defaultPrompt = requireValue(arg, next);
       index += 1;
     } else if (arg === '--timeout-ms') {
       args.timeoutMs = Number(requireValue(arg, next));
@@ -237,19 +244,14 @@ function buildPayload(args, fixture, runId) {
     message_external_id: `msg-newbai-customer-answer-${suffix}`,
     message_type: 'text',
     text: fixture.prompt,
-    default_prompt: args.defaultPrompt,
-    output_format: 'rich_text',
-    render_mode: 'normal',
     available_document_source_id: args.sourceId || null,
     available_document_external_ids: args.documentExternalIds,
     dataset_external_ids: args.datasetExternalIds,
     documentExternalId: null,
-    requested_skills: [],
     mention_external_user_ids: [],
     attachment_refs: [],
     idempotency_key: `newbai-customer-answer-live:${suffix}`,
     received_at: new Date().toISOString(),
-    render_options: null,
   };
 }
 
@@ -263,8 +265,9 @@ function summarizePayload(fixture, payload) {
     message_external_id: payload.message_external_id,
     dataset_external_ids_count: payload.dataset_external_ids.length,
     document_external_ids_count: payload.available_document_external_ids.length,
-    render_mode: payload.render_mode,
-    requested_skills_count: payload.requested_skills.length,
+    orchestration_field_count: ORCHESTRATION_PAYLOAD_FIELDS.filter((key) =>
+      Object.hasOwn(payload, key),
+    ).length,
   };
 }
 
@@ -492,7 +495,7 @@ async function writeJsonl(path, rows) {
   await writeFile(path, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8');
 }
 
-function runEvaluator(args, resultJsonl, runId) {
+function runEvaluator(args, resultJsonl, runId, selectedCases) {
   const evaluatorDir = join(args.outputDir, 'evaluator');
   const command = [
     'scripts/smoke/newbai-customer-answer.mjs',
@@ -500,12 +503,14 @@ function runEvaluator(args, resultJsonl, runId) {
     args.fixturePath,
     '--results-jsonl',
     resultJsonl,
+    '--selected-case-ids',
+    selectedCases.map((fixture) => fixture.case_id).join(','),
     '--output-dir',
     evaluatorDir,
     '--pretty',
   ];
   if (args.requireReady) {
-    command.push('--require-ready');
+    command.push('--require-diagnostic-match');
   }
   const result = spawnSync(process.execPath, command, {
     cwd: process.cwd(),
@@ -527,14 +532,18 @@ function renderMarkdown(report) {
   const lines = [
     '# NewBai Customer Answer Live Capture',
     '',
-    `- Status: ${report.ok ? 'passed' : 'failed'}`,
+    `- Diagnostic status: ${report.ok ? 'passed' : 'failed'}`,
+    `- Evaluation class: ${report.evaluation_class}`,
+    `- Decision eligible: ${report.decision_eligible}`,
     `- Mode: ${report.mode}`,
     `- Run ID: ${report.run_id}`,
     `- Network calls run: ${report.safety.network_calls_run}`,
     `- Provider/live allowed: ${report.safety.provider_live_allowed}`,
     `- Static page publish requested: ${report.safety.static_page_publish_requested}`,
+    `- Execution safety evidence: ${report.execution_safety_evidence_status}`,
     `- Result JSONL: ${report.result_jsonl || 'none'}`,
-    `- Evaluator: ${report.evaluator?.run ? (report.evaluator.ok ? 'passed' : 'failed') : 'not run'}`,
+    `- Legacy evaluator: ${report.evaluator?.run ? (report.evaluator.ok ? 'passed' : 'failed') : 'not run'}`,
+    `- Promotion blockers: ${report.promotion_blockers.join(', ')}`,
     '',
     '## Cases',
     '',
@@ -575,6 +584,11 @@ function buildSummary(report) {
       ),
     noStaticPagePublishRequested: report.safety?.static_page_publish_requested === false,
     bearerNotIncludedInReport: report.safety?.bearer_included_in_report === false,
+    orchestrationFieldsAbsent: cases.every((item) => item.orchestration_field_count === 0),
+    permanentlyNonDecision: report.decision_eligible === false
+      && report.evaluation_class === EVALUATION_CLASS
+      && Array.isArray(report.promotion_blockers)
+      && report.promotion_blockers.length === PROMOTION_BLOCKERS.length,
   };
   return {
     ok: Object.values(checks).every(Boolean),
@@ -591,6 +605,8 @@ function buildSummary(report) {
     evaluator_run: evaluatorRun,
     evaluator_ok: evaluatorOk,
     result_jsonl_present: Boolean(report.result_jsonl),
+    evaluation_class: EVALUATION_CLASS,
+    decision_eligible: false,
   };
 }
 
@@ -599,7 +615,9 @@ async function runSelfTest(args, fixtures, selectedCases, runId) {
   const resultJsonl = join(outputDir, `${runId}.results.jsonl`);
   const rows = selectedCases.map((fixture) => ({ case_id: fixture.case_id, ...fixture.sample_result }));
   await writeJsonl(resultJsonl, rows);
-  const evaluator = args.evaluate ? runEvaluator({ ...args, requireReady: true }, resultJsonl, runId) : { run: false };
+  const evaluator = args.evaluate
+    ? runEvaluator({ ...args, requireReady: true }, resultJsonl, runId, selectedCases)
+    : { run: false };
   const report = {
     ok: !evaluator.run || evaluator.ok,
     mode: 'self-test',
@@ -611,6 +629,9 @@ async function runSelfTest(args, fixtures, selectedCases, runId) {
     safety: {
       network_calls_run: false,
       provider_live_allowed: false,
+      provider_call_status: 'not_run',
+      mutation_status: 'not_run',
+      linked_execution_safety_receipt: false,
       static_page_publish_requested: false,
       bearer_included_in_report: false,
     },
@@ -619,6 +640,7 @@ async function runSelfTest(args, fixtures, selectedCases, runId) {
       case_id: fixture.case_id,
       category: fixture.category,
       prompt_sha256: sha256(fixture.prompt),
+      orchestration_field_count: 0,
       status: 'sample_result',
     })),
   };
@@ -644,6 +666,9 @@ async function runPreflight(args, fixtures, selectedCases, runId) {
     safety: {
       network_calls_run: false,
       provider_live_allowed: false,
+      provider_call_status: 'not_run',
+      mutation_status: 'not_run',
+      linked_execution_safety_receipt: false,
       live_write_approval_required: true,
       static_page_publish_requested: false,
       bearer_included_in_report: false,
@@ -703,7 +728,9 @@ async function runLive(args, fixtures, selectedCases, runId) {
   const outputDir = join(process.cwd(), args.outputDir);
   const resultJsonl = join(outputDir, `${runId}.results.jsonl`);
   await writeJsonl(resultJsonl, rows);
-  const evaluator = args.evaluate ? runEvaluator(args, resultJsonl, runId) : { run: false };
+  const evaluator = args.evaluate
+    ? runEvaluator(args, resultJsonl, runId, selectedCases)
+    : { run: false };
   const failedCaseCount = cases.filter((item) => item.status === 'failed').length;
   const report = {
     ok: failedCaseCount === 0 && (!evaluator.run || evaluator.ok),
@@ -722,6 +749,9 @@ async function runLive(args, fixtures, selectedCases, runId) {
     safety: {
       network_calls_run: true,
       provider_live_allowed: true,
+      provider_call_status: 'unknown',
+      mutation_status: 'unknown',
+      linked_execution_safety_receipt: false,
       static_page_publish_requested: false,
       bearer_included_in_report: false,
     },
@@ -732,6 +762,12 @@ async function runLive(args, fixtures, selectedCases, runId) {
 }
 
 async function writeReport(args, report, runId) {
+  report.evaluation_class = EVALUATION_CLASS;
+  report.decision_eligible = false;
+  report.promotion_blockers = [...PROMOTION_BLOCKERS];
+  report.execution_safety_evidence_status = report.mode === 'live'
+    ? 'unknown_without_linked_execution_receipt'
+    : 'not_run';
   const summary = buildSummary(report);
   report.summary = summary;
   report.ok = summary.ok;

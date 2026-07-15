@@ -671,6 +671,109 @@ mod tests {
     }
 
     #[test]
+    fn semantic_supply_model_autonomy_keeps_real_retrieval_schema_and_drops_internals() {
+        let item = json!({
+            "type": "retrieval_evidence",
+            "source": "document_chunk_fallback",
+            "dataset_id": "dataset-visible",
+            "document_id": "document-visible",
+            "document_chunk_id": "chunk-visible",
+            "retrieval_evidence_id": "evidence-visible",
+            "chunk_index": 4,
+            "source_locator": "documents/real-policy.pdf#page=3&chunk=4",
+            "summary": "真实制度资料摘要",
+            "content_excerpt": "真实制度资料正文。",
+            "score": 0.91,
+            "semantic_score": 0.12,
+            "snapshot_id": "semantic-snapshot-secret",
+            "matched_node_ids": ["semantic-node-secret"],
+            "query_aliases": ["semantic-alias-secret"],
+            "semantic_supply": {
+                "visible_source_document_ids": ["semantic-hidden-document"],
+                "evidence_boosts": [{
+                    "document_id": "document-visible",
+                    "match_ids": ["semantic-match-secret"]
+                }],
+                "supplement_document_ids": ["semantic-supplement-secret"],
+                "trace": {
+                    "eligible_node_count": 9,
+                    "matched_node_count": 2,
+                    "unresolved_provenance_count": 0,
+                    "opaque": "semantic-trace-secret"
+                },
+                "answer_template": "semantic-answer-template-secret",
+                "intent": "semantic-intent-secret",
+                "route": "semantic-route-secret",
+                "action": "semantic-action-secret"
+            },
+            "evidence_manifest": {
+                "evidence": {
+                    "section_title_hints": ["制度条款"],
+                    "noun_terms": ["通知期限"]
+                },
+                "semantic_supply": {
+                    "trace": "semantic-manifest-trace-secret"
+                }
+            }
+        });
+
+        let model_item = assistant_run_model_supply_item_for_context(&item);
+        let model_brief = assistant_run_model_supply_item_brief(&item).unwrap();
+        let serialized = serde_json::to_string(&model_item).unwrap();
+
+        assert_eq!(model_item["type"], json!("retrieval_evidence"));
+        assert_eq!(model_item["source"], json!("document_chunk_fallback"));
+        assert_eq!(model_item["document_id"], json!("document-visible"));
+        assert_eq!(model_item["document_chunk_id"], json!("chunk-visible"));
+        assert_eq!(
+            model_item["retrieval_evidence_id"],
+            json!("evidence-visible")
+        );
+        assert_eq!(
+            model_item["source_locator"],
+            json!("documents/real-policy.pdf#page=3&chunk=4")
+        );
+        assert_eq!(
+            model_item["evidence_context"]["section_title_hints"],
+            json!(["制度条款"])
+        );
+        assert!(model_brief.contains("documents/real-policy.pdf#page=3&chunk=4"));
+        assert!(model_brief.contains("document_id=document-visible"));
+        assert!(!model_brief.contains("semantic-"));
+        for internal_key in [
+            "semantic_score",
+            "snapshot_id",
+            "matched_node_ids",
+            "query_aliases",
+            "semantic_supply",
+        ] {
+            assert!(
+                model_item.get(internal_key).is_none(),
+                "internal semantic field must not enter model supply: {internal_key}"
+            );
+        }
+        for secret in [
+            "semantic-snapshot-secret",
+            "semantic-node-secret",
+            "semantic-alias-secret",
+            "semantic-hidden-document",
+            "semantic-match-secret",
+            "semantic-supplement-secret",
+            "semantic-trace-secret",
+            "semantic-manifest-trace-secret",
+            "semantic-answer-template-secret",
+            "semantic-intent-secret",
+            "semantic-route-secret",
+            "semantic-action-secret",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "internal semantic value leaked into model supply: {secret}"
+            );
+        }
+    }
+
+    #[test]
     fn search_evidence_keeps_contract_and_controlled_search_rule() {
         let item = json!({
             "type": "search_evidence",

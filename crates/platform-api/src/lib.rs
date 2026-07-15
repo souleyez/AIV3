@@ -266,6 +266,7 @@ mod assistant_run_resume_project_delivery_support;
 mod assistant_run_resume_prompt_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
+mod assistant_run_semantic_supply_support;
 mod assistant_run_spreadsheet_attendance_support;
 mod assistant_run_sse_support;
 mod assistant_run_static_page_dataset_scope_support;
@@ -409,6 +410,8 @@ mod fashion_postchain_adapter_support;
 pub mod semantic_label_resolver;
 pub mod semantic_profile_adapters;
 pub mod semantic_relation_builder;
+#[cfg(test)]
+mod semantic_supply_ab_receipt_tests;
 pub mod semantic_understanding;
 pub use contracts::{
     AssetProfileParseTaskPayload, ASSET_PROFILE_PARSE_QUEUE, ASSET_PROFILE_PARSE_TASK_KEY,
@@ -612,6 +615,7 @@ use assistant_run_resume_project_delivery_support::*;
 use assistant_run_resume_prompt_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
+use assistant_run_semantic_supply_support::*;
 use assistant_run_spreadsheet_attendance_support::*;
 use assistant_run_sse_support::*;
 use assistant_run_static_page_dataset_scope_support::*;
@@ -6114,6 +6118,10 @@ async fn create_assistant_run_inner(
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
             .await?;
     let requested_selected_scope = request.selected_scope.clone();
+    let semantic_supply_explicit_dataset_ids = assistant_semantic_supply_explicit_dataset_ids(
+        requested_selected_scope.as_ref(),
+        &visible_datasets,
+    );
     let selected_dataset_id = requested_selected_scope
         .as_ref()
         .and_then(selected_dataset_id_from_scope);
@@ -6191,13 +6199,14 @@ async fn create_assistant_run_inner(
         .take(5)
         .collect();
     request.selected_scope = Some(selected_scope.clone());
-    let mut evidence_state = build_assistant_run_evidence_state(
+    let mut evidence_state = build_assistant_run_evidence_state_with_semantic_scope(
         &state,
         &selected_scope,
         &request.prompt,
         local_thread_id.as_deref(),
         &active_secret_binding_ids,
         current_user_id,
+        &semantic_supply_explicit_dataset_ids,
     )
     .await?;
 
@@ -39912,6 +39921,275 @@ fn external_principal_trust_level_label(level: &ExternalPrincipalTrustLevel) -> 
     }
 }
 
+async fn assistant_semantic_supply_with_timeout<F, T>(
+    timeout: StdDuration,
+    future: F,
+) -> Result<T, &'static str>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| "snapshot_lookup_timeout")
+}
+
+async fn load_assistant_run_semantic_supply_plan(
+    state: &AppState,
+    dataset_id: DatasetId,
+    prompt: &str,
+    visible_document_ids: &BTreeSet<DocumentId>,
+) -> Option<AssistantSemanticSupplyPlan> {
+    if visible_document_ids.is_empty() {
+        return None;
+    }
+
+    let repository = state.storage.dataset_semantic_snapshots();
+    let lookup = assistant_semantic_supply_with_timeout(StdDuration::from_millis(100), async {
+        let latest_ready = repository
+            .load_latest_ready(state.tenant_id, dataset_id)
+            .await;
+        let latest_attempt = repository
+            .load_latest_attempt(state.tenant_id, dataset_id)
+            .await;
+        (latest_ready, latest_attempt)
+    })
+    .await;
+    let (snapshot, latest_attempt) = match lookup {
+        Ok((Ok(Some(snapshot)), Ok(latest_attempt))) => (snapshot, latest_attempt),
+        Ok((Ok(None), Ok(_))) => return None,
+        Ok((Err(_), _)) | Ok((_, Err(_))) => {
+            tracing::warn!(
+                reason = "snapshot_lookup_failed",
+                "semantic supply fell back to baseline"
+            );
+            return None;
+        }
+        Err(reason) => {
+            tracing::warn!(reason, "semantic supply fell back to baseline");
+            return None;
+        }
+    };
+    let understanding = match serde_json::from_value::<
+        semantic_understanding::DatasetSemanticUnderstanding,
+    >(snapshot.manifest)
+    {
+        Ok(understanding) => understanding,
+        Err(_) => {
+            tracing::warn!(
+                reason = "snapshot_manifest_invalid",
+                "semantic supply fell back to baseline"
+            );
+            return None;
+        }
+    };
+    if latest_attempt.as_ref().is_some_and(|attempt| {
+        assistant_semantic_supply_latest_attempt_invalidates_ready(
+            &attempt.status,
+            attempt.updated_at > understanding.generated_at,
+        )
+    }) {
+        tracing::info!(
+            reason = "snapshot_latest_attempt_stale",
+            "semantic supply fell back to baseline"
+        );
+        return None;
+    }
+    build_assistant_semantic_supply_plan(snapshot.id, prompt, &understanding, visible_document_ids)
+}
+
+fn assistant_semantic_supply_recovery_document_ids(
+    semantic_plan: &AssistantSemanticSupplyPlan,
+    authorized_document_ids: &BTreeSet<DocumentId>,
+    initial_evidences: &[RetrievalEvidence],
+    document_limit: usize,
+) -> Vec<DocumentId> {
+    if document_limit == 0 {
+        return Vec::new();
+    }
+    let initial_document_ids = initial_evidences
+        .iter()
+        .map(|evidence| evidence.document_id)
+        .collect::<BTreeSet<_>>();
+    semantic_plan
+        .supplement_document_ids
+        .iter()
+        .copied()
+        .filter(|document_id| {
+            !document_id.0.is_nil()
+                && authorized_document_ids.contains(document_id)
+                && !initial_document_ids.contains(document_id)
+        })
+        .take(document_limit)
+        .collect()
+}
+
+async fn load_assistant_run_semantic_supplement_evidences(
+    state: &AppState,
+    dataset_id: DatasetId,
+    recovery_document_ids: &[DocumentId],
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> Vec<RetrievalEvidence> {
+    if recovery_document_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let recovery_document_ids = recovery_document_ids.to_vec();
+    let recovery_document_id_set = recovery_document_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let candidate_limit = recovery_document_ids.len().saturating_mul(8).clamp(1, 16);
+    let lookup = assistant_semantic_supply_with_timeout(StdDuration::from_millis(100), async {
+        let evidences = state
+            .storage
+            .retrieval_evidences()
+            .list_latest_by_document_ids(state.tenant_id, &recovery_document_ids, candidate_limit)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let evidences = evidences
+            .into_iter()
+            .filter(|evidence| {
+                evidence.tenant_id == state.tenant_id
+                    && evidence.dataset_id == dataset_id
+                    && recovery_document_id_set.contains(&evidence.document_id)
+            })
+            .collect::<Vec<_>>();
+        let evidences = filter_retrieval_evidences_for_assistant_evidence_scope(
+            state,
+            dataset_id,
+            evidences,
+            current_user_id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?;
+        let evidences = filter_retrieval_evidences_for_external_acl(
+            state,
+            external_acl_filter,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+            evidences,
+        )
+        .await?;
+        Ok::<_, ApiError>(filter_retrieval_evidences_for_selected_documents(
+            evidences,
+            selected_document_ids,
+        ))
+    })
+    .await;
+
+    match lookup {
+        Ok(Ok(evidences)) => evidences,
+        Ok(Err(_)) => {
+            tracing::warn!(
+                reason = "supplement_evidence_lookup_failed",
+                "semantic supply kept the existing evidence pool"
+            );
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(
+                reason = "supplement_evidence_lookup_timeout",
+                "semantic supply kept the existing evidence pool"
+            );
+            Vec::new()
+        }
+    }
+}
+
+fn merge_assistant_semantic_supplement_candidates(
+    scoped_evidences: &[RetrievalEvidence],
+    additional_evidences: Vec<RetrievalEvidence>,
+) -> Vec<RetrievalEvidence> {
+    let mut merged = scoped_evidences.to_vec();
+    let mut seen_ids = merged
+        .iter()
+        .map(|evidence| evidence.id)
+        .collect::<BTreeSet<_>>();
+    let mut seen_source_keys = merged
+        .iter()
+        .map(|evidence| {
+            (
+                evidence.document_id,
+                evidence.document_chunk_id,
+                evidence.source_locator.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for evidence in additional_evidences {
+        let source_key = (
+            evidence.document_id,
+            evidence.document_chunk_id,
+            evidence.source_locator.clone(),
+        );
+        if seen_ids.contains(&evidence.id) || seen_source_keys.contains(&source_key) {
+            continue;
+        }
+        seen_ids.insert(evidence.id);
+        seen_source_keys.insert(source_key);
+        merged.push(evidence);
+    }
+    merged
+}
+
+fn assistant_semantic_supply_rank_change_count(
+    baseline: &[RankedRetrievalEvidence<'_>],
+    semantic: &[RankedRetrievalEvidence<'_>],
+) -> usize {
+    let semantic_positions = semantic
+        .iter()
+        .enumerate()
+        .map(|(index, ranked)| (ranked.evidence.id, index))
+        .collect::<BTreeMap<_, _>>();
+    baseline
+        .iter()
+        .enumerate()
+        .filter(|(index, ranked)| semantic_positions.get(&ranked.evidence.id) != Some(index))
+        .count()
+        + semantic
+            .iter()
+            .filter(|ranked| {
+                !baseline
+                    .iter()
+                    .any(|baseline| baseline.evidence.id == ranked.evidence.id)
+            })
+            .count()
+}
+
+fn record_assistant_semantic_supply_receipt(
+    mode: AssistantSemanticSupplyMode,
+    candidate_count: usize,
+    plan: Option<&AssistantSemanticSupplyPlan>,
+    rank_change_count: usize,
+    elapsed_ms: u128,
+) {
+    let (reason, matched_node_count, alias_count, visible_source_count, supplement_candidate_count) =
+        plan.map_or(("no_safe_match", 0, 0, 0, 0), |plan| {
+            (
+                "plan_ready",
+                plan.matched_node_ids.len(),
+                plan.query_aliases.len(),
+                plan.visible_source_document_ids.len(),
+                plan.supplement_document_ids.len(),
+            )
+        });
+    tracing::info!(
+        semantic_supply_mode = mode.as_str(),
+        reason,
+        candidate_count,
+        matched_node_count,
+        alias_count,
+        visible_source_count,
+        supplement_candidate_count,
+        rank_change_count,
+        elapsed_ms,
+        "assistant semantic supply receipt"
+    );
+}
+
 async fn build_assistant_run_evidence_state(
     state: &AppState,
     selected_scope: &Value,
@@ -39919,6 +40197,28 @@ async fn build_assistant_run_evidence_state(
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+) -> std::result::Result<Value, ApiError> {
+    let no_explicit_semantic_datasets = BTreeSet::new();
+    build_assistant_run_evidence_state_with_semantic_scope(
+        state,
+        selected_scope,
+        prompt,
+        local_thread_id,
+        active_secret_binding_ids,
+        current_user_id,
+        &no_explicit_semantic_datasets,
+    )
+    .await
+}
+
+async fn build_assistant_run_evidence_state_with_semantic_scope(
+    state: &AppState,
+    selected_scope: &Value,
+    prompt: &str,
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    semantic_supply_explicit_dataset_ids: &BTreeSet<DatasetId>,
 ) -> std::result::Result<Value, ApiError> {
     let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
     let conversation_memory_requested = selected_scope_requests_conversation_memory(selected_scope);
@@ -39965,6 +40265,7 @@ async fn build_assistant_run_evidence_state(
     let mut media_context_by_document: HashMap<DocumentId, Option<Value>> = HashMap::new();
     let mut retrieval_chunks_by_document: HashMap<DocumentId, Vec<DocumentChunk>> = HashMap::new();
     let mut unavailable_dataset_ids = Vec::new();
+    let mut semantic_supplement_remaining = ASSISTANT_SEMANTIC_SUPPLY_SUPPLEMENT_LIMIT;
 
     for dataset_id in dataset_ids
         .into_iter()
@@ -39996,6 +40297,18 @@ async fn build_assistant_run_evidence_state(
             "title": dataset.title.clone(),
             "visibility": dataset.visibility.as_str(),
         }));
+        let semantic_supply_mode = if semantic_supply_explicit_dataset_ids.contains(&dataset.id) {
+            assistant_semantic_supply_effective_mode(
+                assistant_semantic_supply_mode_from_env(
+                    state.tenant_id,
+                    dataset.id,
+                    current_user_id,
+                ),
+                assistant_run_scope_is_external_channel(Some(selected_scope)),
+            )
+        } else {
+            AssistantSemanticSupplyMode::Off
+        };
 
         let parse_status_items = build_assistant_run_document_parse_status_supply(
             state,
@@ -40129,7 +40442,111 @@ async fn build_assistant_run_evidence_state(
         let evidences =
             filter_retrieval_evidences_for_selected_documents(evidences, &evidence_document_ids);
 
-        let ranked_evidences = rank_retrieval_evidences_for_prompt(&evidences, prompt, limit);
+        let semantic_supply_started_at = Instant::now();
+        let semantic_visible_document_ids = if semantic_supply_mode.is_enabled() {
+            match assistant_semantic_supply_with_timeout(
+                StdDuration::from_millis(100),
+                assistant_run_scoped_visible_document_ids(
+                    state,
+                    &dataset,
+                    current_user_id,
+                    external_acl_filter.as_ref(),
+                    &evidence_document_ids,
+                    allow_selected_documents_without_acl_snapshot,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(document_ids)) => document_ids.into_iter().collect::<BTreeSet<_>>(),
+                Ok(Err(_)) => {
+                    tracing::warn!(
+                        reason = "visible_document_scope_lookup_failed",
+                        "semantic supply fell back to baseline"
+                    );
+                    BTreeSet::new()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        reason = "visible_document_scope_lookup_timeout",
+                        "semantic supply fell back to baseline"
+                    );
+                    BTreeSet::new()
+                }
+            }
+        } else {
+            BTreeSet::new()
+        };
+        let semantic_supply_plan = if semantic_supply_mode.is_enabled() {
+            load_assistant_run_semantic_supply_plan(
+                state,
+                dataset.id,
+                prompt,
+                &semantic_visible_document_ids,
+            )
+            .await
+        } else {
+            None
+        };
+        let additional_supplement_evidences = if semantic_supply_mode
+            == AssistantSemanticSupplyMode::Supplement
+            && semantic_supplement_remaining > 0
+        {
+            match semantic_supply_plan.as_ref() {
+                Some(plan) => {
+                    let recovery_document_ids = assistant_semantic_supply_recovery_document_ids(
+                        plan,
+                        &semantic_visible_document_ids,
+                        &evidences,
+                        semantic_supplement_remaining,
+                    );
+                    load_assistant_run_semantic_supplement_evidences(
+                        state,
+                        dataset.id,
+                        &recovery_document_ids,
+                        current_user_id,
+                        external_acl_filter.as_ref(),
+                        &evidence_document_ids,
+                        allow_selected_documents_without_acl_snapshot,
+                    )
+                    .await
+                }
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let semantic_supplement_candidates = if additional_supplement_evidences.is_empty() {
+            None
+        } else {
+            Some(merge_assistant_semantic_supplement_candidates(
+                &evidences,
+                additional_supplement_evidences,
+            ))
+        };
+        let semantic_supplement_candidate_slice = semantic_supplement_candidates
+            .as_deref()
+            .unwrap_or(&evidences);
+        let (ranked_evidences, rank_change_count, supplement_count) =
+            rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates(
+                &evidences,
+                semantic_supplement_candidate_slice,
+                prompt,
+                limit,
+                semantic_supply_mode,
+                semantic_supply_plan.as_ref(),
+                semantic_supplement_remaining,
+            );
+        semantic_supplement_remaining =
+            semantic_supplement_remaining.saturating_sub(supplement_count);
+        if semantic_supply_mode.is_enabled() {
+            record_assistant_semantic_supply_receipt(
+                semantic_supply_mode,
+                evidences.len(),
+                semantic_supply_plan.as_ref(),
+                rank_change_count,
+                semantic_supply_started_at.elapsed().as_millis(),
+            );
+        }
         if ranked_evidences.is_empty() {
             let fallback_items = build_assistant_run_chunk_fallback_supply(
                 state,
@@ -40701,7 +41118,7 @@ async fn build_assistant_run_dataset_fact_snapshot_supply(
     )])
 }
 
-async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
+async fn assistant_run_scoped_visible_document_ids(
     state: &AppState,
     dataset: &Dataset,
     current_user_id: Option<UserId>,
@@ -40712,7 +41129,12 @@ async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
     let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
     let mut document_ids = Vec::new();
     for document in documents {
-        if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
+        if !document_is_visible_for_assistant_evidence_owner_scope(
+            &document,
+            current_user_id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        ) {
             continue;
         }
         if !selected_document_ids.is_empty() && !selected_document_ids.contains(&document.id) {
@@ -40734,6 +41156,51 @@ async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
         }
     }
     Ok(document_ids)
+}
+
+async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<Vec<DocumentId>, ApiError> {
+    let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
+    let mut document_ids = Vec::new();
+    for document in documents {
+        if !assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            document.owner_user_id,
+            current_user_id,
+        ) {
+            continue;
+        }
+        if !selected_document_ids.is_empty() && !selected_document_ids.contains(&document.id) {
+            continue;
+        }
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
+            continue;
+        }
+        if !document_ids.contains(&document.id) {
+            document_ids.push(document.id);
+        }
+    }
+    Ok(document_ids)
+}
+
+fn assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+    document_owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id_is_visible(document_owner_user_id, current_user_id)
 }
 
 async fn assistant_run_dataset_fact_snapshot_scope_is_visible(
@@ -45375,6 +45842,22 @@ fn assistant_run_scope_with_requested_document_scope(
     selected_scope
 }
 
+fn assistant_semantic_supply_explicit_dataset_ids(
+    explicitly_requested_scope: Option<&Value>,
+    visible_datasets: &[Dataset],
+) -> BTreeSet<DatasetId> {
+    let visible_dataset_ids = visible_datasets
+        .iter()
+        .map(|dataset| dataset.id)
+        .collect::<BTreeSet<_>>();
+    explicitly_requested_scope
+        .map(selected_dataset_ids_from_scope)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|dataset_id| visible_dataset_ids.contains(dataset_id))
+        .collect()
+}
+
 fn assistant_run_scope_with_visible_dataset_range(
     mut selected_scope: Value,
     visible_datasets: &[Dataset],
@@ -49117,6 +49600,8 @@ struct RankedRetrievalEvidence<'a> {
     score: f64,
     lexical_score: f64,
     recall_score: f64,
+    semantic_score: f64,
+    ranking_score: f64,
     rank_hint: usize,
 }
 
@@ -49132,6 +49617,15 @@ fn rank_retrieval_evidences_for_prompt<'a>(
     evidences: &'a [RetrievalEvidence],
     prompt: &str,
     limit: usize,
+) -> Vec<RankedRetrievalEvidence<'a>> {
+    rank_retrieval_evidences_for_prompt_with_semantic_plan(evidences, prompt, limit, None)
+}
+
+fn rank_retrieval_evidences_for_prompt_with_semantic_plan<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
 ) -> Vec<RankedRetrievalEvidence<'a>> {
     if evidences.is_empty() || limit == 0 {
         return Vec::new();
@@ -49157,37 +49651,306 @@ fn rank_retrieval_evidences_for_prompt<'a>(
             } else {
                 evidence.recall_score
             };
+            let semantic_score = semantic_plan
+                .map(|plan| {
+                    plan.semantic_score_for_attributable_text(
+                        evidence.document_id,
+                        &assistant_semantic_attributable_evidence_text(evidence),
+                    )
+                })
+                .unwrap_or(0.0);
+            let ranking_score = if semantic_score > 0.0 {
+                // The baseline ranker gives any lexical hit priority, but its
+                // numeric `score` intentionally replaces recall when lexical
+                // score is non-zero. Preserve that candidate's existing recall
+                // strength before adding a bounded, authorized semantic boost;
+                // otherwise enabling semantic ranking can demote the exact
+                // lexical target it was meant to help.
+                score.max(evidence.recall_score) + semantic_score
+            } else {
+                // Unmatched candidates retain their original numeric score.
+                // Restoring recall for them would let an unrelated, high-recall
+                // decoy overtake the evidence selected by the semantic plan.
+                score
+            };
             RankedRetrievalEvidence {
                 evidence,
                 score,
                 lexical_score,
                 recall_score: evidence.recall_score,
+                semantic_score,
+                ranking_score,
                 rank_hint: rank_hint_from_evidence_manifest(evidence).unwrap_or(usize::MAX),
             }
         })
         .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| {
-        right
-            .lexical_score
-            .partial_cmp(&left.lexical_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                right
-                    .score
-                    .partial_cmp(&left.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| {
-                right
-                    .recall_score
-                    .partial_cmp(&left.recall_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| left.rank_hint.cmp(&right.rank_hint))
-            .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
-            .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
-    });
-    ranked.into_iter().take(limit).collect()
+    if semantic_plan.is_some() && ranked.iter().any(|item| item.semantic_score > 0.0) {
+        ranked.sort_by(|left, right| {
+            right
+                .ranking_score
+                .partial_cmp(&left.ranking_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    right
+                        .semantic_score
+                        .partial_cmp(&left.semantic_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .lexical_score
+                        .partial_cmp(&left.lexical_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .recall_score
+                        .partial_cmp(&left.recall_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.rank_hint.cmp(&right.rank_hint))
+                .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
+                .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+                .then_with(|| left.evidence.id.cmp(&right.evidence.id))
+        });
+        ranked.into_iter().take(limit).collect()
+    } else {
+        ranked.sort_by(|left, right| {
+            right
+                .lexical_score
+                .partial_cmp(&left.lexical_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    right
+                        .score
+                        .partial_cmp(&left.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .recall_score
+                        .partial_cmp(&left.recall_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.rank_hint.cmp(&right.rank_hint))
+                .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
+                .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+        });
+        ranked.into_iter().take(limit).collect()
+    }
+}
+
+/// Limits semantic attribution to text that the same retrieval item can
+/// actually supply to the model and expose as a citable excerpt. Locator,
+/// payload-filter and manifest metadata remain useful to the baseline ranker,
+/// but they cannot prove that this chunk supports a graph alias.
+fn assistant_semantic_attributable_evidence_text(evidence: &RetrievalEvidence) -> String {
+    [evidence.summary.trim(), evidence.content_excerpt.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+fn rank_retrieval_evidences_for_semantic_supply_mode<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize) {
+    let (ranked, rank_change_count, _) =
+        rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_limit(
+            evidences,
+            prompt,
+            limit,
+            mode,
+            semantic_plan,
+            ASSISTANT_SEMANTIC_SUPPLY_SUPPLEMENT_LIMIT,
+        );
+    (ranked, rank_change_count)
+}
+
+#[cfg(test)]
+fn rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_limit<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+    supplement_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize, usize) {
+    rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates(
+        evidences,
+        evidences,
+        prompt,
+        limit,
+        mode,
+        semantic_plan,
+        supplement_limit,
+    )
+}
+
+fn rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates<'a>(
+    evidences: &'a [RetrievalEvidence],
+    supplement_evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+    supplement_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize, usize) {
+    let baseline = rank_retrieval_evidences_for_prompt(evidences, prompt, limit);
+    let Some(semantic_plan) = semantic_plan else {
+        return (baseline, 0, 0);
+    };
+    let semantic = rank_retrieval_evidences_for_prompt_with_semantic_plan(
+        evidences,
+        prompt,
+        evidences.len(),
+        Some(semantic_plan),
+    );
+    let semantic = take_semantic_ranked_with_document_cap(semantic, limit);
+    let (semantic, supplement_count) = if mode == AssistantSemanticSupplyMode::Supplement {
+        supplement_ranked_retrieval_evidences(
+            semantic,
+            supplement_evidences,
+            prompt,
+            semantic_plan,
+            supplement_limit,
+            limit,
+        )
+    } else {
+        (semantic, 0)
+    };
+    let rank_change_count = assistant_semantic_supply_rank_change_count(&baseline, &semantic);
+    if mode.changes_supply() {
+        (semantic, rank_change_count, supplement_count)
+    } else {
+        (baseline, rank_change_count, 0)
+    }
+}
+
+fn take_semantic_ranked_with_document_cap(
+    ranked: Vec<RankedRetrievalEvidence<'_>>,
+    limit: usize,
+) -> Vec<RankedRetrievalEvidence<'_>> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let distinct_document_count = ranked
+        .iter()
+        .map(|ranked| ranked.evidence.document_id)
+        .collect::<BTreeSet<_>>()
+        .len();
+    if distinct_document_count <= 1 {
+        return ranked.into_iter().take(limit).collect();
+    }
+
+    let mut document_counts = BTreeMap::<DocumentId, usize>::new();
+    let mut selected = Vec::with_capacity(limit.min(ranked.len()));
+    let mut overflow = Vec::new();
+    for ranked in ranked {
+        if selected.len() < limit {
+            let count = document_counts
+                .entry(ranked.evidence.document_id)
+                .or_default();
+            if *count < 2 {
+                *count += 1;
+                selected.push(ranked);
+                continue;
+            }
+        }
+        overflow.push(ranked);
+    }
+    let remaining = limit.saturating_sub(selected.len());
+    selected.extend(overflow.into_iter().take(remaining));
+    selected
+}
+
+fn supplement_ranked_retrieval_evidences<'a>(
+    mut selected: Vec<RankedRetrievalEvidence<'a>>,
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    semantic_plan: &AssistantSemanticSupplyPlan,
+    supplement_limit: usize,
+    final_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize) {
+    selected.truncate(final_limit);
+    let provider_retrieval_limit = final_limit.min(ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT);
+    let supplement_limit = supplement_limit.min(provider_retrieval_limit);
+    if supplement_limit == 0 || semantic_plan.supplement_document_ids.is_empty() {
+        return (selected, 0);
+    }
+    let mut selected_keys = selected
+        .iter()
+        .map(|ranked| {
+            (
+                ranked.evidence.document_id,
+                ranked.evidence.document_chunk_id,
+                ranked.evidence.source_locator.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let mut document_counts = selected.iter().fold(
+        BTreeMap::<DocumentId, usize>::new(),
+        |mut counts, ranked| {
+            *counts.entry(ranked.evidence.document_id).or_default() += 1;
+            counts
+        },
+    );
+    let candidates = rank_retrieval_evidences_for_prompt_with_semantic_plan(
+        evidences,
+        prompt,
+        evidences.len(),
+        Some(semantic_plan),
+    );
+    let mut supplements = Vec::with_capacity(supplement_limit);
+    for candidate in candidates {
+        if supplements.len() >= supplement_limit {
+            break;
+        }
+        let evidence = candidate.evidence;
+        if !semantic_plan
+            .supplement_document_ids
+            .contains(&evidence.document_id)
+            || !semantic_plan.has_attributable_text(
+                evidence.document_id,
+                &assistant_semantic_attributable_evidence_text(evidence),
+            )
+            || evidence.id.0.is_nil()
+            || evidence.document_id.0.is_nil()
+            || evidence.document_chunk_id.0.is_nil()
+            || evidence.source_locator.trim().is_empty()
+        {
+            continue;
+        }
+        let count = document_counts.entry(evidence.document_id).or_default();
+        if *count >= 2 {
+            continue;
+        }
+        let key = (
+            evidence.document_id,
+            evidence.document_chunk_id,
+            evidence.source_locator.clone(),
+        );
+        if !selected_keys.insert(key) {
+            continue;
+        }
+        *count += 1;
+        supplements.push(candidate);
+    }
+    if supplements.is_empty() {
+        return (selected, 0);
+    }
+
+    let supplement_count = supplements.len();
+    let tail = selected.split_off(0);
+    selected.extend(supplements);
+    selected.extend(tail);
+    selected.truncate(final_limit);
+    (selected, supplement_count)
 }
 
 fn rank_document_chunks_for_prompt(
@@ -82976,6 +83739,25 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_fact_snapshot_keeps_strict_owner_scope_when_semantic_supply_is_off() {
+        let current_user_id = UserId(Uuid::from_u128(836_351));
+        let other_owner_user_id = UserId(Uuid::from_u128(836_352));
+
+        assert!(assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            None,
+            Some(current_user_id),
+        ));
+        assert!(assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            Some(current_user_id),
+            Some(current_user_id),
+        ));
+        assert!(!assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            Some(other_owner_user_id),
+            Some(current_user_id),
+        ));
+    }
+
+    #[test]
     fn assistant_run_fact_snapshot_does_not_shadow_point_list_runtime_scan() {
         let evidence = json!({
             "status": "supplied",
@@ -91754,25 +92536,31 @@ retrieve_evidence:
             response.evidence_state["supply_quality"]["citationLocators"][0],
             json!("documents/order-risk-notes.md#chunk=0")
         );
-        assert_eq!(
-            response.evidence_state["supplied_items"][0]["retrieval_evidence_id"],
-            json!(evidences[0].id)
-        );
-        assert!(
-            response.evidence_state["supplied_items"][0]["content_excerpt"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("warehouse handoff exceeds two days")
-        );
+        let ranked_item = response.evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .iter()
+            .find(|item| item["retrieval_evidence_id"] == json!(evidences[0].id))
+            .expect("ranked retrieval evidence should retain its provenance id");
+        assert_eq!(ranked_item["document_id"], json!(document.id));
+        assert_eq!(ranked_item["document_chunk_id"], json!(chunks[0].id));
+        assert!(ranked_item["content_excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("warehouse handoff exceeds two days"));
         assert!(response
             .assistant_message
             .content
             .contains("已有可见供料时，正式模型回答会优先参考供料"));
         assert!(!response.assistant_message.content.contains("供料状态:"));
         assert!(!response.assistant_message.content.contains("Prompt:"));
+        let supplied_item_count = response.evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .len();
         assert!(response.execution_trail.iter().any(|step| {
             step.get("label") == Some(&json!("检索供料证据"))
-                && step.get("supplied_count") == Some(&json!(2))
+                && step.get("supplied_count") == Some(&json!(supplied_item_count))
         }));
 
         let Json(detail) = get_assistant_run(
@@ -91783,8 +92571,14 @@ retrieve_evidence:
         .await
         .expect("assistant run detail should load");
         assert_eq!(detail.run.evidence_state["status"], json!("supplied"));
+        let persisted_ranked_item = detail.run.evidence_state["supplied_items"]
+            .as_array()
+            .expect("persisted supplied items should be present")
+            .iter()
+            .find(|item| item["retrieval_evidence_id"] == json!(evidences[0].id))
+            .expect("persisted ranked retrieval evidence should retain its provenance id");
         assert_eq!(
-            detail.run.evidence_state["supplied_items"][0]["summary"],
+            persisted_ranked_item["summary"],
             json!("Order delay risk evidence")
         );
     }
@@ -93376,6 +94170,51 @@ retrieve_evidence:
     }
 
     #[test]
+    fn semantic_supply_uses_only_the_immutable_explicit_dataset_selection() {
+        let now = Utc::now();
+        let dataset_id = DatasetId::new();
+        let visible_dataset = Dataset {
+            id: dataset_id,
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            key: "semantic-visible".to_string(),
+            title: "语义可见资料".to_string(),
+            description: Some("语义供料范围门禁".to_string()),
+            lifecycle: DatasetLifecycle::Active,
+            visibility: DatasetVisibility::Public,
+            default_secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::from([("document_count".to_string(), json!(1))]),
+            created_at: now,
+            updated_at: now,
+        };
+        let requested_scope = json!({
+            "datasets": [{"type": "dataset", "id": dataset_id}],
+        });
+        assert!(assistant_semantic_supply_explicit_dataset_ids(
+            None,
+            std::slice::from_ref(&visible_dataset)
+        )
+        .is_empty());
+        assert_eq!(
+            assistant_semantic_supply_explicit_dataset_ids(
+                Some(&requested_scope),
+                std::slice::from_ref(&visible_dataset)
+            ),
+            BTreeSet::from([dataset_id])
+        );
+
+        let unrequested_id = DatasetId::new();
+        let unauthorized_request = json!({
+            "datasets": [{"type": "dataset", "id": unrequested_id}],
+        });
+        assert!(assistant_semantic_supply_explicit_dataset_ids(
+            Some(&unauthorized_request),
+            std::slice::from_ref(&visible_dataset)
+        )
+        .is_empty());
+    }
+
+    #[test]
     fn assistant_run_requested_external_scope_preserves_acl_bypass_metadata() {
         let temporary_dataset_id = Uuid::new_v4();
         let document_id = Uuid::new_v4();
@@ -94211,10 +95050,8 @@ retrieve_evidence:
             .as_str()
             .unwrap_or_default()
             .contains("Order cancellation risk"));
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_chunk_id"],
-            json!(chunks[1].id)
-        );
+        assert_eq!(response.evidence_state["detail_preferred"], json!(false));
+        assert_eq!(response.evidence_state["detail_targets"], json!([]));
         assert!(response
             .assistant_message
             .content
@@ -95797,14 +96634,8 @@ retrieve_evidence:
             .as_str()
             .unwrap_or_default()
             .contains("提交固定资产申请单"));
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_id"],
-            json!(fixed_asset_document_id)
-        );
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_chunk_id"],
-            json!(fixed_asset_chunk_id)
-        );
+        assert_eq!(response.evidence_state["detail_preferred"], json!(false));
+        assert_eq!(response.evidence_state["detail_targets"], json!([]));
     }
 
     fn test_dataset(
@@ -102348,8 +103179,18 @@ retrieve_evidence:
             })
             .await
             .expect("other-user lexical search should load hits");
-        assert_eq!(other_user_hits.len(), 1);
+        assert_eq!(
+            other_user_hits.len(),
+            2,
+            "storage should return the visible candidate set before API-side final ranking"
+        );
         assert_eq!(other_user_hits[0].document_id, private_document.id);
+        assert!(other_user_hits
+            .iter()
+            .any(|hit| hit.document_id == phrase_document.id));
+        assert!(other_user_hits.iter().all(|hit| {
+            hit.document_id == private_document.id || hit.document_id == phrase_document.id
+        }));
     }
 
     #[tokio::test]
@@ -102508,12 +103349,10 @@ retrieve_evidence:
             explain (format json)
             select id
             from retrieval_evidences
-            where tenant_id = $1
-              and search_terms ?| $2::text[]
+            where search_terms ?| $1::text[]
             limit 1
             "#,
         )
-        .bind(tenant.id.0)
         .bind(vec![
             "深层召回".to_string(),
             "目标条款".to_string(),
@@ -102525,7 +103364,7 @@ retrieve_evidence:
         let explain_text = explain_plan.to_string();
         assert!(
             explain_text.contains("retrieval_evidences_search_terms_gin_idx"),
-            "lexical search_terms query should use the GIN index, got plan: {explain_text}"
+            "the search_terms operator should remain backed by the GIN index, got plan: {explain_text}"
         );
 
         let legacy_window = storage
@@ -102562,7 +103401,11 @@ retrieve_evidence:
             .await
             .expect("postgres lexical search should load hits");
 
-        assert_eq!(lexical_hits.len(), 1);
+        assert_eq!(
+            lexical_hits.len(),
+            16,
+            "storage should return candidate_limit deep-search candidates before API-side ranking"
+        );
         assert_eq!(lexical_hits[0].document_chunk_id, target_chunk.id);
     }
 
