@@ -145,7 +145,7 @@ Shadow 只计算 B/C，不改变 A 的模型可见供料。
 | Task 7 模型自主与公开契约 | completed | 内部语义字段不进入 provider/public citation；模型调用、动作目录和普通问答契约保持不变 |
 | Task 8 offline A/B/C | completed_fail_closed | 24 例只作离线检索诊断；旧 precommit 数值已被安全加固后的 fixture/evaluator 变更取代；独立 feature-off 基线缺失使 `retrieval_candidate=null` |
 | Task 9 full regression | completed | Web 467/467、storage 46、retrieval-worker 50/0/1 ignored、Platform API 2884/1 frozen/2 ignored；semantic-supply 专项 33/0/1 ignored |
-| Task 10 feature-off/shadow rollout | phase_a_pending | 当前只允许可选 Phase A feature-off operational install；shadow 因 candidate=null 不执行、不授权 |
+| Task 10 feature-off/shadow rollout | completed_operational_install_only | 8 服务器仅执行 Phase A：代码提交 `9b7ec2bcee7796723c58f781a8bbf113d3285b31` 已安装；模式 `off`、三 allowlist `0/0/0`；只重启 API 且 active/health/ready，非 API 服务快照一致。shadow / final-off 为 `not_executed` / `N/A`，`provider_calls_initiated_by_runbook=0`；不构成 promotion、shadow-safe 或问答提升证据 |
 | Task 11 controlled live decision | skipped_fail_closed | Task 8 没有 promotion candidate，因此不执行 live A/B/C，不调用 provider；live harness 只作为未来工具保留 |
 
 ### 5.1 Task 0–7 实现与安全证据
@@ -181,6 +181,22 @@ Task 0 关键本地证据：
 
 即使最终 clean-HEAD 检索指标显示方向性改善，当前也必须保持 `retrieval_candidate=null`、`decision_eligible=false`，因为没有独立冻结的 feature-off 基线。不得通过下调 P@5、grounding、holdout、overlap 或 latency 阈值制造候选。
 
+代码提交 `9b7ec2bcee7796723c58f781a8bbf113d3285b31` 的 clean-worktree exporter/evaluator sidecar 已完成。它只是一组离线检索诊断，不是 feature-off 基线或答案质量证据：
+
+| 项目 | A control | B graph rerank | C rerank + evidence |
+| --- | ---: | ---: | ---: |
+| Recall@20 | 0.416667 | 0.791667 | 0.791667 |
+| MRR@20 | 0.416667 | 0.791667 | 0.791667 |
+| P@5 | 0.083333 | 0.183333 | 0.183333 |
+| grounding | 0.85 | 0.85 | 0.85 |
+| p95 ms | 35.5670 | 35.1052 | 50.1643 |
+| permission leaks | 0 | 0 | 0 |
+
+- experiment id：`5229b4911f4b2435f846f8bfa601f63ad9d4a1e6ee99b5ce755c82c668d3ca1e`；fixture SHA-256：`6592667a5826795a42f5c0d262a327cfa0b86b66604a1b678204adf26b5cda85`；
+- runtime input raw / canonical SHA-256：`9f566aef003c43c40c02ddc5e1353914899a8b6ea3ec385cfc6a1386ee77483d` / `87aba9c888066838fd4a6ba51cf4cdf0f65e3cd954657e7eadf4e5b076fdc908`；
+- evaluator receipt SHA-256：`51b1549ce522a0eab7b15de97c3b3644b2ed253015b934d4c38f9aa9867c8e18`；
+- 最终状态：`acceptance_status=retrieval_gate_failed`、`retrieval_candidate=null`、`decision_eligible=false`、`answer_evaluation.status=not_run`；三臂 grounding 都只有 17/20，且没有独立冻结的 feature-off 基线。
+
 离线与全答案命令必须区分：
 
 ```bash
@@ -215,9 +231,34 @@ Task 9 receipts：
 
 | Receipt | SHA-256 |
 | --- | --- |
-| `target/retrieval-quality-smoke/retrieval-quality-smoke-20260715T035049Z.json` | `DB4636F3285AD7E0D949BF77935C5478C16A2ED5563D330AB1A4B93DA354360D` |
-| `target/document-quality-smoke/document-quality-smoke-20260715T035423Z-43232.json` | `C397961AAC0F721D74508B4C9A813F735B7A3399EB2C3AEDCF59FF9A19D2DA4E` |
-| `target/newbai-customer-answer-smoke/newbai-customer-answer-smoke-20260715035417.json` | `BB42A8DCE883666FB746FC6152A5E67917DFA97EFAECE0FFD70C340144E5214B` |
+| `target/retrieval-quality-smoke/retrieval-quality-smoke-20260715T053918Z.json` | `59025307881F2B862848A3B54B8EF4EDE4ED995E225049EE85529AD3F99AC1FC` |
+| `target/document-quality-smoke/document-quality-smoke-20260715T054012Z-37500.json` | `AFBC0F126765686F404397DF294C9002B0EE68FF946145356A3AA42C87350A57` |
+| `target/newbai-customer-answer-smoke/newbai-customer-answer-smoke-20260715054012.json` | `93090C075B2A6F38444B8E5E58ABBB132456BAD76169C37DA20A478281285412` |
+
+### 5.4 Task 10 Phase A feature-off operational install
+
+8 服务器只完成 Phase A operational install。运行二进制由代码提交 `9b7ec2bcee7796723c58f781a8bbf113d3285b31` 构建；没有执行 shadow、Task 11 或问答请求，rollout runbook 未发起 provider 调用，也没有修改 Web/worker、migration、图谱快照或业务数据。
+
+第一次切换在 `/srv/aiv3/backups/assistant-semantic-supply-20260715T055657Z` 留下备份。聚焦测试、构建、显式 feature-off 和 API 健康均已通过，但旧版 `journalctl` 拒绝带 `T/+08:00` 的时间参数，发布脚本因此按 fail-closed 规则恢复发布前配置与二进制并确认 API 健康。随后只将日志窗口改为该服务器兼容的本地时间格式，完整重跑并成功。
+
+| 回执字段 | 结果 |
+| --- | --- |
+| 成功窗口 | `2026-07-15T06:05:44Z` → `2026-07-15T06:05:53Z` |
+| approved code / GitHub / Phase A server HEAD | `9b7ec2bcee7796723c58f781a8bbf113d3285b31`；worktree clean |
+| PostgreSQL 服务端 | `18.4` |
+| API binary SHA-256 before | `158cfb2e47b3b171a4bc5ddd1616f7bbebf358dcb8243251dc9d74ad66aa1ef4` |
+| API binary SHA-256 built / running | `aceede30ad2a0c6d20eb4c138f4cd8266d167e8e4e7598ae90f3f4f884cfc227` / 相同 |
+| 服务器聚焦门禁 | shadow 2、model autonomy 2、public citation 4、model supply brief 1、ordinary chat unrestricted 1；A/B/C self-test passed |
+| feature-off | API active；health/ready passed；mode `off`；allowlist `0/0/0`；值不入回执 |
+| shadow / final-off | `not_executed` / `N/A` |
+| 服务边界 | 非 API 服务快照 byte-equal；only API restarted |
+| provider | `provider_calls_initiated_by_runbook=0` |
+| 日志安全 | 247 行；semantic receipt 0；unsafe receipt 0；fatal/readiness error 0 |
+| 备份与 cleanup | `/srv/aiv3/backups/assistant-semantic-supply-20260715T060548Z`；`cleanup_manifest_auto_delete=false` |
+| Phase A receipt SHA-256 | `70cca35e7cd05e1a5c2fb13d1fbf38e06366f21b2b11fbbd496b747eca66eb94` |
+| 结论 | `feature_off_operational_install_only` |
+
+该回执只证明 feature-off operational install、配置和 API 服务边界；不证明独立 feature-off 基线、shadow 安全、检索收益、答案质量、自然度或 citation 准确率提升。当前决策仍为 `keep_graph_visual_only`。
 
 ## 6. 最终决策
 
@@ -230,5 +271,7 @@ Task 9 receipts：
 - 不执行 Task 11 live A/B/C，不调用 provider；
 - 不声称答案质量、自然度或 citation 准确率提升；
 - feature mode 保持 `off`，图谱继续用于数据集理解可视化。
+
+Task 10 Phase A 的 operational install 不改变该决策，也不构成 `feature_off_shadow_safe` 或问答质量证据。
 
 `scripts/smoke/semantic-supply-main-live.mjs` 只保留未来采集契约的 fail-closed 脚手架。其本地 `--self-test --pretty` 已通过，记录 `network_requests=0`、`filesystem_writes=0`、`decision_eligible=false`；当前版本还会对所有 preflight/execute 固定返回 `live_execution_disabled_without_offline_promotion_candidate`，只读并校验仓库固定夹具后，在创建回执文件、认证和联网前退出。以后即使离线候选通过，也必须另行改代码解除硬锁并重新审查，不能把当前 self-test、preflight 或任何单臂 receipt 解释为晋级证据。

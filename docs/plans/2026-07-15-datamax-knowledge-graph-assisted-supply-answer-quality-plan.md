@@ -12,7 +12,7 @@
 
 **Status:** IMPLEMENTATION COMPLETE — NO PROMOTION CANDIDATE — FEATURE KEPT OFF
 
-**Execution started:** 2026-07-15 from the frozen baseline below. Local code and no-provider validation may proceed; GitHub push, server rollout and live-provider conclusions remain unclaimed until their own gates are recorded.
+**Execution completed:** 2026-07-15. GitHub synchronization and the 8-server Task 10 Phase A receipt are recorded in `docs/validation/semantic-supply-answer-quality.md`. Task 10 completed only as `feature_off_operational_install_only`; no shadow was executed, the rollout runbook initiated no provider call, and no answer-quality or promotion conclusion is claimed.
 
 **Baseline:** `e14e924fa40ddb3f12b2366ea07a73bc18e4f467`
 
@@ -615,6 +615,8 @@ git status --short
 **Commit:** `docs: record semantic supply local regression`
 
 ### Task 10: Prepare feature-off and shadow rollout
+
+**Execution status:** completed as Phase A `feature_off_operational_install_only`. Code commit `9b7ec2bcee7796723c58f781a8bbf113d3285b31` was installed with mode explicitly `off` and all three allowlists empty; only `platform-api` was restarted and verified healthy, while non-API services remained unchanged. Shadow was not executed because `retrieval_candidate=null`; `provider_calls_initiated_by_runbook=0`.
 
 **Files:**
 
