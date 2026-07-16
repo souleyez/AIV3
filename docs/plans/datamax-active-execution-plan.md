@@ -1,6 +1,6 @@
 # DataMax V3 Active Execution Plan
 
-**Status:** READY FOR EXECUTION — NO TASK IN PROGRESS
+**Status:** READY FOR TASK 2 — TASK 1 CODE COMPLETE; DEPLOYMENT/POSTGRESQL ROTATION PENDING
 
 **Cutover date:** 2026-07-16
 
@@ -8,7 +8,11 @@
 
 - `docs/plans/2026-07-16-datamax-v3-quality-and-production-readiness.md`
 
-**Next task:** Task 1 — redact PostgreSQL/NATS connection endpoints from logs and errors.
+**Completed task:** Task 1 — redact PostgreSQL/NATS connection endpoints from logs and errors.
+
+**Task 1 implementation commit:** `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`
+
+**Next task:** Task 2 — reconcile GitHub main, required CI and the 8-server release line; deploy the redaction fix before rotating the historically exposed PostgreSQL credential.
 
 **Unique validation ledger:**
 

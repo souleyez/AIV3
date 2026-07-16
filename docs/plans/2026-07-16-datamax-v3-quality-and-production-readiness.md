@@ -10,11 +10,13 @@
 
 ---
 
-**Status:** READY FOR EXECUTION — NO TASK IN PROGRESS
+**Status:** READY FOR TASK 2 — TASK 1 CODE COMPLETE; RUNTIME CLOSURE MOVES WITH TASK 2
 
 **Created:** 2026-07-16
 
-**Next task:** Task 1 — 连接串和启动日志脱敏
+**Last completed implementation:** Task 1 — 连接串和启动日志脱敏，commit `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`
+
+**Next task:** Task 2 — 主线、CI 与 8 服务器发布线归一
 
 **Validation ledger:** `docs/validation/2026-07-16-datamax-v3-quality-readiness.md`
 
@@ -149,7 +151,7 @@ Expected: all tests pass; the final `rg` has no production log/error match.
 
 **Step 6: Perform a count-only historical log audit**
 
-On 8 server, search journal fields without printing matching lines or URLs. Record only service name, time range and match count. If any credential-bearing URL was historically logged, stop and rotate the affected secret through the approved secret channel; record rotation completion, never the secret.
+On 8 server, search journal fields without printing matching lines or URLs. Record only service name, time range and match count. If any credential-bearing URL was historically logged, record `rotation_required` and stop short of rotating while the old binaries are still deployed. Task 2 must first deploy the fixed binaries, verify new logs are redacted, and only then rotate the affected secret through the approved secret channel; record rotation completion, never the secret. This ordering prevents a restart of old code from logging the replacement secret again.
 
 **Step 7: Commit**
 
@@ -159,6 +161,8 @@ git commit -m "fix: redact runtime connection endpoints"
 ```
 
 **Completion standard:** no current code path or new journal line exposes raw PostgreSQL/NATS credentials; malformed URLs also fail closed.
+
+**2026-07-16 execution state:** local implementation and deterministic gates are complete at `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`. The count-only 8-server audit found historical PostgreSQL credential-bearing URL records, so `rotation_required=postgresql`; no NATS credential-bearing record was found. The fixed binaries are not deployed in Task 1. Task 2 must deploy them, verify fresh records are redacted, then rotate the affected PostgreSQL credential through the approved secret channel. Until that runtime sequence passes, Task 1 is implementation-complete rather than production-closed.
 
 ## Task 2: Reconcile GitHub main, CI and the 8-server release line
 
@@ -208,7 +212,7 @@ Push Task 1 plus this docs/CI cutover branch, open a PR into `main`, and require
 
 **Step 5: Merge and align the server**
 
-After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Rebuild/restart only services changed by Task 1. Do not change feature flags.
+After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Rebuild/restart only services changed by Task 1. Verify their new startup records contain only redacted endpoints; if Task 1 recorded `rotation_required`, rotate the affected database/NATS credential now through the approved secret channel and restart the dependent services once more. Do not change feature flags.
 
 **Step 6: Verify identity and runtime**
 
