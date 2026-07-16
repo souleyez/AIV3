@@ -56,7 +56,7 @@ pub(crate) fn assistant_run_database_schema_context_item(
         "analysis_views": analysis_views,
         "answer_guidance": {
             "scope": "database_source_dataset_mapping",
-            "metric_rule": "指标字段用于聚合，回答时说明 aggregation 和 scan_limit；若字段含义来自字段名启发式，应提示按业务口径确认。",
+            "metric_rule": "metrics 仅表示候选数值字段；只有字段语义契约允许的 aggregation 才可执行，回答时说明 aggregation 和 scan_limit；未确认单位、可加性或业务口径时不得自行汇总。",
             "report_rule": "报表优先拆成实体排行、时间趋势、分类对比；不要把不同维度的聚合样本混成同一张图。",
             "scan_limit": scan_limit,
         },
@@ -149,22 +149,10 @@ pub(crate) fn assistant_run_database_aggregate_scan_limit() -> u32 {
 }
 
 pub(crate) fn assistant_run_database_aggregate_sort_semantics(
-    metric: Option<&str>,
-    order_direction: &str,
+    _metric: Option<&str>,
+    _order_direction: &str,
 ) -> Option<&'static str> {
-    if !order_direction.eq_ignore_ascii_case("asc") {
-        return None;
-    }
-    let metric = metric.unwrap_or_default().to_ascii_lowercase();
-    if metric.contains("xuzeng")
-        || metric.contains("quekou")
-        || metric.contains("gap")
-        || metric.contains("shortfall")
-    {
-        Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
-    } else {
-        None
-    }
+    None
 }
 
 pub(crate) fn assistant_run_database_join_or_dash<T: AsRef<str>>(items: &[T]) -> String {
@@ -201,11 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn database_aggregate_sort_semantics_only_marks_take_high_ascending_metrics() {
-        assert!(
-            assistant_run_database_aggregate_sort_semantics(Some("quekou"), "asc")
-                .unwrap()
-                .contains("机会越靠前")
+    fn database_aggregate_sort_semantics_does_not_invent_business_direction() {
+        assert_eq!(
+            assistant_run_database_aggregate_sort_semantics(Some("quekou"), "asc"),
+            None
         );
         assert_eq!(
             assistant_run_database_aggregate_sort_semantics(Some("quekou"), "desc"),

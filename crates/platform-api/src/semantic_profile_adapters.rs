@@ -2,9 +2,12 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
+use crate::semantic_label_resolver::{
+    classify_semantic_primary_label, safe_semantic_business_label, semantic_evidence_label_is_safe,
+};
 use crate::semantic_understanding::{
-    stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticStatus,
-    MAX_EVIDENCE_REFS, MAX_EXAMPLES,
+    stable_semantic_id, SemanticEvidenceRef, SemanticObservation, SemanticSourceIdentity,
+    SemanticStatus, MAX_EVIDENCE_REFS, MAX_EXAMPLES,
 };
 
 #[derive(Clone, Debug)]
@@ -52,6 +55,7 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let parse = input
         .metadata
         .get("parse_metadata")
+        .or_else(|| input.metadata.get("external_metadata"))
         .unwrap_or(&input.metadata);
     let table = string_at(parse, "source_table").unwrap_or_else(|| input.title.clone());
     let table_comment = string_at(parse, "table_comment");
@@ -117,8 +121,8 @@ fn adapt_database(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 }
 
 fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
-    let sheet = string_at(&input.metadata, "sheet_name")
-        .unwrap_or_else(|| spreadsheet_business_title(&input.title));
+    let raw_sheet = string_at(&input.metadata, "sheet_name").unwrap_or_else(|| input.title.clone());
+    let sheet = spreadsheet_business_title(&raw_sheet);
     let mut output = vec![observation(
         input,
         "object",
@@ -135,6 +139,9 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let formulas = object_at(&input.metadata, "formulas");
     let candidates = string_array_at(&input.metadata, "candidate_keys");
     for header in string_array_at(&input.metadata, "headers") {
+        let Some(safe_header) = safe_semantic_business_label(&header) else {
+            continue;
+        };
         let mut attributes = Map::new();
         if let Some(value_type) = value_types.and_then(|values| values.get(&header)).cloned() {
             attributes.insert("value_type".to_string(), value_type);
@@ -151,25 +158,50 @@ fn adapt_spreadsheet(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
             input,
             "spreadsheet_table",
             &sheet,
-            &header,
-            None,
+            &safe_header,
+            Some(safe_header.clone()),
             None,
             attributes,
         );
+    }
+    for (index, fact) in input.facts.iter().enumerate() {
+        let raw_name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let Some(name) = safe_semantic_business_label(&raw_name) else {
+            continue;
+        };
+        let mut item = observation(
+            input,
+            "fact",
+            "spreadsheet_table",
+            &sheet,
+            &name,
+            Some(name.clone()),
+            "document_fact",
+            SemanticStatus::Confirmed,
+            1.0,
+            fact.clone(),
+        );
+        item.value_type = string_at(fact, "value_type");
+        item.observed_values = ["value_text", "value_number", "value_date", "value"]
+            .into_iter()
+            .filter_map(|key| fact.get(key).and_then(value_string))
+            .take(MAX_EXAMPLES)
+            .collect();
+        output.push(item);
     }
     output
 }
 
 fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
-    let display_title = business_source_title(&input.title);
+    let display_title = document_business_title(&input.title);
     let mut output = vec![observation(
         input,
         "object",
         "document_section",
         &object_key,
-        &input.title,
-        Some(display_title),
+        &display_title,
+        Some(display_title.clone()),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -181,13 +213,16 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         ("entity", "entities"),
     ] {
         for value in string_array_at(&input.metadata, key) {
+            let Some(safe_value) = safe_semantic_business_label(&value) else {
+                continue;
+            };
             output.push(observation(
                 input,
                 kind,
                 "document_section",
                 &object_key,
-                &value,
-                Some(value.clone()),
+                &safe_value,
+                Some(safe_value.clone()),
                 "parsed_structure",
                 SemanticStatus::Observed,
                 0.85,
@@ -196,7 +231,10 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
         }
     }
     for (index, fact) in input.facts.iter().enumerate() {
-        let name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let raw_name = string_at(fact, "name").unwrap_or_else(|| format!("fact_{index}"));
+        let Some(name) = safe_semantic_business_label(&raw_name) else {
+            continue;
+        };
         output.push(observation(
             input,
             "fact",
@@ -216,13 +254,14 @@ fn adapt_document(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key =
         string_at(&input.metadata, "profile_kind").unwrap_or_else(|| input.source_id.clone());
+    let display_title = localized_business_source_title(&input.title, "资产资料");
     let mut output = vec![observation(
         input,
         "object",
         "asset_profile",
         &object_key,
-        &input.title,
-        Some(business_source_title(&input.title)),
+        &display_title,
+        Some(display_title.clone()),
         "asset_profile",
         SemanticStatus::Observed,
         0.9,
@@ -265,14 +304,14 @@ fn adapt_asset(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
 
 fn adapt_media(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let object_key = input.source_id.clone();
-    let display_title = business_source_title(&input.title);
+    let display_title = localized_business_source_title(&input.title, "音视频资料");
     let mut output = vec![observation(
         input,
         "object",
         "media_segment",
         &object_key,
-        &input.title,
-        Some(display_title),
+        &display_title,
+        Some(display_title.clone()),
         "source_title",
         SemanticStatus::Observed,
         0.9,
@@ -343,6 +382,10 @@ fn business_source_title(title: &str) -> String {
     trimmed.to_string()
 }
 
+fn document_business_title(title: &str) -> String {
+    localized_business_source_title(title, "文档资料")
+}
+
 fn spreadsheet_business_title(title: &str) -> String {
     let trimmed = title.trim();
     let delimiter_count = trimmed
@@ -352,21 +395,29 @@ fn spreadsheet_business_title(title: &str) -> String {
     if trimmed.chars().count() > 80 || delimiter_count >= 4 {
         "表格数据".to_string()
     } else {
-        business_source_title(trimmed)
+        localized_business_source_title(trimmed, "表格数据")
     }
+}
+
+fn localized_business_source_title(title: &str, fallback: &str) -> String {
+    let title = business_source_title(title);
+    safe_semantic_business_label(&title)
+        .filter(|label| classify_semantic_primary_label(label).chinese_business_label)
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn adapt_web_api(input: &SemanticProfileInput) -> Vec<SemanticObservation> {
     let resource =
         string_at(&input.metadata, "resource_type").unwrap_or_else(|| input.source_id.clone());
-    let label = string_at(&input.metadata, "title").unwrap_or_else(|| input.title.clone());
+    let raw_label = string_at(&input.metadata, "title").unwrap_or_else(|| input.title.clone());
+    let label = localized_business_source_title(&raw_label, "网页接口资料");
     let mut output = vec![observation(
         input,
         "object",
         "api_resource",
         &resource,
-        &resource,
-        Some(label),
+        &label,
+        Some(label.clone()),
         "source_metadata",
         SemanticStatus::Observed,
         0.9,
@@ -429,6 +480,7 @@ fn observation(
         ),
         source_kind: input.source_kind.clone(),
         source_id: input.source_id.clone(),
+        source_identity: semantic_source_identity(input, object_kind, object_key),
         observation_kind: observation_kind.to_string(),
         object_kind: object_kind.to_string(),
         object_key: object_key.to_string(),
@@ -443,6 +495,55 @@ fn observation(
         confidence,
         evidence_refs: evidence_refs(input),
     }
+}
+
+fn semantic_source_identity(
+    input: &SemanticProfileInput,
+    object_kind: &str,
+    object_key: &str,
+) -> Option<SemanticSourceIdentity> {
+    if object_kind != "database_table" {
+        return None;
+    }
+    let parse = input
+        .metadata
+        .get("parse_metadata")
+        .or_else(|| input.metadata.get("external_metadata"))
+        .unwrap_or(&input.metadata);
+    let source_system_key = string_at_any(
+        parse,
+        &["source_system_key", "source_system", "connection_key"],
+    )
+    .or_else(|| {
+        input
+            .metadata
+            .get("external_source")
+            .and_then(|value| string_at_any(value, &["source_id", "source_system_key"]))
+    })
+    .unwrap_or_else(|| input.source_id.trim().to_string());
+    let mut source_schema_key =
+        string_at_any(parse, &["source_schema", "schema"]).unwrap_or_default();
+    let mut source_object_key = object_key.trim().to_string();
+    if source_schema_key.is_empty() {
+        if let Some((schema, object)) = source_object_key.rsplit_once('.') {
+            if !schema.trim().is_empty() && !object.trim().is_empty() {
+                source_schema_key = schema.trim().to_string();
+                source_object_key = object.trim().to_string();
+            }
+        }
+    } else if source_object_key
+        .to_ascii_lowercase()
+        .starts_with(&format!("{}.", source_schema_key.to_ascii_lowercase()))
+    {
+        source_object_key = source_object_key[source_schema_key.len() + 1..]
+            .trim()
+            .to_string();
+    }
+    Some(SemanticSourceIdentity {
+        source_system_key,
+        source_schema_key,
+        source_object_key,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -487,7 +588,7 @@ fn evidence_refs(input: &SemanticProfileInput) -> Vec<SemanticEvidenceRef> {
         .evidence_labels
         .iter()
         .map(|label| label.trim())
-        .filter(|label| !label.is_empty())
+        .filter(|label| semantic_evidence_label_is_safe(label))
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
     if labels.is_empty() {
@@ -518,6 +619,10 @@ fn array_at<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 
 fn string_at(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(value_string)
+}
+
+fn string_at_any(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| string_at(value, key))
 }
 
 fn string_array_at(value: &Value, key: &str) -> Vec<String> {
@@ -614,6 +719,35 @@ mod tests {
     }
 
     #[test]
+    fn database_adapter_preserves_internal_source_identity_without_serializing_it() {
+        let observations = adapt_semantic_profile(&input(
+            "database",
+            json!({"parse_metadata": {
+                "source_system_key": "oracle-badw-internal",
+                "schema": "finance_private",
+                "source_table": "lease_contract",
+                "fields": {"contract_id": "C-001"}
+            }}),
+        ));
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("database object observation");
+        let identity = object
+            .source_identity
+            .as_ref()
+            .expect("database source identity");
+
+        assert_eq!(identity.source_system_key, "oracle-badw-internal");
+        assert_eq!(identity.source_schema_key, "finance_private");
+        assert_eq!(identity.source_object_key, "lease_contract");
+
+        let public_json = serde_json::to_string(object).expect("serializable observation");
+        assert!(!public_json.contains("oracle-badw-internal"));
+        assert!(!public_json.contains("source_identity"));
+    }
+
+    #[test]
     fn spreadsheet_adapter_reads_sheet_headers_formulas_and_key_candidates() {
         let observations = adapt_semantic_profile(&input(
             "spreadsheet",
@@ -648,6 +782,89 @@ mod tests {
     }
 
     #[test]
+    fn newbai_spreadsheet_noise_never_becomes_object_or_field_main_label() {
+        let mut fixture = input(
+            "spreadsheet",
+            json!({
+                "sheet_name": "1001\t新街口门店\t2026\t123456.78",
+                "headers": [
+                    "项目名称",
+                    "合同金额",
+                    "2026",
+                    "HT-2026-000001",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "select * from lease_contract",
+                    "paragraph_aware_noun_terms_v1",
+                    "C:\\internal\\newbai\\source.xlsx",
+                    "technical_report_alpha.xlsx",
+                    "1001,新街口门店,2026,123456.78"
+                ]
+            }),
+        );
+        fixture.title = "technical_report_alpha.xlsx".to_string();
+        fixture.facts = vec![json!({
+            "name": "租赁面积",
+            "fact_type": "metric",
+            "value_type": "number"
+        })];
+        fixture.evidence_labels = vec![
+            "新百脱敏表头".to_string(),
+            "C:\\internal\\newbai\\raw.xlsx".to_string(),
+            "postgres://example.invalid/newbai".to_string(),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("spreadsheet object");
+        assert_eq!(object.label_hint.as_deref(), Some("表格数据"));
+        assert_eq!(object.technical_name, "表格数据");
+
+        let field_names = observations
+            .iter()
+            .filter(|item| matches!(item.observation_kind.as_str(), "field" | "fact"))
+            .map(|item| item.technical_name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            field_names,
+            BTreeSet::from(["合同金额", "租赁面积", "项目名称"])
+        );
+        assert!(observations.iter().all(|item| {
+            item.evidence_refs
+                .iter()
+                .all(|reference| reference.label == "新百脱敏表头")
+        }));
+    }
+
+    #[test]
+    fn newbai_facts_only_spreadsheet_builds_fields_without_chunk_headers() {
+        let mut fixture = input("spreadsheet", json!({"parse_metadata": {}}));
+        fixture.title = "Data_Buddy_AI经营分析5个重点场景.xlsx".to_string();
+        fixture.facts = vec![
+            json!({"name": "项目名称", "value_type": "text"}),
+            json!({"name": "固定与提成取高预警V1", "value_type": "text"}),
+            json!({"name": "2026", "value_type": "number"}),
+            json!({"name": "select * from lease_contract", "value_type": "text"}),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let object = observations
+            .iter()
+            .find(|item| item.observation_kind == "object")
+            .expect("facts-only spreadsheet object");
+        assert_eq!(object.label_hint.as_deref(), Some("经营分析重点场景"));
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|item| item.observation_kind == "fact")
+                .map(|item| item.technical_name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["固定与提成取高预警", "项目名称"])
+        );
+    }
+
+    #[test]
     fn document_adapter_reads_sections_tables_entities_facts_and_evidence() {
         let mut fixture = input(
             "document",
@@ -673,9 +890,43 @@ mod tests {
             .expect("document object");
 
         assert_eq!(object.label_hint.as_deref(), Some("新百项目"));
-        assert_eq!(object.technical_name, "新百项目.zip");
+        assert_eq!(object.technical_name, "新百项目");
         assert_eq!(business_source_title("周报.DOCX"), "周报");
         assert_eq!(business_source_title("无扩展名"), "无扩展名");
+    }
+
+    #[test]
+    fn document_adapter_excludes_sensitive_or_noisy_public_names() {
+        let sensitive_token = "a".repeat(64);
+        let mut fixture = input(
+            "document",
+            json!({
+                "sections": ["经营摘要", "2026"],
+                "tables": ["租金明细", sensitive_token.clone()],
+                "entities": ["新百项目", "13800138000"]
+            }),
+        );
+        fixture.title = sensitive_token.clone();
+        fixture.facts = vec![
+            json!({"name": "项目负责人", "value_type": "text"}),
+            json!({"name": sensitive_token, "value_type": "text"}),
+            json!({"name": "13800138000", "value_type": "text"}),
+        ];
+
+        let observations = adapt_semantic_profile(&fixture);
+        let technical_names = observations
+            .iter()
+            .map(|item| item.technical_name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(technical_names.contains("文档资料"));
+        assert!(technical_names.contains("经营摘要"));
+        assert!(technical_names.contains("租金明细"));
+        assert!(technical_names.contains("新百项目"));
+        assert!(technical_names.contains("项目负责人"));
+        assert!(!technical_names.contains("2026"));
+        assert!(!technical_names.contains("13800138000"));
+        assert!(!technical_names.contains(sensitive_token.as_str()));
     }
 
     #[test]
@@ -729,6 +980,31 @@ mod tests {
         assert!(observations
             .iter()
             .any(|item| item.observation_kind == "reference"));
+    }
+
+    #[test]
+    fn unknown_english_source_titles_use_honest_chinese_kind_fallbacks() {
+        for (source_kind, metadata, expected_label) in [
+            ("document", json!({}), "文档资料"),
+            ("spreadsheet", json!({}), "表格数据"),
+            ("asset", json!({}), "资产资料"),
+            ("media", json!({}), "音视频资料"),
+            (
+                "web_api",
+                json!({"resource_type": "store", "title": "Store API Resource"}),
+                "网页接口资料",
+            ),
+        ] {
+            let observations = adapt_semantic_profile(&input(source_kind, metadata));
+            let object = observations
+                .iter()
+                .find(|item| item.observation_kind == "object")
+                .expect("source object");
+
+            assert_eq!(object.label_hint.as_deref(), Some(expected_label));
+            assert_eq!(object.technical_name, expected_label);
+            assert_eq!(object.source_id, format!("fixture:{source_kind}"));
+        }
     }
 
     #[test]

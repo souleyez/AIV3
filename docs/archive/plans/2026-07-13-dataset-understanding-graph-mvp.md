@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 仅作历史设计与验收证据；禁止继续 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # Dataset Understanding Graph MVP Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
@@ -73,4 +75,3 @@ Run: `pnpm --filter @ai-data-platform-v3/web build` from the repository root.
 **Step 4: Inspect the live page visually**
 
 Start the existing Web development surface, select a populated dataset, and verify: the graph changes with selection, only real response fields appear, node clicks update evidence, zero-data states remain honest, and the document list stays usable below the graph.
-

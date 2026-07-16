@@ -2,10 +2,31 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  buildCrossDatasetUnderstandingGraph,
   buildDatasetUnderstandingGraph,
   DATASET_GRAPH_CATEGORIES,
   filterDatasetUnderstandingGraph,
+  layoutCrossDatasetUnderstandingGraph,
 } from '../lib/dataset-understanding-graph';
+import {
+  graphBudgetStatusText,
+  graphDensityForContainerWidth,
+} from '../lib/dataset-understanding-graph-budget';
+import {
+  datasetUnderstandingForceConfig,
+  graphNodeLabelVisible,
+  layoutDatasetUnderstandingGraph,
+} from '../lib/dataset-understanding-graph-layout';
+
+const DATASET_GRAPH_SERIES_ID = 'dataset-understanding-graph';
+let echartsModulePromise = null;
+
+function loadEchartsModule() {
+  if (!echartsModulePromise) echartsModulePromise = import('echarts');
+  return echartsModulePromise;
+}
+
+if (typeof window !== 'undefined') void loadEchartsModule();
 
 function compactNumber(value) {
   const number = Number(value) || 0;
@@ -57,12 +78,66 @@ function semanticRoleLabel(value) {
   }[value] || value || '待判断';
 }
 
-function optionForModel(model, filters) {
-  const { nodes: visibleNodes, links: visibleLinks } = filterDatasetUnderstandingGraph(model, filters);
+function staticLayoutExtentAnchors(nodes) {
+  const positioned = (Array.isArray(nodes) ? nodes : []).filter((node) => (
+    Number.isFinite(Number(node?.x)) && Number.isFinite(Number(node?.y))
+  ));
+  if (!positioned.length) return [];
+  const xs = positioned.map((node) => Number(node.x));
+  const ys = positioned.map((node) => Number(node.y));
+  const minimumX = Math.min(...xs) - 90;
+  const maximumX = Math.max(...xs) + 90;
+  const minimumY = Math.min(...ys) - 90;
+  const maximumY = Math.max(...ys) + 90;
+  return [
+    ['north-west', minimumX, minimumY],
+    ['north-east', maximumX, minimumY],
+    ['south-east', maximumX, maximumY],
+    ['south-west', minimumX, maximumY],
+  ].map(([key, x, y]) => ({
+    id: `__dataset-layout-anchor:${key}`,
+    name: '',
+    x,
+    y,
+    fixed: true,
+    layoutAnchor: true,
+    symbolSize: 0,
+  }));
+}
+
+function optionForModel(model, filters, projectedGraph = null) {
+  const { nodes: visibleNodes, links: visibleLinks } = projectedGraph
+    || filterDatasetUnderstandingGraph(model, filters);
+  const layoutInputNodes = model.nodes;
+  const layoutBaseNodes = model.mode === 'cross'
+    ? layoutCrossDatasetUnderstandingGraph(layoutInputNodes, model.datasetClusters)
+    : layoutDatasetUnderstandingGraph(layoutInputNodes);
+  const layoutById = new Map(layoutBaseNodes.map((node) => [node.id, node]));
+  const positionedNodes = visibleNodes.map((node) => {
+    const layoutNode = layoutById.get(node.id);
+    return layoutNode ? {
+      ...node,
+      x: layoutNode.x,
+      y: layoutNode.y,
+      fixed: layoutNode.fixed,
+      layoutTier: layoutNode.layoutTier,
+      symbol: layoutNode.symbol || node.symbol,
+      symbolSize: layoutNode.symbolSize || node.symbolSize,
+    } : node;
+  });
+  const force = datasetUnderstandingForceConfig(layoutBaseNodes.length);
+  const staticLayout = model.mode === 'fallback'
+    || model.mode === 'cross'
+    || layoutBaseNodes.length > 120;
+  const seriesNodes = staticLayout
+    ? [...positionedNodes, ...staticLayoutExtentAnchors(layoutBaseNodes)]
+    : positionedNodes;
+  const zoom = Number(filters?.zoom) || 1;
+  const selectedNodeId = filters?.focusNodeId || '';
 
   return {
-    animationDuration: 650,
-    animationDurationUpdate: 420,
+    animationDuration: staticLayout ? 0 : 650,
+    animationDurationUpdate: staticLayout ? 0 : 420,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
@@ -80,34 +155,52 @@ function optionForModel(model, filters) {
             params.data?.evidence,
           ].filter(Boolean).join('\n');
         }
-        return [params.data?.name, params.data?.detail].filter(Boolean).join('\n');
+        return [
+          params.data?.shared ? '共享节点' : '',
+          params.data?.name,
+          params.data?.detail,
+          params.data?.sourceDatasets?.length
+            ? `可见来源：${params.data.sourceDatasets.map((dataset) => dataset.title).join('、')}`
+            : '',
+        ].filter(Boolean).join('\n');
       },
     },
     series: [{
+      id: DATASET_GRAPH_SERIES_ID,
       type: 'graph',
-      layout: 'force',
+      // Large single-dataset and every clustered cross-dataset view already
+      // have deterministic coordinates. Keeping the layout strategy tied to
+      // the full model preserves the same mental map as filters change.
+      layout: staticLayout ? 'none' : 'force',
       roam: true,
-      draggable: true,
+      draggable: !staticLayout,
       cursor: 'grab',
       categories: model.categories.map((category) => ({
         name: category.name,
         itemStyle: { color: category.color },
       })),
-      data: visibleNodes.map((node) => ({
+      data: seriesNodes.map((node) => node.layoutAnchor ? {
+        ...node,
+        silent: true,
+        tooltip: { show: false },
+        label: { show: false },
+        itemStyle: { opacity: 0 },
+      } : ({
         ...node,
         label: {
-          show: true,
           fontSize: node.kind === 'dataset' ? 11 : 9,
           fontWeight: node.kind === 'dataset' ? 800 : 650,
           color: node.signal === 'identifier' ? '#8794a8' : '#dce6f4',
         },
         itemStyle: {
-          color: graphCategory(model, node.kind).color,
+          color: model.mode === 'cross' ? node.clusterColor : graphCategory(model, node.kind).color,
           opacity: node.signal === 'identifier' ? 0.62 : 1,
-          borderColor: node.kind === 'dataset' ? '#ffffff' : 'rgba(255,255,255,0.52)',
-          borderWidth: node.kind === 'dataset' ? 2 : 1,
-          shadowBlur: node.kind === 'dataset' ? 28 : 12,
-          shadowColor: `${graphCategory(model, node.kind).color}55`,
+          borderColor: node.shared || node.kind === 'dataset' ? '#ffffff' : 'rgba(255,255,255,0.52)',
+          borderWidth: node.shared || node.kind === 'dataset' ? 2 : 1,
+          shadowBlur: node.shared || node.kind === 'dataset' ? 28 : 12,
+          shadowColor: model.mode === 'cross'
+            ? `${node.clusterColor}66`
+            : `${graphCategory(model, node.kind).color}55`,
         },
       })),
       links: visibleLinks.map((link) => ({
@@ -122,17 +215,14 @@ function optionForModel(model, filters) {
               : link.type === 'confirmed'
                 ? 'rgba(52, 211, 153, 0.94)'
                 : 'rgba(94, 234, 212, 0.84)',
-          type: link.type === 'inferred' ? 'dashed' : 'solid',
+          type: link.lineKind || (link.type === 'inferred' ? 'dashed' : 'solid'),
           width: link.rootRelation ? 0.75 : link.type === 'inferred' ? 1.35 : 1.8,
           opacity: link.rootRelation ? 0.24 : link.type === 'inferred' ? 0.62 : 0.76,
           curveness: link.rootRelation ? 0.02 : 0.12,
         },
       })),
       force: {
-        repulsion: model.mode === 'semantic' ? 235 : 182,
-        gravity: model.mode === 'semantic' ? 0.055 : 0.085,
-        edgeLength: model.mode === 'semantic' ? [74, 148] : [58, 126],
-        friction: 0.24,
+        ...force,
       },
       label: {
         show: true,
@@ -142,11 +232,23 @@ function optionForModel(model, filters) {
         fontSize: 9,
         textBorderColor: 'rgba(2, 8, 18, 0.92)',
         textBorderWidth: 3,
+        rich: {
+          shared: {
+            color: '#0f172a',
+            backgroundColor: '#f8fafc',
+            borderRadius: 7,
+            padding: [2, 5],
+            fontSize: 8,
+            fontWeight: 800,
+          },
+        },
         formatter(params) {
-          return String(params.data?.shortLabel || '').slice(0, 5);
+          if (!graphNodeLabelVisible(params.data, zoom, selectedNodeId)) return '';
+          const label = String(params.data?.shortLabel || '').slice(0, 5);
+          return params.data?.shared ? `{shared|共享}\n${label}` : label;
         },
       },
-      labelLayout: { hideOverlap: false },
+      labelLayout: { hideOverlap: true },
       edgeLabel: {
         show: false,
         color: '#e5edf8',
@@ -166,6 +268,49 @@ function optionForModel(model, filters) {
       },
     }],
   };
+}
+
+function updateChartLabelLod(chart, zoom, selectedNodeId, element = null) {
+  if (!chart || chart.isDisposed?.()) return;
+  const option = {
+    series: [{
+      id: DATASET_GRAPH_SERIES_ID,
+      label: {
+        formatter(params) {
+          if (!graphNodeLabelVisible(params.data, zoom, selectedNodeId)) return '';
+          const label = String(params.data?.shortLabel || '').slice(0, 5);
+          return params.data?.shared ? `{shared|共享}\n${label}` : label;
+        },
+      },
+    }],
+  };
+  markChartRenderRequested(element, option);
+  chart.setOption(option, { lazyUpdate: true });
+}
+
+function markChartRenderRequested(element, option) {
+  if (!element) return 0;
+  const revision = Number(element.dataset.echartsRequestedRevision || 0) + 1;
+  const series = option?.series?.[0] || {};
+  element.dataset.echartsRequestedRevision = String(revision);
+  element.dataset.echartsUpdateCount = String(revision);
+  element.dataset.echartsReady = 'false';
+  if (series.layout) element.dataset.echartsLayout = String(series.layout);
+  if (Array.isArray(series.data)) {
+    element.dataset.echartsNodeCount = String(series.data.filter((node) => !node.layoutAnchor).length);
+  }
+  if (Array.isArray(series.links)) element.dataset.echartsEdgeCount = String(series.links.length);
+  return revision;
+}
+
+function markChartRenderFinished(element) {
+  if (!element) return;
+  const requested = Number(element.dataset.echartsRequestedRevision || 0);
+  const rendered = Number(element.dataset.echartsRenderedRevision || 0);
+  if (requested <= rendered) return;
+  element.dataset.echartsRenderedRevision = String(requested);
+  element.dataset.echartsFinishedAt = String(performance.now());
+  element.dataset.echartsReady = 'true';
 }
 
 function PipelineStage({ stage, index, last, active, onSelect }) {
@@ -189,16 +334,25 @@ function PipelineStage({ stage, index, last, active, onSelect }) {
 
 function UnderstandingOverview({ model }) {
   const { understanding } = model;
+  const hiddenQualityEntries = Object.entries(model.fallbackQuality?.hiddenByClass || {});
+  const qualityClassLabels = {
+    document: '资料标题',
+    technical: '技术标识',
+    row: '原始数据行',
+    sql: 'SQL / 注释',
+    numeric: '数字编号',
+    unknown: '未分类线索',
+  };
   return (
     <>
-      <span>系统理解摘要</span>
+      <span>{model.mode === 'semantic' ? '系统理解摘要' : '资料来源摘要'}</span>
       <div className={`dataset-understanding-node-kind overview ${model.mode}`.trim()}>
-        <i />{model.mode === 'semantic' ? '真实语义快照' : '基础理解视图'}
+        <i />{model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}
       </div>
-      <h4>系统已经理解到什么</h4>
+      <h4>{model.overviewTitle || (model.mode === 'semantic' ? '系统已经理解到什么' : '当前资料来源包含什么')}</h4>
       <p>{understanding.summary}</p>
       <div className="dataset-understanding-insight-group">
-        <strong>核心概念</strong>
+        <strong>{model.mode === 'semantic' ? '核心概念' : '可信中文线索'}</strong>
         <div className="dataset-understanding-insight-tags">
           {understanding.keyConcepts.length
             ? understanding.keyConcepts.slice(0, 10).map((term) => <span key={term}>{term}</span>)
@@ -211,8 +365,25 @@ function UnderstandingOverview({ model }) {
       </div>
       {understanding.technicalIdentifiers.length ? (
         <div className="dataset-understanding-insight-group muted">
-          <strong>技术标识</strong>
+          <strong>技术标识（仅详情）</strong>
           <p>{understanding.technicalIdentifiers.join(' · ')}</p>
+        </div>
+      ) : null}
+      {model.mode === 'fallback' && model.fallbackQuality?.hiddenCount ? (
+        <div className="dataset-understanding-insight-group muted">
+          <strong>待解释清单</strong>
+          <p>
+            已从主画布隐藏 {model.fallbackQuality.hiddenCount} 个低质量或技术项
+            {model.fallbackQuality.deduplicatedDocumentTitles
+              ? `，并合并 ${model.fallbackQuality.deduplicatedDocumentTitles} 个重复资料标题`
+              : ''}。
+          </p>
+          <div className="dataset-understanding-insight-tags">
+            {hiddenQualityEntries.map(([qualityClass, count]) => (
+              <span key={qualityClass}>{qualityClassLabels[qualityClass] || '待解释'} {count}</span>
+            ))}
+          </div>
+          <small>原始数据行、SQL、路径、编号和 hash 不在界面回显；安全的技术原名只保留在阶段详情中。</small>
         </div>
       ) : null}
       {model.limitations?.length ? (
@@ -224,7 +395,7 @@ function UnderstandingOverview({ model }) {
       <small className="dataset-understanding-honesty-note">
         {model.mode === 'semantic'
           ? '摘要、对象、字段和关系均来自版本化语义快照；推断关系不等同于已确认事实。'
-          : '基础视图只归纳现有摘要字段和可见资料，不补写业务结论。'}
+          : '资料来源图只归纳通过质量门禁的摘要字段和可见资料；语义快照生成前不声称系统已经理解业务。'}
       </small>
     </>
   );
@@ -249,7 +420,7 @@ function ConnectionGroup({ title, items, model, onSelectLink, direction }) {
   );
 }
 
-function NodeInspector({ model, node, onSelectLink }) {
+function NodeInspector({ model, node, onSelectLink, onFocusDataset }) {
   if (!node) return null;
   const incoming = model.links
     .filter((link) => link.target === node.id)
@@ -267,6 +438,51 @@ function NodeInspector({ model, node, onSelectLink }) {
     ? Math.min(100, Math.round((node.nonEmptyCount / parentObject.coverageCount) * 100))
     : null;
   const objectExamples = [...new Set(objectFields.flatMap((field) => field.examples || []))].slice(0, 5);
+
+  if (model.mode === 'cross') {
+    const sourceDatasets = Array.isArray(node.sourceDatasets) ? node.sourceDatasets : [];
+    const focusDatasetId = node.kind === 'dataset' ? node.datasetRefs?.[0] : '';
+    return (
+      <>
+        <span>{node.shared ? '共享节点详情' : '跨数据集节点详情'}</span>
+        <div className={`dataset-understanding-node-kind ${node.shared ? 'shared' : ''}`.trim()}>
+          <i style={{ background: node.clusterColor }} />
+          {node.shared ? '共享' : graphCategory(model, node.kind).name}
+        </div>
+        <h4>{node.name}</h4>
+        <p>{node.detail || '当前节点只来自本次请求可见的数据集范围。'}</p>
+        <dl>
+          <div><dt>节点类型</dt><dd>{graphCategory(model, node.kind).name}</dd></div>
+          <div><dt>可见来源</dt><dd>{sourceDatasets.map((dataset) => dataset.title).join(' · ') || '未返回'}</dd></div>
+          <div><dt>可见贡献数</dt><dd>{compactNumber(node.visibleProvenanceCount)}</dd></div>
+          <div><dt>共享状态</dt><dd>{node.shared ? '确定身份依据形成共享节点' : '当前数据集内节点'}</dd></div>
+          <div><dt>证据范围</dt><dd>{node.evidence || '本次可见数据集范围'}</dd></div>
+        </dl>
+        {sourceDatasets.length ? (
+          <div className="dataset-understanding-insight-group">
+            <strong>来源数据集</strong>
+            <div className="dataset-understanding-insight-tags">
+              {sourceDatasets.map((sourceDataset) => (
+                <span key={sourceDataset.id}>{sourceDataset.title}</span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {focusDatasetId ? (
+          <button
+            type="button"
+            className="dataset-understanding-cluster-focus-action"
+            onClick={() => onFocusDataset?.(focusDatasetId)}
+          >
+            聚焦此数据集
+          </button>
+        ) : null}
+        <ConnectionGroup title="入向关系" items={incoming} model={model} onSelectLink={onSelectLink} direction="incoming" />
+        <ConnectionGroup title="出向关系" items={outgoing} model={model} onSelectLink={onSelectLink} direction="outgoing" />
+        {model.emptyCrossMessage ? <small className="dataset-understanding-honesty-note">{model.emptyCrossMessage}</small> : null}
+      </>
+    );
+  }
 
   return (
     <>
@@ -372,11 +588,29 @@ function StageInspector({ stage, onSelectNode }) {
 }
 
 export default function DatasetUnderstandingGraph({ dataset, documents = [], understandingState = null }) {
+  const panelRef = useRef(null);
   const chartRef = useRef(null);
-  const model = useMemo(
+  const chartInstanceRef = useRef(null);
+  const chartOptionRef = useRef(null);
+  const selectedNodeIdRef = useRef('');
+  const graphZoomRef = useRef(1);
+  const graphCenterRef = useRef(null);
+  const resizeFrameRef = useRef(null);
+  const [graphMode, setGraphMode] = useState('single');
+  const [crossDatasetIds, setCrossDatasetIds] = useState(() => dataset?.id ? [dataset.id] : []);
+  const [focusDatasetId, setFocusDatasetId] = useState('');
+  const singleModel = useMemo(
     () => buildDatasetUnderstandingGraph(dataset, documents, understandingState?.data || null),
     [dataset, documents, understandingState?.data],
   );
+  const crossGraphState = understandingState?.crossGraphState || null;
+  const crossModel = useMemo(
+    () => buildCrossDatasetUnderstandingGraph(
+      crossGraphState?.rootDatasetId === dataset?.id ? crossGraphState?.data : null,
+    ),
+    [crossGraphState?.data, crossGraphState?.rootDatasetId, dataset?.id],
+  );
+  const model = graphMode === 'cross' && crossModel.hasDataset ? crossModel : singleModel;
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeRelationType, setActiveRelationType] = useState('all');
   const [viewMode, setViewMode] = useState('business');
@@ -385,6 +619,18 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const [selectedLinkId, setSelectedLinkId] = useState('');
   const [selectedStageKey, setSelectedStageKey] = useState('overview');
   const [chartState, setChartState] = useState('loading');
+  const [densityPreference, setDensityPreference] = useState('auto');
+  const [chartContainerWidth, setChartContainerWidth] = useState(1024);
+  const [focusMode, setFocusMode] = useState(false);
+  const availableDatasets = Array.isArray(understandingState?.availableDatasets)
+    ? understandingState.availableDatasets
+    : [];
+  const crossGraphAvailable = understandingState?.crossGraphAvailable === true;
+  const responsiveDensity = graphDensityForContainerWidth(chartContainerWidth);
+  const graphDensity = densityPreference === 'auto' ? responsiveDensity : densityPreference;
+  const graphRequestStatus = graphMode === 'cross'
+    ? crossGraphState?.status || 'idle'
+    : understandingState?.status || model.snapshotStatus;
   const selectedNode = model.nodes.find((node) => node.id === selectedNodeId) || model.nodes[0] || null;
   const selectedLink = model.links.find((link) => link.id === selectedLinkId) || null;
   const selectedLinkSource = selectedLink
@@ -399,7 +645,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     activeRelationType: 'all',
     viewMode,
     focusDepth: 'all',
-  }), [model, viewMode]);
+    density: graphDensity,
+  }), [model, viewMode, graphDensity]);
   const categoryCounts = useMemo(() => Object.fromEntries(
     DATASET_GRAPH_CATEGORIES.map((category) => [
       category.key,
@@ -413,6 +660,24 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     observed: overviewGraph.links.filter((link) => link.type === 'observed').length,
     inferred: overviewGraph.links.filter((link) => link.type === 'inferred').length,
   }), [overviewGraph.links]);
+  const activeGraph = useMemo(() => filterDatasetUnderstandingGraph(model, {
+    activeCategory,
+    activeRelationType,
+    viewMode,
+    focusNodeId: selectedNodeId,
+    focusDepth,
+    focusDatasetId,
+    density: graphDensity,
+  }), [
+    model,
+    activeCategory,
+    activeRelationType,
+    viewMode,
+    selectedNodeId,
+    focusDepth,
+    focusDatasetId,
+    graphDensity,
+  ]);
   const chartOption = useMemo(
     () => optionForModel(model, {
       activeCategory,
@@ -420,10 +685,93 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       viewMode,
       focusNodeId: selectedNodeId,
       focusDepth,
-    }),
-    [model, activeCategory, activeRelationType, viewMode, selectedNodeId, focusDepth],
+      focusDatasetId,
+      density: graphDensity,
+    }, activeGraph),
+    [
+      model,
+      activeCategory,
+      activeRelationType,
+      viewMode,
+      selectedNodeId,
+      focusDepth,
+      focusDatasetId,
+      graphDensity,
+      activeGraph,
+    ],
   );
-  const chartSignature = JSON.stringify(chartOption, (key, value) => typeof value === 'function' ? String(value) : value);
+  chartOptionRef.current = chartOption;
+  selectedNodeIdRef.current = selectedNodeId;
+
+  const requestCrossGraph = (datasetIds, autoNeighbors = 0) => {
+    const rootDatasetId = String(dataset?.id || '').trim();
+    if (!rootDatasetId || typeof understandingState?.loadCrossGraph !== 'function') return;
+    void understandingState.loadCrossGraph({
+      rootDatasetId,
+      datasetIds: datasetIds.filter((id) => id !== rootDatasetId),
+      autoNeighbors,
+      maxNodes: 160,
+      maxEdges: 240,
+      depth: 1,
+    });
+  };
+
+  const selectGraphMode = (nextMode) => {
+    setGraphMode(nextMode);
+    setFocusDatasetId('');
+    if (nextMode !== 'cross') return;
+    const rootDatasetId = String(dataset?.id || '').trim();
+    const selection = rootDatasetId ? [rootDatasetId] : [];
+    setCrossDatasetIds(selection);
+    requestCrossGraph(selection, 3);
+  };
+
+  const toggleCrossDataset = (datasetId) => {
+    const rootDatasetId = String(dataset?.id || '').trim();
+    if (!datasetId || datasetId === rootDatasetId) return;
+    const selected = crossDatasetIds.includes(datasetId);
+    const next = selected
+      ? crossDatasetIds.filter((id) => id !== datasetId)
+      : [...crossDatasetIds, datasetId].slice(0, 8);
+    const normalized = [rootDatasetId, ...next.filter((id) => id && id !== rootDatasetId)].slice(0, 8);
+    setCrossDatasetIds(normalized);
+    setFocusDatasetId('');
+    requestCrossGraph(normalized, 0);
+  };
+
+  const focusDatasetCluster = (datasetId) => {
+    const nextDatasetId = focusDatasetId === datasetId ? '' : datasetId;
+    setFocusDatasetId(nextDatasetId);
+    if (!nextDatasetId) return;
+    const datasetNode = model.nodes.find((node) => (
+      node.kind === 'dataset' && node.datasetRefs?.includes(nextDatasetId)
+    ));
+    if (datasetNode) {
+      setSelectedNodeId(datasetNode.id);
+      setSelectedLinkId('');
+      setSelectedStageKey('');
+    }
+  };
+
+  useEffect(() => {
+    const rootDatasetId = String(dataset?.id || '').trim();
+    setGraphMode('single');
+    setCrossDatasetIds(rootDatasetId ? [rootDatasetId] : []);
+    setFocusDatasetId('');
+  }, [dataset?.id]);
+
+  useEffect(() => {
+    if (!crossGraphAvailable && graphMode === 'cross') setGraphMode('single');
+  }, [crossGraphAvailable, graphMode]);
+
+  useEffect(() => {
+    if (graphMode !== 'cross' || !crossGraphState?.data) return;
+    const returnedIds = crossGraphState.data.datasets
+      .map((item) => item.id)
+      .filter(Boolean)
+      .slice(0, 8);
+    setCrossDatasetIds(returnedIds);
+  }, [crossGraphState?.selectionKey, crossGraphState?.data, graphMode]);
 
   useEffect(() => {
     setSelectedNodeId(model.nodes[0]?.id || '');
@@ -433,11 +781,29 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setActiveRelationType('all');
     setViewMode('business');
     setFocusDepth('all');
-  }, [model.datasetId]);
+    setDensityPreference('auto');
+    setFocusMode(false);
+    graphZoomRef.current = 1;
+    graphCenterRef.current = null;
+  }, [model.datasetId, model.mode]);
 
   useEffect(() => {
     setSelectedLinkId('');
   }, [activeCategory, activeRelationType]);
+
+  useEffect(() => {
+    if (!focusMode) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setFocusMode(false);
+    };
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [focusMode]);
 
   useEffect(() => {
     if (!model.hasDataset || !chartRef.current || !model.nodes.length) {
@@ -445,17 +811,47 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       return undefined;
     }
 
-    let chart = null;
-    let disposed = false;
+    let cancelled = false;
     let observer = null;
     setChartState('loading');
 
-    import('echarts').then((echarts) => {
-      if (disposed || !chartRef.current) return;
-      echarts.getInstanceByDom(chartRef.current)?.dispose();
-      chart = echarts.init(chartRef.current, null, { renderer: 'canvas' });
-      chart.setOption(chartOption, true);
-      chart.on('click', (params) => {
+    loadEchartsModule().then((echarts) => {
+      if (cancelled || !chartRef.current) return;
+      const chart = echarts.getInstanceByDom(chartRef.current)
+        || echarts.init(chartRef.current, null, { renderer: 'canvas' });
+      chartInstanceRef.current = chart;
+      chartRef.current.dataset.echartsInstanceId = chart.id;
+      chartRef.current.dataset.echartsInitCount = String(
+        (Number(chartRef.current.dataset.echartsInitCount) || 0) + 1,
+      );
+      chartRef.current.__datasetGraphScreenPositionSnapshot = () => {
+        const seriesModel = chart.getModel?.().getSeriesByIndex?.(0);
+        const data = seriesModel?.getData?.();
+        if (!data) return [];
+        const positions = [];
+        for (let index = 0; index < data.count(); index += 1) {
+          const id = String(data.getId(index) || '');
+          if (!id || id.startsWith('__dataset-layout-anchor:')) continue;
+          const graphicElement = data.getItemGraphicEl(index);
+          const globalPosition = graphicElement?.transformCoordToGlobal?.(0, 0);
+          const x = Number(globalPosition?.[0]);
+          const y = Number(globalPosition?.[1]);
+          if (Number.isFinite(x) && Number.isFinite(y)) positions.push({ id, x, y });
+        }
+        return positions;
+      };
+      const handleFinished = () => {
+        if (cancelled || !chartRef.current) return;
+        markChartRenderFinished(chartRef.current);
+        setChartState('ready');
+      };
+      chart.on('finished', handleFinished);
+      markChartRenderRequested(chartRef.current, chartOptionRef.current);
+      chart.setOption(chartOptionRef.current, {
+        replaceMerge: ['series'],
+        lazyUpdate: true,
+      });
+      const handleClick = (params) => {
         if (params.dataType === 'node' && params.data?.id) {
           setSelectedNodeId(params.data.id);
           setSelectedLinkId('');
@@ -465,22 +861,75 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           setSelectedLinkId(params.data.id);
           setSelectedStageKey('');
         }
-      });
+      };
+      const handleGraphRoam = () => {
+        const liveSeries = chart.getOption()?.series?.[0] || {};
+        const zoom = Number(liveSeries.zoom) || graphZoomRef.current;
+        graphZoomRef.current = zoom;
+        if (Array.isArray(liveSeries.center) && liveSeries.center.length === 2) {
+          graphCenterRef.current = [...liveSeries.center];
+        }
+        updateChartLabelLod(chart, zoom, selectedNodeIdRef.current, chartRef.current);
+      };
+      const scheduleChartResize = () => {
+        if (resizeFrameRef.current !== null) return;
+        resizeFrameRef.current = window.requestAnimationFrame(() => {
+          resizeFrameRef.current = null;
+          if (cancelled || !chartRef.current || chart.isDisposed?.()) return;
+          const width = Math.round(chartRef.current.getBoundingClientRect().width || 0);
+          if (width > 0) setChartContainerWidth((current) => current === width ? current : width);
+          chart.resize();
+        });
+      };
+      chart.on('click', handleClick);
+      chart.on('graphRoam', handleGraphRoam);
       observer = typeof ResizeObserver === 'undefined'
         ? null
-        : new ResizeObserver(() => chart?.resize());
+        : new ResizeObserver(scheduleChartResize);
       observer?.observe(chartRef.current);
-      setChartState('ready');
+      scheduleChartResize();
+      chartRef.current.__datasetGraphCleanup = () => {
+        chart.off('click', handleClick);
+        chart.off('graphRoam', handleGraphRoam);
+        chart.off('finished', handleFinished);
+        if (chartRef.current) delete chartRef.current.__datasetGraphScreenPositionSnapshot;
+      };
     }).catch(() => {
-      if (!disposed) setChartState('error');
+      if (!cancelled) setChartState('error');
     });
 
     return () => {
-      disposed = true;
+      cancelled = true;
       observer?.disconnect();
-      chart?.dispose();
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      chartRef.current?.__datasetGraphCleanup?.();
+      if (chartInstanceRef.current && !chartInstanceRef.current.isDisposed?.()) {
+        chartInstanceRef.current.dispose();
+      }
+      chartInstanceRef.current = null;
     };
-  }, [model.hasDataset, model.datasetId, model.nodes.length, chartSignature]);
+  }, [model.hasDataset]);
+
+  useEffect(() => {
+    const chart = chartInstanceRef.current;
+    if (!model.hasDataset || !chart || chart.isDisposed?.()) return;
+    const option = {
+      ...chartOption,
+      series: chartOption.series.map((series) => ({
+        ...series,
+        zoom: graphZoomRef.current,
+        ...(graphCenterRef.current ? { center: graphCenterRef.current } : {}),
+      })),
+    };
+    markChartRenderRequested(chartRef.current, option);
+    chart.setOption(option, {
+      replaceMerge: ['series'],
+      lazyUpdate: true,
+    });
+  }, [model.hasDataset, chartOption, selectedNodeId]);
 
   if (!model.hasDataset) {
     return (
@@ -500,33 +949,104 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   }
 
   return (
-    <section className="dataset-understanding-panel" aria-label={`${model.title} 数据集理解图谱`}>
+    <section
+      ref={panelRef}
+      className={`dataset-understanding-panel ${focusMode ? 'focus-mode' : ''}`.trim()}
+      aria-label={`${model.title} 数据集理解图谱`}
+    >
       <header className="dataset-understanding-head">
         <div>
-          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {model.mode === 'semantic' ? '真实语义快照' : '基础视图'}</span>
+          <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {graphMode === 'cross' ? '跨数据集语义图' : model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}</span>
           <h3>{model.title}</h3>
-          <p>{model.mode === 'semantic'
+          <p>{graphMode === 'cross'
+            ? '以当前数据集为根，只展示可见数据集之间有证据的共享、引用和明确标注的相似线索。'
+            : model.mode === 'semantic'
             ? '业务对象、字段与关系来自版本化语义快照；点击节点可查看入向依据、出向理解和原始字段。'
-            : '当前按已有摘要与可见资料展示基础连线；虚线推断不等同于已确认业务关系。'}</p>
+            : '语义快照尚未生成；当前只展示通过质量门禁的资料来源与摘要连线，不能代表系统已经形成业务理解。'}</p>
         </div>
         <div className="dataset-understanding-metrics" aria-label="数据集理解指标">
-          <span><small>{model.mode === 'semantic' ? '来源' : '资料'}</small><strong>{model.mode === 'semantic' ? model.metrics.sourceCount : model.metrics.documentCount}</strong></span>
-          <span><small>{model.mode === 'semantic' ? '业务对象' : '知识线索'}</small><strong>{model.mode === 'semantic' ? model.metrics.objectCount : model.metrics.knowledgeCount}</strong></span>
-          <span className="relations"><small>{model.mode === 'semantic' ? '语义关系' : '交叉关系'}</small><strong>{model.metrics.crossNodeRelationCount}</strong></span>
-          <span><small>{model.mode === 'semantic' ? '已确认事实' : '可检索'}</small><strong>{model.mode === 'semantic' ? model.metrics.confirmedFactCount : model.metrics.readyDocumentCount}</strong></span>
+          <span><small>{model.mode === 'cross' ? '可见数据集' : model.mode === 'semantic' ? '来源' : '资料'}</small><strong>{model.mode === 'cross' ? model.datasetClusters.length : model.mode === 'semantic' ? model.metrics.sourceCount : model.metrics.documentCount}</strong></span>
+          <span><small>{model.mode === 'cross' ? '共享节点' : model.mode === 'semantic' ? '业务对象' : '知识线索'}</small><strong>{model.mode === 'cross' ? model.metrics.sharedNodeCount : model.mode === 'semantic' ? model.metrics.objectCount : model.metrics.knowledgeCount}</strong></span>
+          <span className="relations"><small>{model.mode === 'cross' ? '跨集关系' : model.mode === 'semantic' ? '语义关系' : '交叉关系'}</small><strong>{model.metrics.crossNodeRelationCount}</strong></span>
+          <span><small>{model.mode === 'cross' ? '可靠邻居' : model.mode === 'semantic' ? '已确认事实' : '可检索'}</small><strong>{model.mode === 'cross' ? model.reliableNeighborDatasetIds.length : model.mode === 'semantic' ? model.metrics.confirmedFactCount : model.metrics.readyDocumentCount}</strong></span>
           <span className={model.metrics.attentionDocumentCount ? 'attention' : ''}>
-            <small>{model.mode === 'semantic' ? '待解释' : '待关注'}</small><strong>{model.mode === 'semantic' ? model.metrics.unresolvedFieldCount : model.metrics.attentionDocumentCount}</strong>
+            <small>{model.mode === 'cross' ? '推断线索' : model.mode === 'semantic' ? '待解释' : '待关注'}</small><strong>{model.mode === 'cross' ? model.metrics.inferredRelationCount : model.mode === 'semantic' ? model.metrics.unresolvedFieldCount : model.metrics.attentionDocumentCount}</strong>
           </span>
         </div>
       </header>
 
-      <div className={`dataset-understanding-snapshot-state ${understandingState?.status || model.snapshotStatus} ${model.stale ? 'stale' : ''}`.trim()}>
+      <div className="dataset-understanding-mode-toolbar" aria-label="数据集图谱模式">
+        <div className="dataset-understanding-mode-switch">
+          <span>图谱范围</span>
+          <button type="button" className={graphMode === 'single' ? 'active' : ''} onClick={() => selectGraphMode('single')}>当前数据集</button>
+          {crossGraphAvailable ? (
+            <button type="button" className={graphMode === 'cross' ? 'active' : ''} onClick={() => selectGraphMode('cross')}>跨数据集</button>
+          ) : null}
+        </div>
+        {graphMode === 'cross' ? (
+          <div className="dataset-understanding-cross-selection">
+            <details>
+              <summary>选择数据集 <small>{crossDatasetIds.length} / 8</small></summary>
+              <div>
+                {availableDatasets.map((candidate) => {
+                  const active = crossDatasetIds.includes(candidate.id);
+                  const root = candidate.id === dataset?.id;
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={active ? 'active' : ''}
+                      disabled={root || (!active && crossDatasetIds.length >= 8)}
+                      onClick={() => toggleCrossDataset(candidate.id)}
+                    >
+                      <i style={{ background: model.datasetClusters?.find((cluster) => cluster.id === candidate.id)?.color }} />
+                      <span>{candidate.title}</span>
+                      <small>{root ? '当前' : active ? '已选' : '加入'}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </details>
+            <small>自动邻居最多 3 个，必须有已确认或已观察证据；手动选择最多 8 个。</small>
+          </div>
+        ) : null}
+      </div>
+
+      {graphMode === 'cross' && model.mode === 'cross' ? (
+        <div className="dataset-understanding-cluster-toolbar" aria-label="数据集颜色与聚焦">
+          <button type="button" className={!focusDatasetId ? 'active' : ''} onClick={() => setFocusDatasetId('')}>全部集群</button>
+          {model.datasetClusters.map((cluster) => (
+            <button
+              key={cluster.id}
+              type="button"
+              className={focusDatasetId === cluster.id ? 'active' : ''}
+              onClick={() => focusDatasetCluster(cluster.id)}
+            >
+              <i style={{ background: cluster.color }} />
+              {cluster.title}
+              <small>{cluster.nodeCount}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {graphMode === 'cross' && model.mode === 'cross' && model.emptyCrossMessage ? (
+        <div className="dataset-understanding-cross-empty">{model.emptyCrossMessage}</div>
+      ) : null}
+
+      <div className={`dataset-understanding-snapshot-state ${graphRequestStatus} ${model.stale ? 'stale' : ''}`.trim()}>
         <i />
         <span>
-          {understandingState?.status === 'loading'
+          {graphMode === 'cross' && graphRequestStatus === 'loading'
+            ? '正在读取跨数据集语义图谱；当前数据集视图保持可用。'
+            : graphMode === 'cross' && graphRequestStatus === 'failed'
+              ? `跨数据集图谱暂时不可用：${crossGraphState?.error || '请求失败'}`
+              : graphMode === 'cross' && model.mode !== 'cross'
+                ? '切换到跨数据集后，将自动寻找最多 3 个有确认或观察证据的可见邻居。'
+                : understandingState?.status === 'loading'
             ? '正在读取真实语义理解快照；暂时保留当前可用视图。'
             : understandingState?.status === 'failed'
-              ? '真实语义快照暂时不可用；当前展示可追溯的基础视图。'
+              ? '真实语义快照暂时不可用；当前展示通过质量门禁的资料来源图。'
               : model.statusMessage}
         </span>
       </div>
@@ -547,24 +1067,24 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         ))}
       </div>
 
-      <div className="dataset-understanding-semantic-brief" aria-label="系统理解概览">
-        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'structure' : 'knowledge')}>
-          <span>{model.mode === 'semantic' ? '业务对象' : '核心概念'}</span>
+      <div className="dataset-understanding-semantic-brief" aria-label={model.mode === 'cross' ? '跨数据集概览' : model.mode === 'semantic' ? '系统理解概览' : '资料来源概览'}>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'shared' : model.mode === 'semantic' ? 'structure' : 'knowledge')}>
+          <span>{model.mode === 'cross' ? '共享节点' : model.mode === 'semantic' ? '业务对象' : '可信线索'}</span>
           <strong>{model.understanding.keyConcepts.slice(0, 4).join(' · ') || '待识别'}</strong>
-          <small>{model.understanding.keyConcepts.length} 个业务语义词</small>
+          <small>{model.understanding.keyConcepts.length} 个{model.mode === 'cross' ? '有身份依据的共享项' : model.mode === 'semantic' ? '业务语义词' : '可信中文线索'}</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'labels' : 'structure')}>
-          <span>{model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'scope' : model.mode === 'semantic' ? 'labels' : 'structure')}>
+          <span>{model.mode === 'cross' ? '数据集集群' : model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
           <strong>{(model.mode === 'semantic' ? model.understanding.keyFields : model.understanding.structurePath).slice(0, 4).join(' → ') || '待识别'}</strong>
-          <small>{model.mode === 'semantic' ? `${model.metrics.fieldCount} 个字段，${model.metrics.unresolvedFieldCount} 个待解释` : `${model.understanding.structurePath.length} 个结构线索`}</small>
+          <small>{model.mode === 'cross' ? `${model.datasetClusters.length} 个可见集群` : model.mode === 'semantic' ? `${model.metrics.fieldCount} 个字段，${model.metrics.unresolvedFieldCount} 个待解释` : `${model.understanding.structurePath.length} 个结构线索`}</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'source' : 'ready')}>
-          <span>可检索覆盖</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'scope' : model.mode === 'semantic' ? 'source' : 'ready')}>
+          <span>{model.mode === 'cross' ? '可见快照' : '可检索覆盖'}</span>
           <strong>{model.understanding.retrievalCoverage.ready} / {model.understanding.retrievalCoverage.total}</strong>
-          <small>{model.mode === 'semantic' ? '可追溯覆盖情况' : '明确进入检索的资料'}</small>
+          <small>{model.mode === 'cross' ? '当前快照 / 本次可见数据集' : model.mode === 'semantic' ? '可追溯覆盖情况' : '明确进入检索的资料'}</small>
         </button>
-        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'semantic' ? 'relations' : 'overview')}>
-          <span>关系理解</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' || model.mode === 'semantic' ? 'relations' : 'overview')}>
+          <span>{model.mode === 'cross' ? '跨集证据' : model.mode === 'semantic' ? '关系理解' : '关系线索'}</span>
           <strong>{model.metrics.confirmedRelationCount || 0} 确 · {model.metrics.observedRelationCount} 观 · {model.metrics.inferredRelationCount} 推</strong>
           <small>点击图中节点查看关联依据</small>
         </button>
@@ -580,7 +1100,9 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         </button>
         {DATASET_GRAPH_CATEGORIES.filter((category) => (
           category.key !== 'dataset'
-            && (model.mode === 'semantic'
+            && (model.mode === 'cross'
+              ? ['document', 'object', 'field', 'concept', 'structure'].includes(category.key)
+              : model.mode === 'semantic'
               ? ['object', 'field', 'unresolved'].includes(category.key)
               : ['document', 'knowledge', 'section', 'material', 'strategy'].includes(category.key))
         )).map((category) => (
@@ -609,7 +1131,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <span>关系视图</span>
           {[
             ['all', '全部关系'],
-            ...(model.mode === 'semantic' ? [['confirmed', '已确认'], ['observed', '已观察']] : [['observed', '事实关系']]),
+            ...(model.mode === 'semantic' || model.mode === 'cross' ? [['confirmed', '已确认'], ['observed', '已观察']] : [['observed', '事实关系']]),
             ['inferred', '推断关系'],
           ].map(([key, label]) => (
             <button
@@ -623,13 +1145,13 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           ))}
         </div>
         <div className="dataset-understanding-relation-legend" aria-label="关系图例">
-          {model.mode === 'semantic' ? <span><i className="confirmed" />绿线 · 已确认</span> : null}
+          {model.mode === 'semantic' || model.mode === 'cross' ? <span><i className="confirmed" />绿线 · 已确认</span> : null}
           <span><i className="observed" />实线 · 已观察</span>
           <span><i className="inferred" />虚线 · 待验证</span>
         </div>
       </div>
 
-      {model.mode === 'semantic' ? (
+      {model.mode === 'semantic' || model.mode === 'cross' ? (
         <div className="dataset-understanding-local-toolbar" aria-label="局部图深度">
           <span>图谱范围</span>
           {[['all', '全局'], [1, '一跳'], [2, '两跳']].map(([depth, label]) => (
@@ -646,12 +1168,43 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         </div>
       ) : null}
 
+      <div className="dataset-understanding-local-toolbar" aria-label="图谱节点密度">
+        <span>节点密度</span>
+        {[
+          ['auto', `自适应（${responsiveDensity === 'compact' ? '精简' : '标准'}）`],
+          ['compact', '精简'],
+          ['standard', '标准'],
+          ['expanded', '展开'],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={densityPreference === key ? 'active' : ''}
+            onClick={() => setDensityPreference(key)}
+          >
+            {label}
+          </button>
+        ))}
+        <small>{graphBudgetStatusText(activeGraph.stats)}</small>
+        <button
+          type="button"
+          className={`dataset-understanding-focus-toggle ${focusMode ? 'active' : ''}`.trim()}
+          aria-pressed={focusMode}
+          onClick={() => setFocusMode((current) => !current)}
+        >
+          {focusMode ? '退出专注' : '专注图谱'}
+        </button>
+      </div>
+
       <div className="dataset-understanding-canvas-grid">
         <div className="dataset-understanding-chart-shell">
-          <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} 知识连接图`} />
+          <div ref={chartRef} className="dataset-understanding-chart" role="img" aria-label={`${model.title} ${model.mode === 'cross' ? '跨数据集语义连接图' : model.mode === 'semantic' ? '知识连接图' : '资料来源连接图'}`} />
           {chartState === 'loading' ? <div className="dataset-understanding-chart-state">正在生成理解图谱…</div> : null}
           {chartState === 'error' ? <div className="dataset-understanding-chart-state">图谱画布加载失败，可使用右侧证据详情和下方清单。</div> : null}
-          <div className="dataset-understanding-chart-hint">滚轮缩放 · 拖拽节点 · 点击查看证据{model.mode === 'semantic' ? ' · 每个对象优先展示 4 个中文字段' : ''}</div>
+          <div className="dataset-understanding-chart-hint">
+            {graphBudgetStatusText(activeGraph.stats)} · 滚轮缩放 · 拖拽节点 · 点击查看证据
+            {model.mode === 'cross' ? ' · 颜色代表数据集集群 · 菱形代表共享节点' : model.mode === 'semantic' ? ' · 字段按对象公平分配' : ' · 低质量标签已移入待解释清单'}
+          </div>
         </div>
 
         <aside className="dataset-understanding-evidence dataset-understanding-inspector" aria-live="polite">
@@ -676,16 +1229,27 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
               <h4>{selectedLinkSource?.name || '来源节点'} <em>{selectedLink.relation}</em> {selectedLinkTarget?.name || '目标节点'}</h4>
               <p>{selectedLink.evidence}</p>
               <dl>
-                <div><dt>证据等级</dt><dd>{relationClassLabel(selectedLink.type)}</dd></div>
+                <div><dt>证据等级</dt><dd>{relationClassLabel(selectedLink.evidenceClass || selectedLink.type)}</dd></div>
                 <div><dt>关系类型</dt><dd>{selectedLink.relationType || (selectedLink.structural ? '结构归属' : '相关关系')}</dd></div>
+                {model.mode === 'cross' ? <div><dt>关系语义</dt><dd>{selectedLink.relationSemantics === 'similarity' ? '相似线索（不折叠）' : selectedLink.relationSemantics === 'identity' ? '确定身份共享' : selectedLink.relationSemantics === 'reference' ? '明确引用' : '结构归属'}</dd></div> : null}
                 <div><dt>置信度</dt><dd>{Math.round(selectedLink.confidence * 100)}%</dd></div>
                 <div><dt>节点范围</dt><dd>{selectedLink.rootRelation ? '数据集归属关系' : '知识网络交叉关系'}</dd></div>
+                {model.mode === 'cross' ? <div><dt>可见来源</dt><dd>{selectedLink.supportingDatasets?.map((item) => item.title).join(' · ') || '未返回'}</dd></div> : null}
+                {model.mode === 'cross' ? <div><dt>可见贡献数</dt><dd>{selectedLink.visibleContributionCount}</dd></div> : null}
+                {model.mode === 'cross' ? <div><dt>匹配依据</dt><dd>{selectedLink.reason}</dd></div> : null}
               </dl>
-              {selectedLink.type === 'inferred' ? (
-                <small className="dataset-understanding-honesty-note">虚线不等同于已确认的业务因果或实体关系。</small>
+              {selectedLink.relationSemantics === 'similarity' || selectedLink.type === 'inferred' ? (
+                <small className="dataset-understanding-honesty-note">虚线只是相似线索，不折叠端点，也不升级为确定身份或已确认关系。</small>
               ) : null}
             </>
-          ) : <NodeInspector model={model} node={selectedNode} onSelectLink={setSelectedLinkId} />}
+          ) : (
+            <NodeInspector
+              model={model}
+              node={selectedNode}
+              onSelectLink={setSelectedLinkId}
+              onFocusDataset={focusDatasetCluster}
+            />
+          )}
         </aside>
       </div>
 
@@ -695,7 +1259,9 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <section>
             <h5>节点证据</h5>
             <div>
-              {model.nodes.slice(1).map((node) => (
+              {model.nodes.filter((node, index) => (
+                model.mode === 'cross' ? !node.rootDataset : index > 0
+              )).map((node) => (
                 <button
                   key={node.id}
                   type="button"

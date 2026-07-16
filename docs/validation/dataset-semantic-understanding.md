@@ -72,4 +72,17 @@ Windows 本机需避开指向旧 WSL 的 `C:\Windows\System32\bash.exe`，使用
 - 普通文档、表格、资产、音视频、网页/API 五类 v3 ready 快照全部成功，单次耗时为 0.29–0.49 秒。
 - 表格 v2 的原始行标题问题在发布门禁中被发现；v3 降级为“表格数据”并复验原始行标记为 0。
 
+## “新百项目资料”提质验收
+
+- 目标：`d4923d83-6053-4feb-8005-b22ee51e0227`；单集 canary 运行基线：`7cdb797e`。
+- dry-run：8 direct + 1 membership = 9 份去重资料；9 个业务对象、160 个字段、160 条关系；167/167 个业务标签为中文；manifest 293,643 bytes；写入 0。
+- 质量门禁：原始行、SQL/MIME、策略串、路径/连接、技术文件名和数字标识命中全部为 0，`quality_gate_passed=true`。
+- real run：快照 `4e4505b1-12b7-4f22-877e-5fbff6cf50da` 为 ready，169 节点、160 边、`failure_code=none`。
+- API：HTTP 200，`status=ready`，9/160/160；ETag 存在，二次请求 304；公开正文绝对路径、连接串、SQL/MIME、64 位十六进制 hash 命中均为 0。
+- 回滚演练：移出 allowlist 后为 `empty` 0/0/0 且无 ETag；恢复后不重跑 backfill 即回到 ready 9/160/160、304，ETag 与 canary source fingerprint 一致。
+- 服务：platform-api、retrieval worker、document-enrichment worker、Web 均 active，`NRestarts=0`；跨数据集开关在本次单集 canary 中保持未开启。
+- 备份：`/srv/aiv3/backups/dataset-semantic-newbai-materials-20260714-134501` 和 `/srv/aiv3/backups/dataset-semantic-newbai-allowlist-20260714-143208`；不自动删除业务或 canary 数据。
+
+目标数据集的真实浏览器提质验收与最终跨数据集发布证据仍由当前图谱提质计划的 Task 12–13 收口；本节不把尚未执行的跨集 live 或性能结果记为通过。
+
 完整发布、回滚、snapshot UUID 和清理边界见 `docs/operations/dataset-semantic-understanding-rollout.md`。

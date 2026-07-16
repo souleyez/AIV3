@@ -1,11 +1,37 @@
 # DataMax V3 Active Execution Plan
 
-**Status:** NO ACTIVE R5 EXECUTION PLAN
+**Status:** IN PROGRESS — TASK 2 MAIN/CI/SERVER RECONCILIATION
 
-R5 已于 2026-07-12 完成、冻结并整体归档：
+**Cutover date:** 2026-07-16
 
-- 完整归档：`docs/archive/plans/datamax-active-execution-plan-r5-completed-20260712.md`
-- 完成审计：`docs/validation/datamax-r5-completion-audit-20260712.md`
-- 详细验证账本：`docs/validation/datamax-main-gap-closure.md`
+**Unique implementation plan:**
 
-不得从本指针或任何旧归档继续执行 Task 7–13，也不得恢复旧基线、旧 approval 或旧 live scope。当前未自动建立新的工程治理计划；任何后续开发需先按新的用户目标建立独立活动计划和可信基线。
+- `docs/plans/2026-07-16-datamax-v3-quality-and-production-readiness.md`
+
+**Completed task:** Task 1 — redact PostgreSQL/NATS connection endpoints from logs and errors.
+
+**Task 1 implementation commit:** `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`
+
+**Current task:** Task 2 — reconcile GitHub main, CI and the 8-server release line; deploy the redaction fix before rotating the historically exposed PostgreSQL credential.
+
+**Unique validation ledger:**
+
+- `docs/validation/2026-07-16-datamax-v3-quality-readiness.md`
+
+**Frozen cutover baseline:**
+
+- local/GitHub release branch: `1edff9cdac585671f2ed64ed25690f2be121c750`;
+- `origin/main`: `33e766a904bf28d63e71d170a463f33830c3cf86`;
+- 8-server checkout: `1edff9cdac585671f2ed64ed25690f2be121c750` at the 2026-07-16 read-only inventory;
+- release branch versus `origin/main`: 43 ahead, 0 behind;
+- graph display/cross-graph may remain enabled, but `ASSISTANT_RUN_SEMANTIC_SUPPLY_MODE=off`;
+- asset import/parser feature gates remain off;
+- live retrieval defaults to `legacy_scan` until the new plan's lexical gate passes.
+
+Execution order is fixed: log redaction → main/CI reconciliation → disposable PostgreSQL gate → governed migrations → field semantic contracts → dataset processing details → PostgreSQL lexical qualification → runtime observability → real-provider QA → release closeout.
+
+DataMax may organize authorized evidence but must not orchestrate the user's conversation, the model's wording, answer structure, conclusion, route or action.
+
+Everything under `docs/archive/plans/` is historical and non-executable. Do not continue old Task numbers, approvals, provider windows, feature-flag scopes, SHA baselines or deployment commands.
+
+Do not append execution receipts to this pointer. Update only status, current/next task, exact release identity and links; detailed evidence belongs in the unique validation ledger.

@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn report_link_expected_matches_published_xinbai_link_request() {
         assert!(assistant_run_answer_quality_report_link_expected(&request(
-            "昨天/之前生成的新百报表链接"
+            "昨天/之前生成的新百报表链接发我看看"
         )));
     }
 

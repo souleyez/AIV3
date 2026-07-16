@@ -5,9 +5,9 @@ use axum::{
     response::Response,
 };
 use chrono::Utc;
-use domain_model::{Dataset, DatasetId};
+use domain_model::{Dataset, DatasetId, TenantId};
 #[cfg(test)]
-use domain_model::{SecretBindingId, TenantId, UserId};
+use domain_model::{SecretBindingId, UserId};
 
 #[cfg(test)]
 use crate::dataset_is_visible_for_request;
@@ -21,6 +21,104 @@ use crate::{
     load_visible_dataset_for_user_with_local_scope, local_thread_id_from_headers, ApiError,
     AppState,
 };
+
+const DATASET_SEMANTIC_UNDERSTANDING_ENABLED_ENV: &str = "DATASET_SEMANTIC_UNDERSTANDING_ENABLED";
+const DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST_ENV: &str =
+    "DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST";
+const DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST_ENV: &str =
+    "DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DatasetSemanticReadAccess {
+    Allowed,
+    FeatureDisabled,
+    TenantNotAllowlisted,
+    DatasetNotAllowlisted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DatasetSemanticReadPlan {
+    RequireVisibleDataset,
+    ReturnHonestEmptyWithoutSnapshotLookup,
+    LoadLatestSnapshot,
+}
+
+fn dataset_semantic_read_access(
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+) -> DatasetSemanticReadAccess {
+    dataset_semantic_read_access_from_values(
+        env_flag_value(DATASET_SEMANTIC_UNDERSTANDING_ENABLED_ENV, false),
+        std::env::var(DATASET_SEMANTIC_UNDERSTANDING_TENANT_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(DATASET_SEMANTIC_UNDERSTANDING_DATASET_ALLOWLIST_ENV)
+            .ok()
+            .as_deref(),
+        tenant_id,
+        dataset_id,
+    )
+}
+
+fn dataset_semantic_read_access_from_values(
+    enabled: bool,
+    tenant_allowlist: Option<&str>,
+    dataset_allowlist: Option<&str>,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+) -> DatasetSemanticReadAccess {
+    if !enabled {
+        return DatasetSemanticReadAccess::FeatureDisabled;
+    }
+    if !uuid_csv_contains(tenant_allowlist, tenant_id.0) {
+        return DatasetSemanticReadAccess::TenantNotAllowlisted;
+    }
+    if !uuid_csv_contains(dataset_allowlist, dataset_id.0) {
+        return DatasetSemanticReadAccess::DatasetNotAllowlisted;
+    }
+    DatasetSemanticReadAccess::Allowed
+}
+
+fn dataset_semantic_read_plan(
+    dataset_visible: bool,
+    access: DatasetSemanticReadAccess,
+) -> DatasetSemanticReadPlan {
+    if !dataset_visible {
+        DatasetSemanticReadPlan::RequireVisibleDataset
+    } else if access == DatasetSemanticReadAccess::Allowed {
+        DatasetSemanticReadPlan::LoadLatestSnapshot
+    } else {
+        DatasetSemanticReadPlan::ReturnHonestEmptyWithoutSnapshotLookup
+    }
+}
+
+fn uuid_csv_contains(csv: Option<&str>, expected: uuid::Uuid) -> bool {
+    csv.into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().parse::<uuid::Uuid>().ok())
+        .any(|value| value == expected)
+}
+
+fn env_flag_value(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn dataset_semantic_response_etag(
+    plan: DatasetSemanticReadPlan,
+    source_fingerprint: Option<&str>,
+) -> Option<String> {
+    (plan == DatasetSemanticReadPlan::LoadLatestSnapshot)
+        .then(|| source_fingerprint.map(|value| format!("\"{value}\"")))
+        .flatten()
+}
 
 pub(crate) async fn get_dataset_semantic_understanding(
     State(state): State<AppState>,
@@ -39,38 +137,54 @@ pub(crate) async fn get_dataset_semantic_understanding(
     )
     .await?;
 
-    let latest_ready = state
-        .storage
-        .dataset_semantic_snapshots()
-        .load_latest_ready(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-    let latest_attempt = state
-        .storage
-        .dataset_semantic_snapshots()
-        .load_latest_attempt(state.tenant_id, dataset_id)
-        .await
-        .map_err(ApiError::from_storage)?;
-
-    let (mut understanding, etag) = match latest_ready {
-        Some(snapshot) => {
-            let understanding = serde_json::from_value::<DatasetSemanticUnderstanding>(
-                snapshot.manifest,
-            )
-            .map_err(|error| {
-                ApiError::internal(
-                    "dataset_understanding_manifest_invalid",
-                    format!("dataset understanding manifest is invalid: {error}"),
-                )
-            })?;
-            (
-                understanding,
-                Some(format!("\"{}\"", snapshot.source_fingerprint)),
-            )
+    let read_plan = dataset_semantic_read_plan(
+        true,
+        dataset_semantic_read_access(state.tenant_id, dataset_id),
+    );
+    let (mut understanding, etag) = match read_plan {
+        DatasetSemanticReadPlan::ReturnHonestEmptyWithoutSnapshotLookup => {
+            (rollout_gated_empty_understanding_contract(&dataset), None)
         }
-        None => (empty_understanding_contract(&dataset), None),
+        DatasetSemanticReadPlan::LoadLatestSnapshot => {
+            let latest_ready = state
+                .storage
+                .dataset_semantic_snapshots()
+                .load_latest_ready(state.tenant_id, dataset_id)
+                .await
+                .map_err(ApiError::from_storage)?;
+            let latest_attempt = state
+                .storage
+                .dataset_semantic_snapshots()
+                .load_latest_attempt(state.tenant_id, dataset_id)
+                .await
+                .map_err(ApiError::from_storage)?;
+            let (mut understanding, etag) = match latest_ready {
+                Some(snapshot) => {
+                    let understanding =
+                        serde_json::from_value::<DatasetSemanticUnderstanding>(snapshot.manifest)
+                            .map_err(|error| {
+                            ApiError::internal(
+                                "dataset_understanding_manifest_invalid",
+                                format!("dataset understanding manifest is invalid: {error}"),
+                            )
+                        })?;
+                    (
+                        understanding,
+                        dataset_semantic_response_etag(
+                            read_plan,
+                            Some(&snapshot.source_fingerprint),
+                        ),
+                    )
+                }
+                None => (empty_understanding_contract(&dataset), None),
+            };
+            apply_latest_attempt_state(&mut understanding, latest_attempt.as_ref());
+            (understanding, etag)
+        }
+        DatasetSemanticReadPlan::RequireVisibleDataset => {
+            unreachable!("dataset visibility must be validated before semantic rollout access")
+        }
     };
-    apply_latest_attempt_state(&mut understanding, latest_attempt.as_ref());
     sanitize_understanding_for_public_response(&mut understanding);
 
     if etag
@@ -124,6 +238,14 @@ fn empty_understanding_contract(dataset: &Dataset) -> DatasetSemanticUnderstandi
         stale: false,
         truncated: SemanticTruncation::default(),
     }
+}
+
+fn rollout_gated_empty_understanding_contract(dataset: &Dataset) -> DatasetSemanticUnderstanding {
+    let mut understanding = empty_understanding_contract(dataset);
+    understanding.summary.headline = "该数据集当前暂无可展示的语义快照。".to_string();
+    understanding.summary.limitations =
+        vec!["数据仍可用于现有检索；语义理解开放后将在此显示。".to_string()];
+    understanding
 }
 
 fn apply_latest_attempt_state(
@@ -306,6 +428,106 @@ mod tests {
         assert_eq!(contract.status, "empty");
         assert!(contract.objects.is_empty());
         assert!(contract.summary.headline.contains("尚未生成"));
+    }
+
+    #[test]
+    fn semantic_read_rollout_gate_is_fail_closed_for_feature_tenant_and_dataset() {
+        let tenant_id = TenantId(Uuid::from_u128(2));
+        let dataset_id = DatasetId(Uuid::from_u128(1));
+        let tenant_allowlist = tenant_id.to_string();
+        let dataset_allowlist = dataset_id.to_string();
+
+        assert_eq!(
+            dataset_semantic_read_access_from_values(
+                false,
+                Some(&tenant_allowlist),
+                Some(&dataset_allowlist),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticReadAccess::FeatureDisabled
+        );
+        assert_eq!(
+            dataset_semantic_read_access_from_values(
+                true,
+                Some(&Uuid::from_u128(99).to_string()),
+                Some(&dataset_allowlist),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticReadAccess::TenantNotAllowlisted
+        );
+        assert_eq!(
+            dataset_semantic_read_access_from_values(
+                true,
+                Some(&tenant_allowlist),
+                Some(&Uuid::from_u128(98).to_string()),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticReadAccess::DatasetNotAllowlisted
+        );
+        assert_eq!(
+            dataset_semantic_read_access_from_values(
+                true,
+                Some(&tenant_allowlist),
+                Some(&dataset_allowlist),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticReadAccess::Allowed
+        );
+        assert_eq!(
+            dataset_semantic_read_access_from_values(
+                true,
+                Some("*"),
+                Some("*"),
+                tenant_id,
+                dataset_id,
+            ),
+            DatasetSemanticReadAccess::TenantNotAllowlisted
+        );
+    }
+
+    #[test]
+    fn semantic_read_plan_never_bypasses_dataset_visibility() {
+        assert_eq!(
+            dataset_semantic_read_plan(false, DatasetSemanticReadAccess::Allowed),
+            DatasetSemanticReadPlan::RequireVisibleDataset
+        );
+        assert_eq!(
+            dataset_semantic_read_plan(false, DatasetSemanticReadAccess::FeatureDisabled),
+            DatasetSemanticReadPlan::RequireVisibleDataset
+        );
+        assert_eq!(
+            dataset_semantic_read_plan(true, DatasetSemanticReadAccess::DatasetNotAllowlisted),
+            DatasetSemanticReadPlan::ReturnHonestEmptyWithoutSnapshotLookup
+        );
+        assert_eq!(
+            dataset_semantic_read_plan(true, DatasetSemanticReadAccess::Allowed),
+            DatasetSemanticReadPlan::LoadLatestSnapshot
+        );
+
+        let old_fingerprint = "a".repeat(64);
+        assert_eq!(
+            dataset_semantic_response_etag(
+                DatasetSemanticReadPlan::ReturnHonestEmptyWithoutSnapshotLookup,
+                Some(&old_fingerprint),
+            ),
+            None
+        );
+        assert_eq!(
+            dataset_semantic_response_etag(
+                DatasetSemanticReadPlan::LoadLatestSnapshot,
+                Some(&old_fingerprint),
+            ),
+            Some(format!("\"{old_fingerprint}\""))
+        );
+
+        let gated = rollout_gated_empty_understanding_contract(&dataset(DatasetVisibility::Public));
+        assert_eq!(gated.status, "empty");
+        assert!(gated.objects.is_empty());
+        assert!(gated.summary.headline.contains("暂无可展示"));
     }
 
     #[test]

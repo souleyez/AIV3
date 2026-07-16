@@ -1,4 +1,4 @@
-> **ARCHIVED 2026-07-10:** R4 交接与 PostgreSQL 18.4 升级完成凭据。本文不再是活动计划；唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
+> **ARCHIVED 2026-07-10 — NON-EXECUTABLE:** R4 交接与 PostgreSQL 18.4 升级完成凭据。本文不再是活动计划；禁止继续其中 Task。唯一活动入口是 `docs/plans/datamax-active-execution-plan.md`。
 
 # DataMax V3 盘点后收版、暗发布与资产链路 Implementation Plan
 

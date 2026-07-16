@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-07-16 — NON-EXECUTABLE:** 仅作历史设计与验收证据；禁止继续 Task、继承 approval/基线/开关或执行部署命令。唯一活动入口为 `docs/plans/datamax-active-execution-plan.md`。
+
 # DataMax 当前唯一执行计划
 
 **更新时间：** 2026-06-08 17:36 CST

@@ -2,6 +2,171 @@ use std::collections::BTreeSet;
 
 use crate::semantic_understanding::{SemanticStatus, MAX_EXAMPLES};
 
+pub const SAFE_GENERIC_FIELD_LABEL: &str = "待解释字段";
+pub const SAFE_GENERIC_OBJECT_LABEL: &str = "待解释对象";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemanticPrimaryLabelClass {
+    Business,
+    SafeGenericFallback,
+    Empty,
+    RawRow,
+    SqlOrMime,
+    NumericIdentifier,
+    Strategy,
+    PathOrConnection,
+    TechnicalFilename,
+    TechnicalIdentifier,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticPrimaryLabelQuality {
+    pub class: SemanticPrimaryLabelClass,
+    pub business_label: bool,
+    pub chinese_business_label: bool,
+}
+
+impl SemanticPrimaryLabelQuality {
+    fn new(class: SemanticPrimaryLabelClass, business_label: bool, chinese: bool) -> Self {
+        Self {
+            class,
+            business_label,
+            chinese_business_label: business_label && chinese,
+        }
+    }
+}
+
+pub fn classify_semantic_primary_label(value: &str) -> SemanticPrimaryLabelQuality {
+    let value = value.trim();
+    if value.is_empty() {
+        return SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::Empty, false, false);
+    }
+    if matches!(
+        value,
+        SAFE_GENERIC_FIELD_LABEL | SAFE_GENERIC_OBJECT_LABEL | "表格数据" | "待解释内容"
+    ) {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::SafeGenericFallback,
+            false,
+            true,
+        );
+    }
+
+    let lower = value.to_ascii_lowercase();
+    let chinese_count = value
+        .chars()
+        .filter(|character| is_han_character(*character))
+        .count();
+    if looks_like_sql_or_mime(&lower) {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::SqlOrMime,
+            false,
+            false,
+        );
+    }
+    if looks_like_raw_row(value) {
+        return SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::RawRow, false, false);
+    }
+    if looks_like_strategy(&lower) {
+        return SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::Strategy, false, false);
+    }
+    if looks_like_path_or_connection(value, &lower) {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::PathOrConnection,
+            false,
+            false,
+        );
+    }
+    if looks_like_technical_filename(&lower) && chinese_count < 2 {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::TechnicalFilename,
+            false,
+            false,
+        );
+    }
+    if looks_like_numeric_identifier(value) {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::NumericIdentifier,
+            false,
+            false,
+        );
+    }
+
+    if chinese_count >= 2 {
+        return SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::Business, true, true);
+    }
+
+    let word_count = value
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphabetic))
+        .count();
+    if word_count >= 2
+        && value
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, ' ' | '-' | '&'))
+    {
+        return SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::Business, true, false);
+    }
+    SemanticPrimaryLabelQuality::new(SemanticPrimaryLabelClass::TechnicalIdentifier, false, false)
+}
+
+pub fn safe_semantic_business_label(value: &str) -> Option<String> {
+    let quality = classify_semantic_primary_label(value);
+    if !quality.business_label {
+        return None;
+    }
+    if !quality.chinese_business_label {
+        return Some(value.trim().to_string());
+    }
+
+    let characters = value.chars().collect::<Vec<_>>();
+    let mut projected = String::new();
+    let mut index = 0usize;
+    while index < characters.len() {
+        let character = characters[index];
+        if is_han_character(character) {
+            projected.push(character);
+            index += 1;
+            continue;
+        }
+        if character.is_ascii_digit() {
+            while index < characters.len() && characters[index].is_ascii_digit() {
+                index += 1;
+            }
+            if characters.get(index) == Some(&'个') {
+                index += 1;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    (projected.chars().count() >= 2).then_some(projected)
+}
+
+pub fn semantic_evidence_label_is_safe(value: &str) -> bool {
+    if looks_sensitive(value) {
+        return false;
+    }
+    !matches!(
+        classify_semantic_primary_label(value).class,
+        SemanticPrimaryLabelClass::Empty
+            | SemanticPrimaryLabelClass::RawRow
+            | SemanticPrimaryLabelClass::SqlOrMime
+            | SemanticPrimaryLabelClass::NumericIdentifier
+            | SemanticPrimaryLabelClass::Strategy
+            | SemanticPrimaryLabelClass::PathOrConnection
+            | SemanticPrimaryLabelClass::TechnicalFilename
+    )
+}
+
+pub(crate) fn semantic_technical_name_is_sensitive(value: &str) -> bool {
+    looks_sensitive(value)
+}
+
+fn is_han_character(character: char) -> bool {
+    matches!(character as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticRole {
     Identifier,
@@ -78,62 +243,78 @@ pub struct SemanticLabelResolution {
 
 pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolution {
     let raw_field_key = input.raw_field_key.trim();
-    let (display_name, description, label_source, status, confidence) =
-        if let Some(candidate) = input.confirmed_dictionary.as_ref().filter(|candidate| {
-            candidate.status == "confirmed" && !candidate.label.trim().is_empty()
+    let (display_name, description, label_source, status, confidence) = if let Some(candidate) =
+        input.confirmed_dictionary.as_ref().filter(|candidate| {
+            candidate.status == "confirmed"
+                && classify_semantic_primary_label(&candidate.label).business_label
         }) {
-            (
-                candidate.label.trim().to_string(),
-                candidate.description.clone(),
-                "confirmed_dictionary".to_string(),
-                SemanticStatus::Confirmed,
-                candidate.confidence.clamp(0.0, 1.0),
-            )
-        } else if let Some(comment) = non_empty(input.source_comment.as_deref()) {
-            (
-                comment.to_string(),
-                None,
-                "source_comment".to_string(),
-                SemanticStatus::Confirmed,
-                1.0,
-            )
-        } else if let Some(label) = non_empty(input.reviewed_template.as_deref()) {
-            (
-                label.to_string(),
-                None,
-                "reviewed_template".to_string(),
-                SemanticStatus::Confirmed,
-                1.0,
-            )
-        } else if let Some(candidate) = input.model_suggestion.as_ref().filter(|candidate| {
-            candidate.status == "suggested" && !candidate.label.trim().is_empty()
-        }) {
-            (
-                candidate.label.trim().to_string(),
-                candidate.description.clone(),
-                "model_suggestion".to_string(),
-                SemanticStatus::Inferred,
-                candidate.confidence.clamp(0.0, 0.89),
-            )
-        } else {
-            let split = deterministic_field_label(raw_field_key);
-            let improved = !split.is_empty() && !split.eq_ignore_ascii_case(raw_field_key);
-            (
-                if split.is_empty() {
-                    raw_field_key.to_string()
-                } else {
-                    split
-                },
-                None,
-                if improved {
-                    "deterministic_split".to_string()
-                } else {
-                    "unresolved_raw_key".to_string()
-                },
-                SemanticStatus::Unresolved,
-                if improved { 0.25 } else { 0.0 },
-            )
-        };
+        (
+            safe_semantic_business_label(&candidate.label)
+                .unwrap_or_else(|| candidate.label.trim().to_string()),
+            candidate.description.clone(),
+            "confirmed_dictionary".to_string(),
+            SemanticStatus::Confirmed,
+            candidate.confidence.clamp(0.0, 1.0),
+        )
+    } else if let Some(comment) = non_empty(input.source_comment.as_deref())
+        .filter(|comment| classify_semantic_primary_label(comment).business_label)
+    {
+        (
+            safe_semantic_business_label(comment).unwrap_or_else(|| comment.to_string()),
+            None,
+            "source_comment".to_string(),
+            SemanticStatus::Confirmed,
+            1.0,
+        )
+    } else if let Some(label) = non_empty(input.reviewed_template.as_deref())
+        .filter(|label| classify_semantic_primary_label(label).business_label)
+    {
+        (
+            safe_semantic_business_label(label).unwrap_or_else(|| label.to_string()),
+            None,
+            "reviewed_template".to_string(),
+            SemanticStatus::Confirmed,
+            1.0,
+        )
+    } else if let Some(label) = reviewed_field_alias(raw_field_key) {
+        (
+            label.to_string(),
+            None,
+            "reviewed_alias".to_string(),
+            SemanticStatus::Confirmed,
+            1.0,
+        )
+    } else if let Some(candidate) = input.model_suggestion.as_ref().filter(|candidate| {
+        candidate.status == "suggested"
+            && classify_semantic_primary_label(&candidate.label).business_label
+    }) {
+        (
+            safe_semantic_business_label(&candidate.label)
+                .unwrap_or_else(|| candidate.label.trim().to_string()),
+            candidate.description.clone(),
+            "model_suggestion".to_string(),
+            SemanticStatus::Inferred,
+            candidate.confidence.clamp(0.0, 0.89),
+        )
+    } else {
+        let split = deterministic_field_label(raw_field_key);
+        let safe_split = safe_semantic_business_label(&split);
+        let usable = safe_split.is_some();
+        let improved = usable && !split.eq_ignore_ascii_case(raw_field_key);
+        (
+            safe_split.unwrap_or_else(|| SAFE_GENERIC_FIELD_LABEL.to_string()),
+            None,
+            if !usable {
+                "safe_generic_fallback".to_string()
+            } else if improved {
+                "deterministic_split".to_string()
+            } else {
+                "unresolved_raw_key".to_string()
+            },
+            SemanticStatus::Unresolved,
+            if improved { 0.25 } else { 0.0 },
+        )
+    };
 
     SemanticLabelResolution {
         display_name,
@@ -150,6 +331,20 @@ pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolu
         label_source,
         confidence,
         examples: safe_public_examples(&input.observed_values),
+    }
+}
+
+fn reviewed_field_alias(raw: &str) -> Option<&'static str> {
+    match deterministic_field_label(raw).as_str() {
+        "object type" => Some("对象类型"),
+        "origin id" => Some("来源记录标识"),
+        "zlqj s" => Some("租赁期间开始"),
+        "zlqj e" => Some("租赁期间结束"),
+        "business date" => Some("业务日期"),
+        "sales amount" => Some("销售金额"),
+        "store id" => Some("门店标识"),
+        "visitor count" => Some("客流数量"),
+        _ => None,
     }
 }
 
@@ -210,6 +405,16 @@ pub fn safe_public_examples(values: &[String]) -> Vec<String> {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty() && value.chars().count() <= 80)
         .filter(|value| !looks_sensitive(value))
+        .filter(|value| {
+            !matches!(
+                classify_semantic_primary_label(value).class,
+                SemanticPrimaryLabelClass::RawRow
+                    | SemanticPrimaryLabelClass::SqlOrMime
+                    | SemanticPrimaryLabelClass::Strategy
+                    | SemanticPrimaryLabelClass::PathOrConnection
+                    | SemanticPrimaryLabelClass::TechnicalFilename
+            )
+        })
         .map(str::to_string)
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -266,6 +471,117 @@ fn infer_value_type(values: &[String]) -> String {
     } else {
         "text".to_string()
     }
+}
+
+fn looks_like_raw_row(value: &str) -> bool {
+    if value.contains('\t') {
+        return true;
+    }
+    let delimiter_count = value
+        .chars()
+        .filter(|character| matches!(character, ',' | '，' | ';' | '；' | '|'))
+        .count();
+    delimiter_count >= 2
+}
+
+fn looks_like_sql_or_mime(lower: &str) -> bool {
+    let mime_prefix = [
+        "application/",
+        "audio/",
+        "font/",
+        "image/",
+        "message/",
+        "model/",
+        "multipart/",
+        "text/",
+        "video/",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix) && !lower.contains(char::is_whitespace));
+    let sql_start = [
+        "select ", "with ", "insert ", "update ", "delete ", "merge ",
+    ]
+    .iter()
+    .any(|prefix| lower.trim_start().starts_with(prefix));
+    mime_prefix
+        || sql_start
+        || lower.contains("/*")
+        || lower.contains("*/")
+        || lower.starts_with("--")
+        || lower.contains(" from ")
+        || lower.contains(" where ")
+        || lower.contains("case when")
+        || lower.contains("date_add(")
+        || lower.contains("datediff(")
+}
+
+fn looks_like_strategy(lower: &str) -> bool {
+    [
+        "paragraph_aware",
+        "noun_terms",
+        "parse_strategy",
+        "understanding_strategy",
+        "parser_profile",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn looks_like_path_or_connection(value: &str, lower: &str) -> bool {
+    let connection = [
+        "postgres://",
+        "postgresql://",
+        "mysql://",
+        "oracle://",
+        "jdbc:",
+        "redis://",
+        "mongodb://",
+    ]
+    .iter()
+    .any(|prefix| lower.contains(prefix));
+    let windows_path = value.as_bytes().get(1) == Some(&b':')
+        && matches!(value.as_bytes().get(2), Some(b'\\') | Some(b'/'));
+    let network_path = value.starts_with("\\\\");
+    let unix_path = ["/home/", "/users/", "/etc/", "/var/", "/root/", "/srv/"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix));
+    connection || windows_path || network_path || unix_path
+}
+
+fn looks_like_technical_filename(lower: &str) -> bool {
+    [
+        ".tar.gz", ".xlsx", ".xlsm", ".xls", ".csv", ".zip", ".pdf", ".docx", ".doc", ".pptx",
+        ".ppt", ".json", ".html", ".htm", ".txt", ".md",
+    ]
+    .iter()
+    .any(|suffix| lower.ends_with(suffix))
+}
+
+fn looks_like_numeric_identifier(value: &str) -> bool {
+    let compact = value.trim();
+    let digits = compact.chars().filter(char::is_ascii_digit).count();
+    let alphanumeric = compact
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .count();
+    let pure_numeric = digits > 0
+        && compact.chars().all(|character| {
+            character.is_ascii_digit()
+                || character.is_whitespace()
+                || matches!(character, '.' | ',' | ':' | '/' | '_' | '+' | '-')
+        });
+    let compact_code = compact.chars().count() >= 6
+        && digits >= 2
+        && compact
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+        && !compact.contains(char::is_whitespace)
+        && compact.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/')
+        });
+    pure_numeric
+        || compact_code
+        || (digits >= 4 && alphanumeric > 0 && digits * 100 / alphanumeric >= 55)
 }
 
 fn looks_sensitive(value: &str) -> bool {
@@ -414,6 +730,27 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_source_aliases_resolve_to_meaningful_chinese_labels() {
+        for (raw, expected) in [
+            ("object_type", "对象类型"),
+            ("originId", "来源记录标识"),
+            ("zlqj_s", "租赁期间开始"),
+            ("zlqj_e", "租赁期间结束"),
+            ("business_date", "业务日期"),
+            ("salesAmount", "销售金额"),
+            ("store_id", "门店标识"),
+            ("visitor-count", "客流数量"),
+        ] {
+            let mut value = input();
+            value.raw_field_key = raw.to_string();
+            let resolution = resolve_semantic_label(&value);
+            assert_eq!(resolution.display_name, expected, "raw={raw}");
+            assert_eq!(resolution.label_source, "reviewed_alias");
+            assert_eq!(resolution.status, SemanticStatus::Confirmed);
+        }
+    }
+
+    #[test]
     fn public_examples_remove_credentials_identity_contacts_urls_and_paths() {
         let values = vec![
             "普通门店".to_string(),
@@ -423,6 +760,10 @@ mod tests {
             "11010519491231002X".to_string(),
             "C:\\secrets\\config.json".to_string(),
             "sk-abcdefghijklmnopqrstuvwxyz123456".to_string(),
+            "1001,新街口门店,2026,123456.78".to_string(),
+            "select * from lease_contract".to_string(),
+            "paragraph_aware_noun_terms_v1".to_string(),
+            "technical_report_alpha.xlsx".to_string(),
             "普通门店".to_string(),
         ];
 
@@ -439,5 +780,94 @@ mod tests {
         assert_eq!(resolution.technical_name, "BJBDS");
         assert_eq!(resolution.status, SemanticStatus::Unresolved);
         assert_eq!(resolution.semantic_role, SemanticRole::Unknown);
+    }
+
+    #[test]
+    fn primary_label_quality_rejects_newbai_noise_classes() {
+        for (label, expected) in [
+            (
+                "项目名称,经营状态,合同金额",
+                SemanticPrimaryLabelClass::RawRow,
+            ),
+            (
+                "1001\t新街口门店\t2026\t123456.78",
+                SemanticPrimaryLabelClass::RawRow,
+            ),
+            (
+                "select date_add(day, 1, dt) from lease_contract",
+                SemanticPrimaryLabelClass::SqlOrMime,
+            ),
+            (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                SemanticPrimaryLabelClass::SqlOrMime,
+            ),
+            ("2026", SemanticPrimaryLabelClass::NumericIdentifier),
+            (
+                "HT-2026-000001",
+                SemanticPrimaryLabelClass::NumericIdentifier,
+            ),
+            (
+                "paragraph_aware_noun_terms_v1",
+                SemanticPrimaryLabelClass::Strategy,
+            ),
+            (
+                "C:\\internal\\newbai\\source.xlsx",
+                SemanticPrimaryLabelClass::PathOrConnection,
+            ),
+            (
+                "postgres://example.invalid/newbai",
+                SemanticPrimaryLabelClass::PathOrConnection,
+            ),
+            (
+                "technical_report_alpha.xlsx",
+                SemanticPrimaryLabelClass::TechnicalFilename,
+            ),
+        ] {
+            let quality = classify_semantic_primary_label(label);
+            assert_eq!(quality.class, expected, "label={label}");
+            assert!(!quality.business_label, "label={label}");
+        }
+
+        let trusted = classify_semantic_primary_label("合同预警");
+        assert_eq!(trusted.class, SemanticPrimaryLabelClass::Business);
+        assert!(trusted.business_label);
+        assert!(trusted.chinese_business_label);
+        assert_eq!(
+            safe_semantic_business_label("Data_Buddy_AI经营分析5个重点场景.xlsx").as_deref(),
+            Some("经营分析重点场景")
+        );
+        assert_eq!(
+            safe_semantic_business_label("固定与提成取高预警V1").as_deref(),
+            Some("固定与提成取高预警")
+        );
+    }
+
+    #[test]
+    fn confirmed_and_source_comment_candidates_cannot_bypass_noise_gate() {
+        let mut value = input();
+        value.confirmed_dictionary = Some(LabelCandidate::confirmed(
+            "select rent_amount from lease_contract",
+            "unsafe dictionary fixture",
+        ));
+        value.source_comment = Some("租金金额".to_string());
+
+        let resolution = resolve_semantic_label(&value);
+        assert_eq!(resolution.display_name, "租金金额");
+        assert_eq!(resolution.label_source, "source_comment");
+
+        value.source_comment =
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string());
+        value.reviewed_template = Some("合同金额".to_string());
+        let resolution = resolve_semantic_label(&value);
+        assert_eq!(resolution.display_name, "合同金额");
+        assert_eq!(resolution.label_source, "reviewed_template");
+
+        value.reviewed_template = Some("paragraph_aware_noun_terms_v1".to_string());
+        value.model_suggestion = None;
+        value.raw_field_key = "HT-2026-000001".to_string();
+        let resolution = resolve_semantic_label(&value);
+        assert_eq!(resolution.display_name, SAFE_GENERIC_FIELD_LABEL);
+        assert_eq!(resolution.label_source, "safe_generic_fallback");
+        assert_eq!(resolution.status, SemanticStatus::Unresolved);
     }
 }

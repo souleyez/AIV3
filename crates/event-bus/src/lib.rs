@@ -47,14 +47,20 @@ impl EventBus {
     pub async fn connect_from_env_or_disabled(env_key: &str) -> Self {
         let nats_url =
             std::env::var(env_key).unwrap_or_else(|_| DEFAULT_LOCAL_NATS_URL.to_string());
+        let nats_endpoint = nats_endpoint_for_logging(&nats_url);
 
         match NatsEventBus::connect(&nats_url).await {
             Ok(bus) => {
-                tracing::info!(%env_key, %nats_url, "event bus connected");
+                tracing::info!(%env_key, %nats_endpoint, "event bus connected");
                 Self::Nats(Arc::new(bus))
             }
-            Err(error) => {
-                tracing::warn!(%env_key, %nats_url, error = ?error, "event bus disabled");
+            Err(_error) => {
+                tracing::warn!(
+                    %env_key,
+                    %nats_endpoint,
+                    error_kind = "connect_failed",
+                    "event bus disabled"
+                );
                 Self::Disabled
             }
         }
@@ -93,6 +99,10 @@ impl EventBus {
             },
         }
     }
+}
+
+fn nats_endpoint_for_logging(nats_url: &str) -> String {
+    observability::redact_connection_endpoint(nats_url)
 }
 
 pub enum EventSubscription {
@@ -238,6 +248,25 @@ mod tests {
         assert_eq!(
             workflow_execution_transition_subject("report_render_workflow"),
             "workflow.execution.transitioned.report_render_workflow"
+        );
+    }
+
+    #[test]
+    fn event_bus_diagnostic_endpoint_never_contains_credentials() {
+        let raw =
+            "nats://pilot%40user:s%40per-secret@nats.internal:4222/private?token=hidden#credential";
+
+        let endpoint = nats_endpoint_for_logging(raw);
+
+        assert_eq!(endpoint, "nats://nats.internal:4222");
+        assert!(!endpoint.contains("pilot"));
+        assert!(!endpoint.contains("secret"));
+        assert!(!endpoint.contains("private"));
+        assert!(!endpoint.contains("hidden"));
+        assert!(!endpoint.contains("credential"));
+        assert_eq!(
+            nats_endpoint_for_logging("secret-only-value"),
+            "<redacted-endpoint>"
         );
     }
 }

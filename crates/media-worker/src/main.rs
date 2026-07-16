@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
         poll_interval_ms = poll_interval,
         frame_extraction_enabled = frame_extraction_config.enabled,
         frame_extraction_interval_seconds = frame_extraction_config.interval_seconds,
-        %database_url,
+        database_endpoint = %observability::redact_connection_endpoint(&database_url),
         "media-worker polling started"
     );
 

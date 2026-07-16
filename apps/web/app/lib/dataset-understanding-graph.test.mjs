@@ -2,10 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildCrossDatasetUnderstandingGraph,
   buildDatasetUnderstandingGraph,
   filterDatasetUnderstandingGraph,
   graphNeighborhoodIds,
+  layoutCrossDatasetUnderstandingGraph,
 } from './dataset-understanding-graph.js';
+import {
+  newbaiProjectMaterialsNoisyFallback,
+} from './fixtures/newbai-project-materials-noisy-fallback.js';
+import {
+  auditDatasetUnderstandingGraph,
+} from '../../../../tools/dataset-understanding-quality-audit.mjs';
+import { canonicalDocumentTitle } from './dataset-understanding-label-quality.js';
 
 const dataset = {
   id: 'dataset-main',
@@ -55,6 +64,292 @@ const documents = [
   },
 ];
 
+function crossGraphFixture(overrides = {}) {
+  return {
+    schema_version: '1.0.0',
+    generation_version: 'dataset_semantic_graph_v1',
+    root_dataset_id: 'dataset-main',
+    datasets: [
+      { id: 'dataset-main', title: '新百项目资料', stale: false },
+      { id: 'dataset-neighbor', title: '新百经营分析', stale: false },
+    ],
+    nodes: [
+      {
+        id: 'root:main',
+        kind: 'dataset',
+        display_label: '新百项目资料',
+        dataset_refs: ['dataset-main'],
+        visible_provenance_count: 1,
+      },
+      {
+        id: 'root:neighbor',
+        kind: 'dataset',
+        display_label: '新百经营分析',
+        dataset_refs: ['dataset-neighbor'],
+        visible_provenance_count: 1,
+      },
+      {
+        id: 'shared:document',
+        kind: 'document',
+        display_label: '经营分析资料',
+        dataset_refs: ['dataset-main', 'dataset-neighbor'],
+        visible_provenance_count: 2,
+      },
+      {
+        id: 'main:field',
+        kind: 'field',
+        display_label: '合同金额',
+        dataset_refs: ['dataset-main'],
+        visible_provenance_count: 12,
+      },
+      {
+        id: 'neighbor:field',
+        kind: 'field',
+        display_label: '租赁金额',
+        dataset_refs: ['dataset-neighbor'],
+        visible_provenance_count: 8,
+      },
+    ],
+    edges: [
+      {
+        id: 'edge:identity',
+        source_id: 'root:main',
+        target_id: 'shared:document',
+        relation_type: 'shared_document',
+        label: '共享资料',
+        relation_semantics: 'identity',
+        evidence_class: 'confirmed',
+        confidence: 1,
+        reason: '两个数据集引用同一份已确认资料。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+      {
+        id: 'edge:reference',
+        source_id: 'shared:document',
+        target_id: 'neighbor:field',
+        relation_type: 'explicit_reference',
+        label: '明确引用',
+        relation_semantics: 'reference',
+        evidence_class: 'observed',
+        confidence: 0.86,
+        reason: '可见资料中观察到明确字段引用。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+      {
+        id: 'edge:similarity',
+        source_id: 'main:field',
+        target_id: 'neighbor:field',
+        relation_type: 'label_similarity',
+        label: '同一字段',
+        relation_semantics: 'similarity',
+        evidence_class: 'inferred',
+        confidence: 0.72,
+        reason: '可见证据提示可能相关，不代表同一实体。',
+        cross_dataset: true,
+        supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+      },
+    ],
+    truncated: { datasets: 0, nodes: 0, edges: 0 },
+    stale: false,
+    cross_links_status: 'ready',
+    ...overrides,
+  };
+}
+
+test('cross-dataset model forms dataset-colored clusters and shared diamonds', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const main = model.nodes.find((node) => node.id === 'main:field');
+  const neighbor = model.nodes.find((node) => node.id === 'neighbor:field');
+  const shared = model.nodes.find((node) => node.id === 'shared:document');
+
+  assert.equal(model.mode, 'cross');
+  assert.equal(model.datasetClusters.length, 2);
+  assert.equal(main.clusterId, 'dataset-main');
+  assert.equal(neighbor.clusterId, 'dataset-neighbor');
+  assert.notEqual(main.clusterColor, neighbor.clusterColor);
+  assert.equal(shared.shared, true);
+  assert.equal(shared.symbol, 'diamond');
+  assert.equal(shared.sharedBadge, '共享');
+  assert.deepEqual(shared.sourceDatasets.map((item) => item.title), ['新百项目资料', '新百经营分析']);
+  assert.equal(shared.visibleProvenanceCount, 2);
+});
+
+test('cross-dataset visual grammar keeps identity/reference solid and similarity dashed without identity claims', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const identity = model.links.find((link) => link.id === 'edge:identity');
+  const reference = model.links.find((link) => link.id === 'edge:reference');
+  const similarity = model.links.find((link) => link.id === 'edge:similarity');
+
+  assert.equal(identity.lineKind, 'solid');
+  assert.equal(reference.lineKind, 'solid');
+  assert.equal(similarity.lineKind, 'dashed');
+  assert.equal(similarity.type, 'inferred');
+  assert.doesNotMatch(similarity.relation, /同一|真实共享/);
+  assert.doesNotMatch(similarity.reason, /同一|真实共享/);
+  assert.equal(reference.evidenceClass, 'observed');
+  assert.equal(reference.reason, '可见资料中观察到明确字段引用。');
+  assert.deepEqual(reference.supportingDatasets.map((item) => item.id), ['dataset-main', 'dataset-neighbor']);
+  assert.equal(reference.visibleContributionCount, 2);
+});
+
+test('inferred-only cross graph exposes an honest no-evidence state and no reliable neighbors', () => {
+  const input = crossGraphFixture({
+    nodes: crossGraphFixture().nodes.filter((node) => node.id !== 'shared:document'),
+    edges: [crossGraphFixture().edges.find((edge) => edge.id === 'edge:similarity')],
+    cross_links_status: 'empty',
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.hasReliableCrossLinks, false);
+  assert.deepEqual(model.reliableNeighborDatasetIds, []);
+  assert.match(model.emptyCrossMessage, /尚未发现有证据的跨数据集共享/);
+});
+
+test('an exact shared node remains reliable even when identity folding needs no edge', () => {
+  const input = crossGraphFixture({
+    edges: [],
+    cross_links_status: 'ready',
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.hasReliableCrossLinks, true);
+  assert.deepEqual(model.reliableNeighborDatasetIds, ['dataset-neighbor']);
+  assert.equal(model.emptyCrossMessage, '');
+  assert.equal(model.datasetClusters.find((cluster) => cluster.id === 'dataset-neighbor')?.reliableLinkCount, 1);
+});
+
+test('cross-dataset filtering reuses 100/160 budgets and can focus one dataset cluster', () => {
+  const input = crossGraphFixture();
+  for (let index = 0; index < 180; index += 1) {
+    const datasetId = index % 2 ? 'dataset-main' : 'dataset-neighbor';
+    const id = `field:${String(index).padStart(3, '0')}`;
+    input.nodes.push({
+      id,
+      kind: 'field',
+      display_label: `经营字段${index}`,
+      dataset_refs: [datasetId],
+      visible_provenance_count: 1,
+    });
+  }
+  const model = buildCrossDatasetUnderstandingGraph(input);
+  const standard = filterDatasetUnderstandingGraph(model, { density: 'standard' });
+  const expanded = filterDatasetUnderstandingGraph(model, { density: 'expanded' });
+  const focused = filterDatasetUnderstandingGraph(model, {
+    density: 'standard',
+    focusDatasetId: 'dataset-neighbor',
+  });
+
+  assert.ok(standard.nodes.length <= 120);
+  assert.ok(expanded.nodes.length <= 160);
+  assert.ok(focused.nodes.every((node) => node.datasetRefs.includes('dataset-neighbor')));
+  assert.equal(focused.nodes.some((node) => node.id === 'root:neighbor'), true);
+  assert.equal(focused.nodes.some((node) => node.id === 'root:main'), false);
+});
+
+test('cross-dataset layout keeps dataset roots fixed and shared nodes between clusters', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture());
+  const positioned = layoutCrossDatasetUnderstandingGraph(model.nodes, model.datasetClusters);
+  const roots = positioned.filter((node) => node.kind === 'dataset');
+  const shared = positioned.find((node) => node.id === 'shared:document');
+
+  assert.equal(roots.length, 2);
+  assert.ok(roots.every((node) => node.fixed));
+  assert.equal(new Set(roots.map((node) => `${node.x}:${node.y}`)).size, 2);
+  assert.equal(shared.symbol, 'diamond');
+  assert.ok(Number.isFinite(shared.x));
+  assert.ok(Number.isFinite(shared.y));
+});
+
+test('cross-dataset static layout is order-stable and separates dense shared nodes', () => {
+  const nodes = [
+    { id: 'root:main', kind: 'dataset', datasetRefs: ['dataset-main'], rootDataset: true },
+    { id: 'root:neighbor', kind: 'dataset', datasetRefs: ['dataset-neighbor'] },
+    ...Array.from({ length: 28 }, (_, index) => ({
+      id: `member:${String(index).padStart(2, '0')}`,
+      kind: 'field',
+      datasetRefs: [index % 2 ? 'dataset-main' : 'dataset-neighbor'],
+      symbolSize: 24,
+    })),
+    ...Array.from({ length: 24 }, (_, index) => ({
+      id: `shared:${String(index).padStart(2, '0')}`,
+      kind: 'field',
+      shared: true,
+      datasetRefs: ['dataset-main', 'dataset-neighbor'],
+      symbolSize: 24,
+    })),
+  ];
+  const clusters = [{ id: 'dataset-main' }, { id: 'dataset-neighbor' }];
+  const positioned = layoutCrossDatasetUnderstandingGraph(nodes, clusters);
+  const reversed = new Map(
+    layoutCrossDatasetUnderstandingGraph(
+      [...nodes].reverse().map((node) => ({ ...node, datasetRefs: [...node.datasetRefs].reverse() })),
+      [...clusters].reverse(),
+    )
+      .map((node) => [node.id, { x: node.x, y: node.y }]),
+  );
+  const shared = positioned.filter((node) => node.shared);
+  const other = positioned.filter((node) => !node.shared);
+  const minimumDistance = Math.min(...shared.flatMap((node, index) => (
+    shared.slice(index + 1).map((other) => Math.hypot(node.x - other.x, node.y - other.y))
+  )));
+  const minimumOtherDistance = Math.min(...shared.flatMap((node) => (
+    other.map((candidate) => Math.hypot(node.x - candidate.x, node.y - candidate.y))
+  )));
+
+  assert.ok(positioned.every((node) => {
+    const other = reversed.get(node.id);
+    return other?.x === node.x && other?.y === node.y;
+  }));
+  assert.ok(minimumDistance >= 48, `minimum shared-node distance was ${minimumDistance}px`);
+  assert.ok(minimumOtherDistance >= 32, `minimum shared-to-other distance was ${minimumOtherDistance}px`);
+});
+
+test('filters the sanitized newbai project fallback noise out of the main canvas', () => {
+  const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
+  const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);
+
+  assert.equal(model.mode, 'fallback');
+  assert.equal(model.snapshotStatus, 'empty');
+  assert.equal(model.nodes.length, 22);
+  assert.equal(model.nodes.filter((node) => node.kind === 'document').length, 8);
+  assert.equal(model.nodes.filter((node) => node.kind === 'strategy').length, 0);
+  assert.equal(model.nodes.some((node) => node.name === '示例经营分析场景'), true);
+  assert.equal(model.nodes.some((node) => /\.(?:xlsx|zip|pdf)$/i.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => /^\d+$/.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => node.name.includes('\t')), false);
+  assert.equal(model.nodes.some((node) => /select\s+|\/\*/i.test(node.name)), false);
+  assert.equal(model.nodes.some((node) => /paragraph_aware_noun_terms_v1/i.test(node.name)), false);
+  assert.equal(model.fallbackQuality.hiddenCount, 18);
+  assert.equal(model.fallbackQuality.deduplicatedDocumentTitles, 9);
+  assert.equal(model.fallbackQuality.hiddenItems.length, 18);
+  assert.equal(model.viewLabel, '资料来源图（语义生成中）');
+  assert.equal(model.overviewTitle, '当前资料来源包含什么');
+  assert.doesNotMatch(model.understanding.summary, /系统已经理解|系统识别/);
+});
+
+test('quality audit reports only aggregate noise counts', () => {
+  const { dataset: noisyDataset, documents: noisyDocuments, understanding } = newbaiProjectMaterialsNoisyFallback;
+  const model = buildDatasetUnderstandingGraph(noisyDataset, noisyDocuments, understanding);
+  const report = auditDatasetUnderstandingGraph(model, 'newbai-project-materials');
+  const serialized = JSON.stringify(report);
+
+  assert.equal(report.totalNodes, 22);
+  assert.equal(report.categoryCounts.document, 8);
+  assert.equal(report.noise.normalizedDuplicateDocumentTitles, 0);
+  assert.equal(report.noise.numericStarted, 0);
+  assert.equal(report.noise.asciiStarted, 0);
+  assert.equal(report.noise.punctuationStarted, 0);
+  assert.equal(report.noise.suspectedDataRows, 0);
+  assert.equal(report.noise.sqlOrComments, 0);
+  assert.equal(report.noise.mimeValues, 0);
+  assert.equal(report.noise.strategyIdentifiers, 0);
+  assert.equal(report.noise.extensionDocumentTitles, 0);
+  assert.equal(report.missingEvidenceEdges, 0);
+  assert.doesNotMatch(serialized, /1001|sample_table|paragraph_aware|technical_report_alpha/i);
+});
+
 test('buildDatasetUnderstandingGraph scopes documents and exposes honest pipeline counts', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
 
@@ -65,7 +360,7 @@ test('buildDatasetUnderstandingGraph scopes documents and exposes honest pipelin
   assert.equal(model.metrics.attentionDocumentCount, 1);
 
   const documentNodes = model.nodes.filter((node) => node.kind === 'document');
-  assert.deepEqual(documentNodes.map((node) => node.name), ['客户清单.pdf', '季度复盘.xlsx']);
+  assert.deepEqual(documentNodes.map((node) => node.name), ['客户清单', '季度复盘']);
   assert.equal(model.nodes.some((node) => node.name === '不属于当前数据集.pdf'), false);
 
   assert.equal(model.pipeline.find((stage) => stage.key === 'ingest').value, '2 份');
@@ -80,8 +375,8 @@ test('buildDatasetUnderstandingGraph gives every node a main label capped at fiv
   assert.ok(model.nodes.every((node) => node.shortLabel));
   assert.ok(model.nodes.every((node) => Array.from(node.shortLabel).length <= 5));
   assert.equal(model.nodes.find((node) => node.kind === 'dataset')?.shortLabel, '客户经营资');
-  assert.equal(model.nodes.find((node) => node.name === '客户清单.pdf')?.shortLabel, '客户清单');
-  assert.equal(model.nodes.find((node) => node.name === '季度复盘.xlsx')?.shortLabel, '季度复盘');
+  assert.equal(model.nodes.find((node) => node.name === '客户清单')?.shortLabel, '客户清单');
+  assert.equal(model.nodes.find((node) => node.name === '季度复盘')?.shortLabel, '季度复盘');
 });
 
 test('buildDatasetUnderstandingGraph exposes evidence-backed details for every processing stage', () => {
@@ -92,11 +387,11 @@ test('buildDatasetUnderstandingGraph exposes evidence-backed details for every p
   assert.ok(model.pipeline.every((stage) => stage.source));
   assert.ok(model.pipeline.every((stage) => stage.summary));
   assert.ok(model.pipeline.every((stage) => Array.isArray(stage.items)));
-  assert.deepEqual(stages.ingest.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
-  assert.deepEqual(stages.clean.items.map((item) => item.label), ['客户清单.pdf', '季度复盘.xlsx']);
-  assert.deepEqual(stages.structure.items.map((item) => item.label), ['经营概览', '风险跟进', 'heading', 'table']);
+  assert.deepEqual(stages.ingest.items.map((item) => item.label), ['客户清单', '季度复盘']);
+  assert.deepEqual(stages.clean.items.map((item) => item.label), ['客户清单', '季度复盘']);
+  assert.deepEqual(stages.structure.items.map((item) => item.label), ['经营概览', '风险跟进']);
   assert.deepEqual(stages.knowledge.items.map((item) => item.label), ['客户分层', '流失风险']);
-  assert.deepEqual(stages.ready.items.map((item) => item.label), ['客户清单.pdf']);
+  assert.deepEqual(stages.ready.items.map((item) => item.label), ['客户清单']);
   assert.match(stages.structure.source, /section_title_hints/);
   assert.match(stages.knowledge.source, /noun_term_hints/);
 });
@@ -111,9 +406,9 @@ test('buildDatasetUnderstandingGraph separates core concepts from technical iden
   assert.deepEqual(model.understanding.technicalIdentifiers, ['k11', 'lcrm']);
   assert.deepEqual(model.understanding.structurePath, ['经营概览', '风险跟进']);
   assert.deepEqual(model.understanding.retrievalCoverage, { ready: 1, total: 2 });
-  assert.ok(model.understanding.summary.includes('5 个知识词'));
+  assert.ok(model.understanding.summary.includes('3 个可信知识词'));
   assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'concept').every((node) => node.symbolSize > 20));
-  assert.ok(model.nodes.filter((node) => node.kind === 'knowledge' && node.signal === 'identifier').every((node) => node.symbolSize < 20));
+  assert.equal(model.nodes.some((node) => node.kind === 'knowledge' && node.signal === 'identifier'), false);
 });
 
 test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and keeps evidence labels', () => {
@@ -127,7 +422,7 @@ test('buildDatasetUnderstandingGraph deduplicates existing knowledge hints and k
 
 test('buildDatasetUnderstandingGraph adds factual document-to-material relationships', () => {
   const model = buildDatasetUnderstandingGraph(dataset, documents);
-  const pdfNode = model.nodes.find((node) => node.kind === 'material' && node.name === 'PDF');
+  const pdfNode = model.nodes.find((node) => node.kind === 'material' && node.name === '文档资料');
   const spreadsheetNode = model.nodes.find((node) => node.kind === 'material' && node.name === '表格');
 
   assert.ok(pdfNode);
@@ -199,6 +494,22 @@ test('buildDatasetUnderstandingGraph does not fabricate knowledge or strategy no
   assert.equal(model.nodes.some((node) => node.kind === 'section'), false);
   assert.equal(model.nodes.some((node) => node.kind === 'strategy'), false);
   assert.equal(model.emptyKnowledgeMessage, '当前接口尚未返回知识词、章节或理解策略。');
+});
+
+test('fallback quality filtering happens before limits and never backfills with noisy labels', () => {
+  const noisyPrefix = Array.from({ length: 24 }, (_, index) => `${20260000 + index}`);
+  const model = buildDatasetUnderstandingGraph({
+    id: 'quality-before-limit',
+    title: '质量限额测试',
+    noun_term_hints: [...noisyPrefix, '可信概念甲', '可信概念乙'],
+  });
+
+  assert.deepEqual(
+    model.nodes.filter((node) => node.kind === 'knowledge').map((node) => node.name),
+    ['可信概念甲', '可信概念乙'],
+  );
+  assert.equal(model.nodes.some((node) => /^\d+$/.test(node.name)), false);
+  assert.equal(model.fallbackQuality.hiddenCount, 24);
 });
 
 test('buildDatasetUnderstandingGraph returns a selection state without a dataset', () => {
@@ -369,7 +680,7 @@ test('semantic graph replaces mixed technical and numbered labels with concise C
     .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
 });
 
-test('business graph keeps at most four trusted Chinese fields per object', () => {
+test('business graph uses the standard balanced budget instead of a fixed four-field slice', () => {
   const extraFields = ['合同编号', '合同状态', '合同日期', '合同金额', '签约门店', '租赁分类']
     .map((label, index) => ({
       ...semanticUnderstanding.fields[0],
@@ -392,9 +703,13 @@ test('business graph keeps at most four trusted Chinese fields per object', () =
     activeCategory: 'all',
     activeRelationType: 'all',
     focusDepth: 'all',
+    density: 'standard',
   });
 
-  assert.equal(business.nodes.filter((node) => node.entityType === 'field' && node.objectId === 'object:lease').length, 4);
+  assert.equal(business.nodes.filter((node) => node.entityType === 'field' && node.objectId === 'object:lease').length, 6);
+  assert.equal(business.stats.density, 'standard');
+  assert.equal(business.stats.visibleNodeCount, business.nodes.length);
+  assert.equal(business.stats.availableNodeCount, business.nodes.length);
   assert.ok(business.nodes.filter((node) => node.entityType === 'field')
     .every((node) => !/[A-Za-z0-9]/.test(node.shortLabel)));
 });
@@ -435,8 +750,11 @@ test('empty semantic status falls back honestly to existing dataset hints', () =
 
   assert.equal(model.mode, 'fallback');
   assert.equal(model.snapshotStatus, 'empty');
-  assert.ok(model.nodes.some((node) => node.name === '客户清单.pdf'));
-  assert.match(model.statusMessage, /基础视图/);
+  assert.ok(model.nodes.some((node) => node.name === '客户清单'));
+  assert.equal(model.viewLabel, '资料来源图（语义生成中）');
+  assert.equal(model.overviewTitle, '当前资料来源包含什么');
+  assert.match(model.statusMessage, /资料来源图（语义生成中）/);
+  assert.doesNotMatch(model.statusMessage, /系统已理解/);
 });
 
 test('local graph focus returns stable one-hop and two-hop neighborhoods', () => {

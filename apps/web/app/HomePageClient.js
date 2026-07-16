@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPanel from './components/ChatPanel';
 import HomeMobileShell from './components/HomeMobileShell';
 import HomeWorkspaceToolbar from './components/HomeWorkspaceToolbar';
@@ -80,6 +80,10 @@ import {
 import { buildCurrentConversationTitle, buildDefaultConversationTitle } from './lib/conversation-title';
 import { buildAutoDatasetIdentity } from './lib/dataset-identity';
 import { fetchDatasetUnderstanding } from './lib/dataset-understanding-api';
+import {
+  datasetSemanticGraphStateAfterFailure,
+  fetchDatasetSemanticGraph,
+} from './lib/dataset-semantic-graph-api';
 import {
   datasetSelectionStateAfterToggle,
   datasetIdsAfterCatalogRefresh,
@@ -358,6 +362,7 @@ export default function HomePageClient() {
   });
   const [localSecretDraft, setLocalSecretDraft] = useState('');
   const [activeSecretCount, setActiveSecretCount] = useState(0);
+  const [activeSecretBindingScope, setActiveSecretBindingScope] = useState('');
   const [accountEmailDraft, setAccountEmailDraft] = useState('');
   const [accountCodeDraft, setAccountCodeDraft] = useState('');
   const [accountNewKeyDraft, setAccountNewKeyDraft] = useState('');
@@ -413,8 +418,17 @@ export default function HomePageClient() {
     data: null,
     error: '',
   });
+  const [datasetSemanticGraphState, setDatasetSemanticGraphState] = useState({
+    rootDatasetId: '',
+    selectionKey: '',
+    status: 'idle',
+    data: null,
+    error: '',
+    available: false,
+  });
 
   const datasetLoadIdRef = useRef(0);
+  const workspaceLoadingIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
   const reportDetailLoadIdRef = useRef(0);
   const fileInputRef = useRef(null);
@@ -425,6 +439,22 @@ export default function HomePageClient() {
   const codexCustomerChatMessageKeysRef = useRef(new Set());
   const uiNoticeMessageKeysRef = useRef(new Set());
   const datasetUnderstandingCacheRef = useRef(new Map());
+  const datasetSemanticGraphAbortRef = useRef(null);
+
+  function syncActiveSecretBindings(bindingIds) {
+    const normalized = [...new Set((Array.isArray(bindingIds) ? bindingIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, 'en'));
+    setActiveSecretCount(normalized.length);
+    setActiveSecretBindingScope(normalized.join(','));
+  }
+
+  const datasetSemanticGraphRequestScope = [
+    String(authSession.user?.id || 'anonymous'),
+    activeSecretBindingScope,
+    String(localThreadId || ''),
+  ].join('|');
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -479,6 +509,73 @@ export default function HomePageClient() {
       controller.abort();
     };
   }, [selectedDatasetId]);
+
+  useEffect(() => {
+    datasetSemanticGraphAbortRef.current?.abort();
+    datasetSemanticGraphAbortRef.current = null;
+    setDatasetSemanticGraphState({
+      rootDatasetId: String(selectedDatasetId || '').trim(),
+      selectionKey: '',
+      status: 'idle',
+      data: null,
+      error: '',
+      available: false,
+    });
+    return () => datasetSemanticGraphAbortRef.current?.abort();
+  }, [datasetSemanticGraphRequestScope, selectedDatasetId]);
+
+  const requestDatasetSemanticGraph = useCallback(async (request) => {
+    const rootDatasetId = String(request?.rootDatasetId || request?.root_dataset_id || '').trim();
+    const probe = request?.probe === true;
+    if (!rootDatasetId) throw new TypeError('跨数据集图谱需要当前数据集。');
+    datasetSemanticGraphAbortRef.current?.abort();
+    const controller = new AbortController();
+    datasetSemanticGraphAbortRef.current = controller;
+    setDatasetSemanticGraphState((current) => ({
+      rootDatasetId,
+      selectionKey: current.rootDatasetId === rootDatasetId ? current.selectionKey : '',
+      status: 'loading',
+      data: current.rootDatasetId === rootDatasetId ? current.data : null,
+      error: '',
+      available: current.rootDatasetId === rootDatasetId && current.available,
+    }));
+    try {
+      const result = await fetchDatasetSemanticGraph(request, { signal: controller.signal });
+      if (controller.signal.aborted) return null;
+      setDatasetSemanticGraphState({
+        rootDatasetId,
+        selectionKey: result.selectionKey,
+        status: result.data.cross_links_status,
+        data: result.data,
+        error: '',
+        available: true,
+      });
+      return result;
+    } catch (loadError) {
+      if (controller.signal.aborted || loadError?.name === 'AbortError') return null;
+      setDatasetSemanticGraphState((current) => datasetSemanticGraphStateAfterFailure(current, {
+        rootDatasetId,
+        probe,
+        error: loadError,
+      }));
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const rootDatasetId = String(selectedDatasetId || '').trim();
+    if (!rootDatasetId) return undefined;
+    void requestDatasetSemanticGraph({
+      rootDatasetId,
+      datasetIds: [],
+      autoNeighbors: 0,
+      maxNodes: 1,
+      maxEdges: 0,
+      depth: 1,
+      probe: true,
+    });
+    return () => datasetSemanticGraphAbortRef.current?.abort();
+  }, [datasetSemanticGraphRequestScope, requestDatasetSemanticGraph, selectedDatasetId]);
   const selectedAssetLibrary = useMemo(
     () => selectedAssetLibraryView(assetLibraries, selectedAssetLibraryId),
     [assetLibraries, selectedAssetLibraryId],
@@ -1471,7 +1568,7 @@ export default function HomePageClient() {
       });
       const bindingIds = response.active_secret_binding_ids || [];
       writeLocalSecretState(localKey, bindingIds);
-      setActiveSecretCount(bindingIds.length);
+      syncActiveSecretBindings(bindingIds);
       setLocalSecretDraft('');
       setAuthSession({ user: response.user, session: response.session });
       writeLocalAccountEmail(response.user?.email || email);
@@ -1513,7 +1610,7 @@ export default function HomePageClient() {
       });
       const bindingIds = response.active_secret_binding_ids || [];
       writeLocalSecretState(localKey, bindingIds);
-      setActiveSecretCount(bindingIds.length);
+      syncActiveSecretBindings(bindingIds);
       setLocalSecretDraft('');
       const claimedCount = response.claimed_datasets?.length || 0;
       const skippedCount = response.skipped_owned_dataset_count || 0;
@@ -1555,7 +1652,7 @@ export default function HomePageClient() {
       });
       const bindingIds = response.active_secret_binding_ids || [];
       writeLocalSecretState(newLocalKey, bindingIds);
-      setActiveSecretCount(bindingIds.length);
+      syncActiveSecretBindings(bindingIds);
       setLocalSecretDraft('');
       setAccountNewKeyDraft('');
       if (response.user) {
@@ -1583,7 +1680,7 @@ export default function HomePageClient() {
         method: 'POST',
       });
       clearLocalSecretState();
-      setActiveSecretCount(0);
+      syncActiveSecretBindings([]);
       setLocalSecretDraft('');
       setAuthSession({ user: null, session: null });
       setSelectedDatasetId(null);
@@ -1871,6 +1968,7 @@ export default function HomePageClient() {
     datasetLoadIdRef.current = loadId;
 
     if (!silent) {
+      workspaceLoadingIdRef.current = loadId;
       setWorkspaceLoading(true);
     }
 
@@ -1910,7 +2008,8 @@ export default function HomePageClient() {
       }
       setError(loadError instanceof Error ? loadError.message : '数据集工作区加载失败');
     } finally {
-      if (datasetLoadIdRef.current === loadId && !silent) {
+      if (!silent && workspaceLoadingIdRef.current === loadId) {
+        workspaceLoadingIdRef.current = 0;
         setWorkspaceLoading(false);
       }
     }
@@ -2018,7 +2117,7 @@ export default function HomePageClient() {
       if (secret && dataset.secret_binding_ids?.length) {
         const nextBindingIds = [...readLocalSecretBindingIds(), ...dataset.secret_binding_ids];
         writeLocalSecretState(secret, nextBindingIds);
-        setActiveSecretCount([...new Set(nextBindingIds)].length);
+        syncActiveSecretBindings(nextBindingIds);
         secretNote = ' 已绑定本地密钥，后续请求会优先带当前密钥。';
       }
       setDatasetDraft({ key: '', title: '', secret: '' });
@@ -2298,13 +2397,13 @@ export default function HomePageClient() {
       const bindingIds = response.secret_binding_ids || [];
       if (!bindingIds.length) {
         clearLocalSecretState();
-        setActiveSecretCount(0);
+        syncActiveSecretBindings([]);
         setBanner('未找到匹配的私密数据集。');
         await refreshCatalog({ silent: true });
         return;
       }
       writeLocalSecretState(secret, bindingIds);
-      setActiveSecretCount(bindingIds.length);
+      syncActiveSecretBindings(bindingIds);
       setLocalSecretDraft('');
       const unlockedTitles = (response.datasets || []).map((dataset) => dataset.title).join('、');
       setBanner(`已解锁 ${bindingIds.length} 个本地绑定${unlockedTitles ? `：${unlockedTitles}` : ''}。`);
@@ -2341,7 +2440,7 @@ export default function HomePageClient() {
       });
       const bindingIds = response.active_secret_binding_ids || response.dataset?.secret_binding_ids || [];
       writeLocalSecretState(secret, bindingIds);
-      setActiveSecretCount(bindingIds.length);
+      syncActiveSecretBindings(bindingIds);
       setLocalSecretDraft('');
       setBanner(`已将 ${response.dataset?.title || selectedDataset.title} 绑定为私密数据集。`);
       await refreshCatalog({ preferredDatasetId: response.dataset?.id || selectedDataset.id, silent: true });
@@ -2354,7 +2453,7 @@ export default function HomePageClient() {
 
   async function handleClearLocalSecret() {
     clearLocalSecretState();
-    setActiveSecretCount(0);
+    syncActiveSecretBindings([]);
     setLocalSecretDraft('');
     setSelectedDatasetId(null);
     setSelectedDatasetIds([]);
@@ -3931,7 +4030,7 @@ export default function HomePageClient() {
   }, [localChatStorageReady, localThreadId, reportShelfFetchDatasetIds.join('|')]);
 
   useEffect(() => {
-    setActiveSecretCount(readLocalSecretBindingIds().length);
+    syncActiveSecretBindings(readLocalSecretBindingIds());
     setLastAssistantRunId(readLocalAssistantRunId());
   }, []);
 
@@ -4030,6 +4129,9 @@ export default function HomePageClient() {
       return;
     }
     if (!selectedDatasetId) {
+      datasetLoadIdRef.current += 1;
+      workspaceLoadingIdRef.current = 0;
+      setWorkspaceLoading(false);
       startTransition(() => {
         setSessions([]);
         setOutputs([]);
@@ -4663,7 +4765,13 @@ export default function HomePageClient() {
     onRefreshAssetLibraries: () => refreshAssetLibraries({ silent: false }),
     selectedDatasetId,
     selectedDatasetIds,
-    datasetUnderstandingState,
+    datasetUnderstandingState: {
+      ...datasetUnderstandingState,
+      crossGraphState: datasetSemanticGraphState,
+      crossGraphAvailable: datasetSemanticGraphState.available,
+      availableDatasets: datasets,
+      loadCrossGraph: requestDatasetSemanticGraph,
+    },
     onSelectDataset: sidebarProps.onSelectDataset,
     onClearDatasetSelection: sidebarProps.onClearDatasetSelection,
     datasetDraft,

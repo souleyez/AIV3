@@ -4,14 +4,18 @@ use domain_model::{DatasetId, TenantId};
 use platform_api::semantic_understanding::SemanticEvidenceClass;
 use retrieval_worker::dataset_semantic_understanding_access;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use storage::{PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use uuid::Uuid;
+
+const SOURCE_DOCUMENT_LIMIT: usize = 10_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BackfillArgs {
     dataset_id: DatasetId,
     limit: usize,
+    source_limit: usize,
     explicit_limit: bool,
     dry_run: bool,
     summary_only: bool,
@@ -57,20 +61,22 @@ async fn main() -> Result<()> {
         }
     }
 
+    let generated_at = Utc::now();
     let output = if args.dry_run {
         let preview = platform_api::dataset_semantic_snapshot::preview_dataset_semantic_snapshot_from_storage(
             &storage,
             tenant_id,
             args.dataset_id,
-            Utc::now(),
-            args.limit,
+            generated_at,
+            args.source_limit,
         )
         .await?;
         let direct_document_count = sqlx::query_scalar::<_, i64>(
-            "select count(*) from documents where tenant_id = $1 and dataset_id = $2",
+            "select count(*) from documents where tenant_id = $1 and dataset_id = $2 and created_at <= $3",
         )
         .bind(tenant_id.0)
         .bind(args.dataset_id.0)
+        .bind(generated_at)
         .fetch_one(storage.pool())
         .await?;
         let membership_document_count = sqlx::query_scalar::<_, i64>(
@@ -82,11 +88,14 @@ async fn main() -> Result<()> {
              and document.tenant_id = membership.tenant_id
             where membership.tenant_id = $1
               and membership.dataset_id = $2
-              and (membership.expires_at is null or membership.expires_at > now())
+              and membership.created_at <= $3
+              and document.created_at <= $3
+              and (membership.expires_at is null or membership.expires_at > $3)
             "#,
         )
         .bind(tenant_id.0)
         .bind(args.dataset_id.0)
+        .bind(generated_at)
         .fetch_one(storage.pool())
         .await?;
         let relation_counts = preview.snapshot.relations.iter().fold(
@@ -104,11 +113,16 @@ async fn main() -> Result<()> {
             .filter(|object| object.kind == "database_table")
             .count();
         let manifest_bytes = serde_json::to_vec(&preview.snapshot)?.len();
+        let quality = platform_api::dataset_semantic_snapshot::audit_semantic_snapshot_quality(
+            &preview.snapshot,
+        );
+        let non_chinese_business_labels = non_chinese_business_labels(&preview.snapshot);
         json!({
             "dry_run": true,
             "summary_only": true,
             "dataset_id": args.dataset_id,
             "limit": args.limit,
+            "source_limit": args.source_limit,
             "direct_document_count": direct_document_count,
             "membership_document_count": membership_document_count,
             "deduplicated_document_count": preview.source_document_count,
@@ -127,7 +141,17 @@ async fn main() -> Result<()> {
             "schema_version": preview.snapshot.schema_version,
             "generation_version": preview.snapshot.generation_version,
             "manifest_bytes": manifest_bytes,
-            "source_fingerprint": preview.source_fingerprint,
+            "business_label_count": quality.business_label_count,
+            "chinese_business_label_count": quality.chinese_business_label_count,
+            "chinese_label_ratio": quality.chinese_label_ratio,
+            "raw_row_hit_count": quality.raw_row_hit_count,
+            "sql_or_mime_hit_count": quality.sql_or_mime_hit_count,
+            "strategy_hit_count": quality.strategy_hit_count,
+            "path_or_connection_hit_count": quality.path_or_connection_hit_count,
+            "technical_filename_hit_count": quality.technical_filename_hit_count,
+            "numeric_identifier_hit_count": quality.numeric_identifier_hit_count,
+            "quality_gate_passed": quality.quality_gate_passed,
+            "non_chinese_business_labels": non_chinese_business_labels,
             "status": "planned",
             "write_count": 0,
         })
@@ -136,20 +160,45 @@ async fn main() -> Result<()> {
             &storage,
             tenant_id,
             args.dataset_id,
-            Utc::now(),
+            generated_at,
         )
         .await?;
+        let quality = outcome
+            .snapshot
+            .as_ref()
+            .map(platform_api::dataset_semantic_snapshot::audit_semantic_snapshot_quality)
+            .unwrap_or_else(empty_quality_report);
+        let current_attempt_quality_passed = matches!(outcome.status.as_str(), "ready" | "skipped")
+            && outcome.failure_code.is_none()
+            && quality.quality_gate_passed;
+        let non_chinese_business_labels = outcome
+            .snapshot
+            .as_ref()
+            .map(non_chinese_business_labels)
+            .unwrap_or_default();
         json!({
             "dry_run": false,
             "summary_only": args.summary_only,
             "dataset_id": args.dataset_id,
             "limit": args.limit,
-            "source_fingerprint": outcome.source_fingerprint,
+            "source_limit": args.source_limit,
             "status": outcome.status,
             "failure_code": outcome.failure_code,
             "object_count": outcome.snapshot.as_ref().map(|item| item.objects.len()).unwrap_or(0),
             "field_count": outcome.snapshot.as_ref().map(|item| item.fields.len()).unwrap_or(0),
             "relation_count": outcome.snapshot.as_ref().map(|item| item.relations.len()).unwrap_or(0),
+            "manifest_bytes": quality.manifest_bytes,
+            "business_label_count": quality.business_label_count,
+            "chinese_business_label_count": quality.chinese_business_label_count,
+            "chinese_label_ratio": quality.chinese_label_ratio,
+            "raw_row_hit_count": quality.raw_row_hit_count,
+            "sql_or_mime_hit_count": quality.sql_or_mime_hit_count,
+            "strategy_hit_count": quality.strategy_hit_count,
+            "path_or_connection_hit_count": quality.path_or_connection_hit_count,
+            "technical_filename_hit_count": quality.technical_filename_hit_count,
+            "numeric_identifier_hit_count": quality.numeric_identifier_hit_count,
+            "non_chinese_business_labels": non_chinese_business_labels,
+            "quality_gate_passed": current_attempt_quality_passed,
         })
     };
     if args.pretty {
@@ -158,6 +207,43 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&output)?);
     }
     Ok(())
+}
+
+fn non_chinese_business_labels(
+    snapshot: &platform_api::semantic_understanding::DatasetSemanticUnderstanding,
+) -> Vec<String> {
+    snapshot
+        .objects
+        .iter()
+        .map(|object| object.label.as_str())
+        .chain(snapshot.fields.iter().map(|field| field.label.as_str()))
+        .filter_map(|label| {
+            let label = label.trim();
+            let quality =
+                platform_api::semantic_label_resolver::classify_semantic_primary_label(label);
+            (quality.business_label && !quality.chinese_business_label).then(|| label.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(32)
+        .collect()
+}
+
+fn empty_quality_report() -> platform_api::dataset_semantic_snapshot::SemanticSnapshotQualityReport
+{
+    platform_api::dataset_semantic_snapshot::SemanticSnapshotQualityReport {
+        business_label_count: 0,
+        chinese_business_label_count: 0,
+        chinese_label_ratio: 0.0,
+        raw_row_hit_count: 0,
+        sql_or_mime_hit_count: 0,
+        strategy_hit_count: 0,
+        path_or_connection_hit_count: 0,
+        technical_filename_hit_count: 0,
+        numeric_identifier_hit_count: 0,
+        manifest_bytes: 0,
+        quality_gate_passed: false,
+    }
 }
 
 fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
@@ -173,8 +259,12 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
     let limit = raw_limit
         .map(|value| value.parse::<usize>())
         .transpose()?
-        .unwrap_or(10)
-        .clamp(1, 10_000);
+        .unwrap_or(1);
+    if limit != 1 {
+        anyhow::bail!(
+            "single-dataset semantic backfill requires --limit 1; source documents use the fixed bounded limit {SOURCE_DOCUMENT_LIMIT}"
+        );
+    }
     if !args.is_empty() || (requested_dry_run && confirm_real_run) {
         anyhow::bail!(usage(program));
     }
@@ -185,6 +275,7 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
     Ok(BackfillArgs {
         dataset_id,
         limit,
+        source_limit: SOURCE_DOCUMENT_LIMIT,
         explicit_limit,
         dry_run,
         summary_only: requested_summary_only || dry_run,
@@ -195,7 +286,7 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage: {program} --dataset-id <uuid> [--limit <n>] [--dry-run] [--summary-only] [--confirm-real-run] [--pretty]"
+        "Usage: {program} --dataset-id <uuid> [--limit 1] [--dry-run] [--summary-only] [--confirm-real-run] [--pretty]"
     )
 }
 
@@ -233,7 +324,8 @@ mod tests {
         assert!(args.dry_run);
         assert!(args.summary_only);
         assert!(!args.confirm_real_run);
-        assert_eq!(args.limit, 10);
+        assert_eq!(args.limit, 1);
+        assert_eq!(args.source_limit, 10_000);
     }
 
     #[test]
@@ -256,13 +348,62 @@ mod tests {
                 "--dataset-id".to_string(),
                 dataset_id.to_string(),
                 "--limit".to_string(),
-                "5".to_string(),
+                "1".to_string(),
                 "--confirm-real-run".to_string(),
                 "--summary-only".to_string(),
             ],
         )
         .expect("confirmed bounded run");
         assert!(!args.dry_run);
-        assert_eq!(args.limit, 5);
+        assert_eq!(args.limit, 1);
+        assert_eq!(args.source_limit, 10_000);
+    }
+
+    #[test]
+    fn semantic_backfill_dry_and_real_use_the_same_source_bound() {
+        let dataset_id = Uuid::from_u128(1);
+        let dry = parse_args(
+            "dataset-semantic-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--limit".to_string(),
+                "1".to_string(),
+                "--dry-run".to_string(),
+            ],
+        )
+        .expect("dry run");
+        let real = parse_args(
+            "dataset-semantic-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--limit".to_string(),
+                "1".to_string(),
+                "--confirm-real-run".to_string(),
+            ],
+        )
+        .expect("real run");
+
+        assert_eq!(dry.source_limit, real.source_limit);
+        assert_eq!(dry.source_limit, 10_000);
+    }
+
+    #[test]
+    fn semantic_backfill_rejects_multi_dataset_limit_for_single_dataset_command() {
+        let dataset_id = Uuid::from_u128(1);
+        let error = parse_args(
+            "dataset-semantic-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--limit".to_string(),
+                "2".to_string(),
+                "--dry-run".to_string(),
+            ],
+        )
+        .expect_err("single dataset command must require limit one");
+
+        assert!(error.to_string().contains("--limit 1"));
     }
 }

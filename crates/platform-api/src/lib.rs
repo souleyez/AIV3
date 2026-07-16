@@ -266,6 +266,7 @@ mod assistant_run_resume_project_delivery_support;
 mod assistant_run_resume_prompt_support;
 mod assistant_run_scope_policy_support;
 mod assistant_run_scope_selection_support;
+mod assistant_run_semantic_supply_support;
 mod assistant_run_spreadsheet_attendance_support;
 mod assistant_run_sse_support;
 mod assistant_run_static_page_dataset_scope_support;
@@ -299,6 +300,7 @@ mod client_config_package_support;
 mod client_config_session_support;
 mod code_review_summary_artifact_support;
 mod codex_orchestrator_access_support;
+pub mod cross_dataset_semantic_graph;
 mod dataset_create_support;
 mod dataset_list_support;
 mod dataset_output_evidence_support;
@@ -307,6 +309,7 @@ mod dataset_output_model_facing;
 mod dataset_output_view_support;
 mod dataset_retrieval_evidence_support;
 mod dataset_secret_binding_support;
+mod dataset_semantic_graph_support;
 pub mod dataset_semantic_snapshot;
 pub mod dataset_semantic_source_support;
 mod dataset_semantic_understanding_support;
@@ -407,6 +410,8 @@ mod fashion_postchain_adapter_support;
 pub mod semantic_label_resolver;
 pub mod semantic_profile_adapters;
 pub mod semantic_relation_builder;
+#[cfg(test)]
+mod semantic_supply_ab_receipt_tests;
 pub mod semantic_understanding;
 pub use contracts::{
     AssetProfileParseTaskPayload, ASSET_PROFILE_PARSE_QUEUE, ASSET_PROFILE_PARSE_TASK_KEY,
@@ -610,6 +615,7 @@ use assistant_run_resume_project_delivery_support::*;
 use assistant_run_resume_prompt_support::*;
 use assistant_run_scope_policy_support::*;
 use assistant_run_scope_selection_support::*;
+use assistant_run_semantic_supply_support::*;
 use assistant_run_spreadsheet_attendance_support::*;
 use assistant_run_sse_support::*;
 use assistant_run_static_page_dataset_scope_support::*;
@@ -1242,6 +1248,10 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}/understanding",
             get(dataset_semantic_understanding_support::get_dataset_semantic_understanding),
+        )
+        .route(
+            "/v1/dataset-semantic-graphs/query",
+            axum::routing::post(dataset_semantic_graph_support::query_dataset_semantic_graph),
         )
         .route(
             "/v1/dataset-secret-bindings",
@@ -3659,14 +3669,13 @@ pub(crate) async fn load_visible_dataset_for_user_with_local_scope(
         .await
         .map_err(ApiError::from_storage)?
         .ok_or_else(|| dataset_not_found_error(dataset_id))?;
-    if !dataset_is_visible_for_request(
+    ensure_dataset_visible_for_request(
         &dataset,
+        state.tenant_id,
         active_secret_binding_ids,
         current_user_id,
         local_thread_id,
-    ) {
-        return Err(dataset_not_found_error(dataset_id));
-    }
+    )?;
     Ok(dataset)
 }
 
@@ -6109,6 +6118,10 @@ async fn create_assistant_run_inner(
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
             .await?;
     let requested_selected_scope = request.selected_scope.clone();
+    let semantic_supply_explicit_dataset_ids = assistant_semantic_supply_explicit_dataset_ids(
+        requested_selected_scope.as_ref(),
+        &visible_datasets,
+    );
     let selected_dataset_id = requested_selected_scope
         .as_ref()
         .and_then(selected_dataset_id_from_scope);
@@ -6186,13 +6199,14 @@ async fn create_assistant_run_inner(
         .take(5)
         .collect();
     request.selected_scope = Some(selected_scope.clone());
-    let mut evidence_state = build_assistant_run_evidence_state(
+    let mut evidence_state = build_assistant_run_evidence_state_with_semantic_scope(
         &state,
         &selected_scope,
         &request.prompt,
         local_thread_id.as_deref(),
         &active_secret_binding_ids,
         current_user_id,
+        &semantic_supply_explicit_dataset_ids,
     )
     .await?;
 
@@ -22086,10 +22100,11 @@ async fn maybe_persist_external_channel_template_html_artifact(
     connection_id: &str,
     run_id: AssistantRunId,
     message: &ExternalBotMessageView,
+    prompt: &str,
     output_text: &str,
     now: DateTime<Utc>,
 ) -> std::result::Result<Option<ExternalChannelTemplateHtmlArtifact>, ApiError> {
-    if !external_channel_message_requests_template_html_artifact(message) {
+    if !external_channel_message_authorizes_template_html_artifact(message, prompt) {
         return Ok(None);
     }
     let Some(html) = extract_external_template_html_from_model_output(output_text) else {
@@ -22218,11 +22233,22 @@ fn external_channel_message_requests_template_html_artifact(
         })
 }
 
+fn external_channel_message_authorizes_template_html_artifact(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    external_channel_message_requests_template_html_artifact(message)
+        && external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+}
+
 fn external_channel_message_requests_static_page_artifact(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> bool {
     if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
+    if !external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
         return false;
     }
     if message.artifact_type.as_deref() == Some("static_page") {
@@ -22287,8 +22313,21 @@ fn external_channel_message_requests_static_page_artifact(
     )
 }
 
+fn external_channel_message_authorizes_static_page_template_prewarm(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+        && !external_channel_message_requests_static_page_artifact(message, prompt)
+        && !external_channel_message_requests_template_html_artifact(message)
+        && !external_channel_message_requests_data_ingestion_analysis(prompt)
+}
+
 pub(crate) fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) -> bool {
     if static_page_prompt_negates_artifact_generation(prompt) {
+        return false;
+    }
+    if !external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
         return false;
     }
     let compact = prompt
@@ -23267,9 +23306,10 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
     if !platform_env_flag("STATIC_PAGE_TEMPLATE_PREWARM_ENABLED", false) {
         return Ok(());
     }
-    if external_channel_message_requests_static_page_artifact(message, &assistant_request.prompt)
-        || external_channel_message_requests_data_ingestion_analysis(&assistant_request.prompt)
-    {
+    if !external_channel_message_authorizes_static_page_template_prewarm(
+        message,
+        &assistant_request.prompt,
+    ) {
         return Ok(());
     }
 
@@ -23438,34 +23478,7 @@ fn external_channel_static_page_template_stability_key(
 }
 
 pub(crate) fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    external_channel_text_has_any(
-        &compact,
-        prompt,
-        &[
-            "数据接入",
-            "入库",
-            "建表",
-            "字段映射",
-            "数据源",
-            "同步",
-            "数据库分析",
-            "导入",
-            "清洗",
-            "schema",
-            "etl",
-            "import",
-            "mapping",
-            "data ingestion",
-            "data-ingestion",
-            "staging plan",
-            "staging_plan",
-        ],
-    )
+    external_channel_prompt_explicitly_authorizes_data_ingestion(prompt)
 }
 
 fn collect_external_data_ingestion_database_source_ids(
@@ -23718,17 +23731,14 @@ async fn maybe_enqueue_external_channel_data_ingestion_analysis(
     force_tool_request: Option<&Value>,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
     let forced_by_model_tool = force_tool_request.is_some();
-    if !forced_by_model_tool
-        && !external_channel_message_requests_data_ingestion_analysis(&run.user_prompt)
-    {
-        return Ok(None);
-    }
-
     let prompt = if forced_by_model_tool {
         assistant_request.prompt.as_str()
     } else {
         run.user_prompt.as_str()
     };
+    if !external_channel_message_requests_data_ingestion_analysis(prompt) {
+        return Ok(None);
+    }
     let mut fixed_task = external_channel_data_ingestion_fixed_task(
         state.tenant_id,
         connection_id,
@@ -27435,23 +27445,499 @@ fn external_channel_model_tool_request(
     })
 }
 
+fn external_channel_output_contains_model_tool_request_tag(output_text: &str) -> bool {
+    let normalized = output_text
+        .to_ascii_lowercase()
+        .replace("&#95;", "_")
+        .replace("&#x5f;", "_");
+    let compact = normalized
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    compact
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-'))
+        .collect::<String>()
+        .contains("v3toolrequest")
+}
+
+fn external_channel_prompt_explicitly_authorizes_capability_action(
+    prompt: &str,
+    action_terms: &[&str],
+    required_target_terms: &[&str],
+) -> bool {
+    let prompt_ends_with_question =
+        prompt.trim_end().ends_with('?') || prompt.trim_end().ends_with('？');
+    let mut phrases = prompt.to_ascii_lowercase();
+    for separator in [
+        " and then ",
+        " then ",
+        " and ",
+        "同时",
+        "然后",
+        "并且",
+        "并",
+        "，",
+        ",",
+        "。",
+        ".",
+        "；",
+        ";",
+        "！",
+        "!",
+        "？",
+        "?",
+    ] {
+        phrases = phrases.replace(separator, "\n");
+    }
+
+    phrases.lines().any(|phrase| {
+        let compact = phrase
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        let term_position =
+            |term: &str| external_channel_phrase_term_position(phrase, &compact, term);
+        let Some(action_position) = action_terms
+            .iter()
+            .filter_map(|term| term_position(term))
+            .min()
+        else {
+            return false;
+        };
+        if !required_target_terms.is_empty()
+            && !required_target_terms
+                .iter()
+                .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if external_channel_phrase_is_action_completion_status(&compact, action_position) {
+            return false;
+        }
+        if ["有哪些", "howto", "tutorial"]
+            .iter()
+            .any(|term| term_position(term).is_some())
+            || ["方法", "教程", "做法", "流程", "示例", "例子"]
+                .iter()
+                .filter_map(|term| term_position(term))
+                .any(|position| position >= action_position)
+        {
+            return false;
+        }
+        if [
+            "不用了",
+            "不要了",
+            "算了",
+            "别做了",
+            "不做了",
+            "停止执行",
+            "取消执行",
+            "nevermind",
+            "cancelit",
+            "stopit",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+            || compact.ends_with("取消")
+        {
+            return false;
+        }
+        let explicitly_commanded = [
+            "请",
+            "帮我",
+            "麻烦",
+            "需要",
+            "我要",
+            "我想",
+            "我们要",
+            "我们想",
+            "想要",
+            "把",
+            "将",
+            "给我",
+            "开始",
+            "重新",
+            "立即",
+            "现在",
+            "please",
+            "i want",
+            "we need",
+            "let's",
+            "lets",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position);
+        if prompt_ends_with_question
+            || ["还是", "行不行", "要不要"]
+                .iter()
+                .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "查看",
+            "看看",
+            "了解",
+            "解释",
+            "说明",
+            "介绍",
+            "请问",
+            "问一下",
+            "想问",
+            "检查",
+            "核对",
+            "汇总",
+            "比较",
+            "盘点",
+            "回顾",
+            "分析",
+            "讨论",
+            "评估",
+            "研究",
+            "考虑",
+            "梳理",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position)
+        {
+            return false;
+        }
+        if [
+            "了解",
+            "状态",
+            "记录",
+            "进度",
+            "历史",
+            "结果",
+            "内容",
+            "说明",
+            "建议",
+            "计划",
+            "方案",
+            "步骤",
+            "规则",
+            "日志",
+            "详情",
+            "模板",
+            "的消息",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "为什么",
+            "为何",
+            "怎么",
+            "如何",
+            "是什么",
+            "什么意思",
+            "含义",
+            "原因",
+            "能不能",
+            "可不可以",
+            "是否",
+            "why",
+            "how",
+            "what",
+            "whether",
+        ]
+        .iter()
+        .any(|term| term_position(term).is_some())
+        {
+            return false;
+        }
+        if [
+            "不要", "不用", "无需", "无须", "不必", "别", "禁止", "do not", "don't", "dont",
+            "never", "without", "not",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position <= action_position)
+        {
+            return false;
+        }
+        if [
+            "已经",
+            "之前",
+            "上次",
+            "曾经",
+            "已",
+            "already",
+            "previously",
+        ]
+        .iter()
+        .filter_map(|term| term_position(term))
+        .any(|position| position < action_position)
+        {
+            return false;
+        }
+
+        let failure_status = ["失败", "failed", "failure"]
+            .iter()
+            .any(|term| term_position(term).is_some());
+        if failure_status && !explicitly_commanded {
+            return false;
+        }
+
+        action_position == 0 || explicitly_commanded
+    })
+}
+
+fn external_channel_data_ingestion_actions_are_only_read_only_mentions(prompt: &str) -> bool {
+    let mut phrases = prompt.to_ascii_lowercase();
+    for separator in [
+        " and then ",
+        " then ",
+        " and ",
+        "同时",
+        "然后",
+        "并且",
+        "并",
+        "，",
+        ",",
+        "。",
+        ".",
+        "；",
+        ";",
+        "！",
+        "!",
+        "？",
+        "?",
+    ] {
+        phrases = phrases.replace(separator, "\n");
+    }
+
+    let action_terms = [
+        "导入数据",
+        "导入到",
+        "入库",
+        "建表",
+        "同步到",
+        "同步进",
+        "配置字段映射",
+        "创建字段映射",
+        "接入",
+        "导入",
+        "同步",
+        "清洗",
+        "createstaging",
+        "importdata",
+        "ingestdata",
+        "import",
+        "ingest",
+        "sync",
+    ];
+    let read_only_markers = [
+        "状态", "结果", "历史", "记录", "日志", "计划", "方案", "步骤", "规则", "方法", "教程",
+        "流程", "示例", "进度", "说明", "内容", "详情", "status", "result", "history", "log",
+        "plan", "method", "tutorial", "example",
+    ];
+    let mut saw_action = false;
+    for phrase in phrases.lines() {
+        let compact = phrase
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        if !action_terms.iter().any(|term| compact.contains(term)) {
+            continue;
+        }
+        saw_action = true;
+        if !read_only_markers
+            .iter()
+            .any(|marker| compact.contains(marker))
+        {
+            return false;
+        }
+    }
+    saw_action
+}
+
+fn external_channel_prompt_explicitly_authorizes_data_ingestion(prompt: &str) -> bool {
+    if external_channel_prompt_explicitly_authorizes_static_page_action(prompt) {
+        return false;
+    }
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let normalized = compact.to_ascii_lowercase();
+    if external_channel_data_ingestion_actions_are_only_read_only_mentions(prompt) {
+        return false;
+    }
+    if external_channel_text_has_any(&normalized, &compact, &["接入", "connect", "integrate"])
+        && external_channel_text_has_any(
+            &normalized,
+            &compact,
+            &[
+                "权限",
+                "授权",
+                "认证",
+                "账号",
+                "系统",
+                "oa",
+                "文档库",
+                "接口",
+                "permission",
+                "auth",
+                "system",
+            ],
+        )
+    {
+        return false;
+    }
+
+    external_channel_prompt_explicitly_authorizes_capability_action(
+        prompt,
+        &[
+            "导入数据",
+            "导入到",
+            "入库",
+            "建表",
+            "同步到",
+            "同步进",
+            "配置字段映射",
+            "创建字段映射",
+            "createstaging",
+            "importdata",
+            "ingestdata",
+        ],
+        &[],
+    ) || external_channel_prompt_explicitly_authorizes_capability_action(
+        prompt,
+        &["接入", "导入", "同步", "清洗", "import", "ingest", "sync"],
+        &[
+            "数据",
+            "这份表",
+            "这张表",
+            "数据表",
+            "表格",
+            "文件",
+            "数据库",
+            "数据源",
+            "schema",
+            "data",
+            "dataset",
+            "table",
+            "file",
+            "database",
+            "datasource",
+        ],
+    )
+}
+
+fn external_channel_model_tool_request_is_authorized_by_prompt(
+    tool_request: &ExternalChannelModelToolRequest,
+    prompt: &str,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let normalized = compact.to_ascii_lowercase();
+    let negated = external_channel_text_has_any(
+        &normalized,
+        &compact,
+        &[
+            "不要", "不用", "无需", "无须", "不必", "别", "donot", "don't", "dont",
+        ],
+    );
+    if negated {
+        return false;
+    }
+    match tool_request.tool {
+        ExternalChannelModelToolCapability::StaticPageArtifact => {
+            external_channel_prompt_explicitly_authorizes_static_page_action(prompt)
+        }
+        ExternalChannelModelToolCapability::DataIngestionAnalysis => {
+            external_channel_prompt_explicitly_authorizes_data_ingestion(prompt)
+        }
+        ExternalChannelModelToolCapability::DocumentProcessing => {
+            external_channel_prompt_explicitly_authorizes_document_processing(tool_request, prompt)
+        }
+        ExternalChannelModelToolCapability::CollectionSetupAnalysis => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &[
+                    "规划采集",
+                    "创建采集",
+                    "配置采集",
+                    "开始采集",
+                    "接入采集",
+                    "抓取",
+                    "爬取",
+                    "采集公开",
+                    "沉淀到资料库",
+                    "setupcollection",
+                    "startcollection",
+                    "crawl",
+                    "scrape",
+                ],
+                &[],
+            )
+        }
+        ExternalChannelModelToolCapability::IntegrationSetupAnalysis => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &["接入", "对接", "集成", "连接", "integrate", "connect"],
+                &[
+                    "系统",
+                    "oa",
+                    "api",
+                    "接口",
+                    "文档库",
+                    "数据库",
+                    "数据源",
+                    "权限",
+                    "system",
+                    "documentlibrary",
+                    "database",
+                ],
+            )
+        }
+        ExternalChannelModelToolCapability::MessageChannelOutreach => {
+            external_channel_prompt_explicitly_authorizes_capability_action(
+                prompt,
+                &[
+                    "发消息",
+                    "发送消息",
+                    "主动联系",
+                    "通知店",
+                    "通知用户",
+                    "通知客户",
+                    "推送给",
+                    "发给",
+                    "sendmessage",
+                    "notifyuser",
+                    "notifycustomer",
+                ],
+                &[],
+            )
+        }
+    }
+}
+
 fn external_channel_model_tool_capability_guidance_lines(first_visible_turn: bool) -> Vec<String> {
     let mut lines = vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/API/表/文件接入需求并生成待确认 staging plan，接入结果必须明确一个目标 DataMax 数据集或提出一个待创建/绑定的数据集；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
-        "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
-        "经营数据问题中提到取高、经营状况、风险识别、销售缺口、需要助推的门店、统计/汇总/排行、临时合同面积/坪效、客流统计/客流同比时，可能需要同步生成或更新经营报表；如果客户同时在问具体名单、原因或统计结论，仍必须正常回答客户问题，不要用“已收到/正在处理”截断答案，宿主会旁路挂载报表产物。".to_string(),
+        "只有用户原话明确要求创建、生成、修改、渲染、导出或发布报表/页面/看板时，才可提出 `static_page_artifact`；查看、解释、引用、分析现有报告，询问模板、指标、名单、原因或统计结论，都属于普通问答，能力字段和模型判断不能替代用户授权。".to_string(),
+        "经营数据问题中提到取高、经营状况、风险识别、销售缺口、门店、统计/汇总/排行、合同面积/坪效、客流或同比时，必须正常回答客户问题；不要自行追加报表动作，不要用“已收到/正在处理”截断答案，也不要因为数据问题本身输出工具标签。".to_string(),
         "客户上传合同、客流表或模板文件并要求用于报表/静态页时，应把这些文件视为当前授权范围内的临时参考材料，用于补充坪效、客流同比、模板风格或模块排序；不要把它误判为 `document_processing`，除非用户明确要求解析状态、重解析、深解析或说资料无法读取。".to_string(),
         "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级解析或事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
     ];
     if first_visible_turn {
         lines.push(
-            "首轮能力触发规则：即使判断用户需要 DataMax 执行平台能力，也必须先给自然语言回复；本轮不要只输出 `<V3_TOOL_REQUEST>`。如果需要生成报表/静态页，正常回答业务结论和处理计划，宿主会旁路挂载或排队产物。"
+            "首轮能力触发规则：即使用户原话明确要求 DataMax 执行平台能力，也必须先给自然语言回复；本轮不要只输出 `<V3_TOOL_REQUEST>`。未获用户明确授权的动作不得提出或排队。"
                 .to_string(),
         );
     } else {
         lines.push(
-            "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。"
+            "只有用户原话明确要求 DataMax 执行上述能力时，才可只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"...\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`；`document_processing` 只允许与原话一致的 `status` 或 `reparse_request`，不得用通用 `create_or_update` 替代；普通问答不得提出工具请求，宿主仍会独立校验用户授权、权限和确认条件。"
                 .to_string(),
         );
     }
@@ -27531,6 +28017,99 @@ fn external_channel_document_processing_intent_requests_reparse(intent: &str) ->
             | "vlm_reparse"
             | "ocr_reparse"
     )
+}
+
+fn external_channel_document_processing_intent_requests_status(intent: &str) -> bool {
+    matches!(
+        intent,
+        "status" | "parse_status" | "check_status" | "inspect_status" | "query_status"
+    )
+}
+
+fn external_channel_prompt_explicitly_requests_document_parse_status(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let Some(status_position) = ["解析状态", "parsestatus"]
+        .iter()
+        .filter_map(|term| compact.find(term))
+        .min()
+    else {
+        return false;
+    };
+    if [
+        "不要", "不用", "无需", "无须", "不必", "别", "禁止", "donot", "don't", "dont", "never",
+        "without", "not",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+    {
+        return false;
+    }
+    if [
+        "解释",
+        "说明",
+        "介绍",
+        "为什么",
+        "为何",
+        "原因",
+        "含义",
+        "why",
+        "reason",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+    {
+        return false;
+    }
+    [
+        "查看",
+        "看看",
+        "查询",
+        "检查",
+        "确认",
+        "告诉我",
+        "给我",
+        "show",
+        "check",
+        "inspect",
+        "query",
+    ]
+    .iter()
+    .filter_map(|term| compact.find(term))
+    .any(|position| position <= status_position)
+}
+
+fn external_channel_prompt_explicitly_authorizes_document_processing(
+    tool_request: &ExternalChannelModelToolRequest,
+    prompt: &str,
+) -> bool {
+    let intent = external_channel_document_processing_intent(tool_request);
+    if external_channel_document_processing_intent_requests_reparse(&intent) {
+        return external_channel_prompt_explicitly_authorizes_capability_action(
+            prompt,
+            &[
+                "重新解析",
+                "重解析",
+                "深解析",
+                "升级解析",
+                "ocr重解析",
+                "vlm重解析",
+                "reparse",
+                "deepparse",
+                "upgradeparse",
+            ],
+            &[],
+        );
+    }
+    if external_channel_document_processing_intent_requests_status(&intent) {
+        return external_channel_prompt_explicitly_requests_document_parse_status(prompt);
+    }
+    false
 }
 
 fn external_channel_document_processing_reparse_enabled() -> bool {
@@ -28079,6 +28658,22 @@ fn external_channel_document_processing_answer_retry_provider_input(base_input: 
     )
 }
 
+fn external_channel_unauthorized_tool_answer_retry_provider_input(
+    base_input: &str,
+    tool: ExternalChannelModelToolCapability,
+) -> String {
+    format!(
+        "{base_input}\n\n[宿主动作授权纠偏]\n上一轮模型提出了未经用户原话明确授权的 `{}` 能力请求。请基于原始问题和当前已授权供料给出自然语言答案；不要输出 <V3_TOOL_REQUEST>，不要创建、修改、发布、入库、重解析、采集、接入或发送消息，也不要替用户推断动作意图。",
+        tool.as_str()
+    )
+}
+
+fn external_channel_invalid_tool_answer_retry_provider_input(base_input: &str) -> String {
+    format!(
+        "{base_input}\n\n[宿主输出安全纠偏]\n上一轮输出包含无法识别、缺失闭合或不在允许目录中的内部工具标签。请基于原始问题和当前已授权供料给出自然语言答案；不要输出 <V3_TOOL_REQUEST>，不要暴露内部标签，也不要创建、修改、发布、入库、重解析、采集、接入或发送消息。"
+    )
+}
+
 fn external_channel_capability_text_from_payload(payload: &Value, keys: &[&str]) -> String {
     keys.iter()
         .filter_map(|key| payload.get(*key).and_then(Value::as_str))
@@ -28588,6 +29183,13 @@ async fn external_channel_dispatch_model_tool_request(
     runtime_manifest: &Value,
     tool_request: ExternalChannelModelToolRequest,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    if !external_channel_model_tool_request_is_authorized_by_prompt(
+        &tool_request,
+        &assistant_request.prompt,
+    ) {
+        return Ok(None);
+    }
+
     match tool_request.tool {
         ExternalChannelModelToolCapability::StaticPageArtifact => {
             let mut tool_message = message.clone();
@@ -29022,6 +29624,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
     let direct_reply_started_at = Instant::now();
     let direct_reply_total_budget = external_channel_direct_reply_total_budget();
     let mut document_processing_answer_retry_used = false;
+    let mut unauthorized_tool_answer_retry_used = false;
 
     let mut attempt_index = 0usize;
     while attempt_index < attempts.len() {
@@ -29475,7 +30078,107 @@ async fn external_channel_chat_model_or_acceptance_reply(
             .await?;
         }
 
-        if let Some(tool_request) = external_channel_model_tool_request(&output_text) {
+        let model_tool_request = external_channel_model_tool_request(&output_text);
+        if external_channel_output_contains_model_tool_request_tag(&output_text)
+            && model_tool_request.is_none()
+        {
+            rejected_attempts.push(json!({
+                "attempt": attempt.label.as_str(),
+                "runtime_mode": attempt.runtime.mode.as_str(),
+                "provider": attempt.runtime.provider.as_str(),
+                "model": attempt.runtime.model.as_str(),
+                "reason": "model_tool_request_invalid_or_unknown",
+                "runtime": runtime_manifest.clone(),
+            }));
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_rejected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt.label.as_str(),
+                            "reason": "invalid_or_unknown_internal_tool_tag",
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            if !unauthorized_tool_answer_retry_used {
+                unauthorized_tool_answer_retry_used = true;
+                if let Some(sink) = answer_delta_sink.as_ref() {
+                    sink.emit_answer_retrying("invalid_model_tool_request");
+                }
+                let mut retry_attempt = attempt.clone();
+                retry_attempt.label = format!("{}_safe_answer_retry", retry_attempt.label);
+                attempts.insert(attempt_index, retry_attempt);
+                provider_input =
+                    external_channel_invalid_tool_answer_retry_provider_input(&provider_input);
+            }
+            continue;
+        }
+        if let Some(tool_request) = model_tool_request {
+            if !external_channel_model_tool_request_is_authorized_by_prompt(
+                &tool_request,
+                &assistant_request.prompt,
+            ) {
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label.as_str(),
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": "model_tool_request_not_authorized_by_user_prompt",
+                    "tool": tool_request.tool.as_str(),
+                    "runtime": runtime_manifest.clone(),
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name:
+                                "assistant_run.external_channel_model_tool_request_rejected"
+                                    .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label.as_str(),
+                                "tool": tool_request.tool.as_str(),
+                                "reason": "user_prompt_did_not_authorize_action",
+                                "runtime": runtime_manifest.clone(),
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                if !unauthorized_tool_answer_retry_used {
+                    unauthorized_tool_answer_retry_used = true;
+                    if let Some(sink) = answer_delta_sink.as_ref() {
+                        sink.emit_answer_retrying("unauthorized_model_tool_request");
+                    }
+                    let mut retry_attempt = attempt.clone();
+                    retry_attempt.label =
+                        format!("{}_authorized_answer_retry", retry_attempt.label);
+                    attempts.insert(attempt_index, retry_attempt);
+                    provider_input = external_channel_unauthorized_tool_answer_retry_provider_input(
+                        &provider_input,
+                        tool_request.tool,
+                    );
+                }
+                continue;
+            }
             if external_channel_document_processing_tool_request_should_retry_as_answer(
                 &tool_request,
                 assistant_request,
@@ -29624,6 +30327,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
             connection_id,
             run_id,
             message,
+            &assistant_request.prompt,
             &output_text,
             now,
         )
@@ -39907,6 +40611,275 @@ fn external_principal_trust_level_label(level: &ExternalPrincipalTrustLevel) -> 
     }
 }
 
+async fn assistant_semantic_supply_with_timeout<F, T>(
+    timeout: StdDuration,
+    future: F,
+) -> Result<T, &'static str>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| "snapshot_lookup_timeout")
+}
+
+async fn load_assistant_run_semantic_supply_plan(
+    state: &AppState,
+    dataset_id: DatasetId,
+    prompt: &str,
+    visible_document_ids: &BTreeSet<DocumentId>,
+) -> Option<AssistantSemanticSupplyPlan> {
+    if visible_document_ids.is_empty() {
+        return None;
+    }
+
+    let repository = state.storage.dataset_semantic_snapshots();
+    let lookup = assistant_semantic_supply_with_timeout(StdDuration::from_millis(100), async {
+        let latest_ready = repository
+            .load_latest_ready(state.tenant_id, dataset_id)
+            .await;
+        let latest_attempt = repository
+            .load_latest_attempt(state.tenant_id, dataset_id)
+            .await;
+        (latest_ready, latest_attempt)
+    })
+    .await;
+    let (snapshot, latest_attempt) = match lookup {
+        Ok((Ok(Some(snapshot)), Ok(latest_attempt))) => (snapshot, latest_attempt),
+        Ok((Ok(None), Ok(_))) => return None,
+        Ok((Err(_), _)) | Ok((_, Err(_))) => {
+            tracing::warn!(
+                reason = "snapshot_lookup_failed",
+                "semantic supply fell back to baseline"
+            );
+            return None;
+        }
+        Err(reason) => {
+            tracing::warn!(reason, "semantic supply fell back to baseline");
+            return None;
+        }
+    };
+    let understanding = match serde_json::from_value::<
+        semantic_understanding::DatasetSemanticUnderstanding,
+    >(snapshot.manifest)
+    {
+        Ok(understanding) => understanding,
+        Err(_) => {
+            tracing::warn!(
+                reason = "snapshot_manifest_invalid",
+                "semantic supply fell back to baseline"
+            );
+            return None;
+        }
+    };
+    if latest_attempt.as_ref().is_some_and(|attempt| {
+        assistant_semantic_supply_latest_attempt_invalidates_ready(
+            &attempt.status,
+            attempt.updated_at > understanding.generated_at,
+        )
+    }) {
+        tracing::info!(
+            reason = "snapshot_latest_attempt_stale",
+            "semantic supply fell back to baseline"
+        );
+        return None;
+    }
+    build_assistant_semantic_supply_plan(snapshot.id, prompt, &understanding, visible_document_ids)
+}
+
+fn assistant_semantic_supply_recovery_document_ids(
+    semantic_plan: &AssistantSemanticSupplyPlan,
+    authorized_document_ids: &BTreeSet<DocumentId>,
+    initial_evidences: &[RetrievalEvidence],
+    document_limit: usize,
+) -> Vec<DocumentId> {
+    if document_limit == 0 {
+        return Vec::new();
+    }
+    let initial_document_ids = initial_evidences
+        .iter()
+        .map(|evidence| evidence.document_id)
+        .collect::<BTreeSet<_>>();
+    semantic_plan
+        .supplement_document_ids
+        .iter()
+        .copied()
+        .filter(|document_id| {
+            !document_id.0.is_nil()
+                && authorized_document_ids.contains(document_id)
+                && !initial_document_ids.contains(document_id)
+        })
+        .take(document_limit)
+        .collect()
+}
+
+async fn load_assistant_run_semantic_supplement_evidences(
+    state: &AppState,
+    dataset_id: DatasetId,
+    recovery_document_ids: &[DocumentId],
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> Vec<RetrievalEvidence> {
+    if recovery_document_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let recovery_document_ids = recovery_document_ids.to_vec();
+    let recovery_document_id_set = recovery_document_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let candidate_limit = recovery_document_ids.len().saturating_mul(8).clamp(1, 16);
+    let lookup = assistant_semantic_supply_with_timeout(StdDuration::from_millis(100), async {
+        let evidences = state
+            .storage
+            .retrieval_evidences()
+            .list_latest_by_document_ids(state.tenant_id, &recovery_document_ids, candidate_limit)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let evidences = evidences
+            .into_iter()
+            .filter(|evidence| {
+                evidence.tenant_id == state.tenant_id
+                    && evidence.dataset_id == dataset_id
+                    && recovery_document_id_set.contains(&evidence.document_id)
+            })
+            .collect::<Vec<_>>();
+        let evidences = filter_retrieval_evidences_for_assistant_evidence_scope(
+            state,
+            dataset_id,
+            evidences,
+            current_user_id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?;
+        let evidences = filter_retrieval_evidences_for_external_acl(
+            state,
+            external_acl_filter,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+            evidences,
+        )
+        .await?;
+        Ok::<_, ApiError>(filter_retrieval_evidences_for_selected_documents(
+            evidences,
+            selected_document_ids,
+        ))
+    })
+    .await;
+
+    match lookup {
+        Ok(Ok(evidences)) => evidences,
+        Ok(Err(_)) => {
+            tracing::warn!(
+                reason = "supplement_evidence_lookup_failed",
+                "semantic supply kept the existing evidence pool"
+            );
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(
+                reason = "supplement_evidence_lookup_timeout",
+                "semantic supply kept the existing evidence pool"
+            );
+            Vec::new()
+        }
+    }
+}
+
+fn merge_assistant_semantic_supplement_candidates(
+    scoped_evidences: &[RetrievalEvidence],
+    additional_evidences: Vec<RetrievalEvidence>,
+) -> Vec<RetrievalEvidence> {
+    let mut merged = scoped_evidences.to_vec();
+    let mut seen_ids = merged
+        .iter()
+        .map(|evidence| evidence.id)
+        .collect::<BTreeSet<_>>();
+    let mut seen_source_keys = merged
+        .iter()
+        .map(|evidence| {
+            (
+                evidence.document_id,
+                evidence.document_chunk_id,
+                evidence.source_locator.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for evidence in additional_evidences {
+        let source_key = (
+            evidence.document_id,
+            evidence.document_chunk_id,
+            evidence.source_locator.clone(),
+        );
+        if seen_ids.contains(&evidence.id) || seen_source_keys.contains(&source_key) {
+            continue;
+        }
+        seen_ids.insert(evidence.id);
+        seen_source_keys.insert(source_key);
+        merged.push(evidence);
+    }
+    merged
+}
+
+fn assistant_semantic_supply_rank_change_count(
+    baseline: &[RankedRetrievalEvidence<'_>],
+    semantic: &[RankedRetrievalEvidence<'_>],
+) -> usize {
+    let semantic_positions = semantic
+        .iter()
+        .enumerate()
+        .map(|(index, ranked)| (ranked.evidence.id, index))
+        .collect::<BTreeMap<_, _>>();
+    baseline
+        .iter()
+        .enumerate()
+        .filter(|(index, ranked)| semantic_positions.get(&ranked.evidence.id) != Some(index))
+        .count()
+        + semantic
+            .iter()
+            .filter(|ranked| {
+                !baseline
+                    .iter()
+                    .any(|baseline| baseline.evidence.id == ranked.evidence.id)
+            })
+            .count()
+}
+
+fn record_assistant_semantic_supply_receipt(
+    mode: AssistantSemanticSupplyMode,
+    candidate_count: usize,
+    plan: Option<&AssistantSemanticSupplyPlan>,
+    rank_change_count: usize,
+    elapsed_ms: u128,
+) {
+    let (reason, matched_node_count, alias_count, visible_source_count, supplement_candidate_count) =
+        plan.map_or(("no_safe_match", 0, 0, 0, 0), |plan| {
+            (
+                "plan_ready",
+                plan.matched_node_ids.len(),
+                plan.query_aliases.len(),
+                plan.visible_source_document_ids.len(),
+                plan.supplement_document_ids.len(),
+            )
+        });
+    tracing::info!(
+        semantic_supply_mode = mode.as_str(),
+        reason,
+        candidate_count,
+        matched_node_count,
+        alias_count,
+        visible_source_count,
+        supplement_candidate_count,
+        rank_change_count,
+        elapsed_ms,
+        "assistant semantic supply receipt"
+    );
+}
+
 async fn build_assistant_run_evidence_state(
     state: &AppState,
     selected_scope: &Value,
@@ -39914,6 +40887,28 @@ async fn build_assistant_run_evidence_state(
     local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+) -> std::result::Result<Value, ApiError> {
+    let no_explicit_semantic_datasets = BTreeSet::new();
+    build_assistant_run_evidence_state_with_semantic_scope(
+        state,
+        selected_scope,
+        prompt,
+        local_thread_id,
+        active_secret_binding_ids,
+        current_user_id,
+        &no_explicit_semantic_datasets,
+    )
+    .await
+}
+
+async fn build_assistant_run_evidence_state_with_semantic_scope(
+    state: &AppState,
+    selected_scope: &Value,
+    prompt: &str,
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    semantic_supply_explicit_dataset_ids: &BTreeSet<DatasetId>,
 ) -> std::result::Result<Value, ApiError> {
     let dataset_ids = selected_dataset_ids_from_scope(selected_scope);
     let conversation_memory_requested = selected_scope_requests_conversation_memory(selected_scope);
@@ -39960,6 +40955,7 @@ async fn build_assistant_run_evidence_state(
     let mut media_context_by_document: HashMap<DocumentId, Option<Value>> = HashMap::new();
     let mut retrieval_chunks_by_document: HashMap<DocumentId, Vec<DocumentChunk>> = HashMap::new();
     let mut unavailable_dataset_ids = Vec::new();
+    let mut semantic_supplement_remaining = ASSISTANT_SEMANTIC_SUPPLY_SUPPLEMENT_LIMIT;
 
     for dataset_id in dataset_ids
         .into_iter()
@@ -39991,6 +40987,18 @@ async fn build_assistant_run_evidence_state(
             "title": dataset.title.clone(),
             "visibility": dataset.visibility.as_str(),
         }));
+        let semantic_supply_mode = if semantic_supply_explicit_dataset_ids.contains(&dataset.id) {
+            assistant_semantic_supply_effective_mode(
+                assistant_semantic_supply_mode_from_env(
+                    state.tenant_id,
+                    dataset.id,
+                    current_user_id,
+                ),
+                assistant_run_scope_is_external_channel(Some(selected_scope)),
+            )
+        } else {
+            AssistantSemanticSupplyMode::Off
+        };
 
         let parse_status_items = build_assistant_run_document_parse_status_supply(
             state,
@@ -40124,7 +41132,111 @@ async fn build_assistant_run_evidence_state(
         let evidences =
             filter_retrieval_evidences_for_selected_documents(evidences, &evidence_document_ids);
 
-        let ranked_evidences = rank_retrieval_evidences_for_prompt(&evidences, prompt, limit);
+        let semantic_supply_started_at = Instant::now();
+        let semantic_visible_document_ids = if semantic_supply_mode.is_enabled() {
+            match assistant_semantic_supply_with_timeout(
+                StdDuration::from_millis(100),
+                assistant_run_scoped_visible_document_ids(
+                    state,
+                    &dataset,
+                    current_user_id,
+                    external_acl_filter.as_ref(),
+                    &evidence_document_ids,
+                    allow_selected_documents_without_acl_snapshot,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(document_ids)) => document_ids.into_iter().collect::<BTreeSet<_>>(),
+                Ok(Err(_)) => {
+                    tracing::warn!(
+                        reason = "visible_document_scope_lookup_failed",
+                        "semantic supply fell back to baseline"
+                    );
+                    BTreeSet::new()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        reason = "visible_document_scope_lookup_timeout",
+                        "semantic supply fell back to baseline"
+                    );
+                    BTreeSet::new()
+                }
+            }
+        } else {
+            BTreeSet::new()
+        };
+        let semantic_supply_plan = if semantic_supply_mode.is_enabled() {
+            load_assistant_run_semantic_supply_plan(
+                state,
+                dataset.id,
+                prompt,
+                &semantic_visible_document_ids,
+            )
+            .await
+        } else {
+            None
+        };
+        let additional_supplement_evidences = if semantic_supply_mode
+            == AssistantSemanticSupplyMode::Supplement
+            && semantic_supplement_remaining > 0
+        {
+            match semantic_supply_plan.as_ref() {
+                Some(plan) => {
+                    let recovery_document_ids = assistant_semantic_supply_recovery_document_ids(
+                        plan,
+                        &semantic_visible_document_ids,
+                        &evidences,
+                        semantic_supplement_remaining,
+                    );
+                    load_assistant_run_semantic_supplement_evidences(
+                        state,
+                        dataset.id,
+                        &recovery_document_ids,
+                        current_user_id,
+                        external_acl_filter.as_ref(),
+                        &evidence_document_ids,
+                        allow_selected_documents_without_acl_snapshot,
+                    )
+                    .await
+                }
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let semantic_supplement_candidates = if additional_supplement_evidences.is_empty() {
+            None
+        } else {
+            Some(merge_assistant_semantic_supplement_candidates(
+                &evidences,
+                additional_supplement_evidences,
+            ))
+        };
+        let semantic_supplement_candidate_slice = semantic_supplement_candidates
+            .as_deref()
+            .unwrap_or(&evidences);
+        let (ranked_evidences, rank_change_count, supplement_count) =
+            rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates(
+                &evidences,
+                semantic_supplement_candidate_slice,
+                prompt,
+                limit,
+                semantic_supply_mode,
+                semantic_supply_plan.as_ref(),
+                semantic_supplement_remaining,
+            );
+        semantic_supplement_remaining =
+            semantic_supplement_remaining.saturating_sub(supplement_count);
+        if semantic_supply_mode.is_enabled() {
+            record_assistant_semantic_supply_receipt(
+                semantic_supply_mode,
+                evidences.len(),
+                semantic_supply_plan.as_ref(),
+                rank_change_count,
+                semantic_supply_started_at.elapsed().as_millis(),
+            );
+        }
         if ranked_evidences.is_empty() {
             let fallback_items = build_assistant_run_chunk_fallback_supply(
                 state,
@@ -40696,7 +41808,7 @@ async fn build_assistant_run_dataset_fact_snapshot_supply(
     )])
 }
 
-async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
+async fn assistant_run_scoped_visible_document_ids(
     state: &AppState,
     dataset: &Dataset,
     current_user_id: Option<UserId>,
@@ -40707,7 +41819,12 @@ async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
     let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
     let mut document_ids = Vec::new();
     for document in documents {
-        if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
+        if !document_is_visible_for_assistant_evidence_owner_scope(
+            &document,
+            current_user_id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        ) {
             continue;
         }
         if !selected_document_ids.is_empty() && !selected_document_ids.contains(&document.id) {
@@ -40729,6 +41846,51 @@ async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
         }
     }
     Ok(document_ids)
+}
+
+async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<Vec<DocumentId>, ApiError> {
+    let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
+    let mut document_ids = Vec::new();
+    for document in documents {
+        if !assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            document.owner_user_id,
+            current_user_id,
+        ) {
+            continue;
+        }
+        if !selected_document_ids.is_empty() && !selected_document_ids.contains(&document.id) {
+            continue;
+        }
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
+            continue;
+        }
+        if !document_ids.contains(&document.id) {
+            document_ids.push(document.id);
+        }
+    }
+    Ok(document_ids)
+}
+
+fn assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+    document_owner_user_id: Option<UserId>,
+    current_user_id: Option<UserId>,
+) -> bool {
+    owner_user_id_is_visible(document_owner_user_id, current_user_id)
 }
 
 async fn assistant_run_dataset_fact_snapshot_scope_is_visible(
@@ -40802,6 +41964,7 @@ async fn build_assistant_run_database_aggregate_supply(
         };
         let aggregate_plans = assistant_run_database_aggregate_dimension_plans(mapping, prompt);
         let metrics = assistant_run_database_aggregate_metrics(mapping, prompt);
+        let count_requested = assistant_run_database_count_aggregation_requested(prompt);
         let aggregation = assistant_run_database_aggregation(prompt, !metrics.is_empty());
         supplied_items.push(assistant_run_database_schema_context_item(
             dataset,
@@ -40811,6 +41974,9 @@ async fn build_assistant_run_database_aggregate_supply(
             &metrics,
             scan_limit,
         ));
+        if metrics.is_empty() && !count_requested {
+            continue;
+        }
         let metric_requests = if metrics.is_empty() {
             vec![None]
         } else {
@@ -45370,6 +46536,22 @@ fn assistant_run_scope_with_requested_document_scope(
     selected_scope
 }
 
+fn assistant_semantic_supply_explicit_dataset_ids(
+    explicitly_requested_scope: Option<&Value>,
+    visible_datasets: &[Dataset],
+) -> BTreeSet<DatasetId> {
+    let visible_dataset_ids = visible_datasets
+        .iter()
+        .map(|dataset| dataset.id)
+        .collect::<BTreeSet<_>>();
+    explicitly_requested_scope
+        .map(selected_dataset_ids_from_scope)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|dataset_id| visible_dataset_ids.contains(dataset_id))
+        .collect()
+}
+
 fn assistant_run_scope_with_visible_dataset_range(
     mut selected_scope: Value,
     visible_datasets: &[Dataset],
@@ -49112,6 +50294,8 @@ struct RankedRetrievalEvidence<'a> {
     score: f64,
     lexical_score: f64,
     recall_score: f64,
+    semantic_score: f64,
+    ranking_score: f64,
     rank_hint: usize,
 }
 
@@ -49127,6 +50311,15 @@ fn rank_retrieval_evidences_for_prompt<'a>(
     evidences: &'a [RetrievalEvidence],
     prompt: &str,
     limit: usize,
+) -> Vec<RankedRetrievalEvidence<'a>> {
+    rank_retrieval_evidences_for_prompt_with_semantic_plan(evidences, prompt, limit, None)
+}
+
+fn rank_retrieval_evidences_for_prompt_with_semantic_plan<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
 ) -> Vec<RankedRetrievalEvidence<'a>> {
     if evidences.is_empty() || limit == 0 {
         return Vec::new();
@@ -49152,37 +50345,306 @@ fn rank_retrieval_evidences_for_prompt<'a>(
             } else {
                 evidence.recall_score
             };
+            let semantic_score = semantic_plan
+                .map(|plan| {
+                    plan.semantic_score_for_attributable_text(
+                        evidence.document_id,
+                        &assistant_semantic_attributable_evidence_text(evidence),
+                    )
+                })
+                .unwrap_or(0.0);
+            let ranking_score = if semantic_score > 0.0 {
+                // The baseline ranker gives any lexical hit priority, but its
+                // numeric `score` intentionally replaces recall when lexical
+                // score is non-zero. Preserve that candidate's existing recall
+                // strength before adding a bounded, authorized semantic boost;
+                // otherwise enabling semantic ranking can demote the exact
+                // lexical target it was meant to help.
+                score.max(evidence.recall_score) + semantic_score
+            } else {
+                // Unmatched candidates retain their original numeric score.
+                // Restoring recall for them would let an unrelated, high-recall
+                // decoy overtake the evidence selected by the semantic plan.
+                score
+            };
             RankedRetrievalEvidence {
                 evidence,
                 score,
                 lexical_score,
                 recall_score: evidence.recall_score,
+                semantic_score,
+                ranking_score,
                 rank_hint: rank_hint_from_evidence_manifest(evidence).unwrap_or(usize::MAX),
             }
         })
         .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| {
-        right
-            .lexical_score
-            .partial_cmp(&left.lexical_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                right
-                    .score
-                    .partial_cmp(&left.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| {
-                right
-                    .recall_score
-                    .partial_cmp(&left.recall_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| left.rank_hint.cmp(&right.rank_hint))
-            .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
-            .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
-    });
-    ranked.into_iter().take(limit).collect()
+    if semantic_plan.is_some() && ranked.iter().any(|item| item.semantic_score > 0.0) {
+        ranked.sort_by(|left, right| {
+            right
+                .ranking_score
+                .partial_cmp(&left.ranking_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    right
+                        .semantic_score
+                        .partial_cmp(&left.semantic_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .lexical_score
+                        .partial_cmp(&left.lexical_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .recall_score
+                        .partial_cmp(&left.recall_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.rank_hint.cmp(&right.rank_hint))
+                .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
+                .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+                .then_with(|| left.evidence.id.cmp(&right.evidence.id))
+        });
+        ranked.into_iter().take(limit).collect()
+    } else {
+        ranked.sort_by(|left, right| {
+            right
+                .lexical_score
+                .partial_cmp(&left.lexical_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    right
+                        .score
+                        .partial_cmp(&left.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    right
+                        .recall_score
+                        .partial_cmp(&left.recall_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.rank_hint.cmp(&right.rank_hint))
+                .then_with(|| right.evidence.created_at.cmp(&left.evidence.created_at))
+                .then_with(|| left.evidence.chunk_index.cmp(&right.evidence.chunk_index))
+        });
+        ranked.into_iter().take(limit).collect()
+    }
+}
+
+/// Limits semantic attribution to text that the same retrieval item can
+/// actually supply to the model and expose as a citable excerpt. Locator,
+/// payload-filter and manifest metadata remain useful to the baseline ranker,
+/// but they cannot prove that this chunk supports a graph alias.
+fn assistant_semantic_attributable_evidence_text(evidence: &RetrievalEvidence) -> String {
+    [evidence.summary.trim(), evidence.content_excerpt.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+fn rank_retrieval_evidences_for_semantic_supply_mode<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize) {
+    let (ranked, rank_change_count, _) =
+        rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_limit(
+            evidences,
+            prompt,
+            limit,
+            mode,
+            semantic_plan,
+            ASSISTANT_SEMANTIC_SUPPLY_SUPPLEMENT_LIMIT,
+        );
+    (ranked, rank_change_count)
+}
+
+#[cfg(test)]
+fn rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_limit<'a>(
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+    supplement_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize, usize) {
+    rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates(
+        evidences,
+        evidences,
+        prompt,
+        limit,
+        mode,
+        semantic_plan,
+        supplement_limit,
+    )
+}
+
+fn rank_retrieval_evidences_for_semantic_supply_mode_with_supplement_candidates<'a>(
+    evidences: &'a [RetrievalEvidence],
+    supplement_evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    limit: usize,
+    mode: AssistantSemanticSupplyMode,
+    semantic_plan: Option<&AssistantSemanticSupplyPlan>,
+    supplement_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize, usize) {
+    let baseline = rank_retrieval_evidences_for_prompt(evidences, prompt, limit);
+    let Some(semantic_plan) = semantic_plan else {
+        return (baseline, 0, 0);
+    };
+    let semantic = rank_retrieval_evidences_for_prompt_with_semantic_plan(
+        evidences,
+        prompt,
+        evidences.len(),
+        Some(semantic_plan),
+    );
+    let semantic = take_semantic_ranked_with_document_cap(semantic, limit);
+    let (semantic, supplement_count) = if mode == AssistantSemanticSupplyMode::Supplement {
+        supplement_ranked_retrieval_evidences(
+            semantic,
+            supplement_evidences,
+            prompt,
+            semantic_plan,
+            supplement_limit,
+            limit,
+        )
+    } else {
+        (semantic, 0)
+    };
+    let rank_change_count = assistant_semantic_supply_rank_change_count(&baseline, &semantic);
+    if mode.changes_supply() {
+        (semantic, rank_change_count, supplement_count)
+    } else {
+        (baseline, rank_change_count, 0)
+    }
+}
+
+fn take_semantic_ranked_with_document_cap(
+    ranked: Vec<RankedRetrievalEvidence<'_>>,
+    limit: usize,
+) -> Vec<RankedRetrievalEvidence<'_>> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let distinct_document_count = ranked
+        .iter()
+        .map(|ranked| ranked.evidence.document_id)
+        .collect::<BTreeSet<_>>()
+        .len();
+    if distinct_document_count <= 1 {
+        return ranked.into_iter().take(limit).collect();
+    }
+
+    let mut document_counts = BTreeMap::<DocumentId, usize>::new();
+    let mut selected = Vec::with_capacity(limit.min(ranked.len()));
+    let mut overflow = Vec::new();
+    for ranked in ranked {
+        if selected.len() < limit {
+            let count = document_counts
+                .entry(ranked.evidence.document_id)
+                .or_default();
+            if *count < 2 {
+                *count += 1;
+                selected.push(ranked);
+                continue;
+            }
+        }
+        overflow.push(ranked);
+    }
+    let remaining = limit.saturating_sub(selected.len());
+    selected.extend(overflow.into_iter().take(remaining));
+    selected
+}
+
+fn supplement_ranked_retrieval_evidences<'a>(
+    mut selected: Vec<RankedRetrievalEvidence<'a>>,
+    evidences: &'a [RetrievalEvidence],
+    prompt: &str,
+    semantic_plan: &AssistantSemanticSupplyPlan,
+    supplement_limit: usize,
+    final_limit: usize,
+) -> (Vec<RankedRetrievalEvidence<'a>>, usize) {
+    selected.truncate(final_limit);
+    let provider_retrieval_limit = final_limit.min(ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT);
+    let supplement_limit = supplement_limit.min(provider_retrieval_limit);
+    if supplement_limit == 0 || semantic_plan.supplement_document_ids.is_empty() {
+        return (selected, 0);
+    }
+    let mut selected_keys = selected
+        .iter()
+        .map(|ranked| {
+            (
+                ranked.evidence.document_id,
+                ranked.evidence.document_chunk_id,
+                ranked.evidence.source_locator.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let mut document_counts = selected.iter().fold(
+        BTreeMap::<DocumentId, usize>::new(),
+        |mut counts, ranked| {
+            *counts.entry(ranked.evidence.document_id).or_default() += 1;
+            counts
+        },
+    );
+    let candidates = rank_retrieval_evidences_for_prompt_with_semantic_plan(
+        evidences,
+        prompt,
+        evidences.len(),
+        Some(semantic_plan),
+    );
+    let mut supplements = Vec::with_capacity(supplement_limit);
+    for candidate in candidates {
+        if supplements.len() >= supplement_limit {
+            break;
+        }
+        let evidence = candidate.evidence;
+        if !semantic_plan
+            .supplement_document_ids
+            .contains(&evidence.document_id)
+            || !semantic_plan.has_attributable_text(
+                evidence.document_id,
+                &assistant_semantic_attributable_evidence_text(evidence),
+            )
+            || evidence.id.0.is_nil()
+            || evidence.document_id.0.is_nil()
+            || evidence.document_chunk_id.0.is_nil()
+            || evidence.source_locator.trim().is_empty()
+        {
+            continue;
+        }
+        let count = document_counts.entry(evidence.document_id).or_default();
+        if *count >= 2 {
+            continue;
+        }
+        let key = (
+            evidence.document_id,
+            evidence.document_chunk_id,
+            evidence.source_locator.clone(),
+        );
+        if !selected_keys.insert(key) {
+            continue;
+        }
+        *count += 1;
+        supplements.push(candidate);
+    }
+    if supplements.is_empty() {
+        return (selected, 0);
+    }
+
+    let supplement_count = supplements.len();
+    let tail = selected.split_off(0);
+    selected.extend(supplements);
+    selected.extend(tail);
+    selected.truncate(final_limit);
+    (selected, supplement_count)
 }
 
 fn rank_document_chunks_for_prompt(
@@ -50729,9 +52191,10 @@ mod tests {
 
     #[test]
     fn xinbai_published_report_link_answer_matches_customer_phrase() {
-        let answer =
-            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
-                .expect("customer phrase should reuse published report");
+        let answer = assistant_run_xinbai_published_report_link_answer(
+            "昨天/之前生成的新百报表链接发我看看",
+        )
+        .expect("customer phrase should reuse published report");
         assert!(answer.contains("新世界百货经营管理月报表已生成"));
         assert!(answer.contains("[新世界百货经营管理月报表]("));
         assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
@@ -50976,6 +52439,29 @@ mod tests {
         assert!(
             assistant_run_xinbai_published_report_link_answer("新百报表怎么重新设计").is_none()
         );
+        assert!(
+            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
+                .is_none()
+        );
+        for prompt in [
+            "不要返回之前的新百报表链接",
+            "之前生成的新百报表链接不要发给我",
+            "之前的新百报表链接为什么打不开？",
+            "之前的新百报表链接是什么格式？",
+            "之前的新百报表链接有权限吗？",
+            "之前的新百报表链接可以打开吗？",
+            "之前生成的新百报告打开了吗？",
+            "不要打开之前的新百报表链接",
+        ] {
+            assert!(
+                assistant_run_xinbai_published_report_link_answer(prompt).is_none(),
+                "negated or explanatory link question must stay ordinary QA: {prompt}"
+            );
+        }
+        assert!(assistant_run_xinbai_published_report_link_answer(
+            "把之前生成的新百报表链接发我看看"
+        )
+        .is_some());
         assert!(assistant_run_xinbai_published_report_link_answer(
             "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 DataMax 产物链接，不覆盖旧页面。"
         )
@@ -51155,34 +52641,32 @@ mod tests {
         let prompt = "取高机会最大的店铺是哪几个，分别差多少";
 
         assert!(assistant_run_database_aggregate_requested(prompt));
-        assert_eq!(
-            assistant_run_database_aggregate_metrics(&mapping, prompt),
-            vec!["xuzengxiaoshou".to_string(), "quekou".to_string()]
-        );
+        assert!(assistant_run_database_aggregate_metrics(&mapping, prompt).is_empty());
         let plans = assistant_run_database_aggregate_dimension_plans(&mapping, prompt);
         assert!(plans.iter().any(|plan| {
             plan.role == "ranking" && plan.dimensions == vec!["shopdesc".to_string()]
         }));
         assert_eq!(
             assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
-            "asc"
+            "desc"
         );
         assert_eq!(
-            assistant_run_database_aggregate_sort_semantics(Some("xuzengxiaoshou"), "asc"),
-            Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
+            assistant_run_database_aggregate_sort_semantics(Some("xuzengxiaoshou"), "desc"),
+            None
         );
-        assert!(assistant_run_database_aggregate_summary(
+        let summary = assistant_run_database_aggregate_summary(
             &mapping,
             "ranking",
             &["shopdesc".to_string()],
             Some("xuzengxiaoshou"),
             "sum",
-            "asc",
+            "desc",
             Some("txdate"),
             5,
             Some(5000),
-        )
-        .contains("机会越靠前"));
+        );
+        assert!(!summary.contains("机会越靠前"));
+        assert!(!summary.contains("高分成线"));
         assert_eq!(
             assistant_run_database_aggregate_latest_time_column(
                 &mapping,
@@ -57099,7 +58583,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_reuses_accepted_dataset_artifact_baseline() {
+    async fn external_channel_static_page_keeps_existing_artifact_link_request_as_qa() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -57216,7 +58700,7 @@ mod tests {
             )
             .await
             .expect("baseline run should be created");
-        let baseline_draft = state
+        let _baseline_draft = state
             .storage
             .static_page_drafts()
             .create(
@@ -57275,22 +58759,12 @@ mod tests {
             now,
         )
         .await
-        .expect("static-page pipeline should complete")
-        .expect("static-page reply should be returned");
+        .expect("static-page pipeline gate should complete");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        let card = reply.card.expect("stable artifact card");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["download_url"], json!(public_url));
-        assert_eq!(card["html_download_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["draft_id"], json!(baseline_draft.id.to_string()));
-        assert_eq!(card["dataset_artifact_key"], json!(dataset_artifact_key));
-        assert_eq!(card["image2_skipped"], json!(true));
+        assert!(
+            reply.is_none(),
+            "a request to resend an existing artifact link must stay ordinary QA"
+        );
 
         let new_run_drafts = state
             .storage
@@ -57300,7 +58774,7 @@ mod tests {
             .expect("drafts should list");
         assert!(
             new_run_drafts.is_empty(),
-            "baseline reuse should not create a new draft or Image2 job"
+            "ordinary link request should not create a new draft or Image2 job"
         );
         let events = state
             .storage
@@ -57308,26 +58782,11 @@ mod tests {
             .list_events(state.tenant_id, run.id)
             .await
             .expect("events should list");
-        let reused = events
-            .iter()
-            .find(|event| {
-                event.event_name
-                    == "assistant_run.external_channel_static_page_stable_artifact_reused"
-            })
-            .expect("reuse event should be recorded");
-        let status_reply = external_channel_static_page_reply_from_events(
-            &events,
-            &message.conversation_external_id,
-        )
-        .expect("status reply should reuse baseline");
-        assert_eq!(
-            status_reply.task_status.as_deref(),
-            Some("static_page_published")
-        );
-        assert_eq!(
-            reused.payload["image2_skip_reason"],
-            json!("accepted_dataset_artifact_baseline")
-        );
+        assert!(!events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+        }));
     }
 
     #[tokio::test]
@@ -58405,8 +59864,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request(
-    ) {
+    async fn external_channel_static_page_dataset_template_overlap_keeps_view_request_as_qa() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -58588,23 +60046,11 @@ mod tests {
             now,
         )
         .await
-        .expect("static-page pipeline should complete")
-        .expect("static-page reply should be returned");
+        .expect("static-page pipeline gate should complete");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        let card = reply.card.expect("card should be returned");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["download_url"], json!(public_url));
-        assert_eq!(card["html_download_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
-        assert_eq!(
-            card["image2_skip_reason"],
-            json!("accepted_dataset_overlap_template_baseline")
+        assert!(
+            reply.is_none(),
+            "a view-only report request must stay ordinary QA"
         );
 
         let new_run_drafts = state
@@ -58615,7 +60061,7 @@ mod tests {
             .expect("drafts should list");
         assert!(
             new_run_drafts.is_empty(),
-            "view request should not create a new draft"
+            "ordinary view request should not create a new draft"
         );
         let workflows = state
             .storage
@@ -58628,7 +60074,7 @@ mod tests {
                 execution.kind != WorkflowKind::StaticPageImageGeneration
                     && execution.kind != WorkflowKind::CodexHostTask
             }),
-            "view request should not enqueue Image2 or Codex"
+            "ordinary view request should not enqueue Image2 or Codex"
         );
         let events = state
             .storage
@@ -58636,12 +60082,9 @@ mod tests {
             .list_events(state.tenant_id, run.id)
             .await
             .expect("events should list");
-        assert!(events.iter().any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
-                && event.payload["artifact_links"] == json!([public_url])
-        }));
         assert!(!events.iter().any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                || event.event_name == "assistant_run.external_channel_static_page_publish_queued"
                 || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
                 || event.event_name.starts_with("codex_host.fixed_task.")
         }));
@@ -59458,8 +60901,7 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
-        let prompt =
-            "我不喜欢这个风格的报表，最好暗黑一点的背景，并且适合手机端展示，重点突出最近可取高门店。";
+        let prompt = "请把这个报表重新设计成暗黑背景的移动端版本，重点突出最近可取高门店。";
 
         assert!(external_channel_message_requests_static_page_artifact(
             &message, prompt
@@ -59486,6 +60928,8 @@ mod tests {
         assert!(provider_input.contains("integration_setup_analysis"));
         assert!(provider_input.contains("message_channel_outreach"));
         assert!(provider_input.contains("不要用“已收到/正在处理”截断答案"));
+        assert!(provider_input.contains("能力字段和模型判断不能替代用户授权"));
+        assert!(!provider_input.contains("可能需要同步生成或更新经营报表"));
         assert!(provider_input.contains("不要因为提到附件、PDF、简历、表格或文档就输出"));
         assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
         assert!(provider_input.contains("retrieve_evidence"));
@@ -60163,36 +61607,78 @@ mod tests {
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_short_report_title_without_artifact_mode() {
+    fn external_channel_model_tool_request_tags_are_detected_even_when_unparseable() {
+        for output in [
+            r#"<V3_TOOL_REQUEST>{not json}</V3_TOOL_REQUEST>"#,
+            r#"<V3_TOOL_REQUEST>{"tool":"unknown_internal_tool"}</V3_TOOL_REQUEST>"#,
+            r#"<v3_tool_request>{"tool":"static_page_artifact"}</v3_tool_request>"#,
+            r#"<V3_TOOL_REQUEST >{"tool":"static_page_artifact"}</V3_TOOL_REQUEST >"#,
+            r#"< V3_TOOL_REQUEST>{"tool":"static_page_artifact"}</ V3_TOOL_REQUEST>"#,
+            r#"<  V3_TOOL_REQUEST >{"tool":"static_page_artifact"}< / V3_TOOL_REQUEST >"#,
+            r#"V3_TOOL_REQUEST>{"tool":"static_page_artifact"}</V3_TOOL_REQUEST>"#,
+            r#"[V3_TOOL_REQUEST]{"tool":"static_page_artifact"}[/V3_TOOL_REQUEST]"#,
+            r#"&lt;V3_TOOL_REQUEST&gt;{"tool":"static_page_artifact"}&lt;/V3_TOOL_REQUEST&gt;"#,
+            r#"<V3 TOOL REQUEST>{"tool":"static_page_artifact"}</V3 TOOL REQUEST>"#,
+            r#"<V3-TOOL-REQUEST>{"tool":"static_page_artifact"}</V3-TOOL-REQUEST>"#,
+            r#"V3&#95;TOOL_REQUEST>{"tool":"static_page_artifact"}"#,
+            r#"natural text </V3_TOOL_REQUEST>"#,
+        ] {
+            assert!(external_channel_output_contains_model_tool_request_tag(
+                output
+            ));
+            assert!(external_channel_model_tool_request(output).is_none());
+        }
+        assert!(!external_channel_output_contains_model_tool_request_tag(
+            "普通自然语言回答"
+        ));
+        let retry =
+            external_channel_invalid_tool_answer_retry_provider_input("base provider input");
+        assert!(retry.contains("无法识别、缺失闭合或不在允许目录"));
+        assert!(retry.contains("不要暴露内部标签"));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_keeps_short_report_title_as_qa() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
 
-        assert!(external_channel_message_requests_static_page_artifact(
+        assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "经营健康度报表"
         ));
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_short_report_listing_request() {
+    fn external_channel_static_page_artifact_keeps_short_report_listing_request_as_qa() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
 
         for prompt in ["可以列一个报表出来吗", "相关报表"] {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "prompt should request a static-page report workflow: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "listing/view wording should stay ordinary QA: {prompt}"
             );
         }
     }
 
     #[test]
-    fn external_channel_static_page_artifact_detects_xinbai_business_report_modules() {
+    fn external_channel_static_page_artifact_requires_explicit_action_for_xinbai_modules() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。",
+            "我临时上传了合同，帮新百经营报表补充门店面积和坪效。",
+            "上传了客流统计，帮经营健康度报表增加客流同比。",
+        ] {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "explicit business-report mutation should request an artifact: {prompt}"
+            );
+        }
 
         for prompt in [
             "我想看看五月份最新的取高机会",
@@ -60214,15 +61700,12 @@ mod tests {
             "月度销售趋势",
             "看月度销售趋势",
             "客流降低预警",
-            "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。",
-            "我临时上传了合同，帮新百经营报表补充门店面积和坪效。",
-            "上传了客流统计，帮经营健康度报表增加客流同比。",
             "经营健康度评分",
             "看一下收入趋势和计划完成",
         ] {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "prompt should request a focused business-report module: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "noun-only/view business question should stay ordinary QA: {prompt}"
             );
         }
     }
@@ -60235,9 +61718,7 @@ mod tests {
 
         for prompt in [
             "帮我对门店销售数据做一次全面数据分析，输出详细结论和图表",
-            "对新百经营数据做多维分析，整理销售趋势、风险门店、助推清单",
-            "把各门店销售、客流、租金数据做完整分析，给一份报告",
-            "做一下新百的经营工作分析",
+            "把各门店销售、客流、租金数据做完整分析，生成一份报告",
             "Please run a data analysis over sales and traffic metrics and generate an analytics report.",
         ] {
             assert!(
@@ -60245,10 +61726,19 @@ mod tests {
                 "large data analysis should create a side report artifact: {prompt}"
             );
         }
+        for prompt in [
+            "对新百经营数据做多维分析，整理销售趋势、风险门店、助推清单",
+            "做一下新百的经营工作分析",
+        ] {
+            assert!(
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "analysis without an explicit artifact action should stay ordinary QA: {prompt}"
+            );
+        }
     }
 
     #[test]
-    fn external_channel_static_page_artifact_defaults_report_terms_to_side_report() {
+    fn external_channel_static_page_artifact_keeps_report_terms_as_qa_without_action() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
@@ -60256,8 +61746,8 @@ mod tests {
         for prompt in ["新百经营最近的取高报表", "门店经营看板", "请看当前销售报告"]
         {
             assert!(
-                external_channel_message_requests_static_page_artifact(&message, prompt),
-                "report artifact terms should create a side report artifact unless this is an explanation question: {prompt}"
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "report nouns and view wording should stay ordinary QA without an explicit action: {prompt}"
             );
         }
     }
@@ -60279,6 +61769,219 @@ mod tests {
                 "explanatory analysis should stay ordinary QA: {prompt}"
             );
         }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_keeps_mixed_evidence_question_as_qa() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+
+        assert!(
+            !external_channel_prompt_requests_static_page_report_workflow(prompt),
+            "mixed database/document evidence question must not authorize an artifact workflow"
+        );
+        assert!(
+            !external_channel_message_requests_static_page_artifact(&message, prompt),
+            "mixed database/document evidence question must stay evidence-supplied QA"
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_structured_fields_do_not_replace_user_action_authorization() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("artifact".to_string());
+        message.output_format = Some("image_text".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+
+        assert!(
+            !external_channel_message_requests_static_page_artifact(&message, prompt),
+            "structured capability fields must not replace an explicit user action request"
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_model_tool_request_cannot_expand_user_authorization() {
+        let prompt = "解释销售缺口最大的门店，同时引用报告里的风险描述。";
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"static_page_artifact","intent":"create_or_update","reason":"引用报告中的风险描述"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(
+            tool_request.tool,
+            ExternalChannelModelToolCapability::StaticPageArtifact
+        );
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(&tool_request, prompt),
+            "a model tool request must not expand the authorization expressed by the user prompt"
+        );
+        let retry_input = external_channel_unauthorized_tool_answer_retry_provider_input(
+            "base provider input",
+            tool_request.tool,
+        );
+        assert!(retry_input.contains("未经用户原话明确授权"));
+        assert!(retry_input.contains("不要替用户推断动作意图"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_requests_require_capability_specific_user_authorization() {
+        let cases = [
+            (
+                "data_ingestion_analysis",
+                "create_or_update",
+                "解释一下数据源是什么",
+                "把这个表导入到数据集并建表",
+            ),
+            (
+                "document_processing",
+                "reparse_request",
+                "总结附件里的项目经历",
+                "刚上传的 PDF 问不出来，请重新解析",
+            ),
+            (
+                "collection_setup_analysis",
+                "create_or_update",
+                "介绍公开资料采集是什么",
+                "帮我规划采集公开网站的政策更新",
+            ),
+            (
+                "integration_setup_analysis",
+                "create_or_update",
+                "解释 API 权限字段",
+                "我们要接入客户自己的 OA 权限和文档库，并确认接口字段。",
+            ),
+            (
+                "message_channel_outreach",
+                "create_or_update",
+                "任务完成通知模板是什么",
+                "请发消息通知店总登录系统查看",
+            ),
+        ];
+        for (tool, intent, ordinary_prompt, explicit_prompt) in cases {
+            let raw = format!(
+                "<V3_TOOL_REQUEST>{{\"tool\":\"{tool}\",\"intent\":\"{intent}\"}}</V3_TOOL_REQUEST>"
+            );
+            let request = external_channel_model_tool_request(&raw).expect("tool request parses");
+            assert!(
+                !external_channel_model_tool_request_is_authorized_by_prompt(
+                    &request,
+                    ordinary_prompt,
+                ),
+                "ordinary prompt must not authorize {tool}"
+            );
+            assert!(
+                external_channel_model_tool_request_is_authorized_by_prompt(
+                    &request,
+                    explicit_prompt,
+                ),
+                "explicit prompt should authorize {tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_model_tool_requests_reject_read_only_or_historical_word_collisions() {
+        let cases = [
+            (
+                "data_ingestion_analysis",
+                "解释为什么导入数据失败，以及失败原因",
+            ),
+            ("data_ingestion_analysis", "我想了解导入数据结果"),
+            ("data_ingestion_analysis", "导入数据步骤"),
+            ("data_ingestion_analysis", "导入数据完成了吗"),
+            ("data_ingestion_analysis", "导入数据已经完成"),
+            ("data_ingestion_analysis", "导入数据完成时间"),
+            ("data_ingestion_analysis", "导入数据历史"),
+            ("data_ingestion_analysis", "导入数据的方法"),
+            ("data_ingestion_analysis", "导入数据还是不导入"),
+            ("data_ingestion_analysis", "请给我导入数据计划"),
+            ("data_ingestion_analysis", "请讨论导入数据"),
+            ("collection_setup_analysis", "介绍抓取公开资料为什么失败"),
+            ("collection_setup_analysis", "抓取规则"),
+            ("collection_setup_analysis", "抓取历史"),
+            ("collection_setup_analysis", "抓取教程"),
+            ("collection_setup_analysis", "请给我公开资料抓取规则"),
+            ("collection_setup_analysis", "请讨论抓取公开资料"),
+            ("integration_setup_analysis", "数据库接入失败原因是什么"),
+            ("integration_setup_analysis", "我想了解接入系统进度"),
+            ("integration_setup_analysis", "接入系统说明"),
+            ("integration_setup_analysis", "接入系统历史"),
+            ("integration_setup_analysis", "接入系统流程"),
+            ("integration_setup_analysis", "请给我系统接入方案"),
+            ("integration_setup_analysis", "请评估接入客户系统"),
+            ("message_channel_outreach", "解释之前发给客户的消息内容"),
+            ("message_channel_outreach", "发给客户的消息内容"),
+            ("message_channel_outreach", "发给客户的消息"),
+            ("message_channel_outreach", "通知客户模板"),
+            ("message_channel_outreach", "发消息示例"),
+            ("message_channel_outreach", "请给我通知客户模板"),
+            ("message_channel_outreach", "请考虑通知客户"),
+            ("document_processing", "解释上次解析失败原因"),
+            ("document_processing", "重新解析已经完成"),
+            ("document_processing", "重新解析？"),
+            ("document_processing", "请给我重新解析步骤"),
+            ("document_processing", "请研究重新解析这个文档"),
+        ];
+        for (tool, prompt) in cases {
+            let intent = if tool == "document_processing" {
+                "reparse_request"
+            } else {
+                "create_or_update"
+            };
+            let raw = format!(
+                "<V3_TOOL_REQUEST>{{\"tool\":\"{tool}\",\"intent\":\"{intent}\"}}</V3_TOOL_REQUEST>"
+            );
+            let request = external_channel_model_tool_request(&raw).expect("tool request parses");
+            assert!(
+                !external_channel_model_tool_request_is_authorized_by_prompt(&request, prompt),
+                "read-only or historical wording must not authorize {tool}: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_document_processing_authorization_binds_prompt_to_tool_intent() {
+        let status = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"status"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("status request parses");
+        let reparse = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("reparse request parses");
+        let unsupported = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"create_or_update"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("unsupported intent still parses as a tool envelope");
+
+        assert!(external_channel_model_tool_request_is_authorized_by_prompt(
+            &status,
+            "请查看这个文档的解析状态"
+        ));
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &reparse,
+                "请查看这个文档的解析状态"
+            )
+        );
+        assert!(external_channel_model_tool_request_is_authorized_by_prompt(
+            &reparse,
+            "请重新解析这个失败的 PDF"
+        ));
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &reparse,
+                "解释上次解析失败的原因"
+            )
+        );
+        assert!(
+            !external_channel_model_tool_request_is_authorized_by_prompt(
+                &unsupported,
+                "请重新解析这个 PDF"
+            )
+        );
     }
 
     #[test]
@@ -60984,10 +62687,37 @@ mod tests {
         assert!(external_channel_message_requests_template_html_artifact(
             &message
         ));
+        assert!(external_channel_message_authorizes_template_html_artifact(
+            &message,
+            "按模板生成 HTML 人员月报"
+        ));
+        for prompt in [
+            "解释 HTML 人员说明报告",
+            "上次生成 HTML 人员说明报告",
+            "HTML 人员说明报告生成完成时间",
+        ] {
+            assert!(
+                !external_channel_message_authorizes_template_html_artifact(&message, prompt),
+                "legacy capability metadata must not replace prompt authorization: {prompt}"
+            );
+        }
         assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "按模板生成 HTML 人员说明报告"
         ));
+        assert!(
+            !external_channel_message_authorizes_static_page_template_prewarm(
+                &message,
+                "解释 HTML 人员说明报告"
+            )
+        );
+        assert!(
+            !external_channel_message_authorizes_static_page_template_prewarm(
+                &message,
+                "按模板生成 HTML 人员月报"
+            ),
+            "legacy HTML artifact routing must not also enqueue a static-page prewarm"
+        );
     }
 
     #[test]
@@ -60996,14 +62726,40 @@ mod tests {
             "帮我接入这份表并入库分析字段"
         ));
         assert!(external_channel_message_requests_data_ingestion_analysis(
-            "这个数据库怎么建表，字段怎么映射？"
+            "请导入数据并返回结果"
         ));
         assert!(external_channel_message_requests_data_ingestion_analysis(
-            "Return read-only data-ingestion analysis plus a staging_plan."
+            "please import data"
         ));
-        assert!(!external_channel_message_requests_data_ingestion_analysis(
-            "邓工是谁？"
-        ));
+        for prompt in [
+            "这个数据库怎么建表，字段怎么映射？",
+            "Return read-only data-ingestion analysis plus a staging_plan.",
+            "我想了解数据源同步结果",
+            "导入数据历史",
+            "不要导入这份表",
+            "我们要接入客户自己的 OA 权限和文档库，并确认接口字段。",
+            "同步更新报表",
+            "请检查数据同步状态",
+            "请汇总数据导入结果",
+            "请比较数据导入方案",
+            "请生成数据同步报表",
+            "请接入客户数据库权限系统",
+            "请给我数据导入结果",
+            "请提供数据同步状态",
+            "请规划数据同步方案",
+            "帮我梳理数据导入方案",
+            "请提供数据导入任务的结果",
+            "请提供数据库同步任务的状态",
+            "请给我数据清洗作业的结果",
+            "important data quality considerations",
+            "synchronization data status",
+            "邓工是谁？",
+        ] {
+            assert!(
+                !external_channel_message_requests_data_ingestion_analysis(prompt),
+                "read-only, historical, or negated wording must not enqueue data ingestion: {prompt}"
+            );
+        }
     }
 
     #[test]
@@ -61151,11 +62907,11 @@ mod tests {
         message.conversation_external_id = "conv-data-tool".to_string();
         message.message_external_id = "msg-data-tool-001".to_string();
         message.idempotency_key = "generic:tenant-ext-001:msg-data-tool-001".to_string();
-        message.text = Some("请看看这份材料后续可以怎样组织使用。".to_string());
+        message.text = Some("请把这份材料导入到 DataMax 数据集。".to_string());
         message.attachment_refs = Vec::new();
         let assistant_request =
             external_bot_message_to_assistant_run_request("generic-chat-main", &message);
-        assert!(!external_channel_message_requests_data_ingestion_analysis(
+        assert!(external_channel_message_requests_data_ingestion_analysis(
             &assistant_request.prompt
         ));
         let now = Utc::now();
@@ -61464,12 +63220,14 @@ mod tests {
             r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户要求重新解析"}</V3_TOOL_REQUEST>"#,
         )
         .expect("tool request should parse");
+        let mut reparse_assistant_request = assistant_request.clone();
+        reparse_assistant_request.prompt = "请重新解析这个失败文档".to_string();
         let reparse_reply = external_channel_dispatch_model_tool_request(
             &state,
             "generic-chat-main",
             &connection,
             run.id,
-            &assistant_request,
+            &reparse_assistant_request,
             &message,
             now,
             "scripted",
@@ -70054,7 +71812,7 @@ mod tests {
     #[test]
     fn assistant_run_answer_quality_autofix_collects_missing_report_link_case() {
         let request = CreateAssistantRunRequest {
-            prompt: "看看最新的门店取高报表".to_string(),
+            prompt: "请生成一份门店取高机会可视化报表".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
@@ -70097,7 +71855,7 @@ mod tests {
     #[test]
     fn assistant_run_answer_quality_autofix_does_not_collect_report_case_with_link() {
         let request = CreateAssistantRunRequest {
-            prompt: "看看最新的门店取高报表".to_string(),
+            prompt: "请生成一份门店取高机会可视化报表".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
@@ -80782,7 +82540,7 @@ retrieve_evidence:
     }
 
     #[test]
-    fn external_channel_business_analysis_provider_input_prefers_structured_metrics() {
+    fn external_channel_business_analysis_provider_input_supplies_metrics_without_forcing_report() {
         let dataset_id = DatasetId::new();
         let input = build_assistant_run_provider_input_with_evidence(
             &CreateAssistantRunRequest {
@@ -80816,12 +82574,11 @@ retrieve_evidence:
             })),
         );
 
-        assert!(input.contains("外部通道经营/数据分析要求"));
-        assert!(input.contains("优先使用 database_schema_context、database_aggregate"));
-        assert!(input.contains("不要只复述文档内容"));
-        assert!(input.contains("直接的自然语言分析结论"));
-        assert!(input.contains("直答控制为 800-1200 字以内的简明经营摘要"));
-        assert!(input.contains("详细图表和大篇幅分析由右侧报表承载"));
+        assert!(input.contains("供料提示（供你参考，不是回答模板）"));
+        assert!(input.contains("database_aggregate"));
+        assert!(!input.contains("外部通道经营/数据分析要求"));
+        assert!(!input.contains("直答控制为 800-1200 字以内的简明经营摘要"));
+        assert!(!input.contains("详细图表和大篇幅分析由右侧报表承载"));
     }
 
     #[test]
@@ -80961,7 +82718,8 @@ retrieve_evidence:
         );
 
         assert!(!input.contains("首轮对话策略"));
-        assert!(input.contains("请只输出一行 `<V3_TOOL_REQUEST>"));
+        assert!(input.contains("才可只输出一行 `<V3_TOOL_REQUEST>"));
+        assert!(input.contains("只有用户原话明确要求 DataMax 执行上述能力时"));
     }
 
     #[test]
@@ -82582,7 +84340,7 @@ retrieve_evidence:
 
     #[test]
     fn assistant_run_provider_input_truncates_long_history_messages() {
-        let long_history = "A".repeat(2000);
+        let long_history = "A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT + 2000);
         let request = CreateAssistantRunRequest {
             prompt: "继续回答".to_string(),
             local_thread_id: None,
@@ -82968,6 +84726,25 @@ retrieve_evidence:
             compact[0]["source"],
             json!("document_facts_scoped_aggregate")
         );
+    }
+
+    #[test]
+    fn assistant_run_fact_snapshot_keeps_strict_owner_scope_when_semantic_supply_is_off() {
+        let current_user_id = UserId(Uuid::from_u128(836_351));
+        let other_owner_user_id = UserId(Uuid::from_u128(836_352));
+
+        assert!(assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            None,
+            Some(current_user_id),
+        ));
+        assert!(assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            Some(current_user_id),
+            Some(current_user_id),
+        ));
+        assert!(!assistant_run_dataset_fact_snapshot_owner_scope_is_visible(
+            Some(other_owner_user_id),
+            Some(current_user_id),
+        ));
     }
 
     #[test]
@@ -91749,25 +93526,31 @@ retrieve_evidence:
             response.evidence_state["supply_quality"]["citationLocators"][0],
             json!("documents/order-risk-notes.md#chunk=0")
         );
-        assert_eq!(
-            response.evidence_state["supplied_items"][0]["retrieval_evidence_id"],
-            json!(evidences[0].id)
-        );
-        assert!(
-            response.evidence_state["supplied_items"][0]["content_excerpt"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("warehouse handoff exceeds two days")
-        );
+        let ranked_item = response.evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .iter()
+            .find(|item| item["retrieval_evidence_id"] == json!(evidences[0].id))
+            .expect("ranked retrieval evidence should retain its provenance id");
+        assert_eq!(ranked_item["document_id"], json!(document.id));
+        assert_eq!(ranked_item["document_chunk_id"], json!(chunks[0].id));
+        assert!(ranked_item["content_excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("warehouse handoff exceeds two days"));
         assert!(response
             .assistant_message
             .content
             .contains("已有可见供料时，正式模型回答会优先参考供料"));
         assert!(!response.assistant_message.content.contains("供料状态:"));
         assert!(!response.assistant_message.content.contains("Prompt:"));
+        let supplied_item_count = response.evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should be present")
+            .len();
         assert!(response.execution_trail.iter().any(|step| {
             step.get("label") == Some(&json!("检索供料证据"))
-                && step.get("supplied_count") == Some(&json!(2))
+                && step.get("supplied_count") == Some(&json!(supplied_item_count))
         }));
 
         let Json(detail) = get_assistant_run(
@@ -91778,8 +93561,14 @@ retrieve_evidence:
         .await
         .expect("assistant run detail should load");
         assert_eq!(detail.run.evidence_state["status"], json!("supplied"));
+        let persisted_ranked_item = detail.run.evidence_state["supplied_items"]
+            .as_array()
+            .expect("persisted supplied items should be present")
+            .iter()
+            .find(|item| item["retrieval_evidence_id"] == json!(evidences[0].id))
+            .expect("persisted ranked retrieval evidence should retain its provenance id");
         assert_eq!(
-            detail.run.evidence_state["supplied_items"][0]["summary"],
+            persisted_ranked_item["summary"],
             json!("Order delay risk evidence")
         );
     }
@@ -93371,6 +95160,51 @@ retrieve_evidence:
     }
 
     #[test]
+    fn semantic_supply_uses_only_the_immutable_explicit_dataset_selection() {
+        let now = Utc::now();
+        let dataset_id = DatasetId::new();
+        let visible_dataset = Dataset {
+            id: dataset_id,
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            key: "semantic-visible".to_string(),
+            title: "语义可见资料".to_string(),
+            description: Some("语义供料范围门禁".to_string()),
+            lifecycle: DatasetLifecycle::Active,
+            visibility: DatasetVisibility::Public,
+            default_secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::from([("document_count".to_string(), json!(1))]),
+            created_at: now,
+            updated_at: now,
+        };
+        let requested_scope = json!({
+            "datasets": [{"type": "dataset", "id": dataset_id}],
+        });
+        assert!(assistant_semantic_supply_explicit_dataset_ids(
+            None,
+            std::slice::from_ref(&visible_dataset)
+        )
+        .is_empty());
+        assert_eq!(
+            assistant_semantic_supply_explicit_dataset_ids(
+                Some(&requested_scope),
+                std::slice::from_ref(&visible_dataset)
+            ),
+            BTreeSet::from([dataset_id])
+        );
+
+        let unrequested_id = DatasetId::new();
+        let unauthorized_request = json!({
+            "datasets": [{"type": "dataset", "id": unrequested_id}],
+        });
+        assert!(assistant_semantic_supply_explicit_dataset_ids(
+            Some(&unauthorized_request),
+            std::slice::from_ref(&visible_dataset)
+        )
+        .is_empty());
+    }
+
+    #[test]
     fn assistant_run_requested_external_scope_preserves_acl_bypass_metadata() {
         let temporary_dataset_id = Uuid::new_v4();
         let document_id = Uuid::new_v4();
@@ -94206,10 +96040,8 @@ retrieve_evidence:
             .as_str()
             .unwrap_or_default()
             .contains("Order cancellation risk"));
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_chunk_id"],
-            json!(chunks[1].id)
-        );
+        assert_eq!(response.evidence_state["detail_preferred"], json!(false));
+        assert_eq!(response.evidence_state["detail_targets"], json!([]));
         assert!(response
             .assistant_message
             .content
@@ -95792,14 +97624,8 @@ retrieve_evidence:
             .as_str()
             .unwrap_or_default()
             .contains("提交固定资产申请单"));
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_id"],
-            json!(fixed_asset_document_id)
-        );
-        assert_eq!(
-            response.evidence_state["detail_targets"][0]["document_chunk_id"],
-            json!(fixed_asset_chunk_id)
-        );
+        assert_eq!(response.evidence_state["detail_preferred"], json!(false));
+        assert_eq!(response.evidence_state["detail_targets"], json!([]));
     }
 
     fn test_dataset(
@@ -102343,8 +104169,18 @@ retrieve_evidence:
             })
             .await
             .expect("other-user lexical search should load hits");
-        assert_eq!(other_user_hits.len(), 1);
+        assert_eq!(
+            other_user_hits.len(),
+            2,
+            "storage should return the visible candidate set before API-side final ranking"
+        );
         assert_eq!(other_user_hits[0].document_id, private_document.id);
+        assert!(other_user_hits
+            .iter()
+            .any(|hit| hit.document_id == phrase_document.id));
+        assert!(other_user_hits.iter().all(|hit| {
+            hit.document_id == private_document.id || hit.document_id == phrase_document.id
+        }));
     }
 
     #[tokio::test]
@@ -102503,12 +104339,10 @@ retrieve_evidence:
             explain (format json)
             select id
             from retrieval_evidences
-            where tenant_id = $1
-              and search_terms ?| $2::text[]
+            where search_terms ?| $1::text[]
             limit 1
             "#,
         )
-        .bind(tenant.id.0)
         .bind(vec![
             "深层召回".to_string(),
             "目标条款".to_string(),
@@ -102520,7 +104354,7 @@ retrieve_evidence:
         let explain_text = explain_plan.to_string();
         assert!(
             explain_text.contains("retrieval_evidences_search_terms_gin_idx"),
-            "lexical search_terms query should use the GIN index, got plan: {explain_text}"
+            "the search_terms operator should remain backed by the GIN index, got plan: {explain_text}"
         );
 
         let legacy_window = storage
@@ -102557,7 +104391,11 @@ retrieve_evidence:
             .await
             .expect("postgres lexical search should load hits");
 
-        assert_eq!(lexical_hits.len(), 1);
+        assert_eq!(
+            lexical_hits.len(),
+            16,
+            "storage should return candidate_limit deep-search candidates before API-side ranking"
+        );
         assert_eq!(lexical_hits[0].document_chunk_id, target_chunk.id);
     }
 

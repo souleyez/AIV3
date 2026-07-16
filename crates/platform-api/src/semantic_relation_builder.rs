@@ -314,6 +314,17 @@ fn evidence_rank(class: SemanticEvidenceClass) -> u8 {
     }
 }
 
+pub fn cap_semantic_evidence_class(
+    requested: SemanticEvidenceClass,
+    strongest_allowed: SemanticEvidenceClass,
+) -> SemanticEvidenceClass {
+    if evidence_rank(requested) < evidence_rank(strongest_allowed) {
+        strongest_allowed
+    } else {
+        requested
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +463,23 @@ mod tests {
         assert!(relations
             .iter()
             .all(|relation| relation.evidence_class == SemanticEvidenceClass::Inferred));
+    }
+
+    #[test]
+    fn evidence_class_cap_never_upgrades_inferred_relationships() {
+        assert_eq!(
+            cap_semantic_evidence_class(
+                SemanticEvidenceClass::Inferred,
+                SemanticEvidenceClass::Confirmed,
+            ),
+            SemanticEvidenceClass::Inferred
+        );
+        assert_eq!(
+            cap_semantic_evidence_class(
+                SemanticEvidenceClass::Confirmed,
+                SemanticEvidenceClass::Inferred,
+            ),
+            SemanticEvidenceClass::Inferred
+        );
     }
 }

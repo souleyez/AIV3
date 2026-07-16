@@ -1,0 +1,95 @@
+name: DataMax Release Identity Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character SHA currently selected from merged main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: datamax-server8-release
+  cancel-in-progress: false
+
+jobs:
+  server8-release-identity:
+    name: Server8 Release Identity Gate
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, aiv3, server8, light]
+    timeout-minutes: 15
+    environment:
+      name: datamax-server8
+
+    steps:
+      - name: Checkout the dispatched main commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact merged main identity
+        shell: bash
+        env:
+          DISPATCH_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          checkout_sha="$(git rev-parse HEAD)"
+          origin_main_sha="$(git rev-parse origin/main)"
+          if [[ "${EXPECTED_SHA}" != "${DISPATCH_SHA}" || \
+                "${EXPECTED_SHA}" != "${checkout_sha}" || \
+                "${EXPECTED_SHA}" != "${origin_main_sha}" ]]; then
+            echo "release identity mismatch" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "release gate checkout is not clean" >&2
+            exit 1
+          fi
+          echo "Merged main identity verified at ${EXPECTED_SHA:0:12}."
+
+      - name: Re-run the credential log scanner
+        run: node tools/check-sensitive-log-fields.mjs
+
+      - name: Verify deployment checkout is a clean ancestor
+        shell: bash
+        env:
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deploy_repo=/srv/aiv3/repo
+          test -d "${deploy_repo}/.git"
+          if [[ -n "$(git -C "${deploy_repo}" status --porcelain)" ]]; then
+            echo "deployment checkout is not clean" >&2
+            exit 1
+          fi
+          deployed_sha="$(git -C "${deploy_repo}" rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "${deployed_sha}" "${DISPATCH_SHA}"; then
+            echo "deployment checkout is not an ancestor of the requested main release" >&2
+            exit 1
+          fi
+          echo "Deployment checkout ${deployed_sha:0:12} is clean and ancestry-compatible."
+
+      - name: Record the guarded handoff
+        shell: bash
+        env:
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "## DataMax server8 release handoff"
+            echo ""
+            echo "- Main SHA: \`${DISPATCH_SHA}\`"
+            echo "- Credential log scanner: passed"
+            echo "- Deployment checkout: clean ancestor"
+            echo "- Mutation performed by this workflow: none"
+            echo "- Next authority boundary: root SSH runbook"
+          } >> "${GITHUB_STEP_SUMMARY}"
