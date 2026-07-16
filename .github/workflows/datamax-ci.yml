@@ -42,11 +42,24 @@ jobs:
           'C:\Program Files\Git\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           'C:\Program Files\Git\usr\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Set up Node.js
-        if: runner.os != 'Windows'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.1
+      - name: Install verified Node.js on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=22.22.1
+          archive="node-v${node_version}-linux-x64.tar.xz"
+          base_url="https://nodejs.org/dist/v${node_version}"
+          curl --fail --location --silent --show-error "${base_url}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          curl --fail --location --silent --show-error "${base_url}/SHASUMS256.txt" \
+            --output "${RUNNER_TEMP}/SHASUMS256.txt"
+          grep -E "  ${archive}$" "${RUNNER_TEMP}/SHASUMS256.txt" \
+            | (cd "${RUNNER_TEMP}" && sha256sum --check --strict -)
+          mkdir -p "${RUNNER_TEMP}/node-${node_version}"
+          tar -xJf "${RUNNER_TEMP}/${archive}" \
+            --strip-components=1 -C "${RUNNER_TEMP}/node-${node_version}"
+          echo "${RUNNER_TEMP}/node-${node_version}/bin" >> "${GITHUB_PATH}"
 
       - name: Install pnpm
         run: npm install --global pnpm@10.33.2
@@ -257,11 +270,24 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        if: runner.os != 'Windows'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.1
+      - name: Install verified Node.js on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_version=22.22.1
+          archive="node-v${node_version}-linux-x64.tar.xz"
+          base_url="https://nodejs.org/dist/v${node_version}"
+          curl --fail --location --silent --show-error "${base_url}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          curl --fail --location --silent --show-error "${base_url}/SHASUMS256.txt" \
+            --output "${RUNNER_TEMP}/SHASUMS256.txt"
+          grep -E "  ${archive}$" "${RUNNER_TEMP}/SHASUMS256.txt" \
+            | (cd "${RUNNER_TEMP}" && sha256sum --check --strict -)
+          mkdir -p "${RUNNER_TEMP}/node-${node_version}"
+          tar -xJf "${RUNNER_TEMP}/${archive}" \
+            --strip-components=1 -C "${RUNNER_TEMP}/node-${node_version}"
+          echo "${RUNNER_TEMP}/node-${node_version}/bin" >> "${GITHUB_PATH}"
 
       - name: Install pnpm
         run: npm install --global pnpm@10.33.2
