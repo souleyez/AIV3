@@ -474,7 +474,9 @@ fn record_snapshot_noise_hit(
     match class {
         SemanticPrimaryLabelClass::RawRow => report.raw_row_hit_count += 1,
         SemanticPrimaryLabelClass::SqlOrMime => report.sql_or_mime_hit_count += 1,
-        SemanticPrimaryLabelClass::Strategy => report.strategy_hit_count += 1,
+        SemanticPrimaryLabelClass::Strategy | SemanticPrimaryLabelClass::OperationalInstruction => {
+            report.strategy_hit_count += 1
+        }
         SemanticPrimaryLabelClass::PathOrConnection => {
             report.path_or_connection_hit_count += 1;
         }
