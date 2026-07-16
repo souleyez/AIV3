@@ -699,9 +699,13 @@ function writeTextFile(filePath, content) {
   fs.writeFileSync(filePath, content);
 }
 
+function normalizeTextLineEndings(content) {
+  return content.replace(/\r\n?/g, '\n');
+}
+
 function assertTextFileMatches(filePath, expected, label) {
   const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
-  if (current !== expected) {
+  if (normalizeTextLineEndings(current) !== normalizeTextLineEndings(expected)) {
     throw new Error(
       `${label} is stale: ${path.relative(repoRoot, filePath)}. Run npm run build:pure-third-party-guide-html.`,
     );

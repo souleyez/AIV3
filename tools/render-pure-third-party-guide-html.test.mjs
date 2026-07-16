@@ -75,6 +75,19 @@ test('renderPureThirdPartyGuideHtml check mode accepts current output', () => {
   assert.ok(result.bytes > 0);
 });
 
+test('renderPureThirdPartyGuideHtml check mode accepts equivalent CRLF output', () => {
+  const paths = tempPaths();
+  fs.writeFileSync(paths.source, sampleMarkdown);
+  renderPureThirdPartyGuideHtml(paths);
+  const html = fs.readFileSync(paths.output, 'utf8');
+  fs.writeFileSync(paths.output, html.replace(/\n/g, '\r\n'));
+
+  const result = renderPureThirdPartyGuideHtml({ ...paths, check: true });
+
+  assert.equal(result.checked, true);
+  assert.ok(result.bytes > 0);
+});
+
 test('renderPureThirdPartyGuideHtml publishes explicit public HTML and Markdown copies', () => {
   const paths = tempPaths();
   const publicHtmlOutput = path.join(paths.dir, 'public', 'external-integrations', 'guide.html');
