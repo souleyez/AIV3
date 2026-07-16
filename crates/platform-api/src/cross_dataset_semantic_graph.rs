@@ -9,7 +9,7 @@ use crate::semantic_understanding::{
 };
 
 pub const DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION: &str = "1.0.0";
-pub const DATASET_SEMANTIC_GRAPH_GENERATION_VERSION: &str = "dataset_semantic_graph_v2";
+pub const DATASET_SEMANTIC_GRAPH_GENERATION_VERSION: &str = "dataset_semantic_graph_v3";
 
 const ABSOLUTE_MAX_DATASETS: usize = 8;
 const ABSOLUTE_MAX_ENDPOINTS: usize = 360;
