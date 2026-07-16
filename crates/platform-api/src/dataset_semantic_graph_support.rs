@@ -614,11 +614,84 @@ fn sanitize_graph_for_visible_scope(
         required_auto_endpoint_ids.insert(target_id.clone());
     }
 
+    // Explicitly selected datasets must retain at least one visible bridge per
+    // pair when the persisted graph has one. Otherwise a large root dataset
+    // can consume the node/edge budget before the second dataset's bridge
+    // endpoints are reached, producing a nominally cross-dataset response with
+    // no cross-dataset relationship at all.
+    let explicit_dataset_ids = explicit_dataset_ids.iter().copied().collect::<Vec<_>>();
+    let mut required_explicit_edge_ids = BTreeSet::new();
+    let mut required_explicit_endpoint_ids = BTreeSet::new();
+    for left_index in 0..explicit_dataset_ids.len() {
+        for right_index in (left_index + 1)..explicit_dataset_ids.len() {
+            let left_dataset_id = explicit_dataset_ids[left_index];
+            let right_dataset_id = explicit_dataset_ids[right_index];
+            let selected = graph
+                .edges
+                .iter()
+                .filter_map(|edge| {
+                    if !edge.cross_dataset
+                        || !all_node_refs.contains_key(&edge.source_id)
+                        || !all_node_refs.contains_key(&edge.target_id)
+                    {
+                        return None;
+                    }
+                    let relation_semantics = safe_relation_semantics(&edge.relation_type)?;
+                    let evidence_class =
+                        if relation_semantics == SemanticRelationSemantics::Similarity {
+                            SemanticEvidenceClass::Inferred
+                        } else {
+                            edge.evidence_class
+                        };
+                    let supporting_dataset_ids = visible_supporting_dataset_ids(
+                        &edge.supporting_dataset_ids,
+                        &edge.source_id,
+                        &edge.target_id,
+                        &all_node_refs,
+                        &visible_dataset_ids,
+                    );
+                    if !supporting_dataset_ids.contains(&left_dataset_id)
+                        || !supporting_dataset_ids.contains(&right_dataset_id)
+                    {
+                        return None;
+                    }
+                    let safe_edge_id = stable_semantic_id(
+                        "cross_relation",
+                        &[
+                            &edge.source_id,
+                            &edge.target_id,
+                            &edge.relation_type,
+                            evidence_name(evidence_class),
+                        ],
+                    );
+                    Some((
+                        evidence_rank(evidence_class),
+                        edge.relation_type.clone(),
+                        edge.source_id.clone(),
+                        edge.target_id.clone(),
+                        safe_edge_id,
+                    ))
+                })
+                .min();
+            let Some((_, _, source_id, target_id, safe_edge_id)) = selected else {
+                continue;
+            };
+            required_explicit_edge_ids.insert(safe_edge_id);
+            required_explicit_endpoint_ids.insert(source_id);
+            required_explicit_endpoint_ids.insert(target_id);
+        }
+    }
+
+    let mut required_endpoint_ids = required_auto_endpoint_ids;
+    required_endpoint_ids.extend(required_explicit_endpoint_ids);
+    let mut required_edge_ids = required_auto_edge_ids;
+    required_edge_ids.extend(required_explicit_edge_ids);
+
     let total_nodes = nodes_by_id.len();
     let mut nodes = nodes_by_id.into_values().collect::<Vec<_>>();
     nodes.sort_by(|left, right| {
-        (!required_auto_endpoint_ids.contains(&left.id))
-            .cmp(&(!required_auto_endpoint_ids.contains(&right.id)))
+        (!required_endpoint_ids.contains(&left.id))
+            .cmp(&(!required_endpoint_ids.contains(&right.id)))
             .then_with(|| node_sort_rank(&left.id).cmp(&node_sort_rank(&right.id)))
             .then_with(|| left.id.cmp(&right.id))
     });
@@ -693,8 +766,8 @@ fn sanitize_graph_for_visible_scope(
     let total_edges = edges_by_key.len();
     let mut edges = edges_by_key.into_values().collect::<Vec<_>>();
     edges.sort_by(|left, right| {
-        (!required_auto_edge_ids.contains(&left.id))
-            .cmp(&(!required_auto_edge_ids.contains(&right.id)))
+        (!required_edge_ids.contains(&left.id))
+            .cmp(&(!required_edge_ids.contains(&right.id)))
             .then_with(|| {
                 evidence_rank(left.evidence_class).cmp(&evidence_rank(right.evidence_class))
             })
@@ -1630,6 +1703,13 @@ mod tests {
             safe_node_label("STORE_CODE", DatasetSemanticGraphNodeKind::Field),
             "业务字段"
         );
+        assert_eq!(
+            safe_node_label(
+                "下载凭据只从进程环境读取任何数据文件均不记录凭据",
+                DatasetSemanticGraphNodeKind::Field
+            ),
+            "业务字段"
+        );
     }
 
     #[test]
@@ -1995,6 +2075,86 @@ mod tests {
         assert!(projected.edges[0]
             .supporting_dataset_ids
             .contains(&neighbor.id));
+    }
+
+    #[test]
+    fn response_budget_preserves_one_bridge_for_each_explicit_dataset_pair() {
+        let root = dataset(11, DatasetVisibility::Public);
+        let selected = dataset(12, DatasetVisibility::Public);
+        let root_hub_id = format!("d:{}:dataset:root", root.id);
+        let selected_hub_id = format!("d:{}:dataset:root", selected.id);
+        let mut nodes = (0..8)
+            .map(|index| DatasetSemanticGraphNode {
+                id: format!("shared:concept:{index:032x}"),
+                kind: DatasetSemanticGraphNodeKind::Concept,
+                display_label: "一般概念".to_string(),
+                dataset_refs: vec![root.id],
+                visible_provenance_count: 1,
+            })
+            .collect::<Vec<_>>();
+        nodes.extend([
+            DatasetSemanticGraphNode {
+                id: root_hub_id.clone(),
+                kind: DatasetSemanticGraphNodeKind::Dataset,
+                display_label: "客流数据".to_string(),
+                dataset_refs: vec![root.id],
+                visible_provenance_count: 1,
+            },
+            DatasetSemanticGraphNode {
+                id: selected_hub_id.clone(),
+                kind: DatasetSemanticGraphNodeKind::Dataset,
+                display_label: "客流画像".to_string(),
+                dataset_refs: vec![selected.id],
+                visible_provenance_count: 1,
+            },
+        ]);
+        let graph = DatasetSemanticGraphV1 {
+            schema_version: DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION.to_string(),
+            root_dataset_id: root.id,
+            datasets: Vec::new(),
+            nodes,
+            edges: vec![DatasetSemanticGraphEdge {
+                id: "internal-temporal-edge".to_string(),
+                source_id: root_hub_id.clone(),
+                target_id: selected_hub_id.clone(),
+                relation_type: "temporal_complementarity".to_string(),
+                label: "internal label".to_string(),
+                relation_semantics: SemanticRelationSemantics::Similarity,
+                evidence_class: SemanticEvidenceClass::Inferred,
+                confidence: 0.6,
+                reason: "internal reason".to_string(),
+                cross_dataset: true,
+                supporting_dataset_ids: vec![root.id, selected.id],
+            }],
+            truncated: DatasetSemanticGraphTruncation::default(),
+            stale: false,
+        };
+        let mut bounded = request(root.id);
+        bounded.dataset_ids = vec![selected.id];
+        bounded.max_nodes = 2;
+        bounded.max_edges = 1;
+        let query = normalize_query(bounded).expect("bounded explicit-pair query");
+
+        let projected =
+            sanitize_graph_for_visible_scope(graph, &[root.clone(), selected.clone()], &query);
+
+        assert_eq!(projected.nodes.len(), 2);
+        assert!(projected.nodes.iter().any(|node| node.id == root_hub_id));
+        assert!(projected
+            .nodes
+            .iter()
+            .any(|node| node.id == selected_hub_id));
+        assert_eq!(projected.edges.len(), 1);
+        assert_eq!(projected.edges[0].relation_type, "temporal_complementarity");
+        assert_eq!(
+            projected.edges[0].evidence_class,
+            SemanticEvidenceClass::Inferred
+        );
+        assert!(projected.edges[0].cross_dataset);
+        assert_eq!(
+            projected.edges[0].supporting_dataset_ids,
+            vec![root.id, selected.id]
+        );
     }
 
     #[test]

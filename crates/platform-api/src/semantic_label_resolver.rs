@@ -14,6 +14,7 @@ pub enum SemanticPrimaryLabelClass {
     SqlOrMime,
     NumericIdentifier,
     Strategy,
+    OperationalInstruction,
     PathOrConnection,
     TechnicalFilename,
     TechnicalIdentifier,
@@ -57,6 +58,13 @@ pub fn classify_semantic_primary_label(value: &str) -> SemanticPrimaryLabelQuali
         .chars()
         .filter(|character| is_han_character(*character))
         .count();
+    if looks_like_operational_instruction(value, &lower) {
+        return SemanticPrimaryLabelQuality::new(
+            SemanticPrimaryLabelClass::OperationalInstruction,
+            false,
+            false,
+        );
+    }
     if looks_like_sql_or_mime(&lower) {
         return SemanticPrimaryLabelQuality::new(
             SemanticPrimaryLabelClass::SqlOrMime,
@@ -154,6 +162,7 @@ pub fn semantic_evidence_label_is_safe(value: &str) -> bool {
             | SemanticPrimaryLabelClass::SqlOrMime
             | SemanticPrimaryLabelClass::NumericIdentifier
             | SemanticPrimaryLabelClass::Strategy
+            | SemanticPrimaryLabelClass::OperationalInstruction
             | SemanticPrimaryLabelClass::PathOrConnection
             | SemanticPrimaryLabelClass::TechnicalFilename
     )
@@ -481,6 +490,7 @@ pub fn safe_public_examples(values: &[String]) -> Vec<String> {
                 SemanticPrimaryLabelClass::RawRow
                     | SemanticPrimaryLabelClass::SqlOrMime
                     | SemanticPrimaryLabelClass::Strategy
+                    | SemanticPrimaryLabelClass::OperationalInstruction
                     | SemanticPrimaryLabelClass::PathOrConnection
                     | SemanticPrimaryLabelClass::TechnicalFilename
             )
@@ -595,6 +605,23 @@ fn looks_like_strategy(lower: &str) -> bool {
     ]
     .iter()
     .any(|marker| lower.contains(marker))
+}
+
+fn looks_like_operational_instruction(value: &str, lower: &str) -> bool {
+    let credential_instruction = value.contains("凭据")
+        && ["下载", "读取", "记录", "环境", "请求"]
+            .iter()
+            .any(|marker| value.contains(marker));
+    let environment_instruction = ["进程环境", "环境变量"]
+        .iter()
+        .any(|marker| value.contains(marker));
+    let english_instruction = (lower.contains("credential")
+        && ["download", "read", "record", "environment", "request"]
+            .iter()
+            .any(|marker| lower.contains(marker)))
+        || lower.contains("process environment")
+        || lower.contains("environment variable");
+    credential_instruction || environment_instruction || english_instruction
 }
 
 fn looks_like_path_or_connection(value: &str, lower: &str) -> bool {
@@ -922,6 +949,14 @@ mod tests {
             (
                 "paragraph_aware_noun_terms_v1",
                 SemanticPrimaryLabelClass::Strategy,
+            ),
+            (
+                "下载凭据只从进程环境读取，任何数据文件均不记录凭据",
+                SemanticPrimaryLabelClass::OperationalInstruction,
+            ),
+            (
+                "Credentials are read from environment variables",
+                SemanticPrimaryLabelClass::OperationalInstruction,
             ),
             (
                 "C:\\internal\\newbai\\source.xlsx",
