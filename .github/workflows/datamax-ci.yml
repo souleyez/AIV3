@@ -19,7 +19,14 @@ concurrency:
 jobs:
   no-credential-smoke:
     name: No-Credential Smoke
-    runs-on: ubuntu-24.04
+    if: >-
+      ${{
+        vars.DATAMAX_CI_USE_ISOLATED_WINDOWS != 'true' ||
+        github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository &&
+         github.event.pull_request.head.sha == vars.DATAMAX_CI_TRUSTED_SHA)
+      }}
+    runs-on: ${{ fromJSON(vars.DATAMAX_CI_USE_ISOLATED_WINDOWS == 'true' && '["self-hosted","Windows","X64","aiv3-ci-isolated"]' || '"ubuntu-24.04"') }}
     timeout-minutes: 45
 
     steps:
@@ -27,6 +34,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Prefer Git for Windows bash on an isolated Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          'C:\Program Files\Git\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'C:\Program Files\Git\usr\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -95,11 +109,16 @@ jobs:
 
   rust-minimal:
     name: Rust P0
-    runs-on: ubuntu-24.04
+    if: >-
+      ${{
+        vars.DATAMAX_CI_USE_ISOLATED_WINDOWS != 'true' ||
+        github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository &&
+         github.event.pull_request.head.sha == vars.DATAMAX_CI_TRUSTED_SHA)
+      }}
+    runs-on: ${{ fromJSON(vars.DATAMAX_CI_USE_ISOLATED_WINDOWS == 'true' && '["self-hosted","Windows","X64","aiv3-ci-isolated"]' || '"ubuntu-24.04"') }}
     timeout-minutes: 120
     env:
-      CC: clang
-      CXX: clang++
       CARGO_INCREMENTAL: 0
       CARGO_TERM_COLOR: always
       RUSTUP_TOOLCHAIN: 1.95.0
@@ -110,7 +129,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Prefer Git for Windows bash on an isolated Windows runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          'C:\Program Files\Git\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          'C:\Program Files\Git\usr\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Install native build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
@@ -131,12 +158,15 @@ jobs:
             datamax-rust-1.95.0-${{ runner.os }}-
 
       - name: Check Rust and native toolchain
+        shell: bash
         run: |
           cargo --version
           rustc --version
           rustfmt --version
-          command -v clang
-          command -v clang++
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            command -v clang
+            command -v clang++
+          fi
 
       - name: Rust format
         run: cargo fmt --all -- --check
@@ -209,7 +239,14 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-24.04
+    if: >-
+      ${{
+        vars.DATAMAX_CI_USE_ISOLATED_WINDOWS != 'true' ||
+        github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository &&
+         github.event.pull_request.head.sha == vars.DATAMAX_CI_TRUSTED_SHA)
+      }}
+    runs-on: ${{ fromJSON(vars.DATAMAX_CI_USE_ISOLATED_WINDOWS == 'true' && '["self-hosted","Windows","X64","aiv3-ci-isolated"]' || '"ubuntu-24.04"') }}
     timeout-minutes: 45
 
     steps:

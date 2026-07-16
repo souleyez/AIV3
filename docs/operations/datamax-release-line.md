@@ -10,13 +10,15 @@
 
 The 2026-07-16 GitHub audit found that the current private-repository plan does not provide usable branch-protection rules or environment reviewers. Do not describe either control as enabled. Until the repository plan changes, the release owner must manually enforce all three merge gates against the exact candidate and merged `main` SHA:
 
-| Job id | Display name | Runner | Manual decision |
+| Job id | Display name | Normal runner / Task 2 contingency | Manual decision |
 |---|---|---|---|
-| `no-credential-smoke` | `No-Credential Smoke` | `ubuntu-24.04` | must be `success` |
-| `rust-minimal` | `Rust P0` | `ubuntu-24.04` | must be `success` |
-| `web` | `Web` | `ubuntu-24.04` | must be `success` |
+| `no-credential-smoke` | `No-Credential Smoke` | `ubuntu-24.04` / isolated workstation runner | must be `success` |
+| `rust-minimal` | `Rust P0` | `ubuntu-24.04` / isolated workstation runner | must be `success` |
+| `web` | `Web` | `ubuntu-24.04` / isolated workstation runner | must be `success` |
 
-These are the only three Task 2 merge-gate jobs. All PR and `main` CI runs execute on GitHub-hosted Ubuntu; untrusted PR code must never run on 8 server.
+These are the only three Task 2 merge-gate jobs. Untrusted PR code must never run on 8 server.
+
+The first PR run (`29462642453`) proved a second GitHub account constraint: all three GitHub-hosted jobs were rejected before runner assignment because recent account payments failed or the Actions spending limit must be increased. This was a control-plane failure, not a test result. Task 2 may set `DATAMAX_CI_USE_ISOLATED_WINDOWS=true` only for a temporary non-production workstation runner; the workflow hardcodes its labels as `self-hosted`, `Windows`, `X64`, `aiv3-ci-isolated`, so the variable cannot redirect jobs to 8 server. While that override exists, every PR job also requires a same-repository head whose exact SHA equals `DATAMAX_CI_TRUSTED_SHA`; an absent or mismatched value skips the job. Record the exact runner name and SHA. After the final receipt checks, delete both variables and unregister the temporary runner so the workflow returns to its `ubuntu-24.04` default. Restoring GitHub-hosted capacity remains an account-level follow-up.
 
 `.github/workflows/datamax-release.yml` is a separately dispatched, read-only handoff. Its only job is `server8-release-identity` / `Server8 Release Identity Gate`. It accepts a lowercase 40-character `expected_sha`, requires the dispatch ref and checked-out commit to be that exact merged `main` SHA, reruns the connection-log scanner, and verifies that `/srv/aiv3/repo` is a clean ancestor of the requested release. The workflow may read the server checkout but must not fetch into it, build, change files, restart services, edit secrets, run migrations or deploy. The `datamax-server8` environment name is an audit grouping only while environment reviewers are unavailable.
 
@@ -349,7 +351,7 @@ The runtime release is valid only when:
 
 ```text
 local main SHA == origin/main SHA == 8-server checkout SHA
-three exact Ubuntu CI jobs == success on that SHA
+three exact CI jobs == success on that SHA
 read-only release identity job == success on that SHA
 server worktree == clean and still contains 1edff9cd and 6bc3ac45
 healthz == 200
@@ -448,4 +450,4 @@ test -z "$(git -C "$REPO" status --porcelain)"
 
 Fast-forward the local `main` worktree while preserving unrelated untracked user files. Dispatch `DataMax Release Identity Gate` once more with `expected_sha=$RECEIPT_SHA`; this final run occurs after the server docs-only fast-forward and must succeed. Recheck health, readiness, both public entries, all eighteen service states and the post-rotation count-only journal window without restarting services.
 
-Task 2 is complete only when local `main`, GitHub `origin/main` and `/srv/aiv3/repo` all equal `RECEIPT_SHA`; both the runtime and receipt lineages passed the three Ubuntu jobs; the built binaries descend from `RUNTIME_SHA` containing `6bc3ac45`; and the final read-only identity run succeeds on `RECEIPT_SHA`.
+Task 2 is complete only when local `main`, GitHub `origin/main` and `/srv/aiv3/repo` all equal `RECEIPT_SHA`; both the runtime and receipt lineages passed the three exact jobs; the built binaries descend from `RUNTIME_SHA` containing `6bc3ac45`; the final read-only identity run succeeds on `RECEIPT_SHA`; and the temporary runner variables and registration are removed.

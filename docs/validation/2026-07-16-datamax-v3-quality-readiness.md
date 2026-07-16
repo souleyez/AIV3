@@ -131,3 +131,13 @@ The other five AIV3 services had zero credential-bearing userinfo match: `aiv3-c
 - Historical journal records remain on the host; no log deletion or journal vacuum was performed.
 - No GitHub push, deployment, service restart, feature-flag change, provider call, database mutation or credential rotation occurred in Task 1.
 - Production closure remains pending Task 2 because the deployed binaries are still the frozen baseline and cannot yet prove a fresh redacted journal window.
+
+### 2026-07-16 Task 2 GitHub-hosted runner incident
+
+- Reconciliation PR: `#1`, initial head `b1057a511e515ee71150474ae7e5f652e6f4f608`.
+- Initial PR workflow run: `29462642453`, exact head matched.
+- `No-Credential Smoke`, `Rust P0` and `Web` each ended before runner assignment with zero executed steps.
+- GitHub's check annotations identify an account billing/spending-limit rejection. These three conclusions are control-plane failures and are not accepted as test failures or passes.
+- The merge gate remains closed. The one-time fallback is an isolated non-production Windows runner enabled by `DATAMAX_CI_USE_ISOLATED_WINDOWS=true`, with hardcoded non-server labels and PR execution restricted to the exact same-repository SHA in `DATAMAX_CI_TRUSTED_SHA`.
+- The fallback must never use 8 server. Both variables and the temporary runner registration must be removed after the final Task 2 receipt checks, returning the workflow to its `ubuntu-24.04` default.
+- No deployment, server restart, feature-flag change, provider call, database mutation or credential rotation occurred during this failed run.
