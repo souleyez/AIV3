@@ -55,6 +55,7 @@ import {
   promptRequestsStaticPageEdit,
 } from './lib/home-chat-intents';
 import { fetchJson, fetchSseJson } from './lib/home-api-client';
+import { loadCatalogInStages } from './lib/catalog-bootstrap';
 import {
   buildCurrentAssistantArtifact,
   buildReportRenderHtmlArtifact,
@@ -1705,25 +1706,27 @@ export default function HomePageClient() {
     }
 
     try {
-      const [datasetItems, planItems, reportItems, documentItems] = await Promise.all([
-        fetchJson('/api/v3/datasets'),
-        fetchJson('/api/v3/report-plans'),
-        fetchJson('/api/v3/published-reports'),
-        fetchJson('/api/v3/documents'),
-      ]);
-
-      const nextDatasets = sortDatasets(datasetItems);
+      let nextDatasets = [];
+      const { planItems, reportItems, documentItems } = await loadCatalogInStages(fetchJson, (datasetItems) => {
+        nextDatasets = sortDatasets(datasetItems);
+        startTransition(() => {
+          setDatasets(nextDatasets);
+          setSelectedDatasetIds((current) => datasetIdsAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
+          setSelectedDatasetId((current) => selectedDatasetIdAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
+          setError('');
+          if (!silent) {
+            setBootstrapping(false);
+          }
+        });
+      });
       const nextReportPlans = Array.isArray(planItems) ? planItems : [];
       const nextPublishedReports = sortByDateDesc(reportItems, 'updated_at');
       const nextDocuments = Array.isArray(documentItems) ? sortByDateDesc(documentItems, 'updated_at') : [];
 
       startTransition(() => {
-        setDatasets(nextDatasets);
         setReportPlans(nextReportPlans);
         setPublishedReports(nextPublishedReports);
         setDocuments(nextDocuments);
-        setSelectedDatasetIds((current) => datasetIdsAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
-        setSelectedDatasetId((current) => selectedDatasetIdAfterCatalogRefresh(current, nextDatasets, preferredDatasetId));
       });
       if (revealArtifactTasks) {
         const scopedDatasetIds = selectedOrFallbackDatasetIds(selectedDatasetIds, selectedDatasetId);
