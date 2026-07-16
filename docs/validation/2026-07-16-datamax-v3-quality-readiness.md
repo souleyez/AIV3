@@ -2,7 +2,7 @@
 
 **Plan:** `docs/plans/2026-07-16-datamax-v3-quality-and-production-readiness.md`
 
-**Status:** OPEN — TASK 2 RECEIPT CANDIDATE; TASK 3 NOT STARTED
+**Status:** OPEN — TASK 2 FINAL-IDENTITY WORKSPACE HOTFIX; TASK 3 NOT STARTED
 
 **Created:** 2026-07-16
 
@@ -38,7 +38,7 @@
 | Task | Gate | State | Required proof |
 |---|---|---|---|
 | 1 | Connection URL redaction | production-closed by Task 2 runtime | commit `6bc3ac45`; local gates green; runtime `ff60d0de`; fresh JSON journal gate zero |
-| 2 | Main/CI/server identity | runtime complete; docs-only external receipt gate in progress | runtime `ff60d0de`; exact PR/main CI and runtime identity green; final receipt SHA/identity and runner cleanup remain external to this commit |
+| 2 | Main/CI/server identity | runtime and docs receipt complete; final-identity workspace hotfix in progress | runtime `ff60d0de`; receipt `45eeb6ad`; final workspace-anchored identity and runner cleanup remain |
 | 3 | Disposable PostgreSQL and mock integration | pending | zero silent early returns; disposable DB removed |
 | 4 | Migration runner | pending | ledger/checksum/concurrency/legacy/no-op tests |
 | 5 | Field semantic contract | pending | confirmed scoped contract round-trip and fail-closed negatives |
@@ -216,6 +216,17 @@ The exact runtime-main job ids were `87538371343` (`No-Credential Smoke`), `8753
 
 The original retained-journal scan's 1,610 matches cannot currently be mapped to an active platform password. An exact rerun over all eighteen currently retained journals returned zero even though the journal still retains records from May 20 onward. Task 2 performed no Codex-driven journal deletion or vacuum, so the discrepancy remains unresolved. It would be unsafe to claim that those historical values were rotated. Any external-datasource credential implicated by future inventory must be identified and rotated through its approved owner channel in a separately scoped task.
 
-**Docs-only closure boundary**
+**Docs receipt and final-identity workspace incident**
 
-This receipt commit intentionally cannot contain its own merge SHA or the final identity run id. After its PR and merged-main three-job gates pass, root SSH must prove the runtime-to-receipt delta contains only the four approved documentation paths, fast-forward without build/restart, and recheck health and count-only journals. The final release-identity run then supplies immutable external evidence. Both temporary repository variables and the runner registration must be removed afterward. Task 3 is not executable until that full external gate closes; no third self-referential receipt PR is required.
+- Docs receipt PR `#4` head `54239bf142cb1f595e33642d18c96e9a8a7a6857` changed only the four approved receipt paths.
+- PR run `29474454471` passed `No-Credential Smoke`, `Web` and `Rust P0`. Attempt 1 Rust ended before any Rust command because Windows Update rebooted the temporary runner during Cargo cache restore; attempt 2 job `87566261124` completed every Rust step successfully on the same head.
+- PR `#4` merged as `45eeb6ad623869bfb1c3f63f7a73951dc637307b` at `2026-07-16T08:06:12Z`.
+- Exact receipt-main run `29482247266` passed jobs `87568444809` (`No-Credential Smoke`), `87568444952` (`Rust P0`) and `87568444815` (`Web`).
+- Local `main` fast-forwarded to `45eeb6ad` while preserving all 33 pre-existing untracked user entries.
+- Root SSH proved exactly four changed documents and fast-forwarded the server without build/restart. Postcheck: 18 active/running, 18 `NRestarts=0`, four HTTP `200`, 817 actual JSON records since runtime restart, userinfo `0`, secret parameters `0`.
+- The first transport wrapper appended one stray carriage return after the successful server receipt and returned nonzero. A second byte-preserving, read-only postcheck returned `receipt_postcheck_ok=true`; the nonzero wrapper was not ignored as evidence.
+- Final identity run `29483371989` attempts 1 and 2 passed checkout, Node `22.22.1`, exact main identity and the sensitive-log scanner, then both failed at `Verify deployment checkout identity is an ancestor` with `fatal: not a git repository`. Jobs: `87572042236` and `87572426077`.
+- Root/server ancestry was independently green. The deterministic defect is the workflow's unqualified `git merge-base`; both failed attempts performed no deployment mutation.
+- The bounded correction anchors checkout graph commands to `GITHUB_WORKSPACE`. Its branch may modify only `.github/workflows/datamax-release.yml` and the same four receipt documents, must pass exact PR/main CI, and may move the server only by workflow/docs fast-forward with no build/restart.
+
+The final hotfix merge SHA and successful final identity run id intentionally remain external evidence; writing them into the commit they identify would restart the receipt loop. Both temporary repository variables and the runner registration must be removed after that gate. Task 3 is not executable until the full external closeout succeeds.

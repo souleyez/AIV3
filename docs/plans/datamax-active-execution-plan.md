@@ -1,6 +1,6 @@
 # DataMax V3 Active Execution Plan
 
-**Status:** TASK 2 RECEIPT CANDIDATE — TASK 3 ACTIVATES ONLY AFTER THE EXTERNAL FINAL GATE
+**Status:** TASK 2 FINAL-IDENTITY WORKSPACE HOTFIX — TASK 3 NOT STARTED
 
 **Cutover date:** 2026-07-16
 
@@ -13,7 +13,7 @@
 - Task 1 — redact PostgreSQL/NATS connection endpoints from logs and errors; implementation commit `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`.
 - Task 2 runtime — reconcile GitHub main, deterministic CI and the 8-server runtime; deployed runtime commit `ff60d0deee81a2cbb98a70a4cbda9693962349d0`.
 
-**Current executable task:** none while this docs-only receipt is passing its exact PR/main CI, server fast-forward, final release-identity gate and temporary-runner cleanup.
+**Current executable task:** Task 2 only — anchor the release ancestry check to the Actions checkout, pass exact PR/main CI, fast-forward the workflow/docs-only delta, pass final release identity, then remove the temporary runner.
 
 **Next task after that gate:** Task 3 — make PostgreSQL and mock integration tests fail instead of silently skipping. Task 3 has not started.
 
@@ -26,7 +26,8 @@
 - frozen deployed ancestor: `1edff9cdac585671f2ed64ed25690f2be121c750`;
 - connection-redaction floor: `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`;
 - running binary source: `ff60d0deee81a2cbb98a70a4cbda9693962349d0`;
-- final receipt SHA: derived from this docs-only PR merge and accepted only when local `main`, GitHub `origin/main` and `/srv/aiv3/repo` agree and the final read-only identity run succeeds;
+- docs-only receipt SHA: `45eeb6ad623869bfb1c3f63f7a73951dc637307b`;
+- final Task 2 SHA: derived from the bounded final-identity workspace hotfix and accepted only when local `main`, GitHub `origin/main` and `/srv/aiv3/repo` agree and the final read-only identity run succeeds;
 - graph display/cross-graph may remain enabled, but `ASSISTANT_RUN_SEMANTIC_SUPPLY_MODE=off`;
 - asset import/parser feature gates remain off;
 - live retrieval defaults to `legacy_scan` until Task 7 passes.
