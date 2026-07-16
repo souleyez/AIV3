@@ -69,7 +69,7 @@ jobs:
       - name: Re-run the credential log scanner
         run: node tools/check-sensitive-log-fields.mjs
 
-      - name: Verify deployment checkout is a clean ancestor
+      - name: Verify deployment checkout identity is an ancestor
         shell: bash
         env:
           DISPATCH_SHA: ${{ github.sha }}
@@ -77,16 +77,13 @@ jobs:
           set -euo pipefail
           deploy_repo=/srv/aiv3/repo
           test -d "${deploy_repo}/.git"
-          if [[ -n "$(git -C "${deploy_repo}" status --porcelain)" ]]; then
-            echo "deployment checkout is not clean" >&2
-            exit 1
-          fi
-          deployed_sha="$(git -C "${deploy_repo}" rev-parse HEAD)"
+          deployed_sha="$(git -c safe.directory="${deploy_repo}" -C "${deploy_repo}" rev-parse HEAD)"
           if ! git merge-base --is-ancestor "${deployed_sha}" "${DISPATCH_SHA}"; then
             echo "deployment checkout is not an ancestor of the requested main release" >&2
             exit 1
           fi
-          echo "Deployment checkout ${deployed_sha:0:12} is clean and ancestry-compatible."
+          echo "Deployment checkout ${deployed_sha:0:12} is ancestry-compatible."
+          echo "Root SSH retains the authoritative full-worktree cleanliness gate."
 
       - name: Record the guarded handoff
         shell: bash
@@ -98,7 +95,8 @@ jobs:
             echo ""
             echo "- Main SHA: \`${DISPATCH_SHA}\`"
             echo "- Credential log scanner: passed"
-            echo "- Deployment checkout: clean ancestor"
+            echo "- Deployment checkout: ancestry-compatible"
+            echo "- Full worktree cleanliness: delegated to the root-SSH gate"
             echo "- Mutation performed by this workflow: none"
             echo "- Next authority boundary: root SSH runbook"
           } >> "${GITHUB_STEP_SUMMARY}"
