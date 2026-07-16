@@ -1,6 +1,6 @@
 # DataMax V3 Main/CI/8-Server Release Line
 
-**Status:** Task 2 runtime receipt recorded; final docs-only identity gate is external to this commit
+**Status:** Task 2 runtime/docs receipt recorded; final-identity workspace hotfix in progress
 
 **Baseline date:** 2026-07-16
 
@@ -18,7 +18,7 @@ The current private-repository plan does not provide usable branch-protection ru
 
 Untrusted PR code must never run on 8 server. The temporary exact-SHA-gated Windows runner used to work around the 2026-07-16 GitHub-hosted billing rejection is a Task 2-only contingency. Its two repository variables and runner registration must be removed after the final receipt gate, returning the workflow expression to its `ubuntu-24.04` default.
 
-`.github/workflows/datamax-release.yml` is a separately dispatched, read-only handoff. It verifies the exact merged `main` identity, Node.js `22.22.1`, the sensitive-log scanner and deployment ancestry. It uses an ephemeral per-command `safe.directory=/srv/aiv3/repo`; it does not change global Git configuration. It intentionally does not read the two root-only tracked semantic-supply fixture inputs. Full deployment-worktree cleanliness is therefore an authoritative root-SSH gate, not a runner claim.
+`.github/workflows/datamax-release.yml` is a separately dispatched, read-only handoff. It verifies the exact merged `main` identity, Node.js `22.22.1`, the sensitive-log scanner and deployment ancestry. It uses an ephemeral per-command `safe.directory=/srv/aiv3/repo`; it does not change global Git configuration. The ancestry comparison must use `git -C "$GITHUB_WORKSPACE"` for the checked-out main graph rather than assuming a step current directory. It intentionally does not read the two root-only tracked semantic-supply fixture inputs. Full deployment-worktree cleanliness is therefore an authoritative root-SSH gate, not a runner claim.
 
 GitHub Actions does not fetch into the deployment checkout, build, edit configuration, restart services, run migrations, rotate secrets or deploy. The `datamax-server8` environment is audit grouping only.
 
@@ -164,7 +164,7 @@ The deployment helper's original ISO-8601 timestamp was rejected by the host `jo
 
 The deployment did not rebuild Web because the runtime delta from the frozen deployed ancestor had no Web source change. It did not run a provider call, migration, database mutation, secret rotation, journal cleanup or feature-flag change.
 
-## 7. Docs-only receipt and final identity
+## 7. Receipt, final-identity hotfix and closeout
 
 Runtime evidence cannot be committed before it exists, so Task 2 closes through one docs-only PR from runtime `main`. Its delta is restricted to these four paths:
 
@@ -177,16 +177,32 @@ docs/validation/2026-07-16-datamax-v3-quality-readiness.md
 
 The receipt PR and merged `main` must each pass the same exact three jobs. Before the server moves, root SSH proves that `RUNTIME_SHA..RECEIPT_SHA` contains only those four paths, then fast-forwards without a build or restart. Local `main` is fast-forwarded while preserving unrelated untracked user files.
 
-The final read-only release-identity run is dispatched only after the server docs-only fast-forward. Its run id and resulting `RECEIPT_SHA` cannot be embedded in the commit they identify without creating an infinite receipt loop; GitHub's merge object, exact CI runs and release-identity run are the immutable external evidence. Do not open a third PR merely to write those identifiers back into this document.
+Docs receipt PR `#4` used exact head `54239bf142cb1f595e33642d18c96e9a8a7a6857`. Run `29474454471` ultimately passed all three jobs on that head; its first Rust attempt was interrupted before Rust execution by a Windows Update reboot and its second attempt completed successfully. PR `#4` merged as `45eeb6ad623869bfb1c3f63f7a73951dc637307b` at `2026-07-16T08:06:12Z`; exact main run `29482247266` passed the same three jobs. Root SSH proved the four-path delta, fast-forwarded with no build/restart and rechecked 18 services, four HTTP entries and 817 actual JSON records with zero sensitive matches.
+
+Final identity run `29483371989` then failed in both attempts at the same read-only ancestry step. Exact main identity, Node and the sensitive-log scanner passed. The failing command used an unqualified `git merge-base` and returned `fatal: not a git repository`; no deployment, service, configuration or database mutation occurred. The bounded correction is to anchor both the checkout proof and merge-base to `GITHUB_WORKSPACE`.
+
+This deterministic gate defect authorizes one final Task 2 hotfix branch restricted to these five paths:
+
+```text
+.github/workflows/datamax-release.yml
+docs/operations/datamax-release-line.md
+docs/plans/2026-07-16-datamax-v3-quality-and-production-readiness.md
+docs/plans/datamax-active-execution-plan.md
+docs/validation/2026-07-16-datamax-v3-quality-readiness.md
+```
+
+The hotfix PR and merged main must pass the exact three CI jobs. Root SSH then proves that `45eeb6ad..FINAL_TASK2_SHA` and `RUNTIME_SHA..FINAL_TASK2_SHA` contain only the five paths above, fast-forwards without build/restart, repeats the nonempty JSON journal and health gates, and dispatches final release identity on `FINAL_TASK2_SHA`.
+
+The final run id and `FINAL_TASK2_SHA` cannot be embedded in the commit they identify without creating an infinite receipt loop; GitHub's merge object, exact CI runs and release-identity run are the immutable external evidence. Do not open another PR merely to write those identifiers back into this document.
 
 Task 2 closes when all of these are true:
 
 ```text
-local main == GitHub origin/main == /srv/aiv3/repo == RECEIPT_SHA
-RUNTIME_SHA is an ancestor of RECEIPT_SHA
-RUNTIME_SHA..RECEIPT_SHA changes only the four allowed documentation paths
-receipt PR and receipt-main each passed No-Credential Smoke, Rust P0 and Web
-final release-identity run succeeded on RECEIPT_SHA
+local main == GitHub origin/main == /srv/aiv3/repo == FINAL_TASK2_SHA
+RUNTIME_SHA and receipt SHA 45eeb6ad are ancestors of FINAL_TASK2_SHA
+RUNTIME_SHA..FINAL_TASK2_SHA changes only the five bounded workflow/receipt paths
+receipt and final-hotfix PR/main pairs each passed No-Credential Smoke, Rust P0 and Web
+final release-identity run succeeded on FINAL_TASK2_SHA
 18 services and four HTTP probes remained healthy without restart
 fresh journal count-only recheck remained zero
 temporary runner variables and registration were removed
