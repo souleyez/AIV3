@@ -10,13 +10,13 @@
 
 ---
 
-**Status:** IN PROGRESS — TASK 2 MAIN/CI/SERVER RECONCILIATION
+**Status:** TASK 2 RECEIPT CANDIDATE — TASK 3 ACTIVATES AFTER THE EXTERNAL FINAL GATE
 
 **Created:** 2026-07-16
 
-**Last completed implementation:** Task 1 — 连接串和启动日志脱敏，commit `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`
+**Last completed implementation:** Task 2 runtime — 主线、CI 与 8 服务器运行版归一，runtime commit `ff60d0deee81a2cbb98a70a4cbda9693962349d0`
 
-**Current task:** Task 2 — 主线、CI 与 8 服务器发布线归一
+**Current task:** Task 2 docs-only receipt and external final identity gate; Task 3 has not started
 
 **Validation ledger:** `docs/validation/2026-07-16-datamax-v3-quality-readiness.md`
 
@@ -151,7 +151,7 @@ Expected: all tests pass; the final `rg` has no production log/error match.
 
 **Step 6: Perform a count-only historical log audit**
 
-On 8 server, search journal fields without printing matching lines or URLs. Record only service name, time range and match count. If any credential-bearing URL was historically logged, record `rotation_required` and stop short of rotating while the old binaries are still deployed. Task 2 must first deploy the fixed binaries, verify new logs are redacted, and only then rotate the affected secret through the approved secret channel; record rotation completion, never the secret. This ordering prevents a restart of old code from logging the replacement secret again.
+On 8 server, search journal fields without printing matching lines or URLs. Record only service name, time range and match count. If any credential-bearing URL was historically logged, record a provisional rotation candidate and stop short of mutation while old binaries are deployed. Task 2 must first deploy the fixed binaries and prove a fresh redacted window, then inspect the current URL, owning role and authentication enforcement path. Rotate only a proven active credential through its approved owner channel; otherwise record `rotation_not_applicable` or an explicit inventory blocker. Record the classification or completion, never the secret. This ordering prevents an old binary from logging a replacement secret and prevents creation of an unenforced secret merely to satisfy a historical inference.
 
 **Step 7: Commit**
 
@@ -162,7 +162,7 @@ git commit -m "fix: redact runtime connection endpoints"
 
 **Completion standard:** no current code path or new journal line exposes raw PostgreSQL/NATS credentials; malformed URLs also fail closed.
 
-**2026-07-16 execution state:** local implementation and deterministic gates are complete at `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`. The count-only 8-server audit found historical PostgreSQL credential-bearing URL records, so `rotation_required=postgresql`; no NATS credential-bearing record was found. The fixed binaries are not deployed in Task 1. Task 2 must deploy them, verify fresh records are redacted, then rotate the affected PostgreSQL credential through the approved secret channel. Until that runtime sequence passes, Task 1 is implementation-complete rather than production-closed.
+**2026-07-16 execution state:** implementation and deterministic gates completed at `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`; Task 2 deployed descendant `ff60d0deee81a2cbb98a70a4cbda9693962349d0` and proved zero fresh credential-userinfo and secret-parameter matches across all eighteen services. The Task 1 retained-journal result of 1,610 PostgreSQL-userinfo matches remains a historical observation, but its provisional `rotation_required=postgresql` inference is superseded for the live platform database: current evidence proves that the platform URL has no password component, the login role has no verifier and loopback HBA uses `trust`. Task 2 therefore records `platform_rotation_not_applicable`; it does not invent a secret that the active authentication rule would not enforce. HBA hardening and any attributable external-datasource rotation require separate scoped work.
 
 ## Task 2: Reconcile GitHub main, CI and the 8-server release line
 
@@ -214,7 +214,7 @@ Push Task 1 plus this docs/CI cutover branch and open a PR into `main`. Treat `N
 
 **Step 5: Merge and align the server**
 
-After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Because the redaction helpers are statically linked shared crates, rebuild every Rust runtime package and restart all 16 Rust services with the old credential. Verify a fresh count-only journal window is zero; Task 1 recorded `rotation_required=postgresql`, so rotate only the PostgreSQL credential through the root-only channel, restart the 17 environment dependents, and verify again. Do not change feature flags.
+After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Because the redaction helpers are statically linked shared crates, rebuild every Rust runtime package and restart all 16 Rust services. Verify a bounded JSON journal window is zero for PostgreSQL/NATS userinfo, including token-only userinfo, and secret-like query, fragment and DSN keys. Classify credential work from the current URL, role-verifier and HBA facts before any mutation. Rotate only a proven active credential with an enforced authentication path and tested rollback; otherwise record `rotation_not_applicable` or an explicit inventory blocker. Do not change feature flags.
 
 **Step 6: Verify identity and runtime**
 
@@ -225,14 +225,17 @@ healthz == 200
 readyz == 200
 both public Web entry points == 200
 all 18 AIV3 services == active/running, NRestarts == 0
-pre/post-rotation fresh-window credential URL counts == 0
+fresh-window credential-userinfo and secret-parameter counts == 0
+database-secret classification == evidence-backed, with no invented secret
 ```
 
 **Step 7: Commit the release receipt**
 
-After runtime evidence exists, create a second short-lived docs-only branch from the merged runtime `main`; update only the runbook, active plan/pointer and validation ledger, then commit `docs: record mainline reconciliation receipt`. Open a second PR, require the same three exact jobs, merge without squash/rebase, and wait for the `main` jobs. Fast-forward the server checkout and local `main` to this receipt SHA only after proving the runtime-to-receipt delta contains those four documentation paths and nothing else; no rebuild or restart is required. Dispatch the read-only release identity gate again on the final receipt SHA, then delete the temporary runner variables and registration.
+After runtime evidence exists, create a second short-lived docs-only branch from the merged runtime `main`; update only the runbook, active plan/pointer and validation ledger, then commit `docs: record mainline reconciliation receipt`. Open a second PR, require the same three exact jobs, merge without squash/rebase, and wait for the `main` jobs. Fast-forward the server checkout and local `main` to this receipt SHA only after proving the runtime-to-receipt delta contains those four documentation paths and nothing else; no rebuild or restart is required. Dispatch the read-only release identity gate again on the final receipt SHA, then delete the temporary runner variables and registration. The merge SHA and final run id are external evidence and are not written back through a third self-referential receipt PR.
 
 **Completion standard:** 8-server checkout, GitHub `main` and local `main` identify the same final receipt SHA; its runtime ancestor supplied the running binaries and passed the same three jobs; both SHAs contain the redaction floor; the final identity workflow succeeds. Future work starts from short-lived branches off main. The validation ledger must state that GitHub cannot platform-enforce those jobs until the private-repository plan supports protection rules.
+
+**2026-07-16 runtime execution state:** the one-time reconciliation closed through PRs `#1`, `#2` and `#3`. Runtime `main` is `ff60d0deee81a2cbb98a70a4cbda9693962349d0`; exact main CI run `29472517847` passed `No-Credential Smoke`, `Rust P0` and `Web`, and read-only release-identity run `29473260743` succeeded. Root SSH fast-forwarded from `1edff9cdac585671f2ed64ed25690f2be121c750`, built all fourteen Cargo runtime packages and restarted the sixteen Rust units. An independent read-only recheck proved 18 active/running services with zero restarts, four HTTP `200` results, unchanged feature flags and zero sensitive matches across 808 actual JSON journal records. That corrected scan is authoritative because the deployment helper's original ISO timestamp was rejected by the host `journalctl` and its hidden stderr had produced a false zero. No provider call, migration, database mutation, secret rotation or journal cleanup occurred. This four-file docs-only branch is the bounded Task 2 receipt candidate; Task 3 becomes executable only after its PR/main CI, docs-only server fast-forward, final identity run and temporary-runner cleanup all pass.
 
 ## Task 3: Make PostgreSQL and mock integration tests fail instead of silently skipping
 
