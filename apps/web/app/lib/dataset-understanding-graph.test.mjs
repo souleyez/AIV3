@@ -67,7 +67,7 @@ const documents = [
 function crossGraphFixture(overrides = {}) {
   return {
     schema_version: '1.0.0',
-    generation_version: 'dataset_semantic_graph_v1',
+    generation_version: 'dataset_semantic_graph_v2',
     root_dataset_id: 'dataset-main',
     datasets: [
       { id: 'dataset-main', title: '新百项目资料', stale: false },
@@ -218,6 +218,113 @@ test('an exact shared node remains reliable even when identity folding needs no 
   assert.deepEqual(model.reliableNeighborDatasetIds, ['dataset-neighbor']);
   assert.equal(model.emptyCrossMessage, '');
   assert.equal(model.datasetClusters.find((cluster) => cluster.id === 'dataset-neighbor')?.reliableLinkCount, 1);
+});
+
+test('mall traffic and audience profile graph exposes business lenses and an honest joint-analysis story', () => {
+  const input = crossGraphFixture({
+    datasets: [
+      { id: 'dataset-main', title: '7月客流数据集', stale: false },
+      { id: 'dataset-neighbor', title: '客流画像', stale: false },
+    ],
+    nodes: [
+      { id: 'root:main', kind: 'dataset', display_label: '7月客流数据集', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'root:neighbor', kind: 'dataset', display_label: '客流画像', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'shared:time', kind: 'concept', display_label: '时间维度', dataset_refs: ['dataset-main', 'dataset-neighbor'], visible_provenance_count: 2 },
+      { id: 'traffic:concept', kind: 'concept', display_label: '客流指标', dataset_refs: ['dataset-main'], visible_provenance_count: 4 },
+      { id: 'traffic:field', kind: 'field', display_label: '进入人次', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'profile:concept', kind: 'concept', display_label: '人群画像', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 3 },
+      { id: 'profile:field', kind: 'field', display_label: '年龄段', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'profile:pid', kind: 'field', display_label: 'PersonID', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'profile:pid-hash', kind: 'field', display_label: 'PIDHash', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'profile:raw-person-id', kind: 'field', display_label: 'rawPersonIdValue', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'profile:visitor-pid', kind: 'field', display_label: 'visitorPid', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'quality:concept', kind: 'concept', display_label: '数据质量', dataset_refs: ['dataset-main', 'dataset-neighbor'], visible_provenance_count: 2 },
+    ],
+    edges: [{
+      id: 'edge:time-alignment',
+      source_id: 'root:main',
+      target_id: 'root:neighbor',
+      relation_type: 'time_alignment',
+      label: '可按时间联合分析',
+      relation_semantics: 'similarity',
+      evidence_class: 'inferred',
+      confidence: 0.6,
+      reason: '共同时间维度支持汇总分析，不代表逐记录或逐人关联。',
+      cross_dataset: true,
+      supporting_dataset_ids: ['dataset-main', 'dataset-neighbor'],
+    }],
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.title, '7月客流数据集 × 客流画像');
+  assert.deepEqual(model.analysisFacets.map((facet) => facet.key), ['time', 'traffic', 'profile', 'quality']);
+  assert.equal(model.analysisFacets.find((facet) => facet.key === 'time')?.shared, true);
+  assert.equal(model.jointStory.headline, '客流规模 × 人群结构');
+  assert.equal(model.jointStory.alignmentState, 'candidate');
+  assert.match(model.jointStory.detail, /不能直接等同或逐人关联/);
+  assert.match(model.jointStory.guardrail, /不代表逐记录、逐点位或逐人身份关联/);
+  assert.deepEqual(model.datasetStories.map((story) => story.role), ['规模与空间节奏', '到访人群结构']);
+  assert.deepEqual(model.pipeline.map((stage) => stage.key), ['scope', 'semantics', 'shared', 'relations', 'boundary']);
+  assert.equal(model.nodes.some((node) => /PersonID|PIDHash|rawPersonIdValue|visitorPid|PID/u.test(node.name)), false);
+});
+
+test('separate date fields without a cross edge do not become observed alignment evidence', () => {
+  const input = crossGraphFixture({
+    datasets: [
+      { id: 'dataset-main', title: '订单数据', stale: false },
+      { id: 'dataset-neighbor', title: '盘点数据', stale: false },
+    ],
+    nodes: [
+      { id: 'root:main', kind: 'dataset', display_label: '订单数据', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'root:neighbor', kind: 'dataset', display_label: '盘点数据', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'date:order', kind: 'field', display_label: '订单日期', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'date:stock', kind: 'field', display_label: '盘点日期', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+    ],
+    edges: [],
+    cross_links_status: 'empty',
+  });
+  const model = buildCrossDatasetUnderstandingGraph(input);
+
+  assert.equal(model.analysisFacets.find((facet) => facet.key === 'time')?.shared, false);
+  assert.equal(model.jointStory.alignmentState, 'none');
+  assert.equal(model.jointStory.evidenceClass, 'inferred');
+  assert.match(model.jointStory.alignmentEvidence, /尚无跨集对齐证据/);
+  assert.match(model.jointStory.detail, /尚无足够证据/);
+  assert.match(model.emptyCrossMessage, /尚未发现有证据/);
+});
+
+test('dataset truncation marks every joint insight as a current-visible partial result', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture({
+    truncated: { datasets: 3, nodes: 0, edges: 0 },
+  }));
+
+  assert.equal(model.partial, true);
+  assert.match(model.title, /当前可见/);
+  assert.equal(model.jointStory.partial, true);
+  assert.match(model.jointStory.guardrail, /仅代表可见部分/);
+  assert.ok(model.limitations.some((item) => /标题、数量与分析视角仅代表当前可见部分/.test(item)));
+  assert.match(model.pipeline.find((stage) => stage.key === 'scope')?.value || '', /当前可见/);
+});
+
+test('analysis lens filtering keeps every facet node and its local connectors visible', () => {
+  const model = buildCrossDatasetUnderstandingGraph(crossGraphFixture({
+    nodes: [
+      { id: 'root:main', kind: 'dataset', display_label: '订单数据', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'root:neighbor', kind: 'dataset', display_label: '盘点数据', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+      { id: 'date:order', kind: 'field', display_label: '订单日期', dataset_refs: ['dataset-main'], visible_provenance_count: 1 },
+      { id: 'date:stock', kind: 'field', display_label: '盘点日期', dataset_refs: ['dataset-neighbor'], visible_provenance_count: 1 },
+    ],
+    edges: [],
+  }));
+  const focused = filterDatasetUnderstandingGraph(model, {
+    focusNodeIds: ['date:order', 'date:stock'],
+    density: 'expanded',
+  });
+
+  assert.equal(focused.nodes.some((node) => node.id === 'date:order'), true);
+  assert.equal(focused.nodes.some((node) => node.id === 'date:stock'), true);
+  assert.equal(focused.nodes.some((node) => node.id === 'root:main'), true);
+  assert.equal(focused.nodes.some((node) => node.id === 'root:neighbor'), true);
 });
 
 test('cross-dataset filtering reuses 100/160 budgets and can focus one dataset cluster', () => {

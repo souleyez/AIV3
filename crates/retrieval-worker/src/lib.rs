@@ -2,13 +2,18 @@ use anyhow::{anyhow, Result};
 use domain_model::{DatasetId, DocumentId, TenantId};
 use platform_api::cross_dataset_semantic_graph::{
     match_cross_dataset_semantic_graph, CrossDatasetCanonicalIdentity,
+    CrossDatasetExplicitRelationInput, CrossDatasetExplicitRelationKind,
     CrossDatasetSemanticEndpointInput, CrossDatasetSemanticMatchInput,
     CrossDatasetSemanticMatcherLimits, CrossDatasetSemanticMatcherOptions,
     DatasetSemanticGraphDataset, DatasetSemanticGraphNodeKind, DatasetSemanticGraphV1,
     DATASET_SEMANTIC_GRAPH_GENERATION_VERSION,
 };
+use platform_api::semantic_label_resolver::{
+    reviewed_mall_delivery_field_alias, reviewed_semantic_field_alias,
+    reviewed_semantic_object_alias,
+};
 use platform_api::semantic_understanding::{
-    stable_semantic_id, DatasetSemanticUnderstanding, SemanticEvidenceClass,
+    stable_semantic_id, DatasetSemanticUnderstanding, SemanticEvidenceClass, SemanticField,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -178,8 +183,21 @@ pub fn build_dataset_semantic_link_graph(
     }
 
     let mut endpoints = Vec::new();
-    append_snapshot_semantic_endpoints(&mut endpoints, &input.left);
-    append_snapshot_semantic_endpoints(&mut endpoints, &input.right);
+    let mut explicit_relations = Vec::new();
+    let left_concepts =
+        append_snapshot_semantic_endpoints(&mut endpoints, &mut explicit_relations, &input.left);
+    let right_concepts =
+        append_snapshot_semantic_endpoints(&mut endpoints, &mut explicit_relations, &input.right);
+    if snapshots_are_temporally_complementary(&left_concepts, &right_concepts) {
+        explicit_relations.push(CrossDatasetExplicitRelationInput {
+            source_dataset_id: left_dataset_id,
+            source_local_node_id: DATASET_ROOT_LOCAL_NODE_ID.to_string(),
+            target_dataset_id: right_dataset_id,
+            target_local_node_id: DATASET_ROOT_LOCAL_NODE_ID.to_string(),
+            kind: CrossDatasetExplicitRelationKind::TemporalComplementarity,
+            evidence_class: SemanticEvidenceClass::Inferred,
+        });
+    }
     for identity in shared_document_identities(&input.left, &input.right) {
         for dataset_id in [left_dataset_id, right_dataset_id] {
             endpoints.push(CrossDatasetSemanticEndpointInput {
@@ -213,9 +231,13 @@ pub fn build_dataset_semantic_link_graph(
             },
         ],
         endpoints,
-        explicit_relations: Vec::new(),
+        explicit_relations,
         options: CrossDatasetSemanticMatcherOptions::default(),
-        limits: CrossDatasetSemanticMatcherLimits::default(),
+        limits: CrossDatasetSemanticMatcherLimits {
+            max_datasets: 8,
+            max_nodes: 240,
+            max_edges: 360,
+        },
         stale: input.left.stale || input.right.stale,
     });
     let manifest = serde_json::to_value(&graph)?;
@@ -263,21 +285,157 @@ fn semantic_document_source_ids(snapshot: &DatasetSemanticUnderstanding) -> BTre
         .collect()
 }
 
+const DATASET_ROOT_LOCAL_NODE_ID: &str = "dataset:root";
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum MallBusinessConcept {
+    Time,
+    Space,
+    TrafficMetric,
+    VisitorProfile,
+    DataQuality,
+    PrivacyBoundary,
+    RetailFormat,
+    StatisticalGrain,
+    StatisticalScale,
+}
+
+impl MallBusinessConcept {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Time => "business-time",
+            Self::Space => "mall-space",
+            Self::TrafficMetric => "traffic-metric",
+            Self::VisitorProfile => "visitor-profile",
+            Self::DataQuality => "data-quality",
+            Self::PrivacyBoundary => "privacy-boundary",
+            Self::RetailFormat => "retail-format",
+            Self::StatisticalGrain => "statistical-grain",
+            Self::StatisticalScale => "statistical-scale",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Time => "时间维度",
+            Self::Space => "空间点位",
+            Self::TrafficMetric => "客流指标",
+            Self::VisitorProfile => "人群画像",
+            Self::DataQuality => "数据质量",
+            Self::PrivacyBoundary => "隐私边界",
+            Self::RetailFormat => "业态分类",
+            Self::StatisticalGrain => "统计粒度",
+            Self::StatisticalScale => "统计规模",
+        }
+    }
+
+    fn local_node_id(self) -> String {
+        format!("concept:{}", self.key())
+    }
+}
+
+fn snapshot_matches_reviewed_mall_delivery(snapshot: &DatasetSemanticUnderstanding) -> bool {
+    let signals = snapshot
+        .fields
+        .iter()
+        .flat_map(|field| [&field.technical_name, &field.label])
+        .map(|value| normalized_semantic_signal(value))
+        .collect::<BTreeSet<_>>();
+    let marker_count = |markers: &[&str]| {
+        markers
+            .iter()
+            .filter(|&&marker| signals.contains(marker))
+            .count()
+    };
+    let title_signal = normalized_semantic_signal(&snapshot.dataset.title);
+    let title_hint = ["客流", "商场", "mall", "aibee"]
+        .iter()
+        .any(|marker| title_signal.contains(marker));
+    let delivery_object_hint = snapshot.objects.iter().any(|object| {
+        let signal = format!(
+            "{} {}",
+            normalized_semantic_signal(&object.technical_name),
+            normalized_semantic_signal(&object.label)
+        );
+        [
+            "traffichourly",
+            "pointinventory",
+            "agedistribution",
+            "genderdistribution",
+            "grouptypedistribution",
+            "dailysummary",
+        ]
+        .iter()
+        .any(|marker| signal.contains(marker))
+    });
+    let traffic_signature =
+        marker_count(&["trafficin", "trafficout", "visitors", "averagestay"]) >= 2;
+    let profile_marker_count = marker_count(&[
+        "agebucket",
+        "gender",
+        "grouptype",
+        "uniquepidcount",
+        "uniquepersonidcount",
+    ]);
+    let profile_strong_marker = ["grouptype", "uniquepidcount", "uniquepersonidcount"]
+        .iter()
+        .any(|marker| signals.contains(*marker));
+    let profile_signature = profile_strong_marker && profile_marker_count >= 2;
+    (title_hint || delivery_object_hint) && (traffic_signature || profile_signature)
+}
+
 fn append_snapshot_semantic_endpoints(
     endpoints: &mut Vec<CrossDatasetSemanticEndpointInput>,
+    explicit_relations: &mut Vec<CrossDatasetExplicitRelationInput>,
     snapshot: &DatasetSemanticUnderstanding,
-) {
+) -> BTreeSet<MallBusinessConcept> {
+    let reviewed_mall_delivery = snapshot_matches_reviewed_mall_delivery(snapshot);
+    endpoints.push(CrossDatasetSemanticEndpointInput {
+        dataset_id: snapshot.dataset.id,
+        local_node_id: DATASET_ROOT_LOCAL_NODE_ID.to_string(),
+        kind: DatasetSemanticGraphNodeKind::Dataset,
+        display_label: safe_semantic_link_label(&snapshot.dataset.title, "数据集"),
+        visible_provenance_count: snapshot.coverage.document_count.max(1),
+        identities: Vec::new(),
+    });
+
+    let visible_fields = snapshot
+        .fields
+        .iter()
+        .filter(|field| !semantic_field_is_direct_person_identifier(field))
+        .collect::<Vec<_>>();
+    let visible_object_ids = snapshot
+        .objects
+        .iter()
+        .map(|object| object.id.trim())
+        .filter(|id| !id.is_empty())
+        .collect::<BTreeSet<_>>();
+
     for object in &snapshot.objects {
         endpoints.push(CrossDatasetSemanticEndpointInput {
             dataset_id: snapshot.dataset.id,
             local_node_id: object.id.clone(),
             kind: DatasetSemanticGraphNodeKind::Object,
-            display_label: safe_semantic_link_label(&object.label, "业务对象"),
-            visible_provenance_count: object.coverage_count,
+            display_label: semantic_graph_object_label(
+                snapshot,
+                object.id.as_str(),
+                reviewed_mall_delivery,
+            ),
+            visible_provenance_count: object.coverage_count.max(1),
             identities: Vec::new(),
         });
+        explicit_relations.push(CrossDatasetExplicitRelationInput {
+            source_dataset_id: snapshot.dataset.id,
+            source_local_node_id: DATASET_ROOT_LOCAL_NODE_ID.to_string(),
+            target_dataset_id: snapshot.dataset.id,
+            target_local_node_id: object.id.clone(),
+            kind: CrossDatasetExplicitRelationKind::DatasetContainsObject,
+            evidence_class: SemanticEvidenceClass::Observed,
+        });
     }
-    for field in &snapshot.fields {
+
+    let mut concepts = BTreeSet::new();
+    for field in visible_fields {
         let identities = semantic_v3_opaque_field_identity(snapshot, &field.id)
             .into_iter()
             .collect();
@@ -285,11 +443,303 @@ fn append_snapshot_semantic_endpoints(
             dataset_id: snapshot.dataset.id,
             local_node_id: field.id.clone(),
             kind: DatasetSemanticGraphNodeKind::Field,
-            display_label: safe_semantic_link_label(&field.label, "业务字段"),
+            display_label: semantic_graph_field_label(field, reviewed_mall_delivery),
             visible_provenance_count: field.non_empty_count.max(1),
             identities,
         });
+        if visible_object_ids.contains(field.object_id.trim()) {
+            explicit_relations.push(CrossDatasetExplicitRelationInput {
+                source_dataset_id: snapshot.dataset.id,
+                source_local_node_id: field.object_id.clone(),
+                target_dataset_id: snapshot.dataset.id,
+                target_local_node_id: field.id.clone(),
+                kind: CrossDatasetExplicitRelationKind::ObjectContainsField,
+                evidence_class: SemanticEvidenceClass::Observed,
+            });
+        }
+        for concept in semantic_field_business_concepts(field, reviewed_mall_delivery) {
+            concepts.insert(concept);
+            explicit_relations.push(CrossDatasetExplicitRelationInput {
+                source_dataset_id: snapshot.dataset.id,
+                source_local_node_id: field.id.clone(),
+                target_dataset_id: snapshot.dataset.id,
+                target_local_node_id: concept.local_node_id(),
+                kind: CrossDatasetExplicitRelationKind::FieldExpressesConcept,
+                evidence_class: SemanticEvidenceClass::Observed,
+            });
+        }
     }
+
+    for concept in &concepts {
+        endpoints.push(CrossDatasetSemanticEndpointInput {
+            dataset_id: snapshot.dataset.id,
+            local_node_id: concept.local_node_id(),
+            kind: DatasetSemanticGraphNodeKind::Concept,
+            display_label: concept.label().to_string(),
+            visible_provenance_count: snapshot
+                .fields
+                .iter()
+                .filter(|field| {
+                    semantic_field_business_concepts(field, reviewed_mall_delivery)
+                        .contains(concept)
+                })
+                .count()
+                .max(1) as u64,
+            identities: vec![CrossDatasetCanonicalIdentity::ConfirmedConcept {
+                concept_id: concept.key().to_string(),
+            }],
+        });
+    }
+    concepts
+}
+
+fn semantic_graph_object_label(
+    snapshot: &DatasetSemanticUnderstanding,
+    object_id: &str,
+    reviewed_mall_delivery: bool,
+) -> String {
+    let Some(object) = snapshot
+        .objects
+        .iter()
+        .find(|object| object.id == object_id)
+    else {
+        return "业务对象".to_string();
+    };
+    if reviewed_mall_delivery {
+        if let Some(label) = reviewed_semantic_object_alias(&object.technical_name)
+            .or_else(|| reviewed_semantic_object_alias(&object.label))
+        {
+            return label.to_string();
+        }
+    }
+    let safe_label = safe_semantic_link_label(&object.label, "");
+    if safe_label
+        .chars()
+        .filter(|character| is_cjk_business_character(*character))
+        .count()
+        >= 2
+        && !matches!(safe_label.as_str(), "业务对象" | "待解释对象")
+    {
+        return safe_label;
+    }
+
+    let concepts = snapshot
+        .fields
+        .iter()
+        .filter(|field| field.object_id == object_id)
+        .flat_map(|field| semantic_field_business_concepts(field, reviewed_mall_delivery))
+        .collect::<BTreeSet<_>>();
+    if concepts.contains(&MallBusinessConcept::TrafficMetric)
+        && concepts.contains(&MallBusinessConcept::Space)
+    {
+        "客流时空数据".to_string()
+    } else if concepts.contains(&MallBusinessConcept::VisitorProfile) {
+        "客流画像汇总".to_string()
+    } else if concepts.contains(&MallBusinessConcept::DataQuality) {
+        "数据质量校验".to_string()
+    } else if concepts.contains(&MallBusinessConcept::TrafficMetric) {
+        "客流指标数据".to_string()
+    } else if concepts.contains(&MallBusinessConcept::Space) {
+        "空间点位数据".to_string()
+    } else {
+        "业务对象".to_string()
+    }
+}
+
+fn semantic_graph_field_label(field: &SemanticField, reviewed_mall_delivery: bool) -> String {
+    reviewed_mall_delivery
+        .then(|| reviewed_mall_delivery_field_alias(&field.technical_name))
+        .flatten()
+        .or_else(|| {
+            reviewed_mall_delivery
+                .then(|| reviewed_mall_delivery_field_alias(&field.label))
+                .flatten()
+        })
+        .or_else(|| reviewed_semantic_field_alias(&field.technical_name))
+        .or_else(|| reviewed_semantic_field_alias(&field.label))
+        .map(str::to_string)
+        .unwrap_or_else(|| safe_semantic_link_label(&field.label, "业务字段"))
+}
+
+fn semantic_field_is_direct_person_identifier(field: &SemanticField) -> bool {
+    [&field.technical_name, &field.label]
+        .into_iter()
+        .any(|value| {
+            !approved_person_identifier_aggregate(value)
+                && contains_direct_person_identifier_marker(value)
+        })
+}
+
+fn approved_person_identifier_aggregate(value: &str) -> bool {
+    matches!(
+        normalized_semantic_signal(value).as_str(),
+        "uniquepidcount" | "uniquepersonidcount" | "missingpidcount" | "missingpersonidcount"
+    )
+}
+
+fn semantic_field_business_concepts(
+    field: &SemanticField,
+    reviewed_mall_delivery: bool,
+) -> Vec<MallBusinessConcept> {
+    if !reviewed_mall_delivery || semantic_field_is_direct_person_identifier(field) {
+        return Vec::new();
+    }
+    let technical = normalized_semantic_signal(&field.technical_name);
+    let label = normalized_semantic_signal(&field.label);
+    let signal = format!("{technical} {label}");
+    let contains_any = |needles: &[&str]| needles.iter().any(|needle| signal.contains(needle));
+    let equals_any = |needles: &[&str]| {
+        needles
+            .iter()
+            .any(|needle| technical == *needle || label == *needle)
+    };
+    let quality = contains_any(&[
+        "duplicate",
+        "missing",
+        "mismatch",
+        "invalid",
+        "quality",
+        "validation",
+        "error",
+        "重复",
+        "缺失",
+        "不一致",
+        "无效",
+        "质量",
+        "校验",
+        "异常",
+    ]);
+    let mut concepts = BTreeSet::new();
+    if !quality
+        && contains_any(&[
+            "businessdate",
+            "timestamp",
+            "datetime",
+            "date",
+            "day",
+            "hour",
+            "minute",
+            "日期",
+            "时间",
+            "小时",
+            "分钟",
+        ])
+    {
+        concepts.insert(MallBusinessConcept::Time);
+    }
+    if contains_any(&[
+        "sourcemallid",
+        "mallid",
+        "entityid",
+        "entityname",
+        "entitytype",
+        "floor",
+        "area",
+        "location",
+        "region",
+        "store",
+        "gate",
+        "passage",
+        "商场",
+        "点位",
+        "空间",
+        "楼层",
+        "区域",
+        "门店",
+        "出入口",
+        "通道",
+    ]) {
+        concepts.insert(MallBusinessConcept::Space);
+    }
+    if contains_any(&[
+        "trafficin",
+        "trafficout",
+        "visitors",
+        "visitorcount",
+        "averagestay",
+        "进入人次",
+        "离开人次",
+        "去重到访",
+        "平均停留",
+        "客流数量",
+    ]) {
+        concepts.insert(MallBusinessConcept::TrafficMetric);
+    }
+    if equals_any(&["agebucket", "age", "年龄段", "年龄"])
+        || contains_any(&[
+            "gender",
+            "grouptype",
+            "share",
+            "uniquepidcount",
+            "uniquepersonidcount",
+            "年龄段",
+            "年龄",
+            "性别",
+            "同行关系",
+            "结构占比",
+            "人群画像",
+        ])
+    {
+        concepts.insert(MallBusinessConcept::VisitorProfile);
+    }
+    if quality {
+        concepts.insert(MallBusinessConcept::DataQuality);
+    }
+    if contains_any(&["uniquepidcount", "uniquepersonidcount", "日内去重画像数"]) {
+        concepts.insert(MallBusinessConcept::PrivacyBoundary);
+    }
+    if contains_any(&["l1retailformat", "l2retailformat", "一级业态", "二级业态"]) {
+        concepts.insert(MallBusinessConcept::RetailFormat);
+    }
+    if contains_any(&[
+        "interval",
+        "grain",
+        "hour",
+        "minute",
+        "统计粒度",
+        "小时",
+        "分钟",
+    ]) {
+        concepts.insert(MallBusinessConcept::StatisticalGrain);
+    }
+    if contains_any(&[
+        "recordcount",
+        "visitorcount",
+        "uniquepidcount",
+        "uniquepersonidcount",
+        "count",
+        "share",
+        "trafficin",
+        "trafficout",
+        "visitors",
+        "记录数",
+        "人次",
+        "人数",
+        "占比",
+    ]) {
+        concepts.insert(MallBusinessConcept::StatisticalScale);
+    }
+    concepts.into_iter().collect()
+}
+
+fn normalized_semantic_signal(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn snapshots_are_temporally_complementary(
+    left: &BTreeSet<MallBusinessConcept>,
+    right: &BTreeSet<MallBusinessConcept>,
+) -> bool {
+    left.contains(&MallBusinessConcept::Time)
+        && right.contains(&MallBusinessConcept::Time)
+        && ((left.contains(&MallBusinessConcept::TrafficMetric)
+            && right.contains(&MallBusinessConcept::VisitorProfile))
+            || (right.contains(&MallBusinessConcept::TrafficMetric)
+                && left.contains(&MallBusinessConcept::VisitorProfile)))
 }
 
 fn semantic_v3_opaque_field_identity(
@@ -321,6 +771,7 @@ fn safe_semantic_link_label(value: &str, fallback: &str) -> String {
         && matches!(lower.as_bytes().get(2), Some(b'\\') | Some(b'/'));
     let internal = windows_path
         || lower.starts_with("\\\\")
+        || contains_direct_person_identifier_marker(&lower)
         || [
             "/home/",
             "/users/",
@@ -335,6 +786,15 @@ fn safe_semantic_link_label(value: &str, fallback: &str) -> String {
             "oss://",
             "sha256",
             "hmac",
+            "http://",
+            "https://",
+            "token=",
+            "password=",
+            "passwd=",
+            "secret=",
+            "api_key=",
+            "apikey=",
+            "bearer ",
         ]
         .iter()
         .any(|marker| lower.contains(marker));
@@ -358,10 +818,22 @@ fn looks_opaque_semantic_label(value: &str) -> bool {
         .chars()
         .filter(|character| !matches!(character, '-' | '_' | ':' | ' '))
         .collect::<String>();
-    compact.len() >= 16
+    let hexadecimal = compact.len() >= 16
         && compact
             .chars()
-            .all(|character| character.is_ascii_hexdigit())
+            .all(|character| character.is_ascii_hexdigit());
+    let opaque_token = compact.len() >= 24
+        && compact
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+        && compact
+            .chars()
+            .any(|character| character.is_ascii_lowercase())
+        && compact
+            .chars()
+            .any(|character| character.is_ascii_uppercase())
+        && compact.chars().any(|character| character.is_ascii_digit());
+    hexadecimal || opaque_token
 }
 
 pub fn dataset_semantic_link_manifest_is_safe(manifest: &Value) -> bool {
@@ -369,27 +841,88 @@ pub fn dataset_semantic_link_manifest_is_safe(manifest: &Value) -> bool {
         Ok(serialized) => serialized.to_ascii_lowercase(),
         Err(_) => return false,
     };
-    ![
-        "sha256",
-        "hmac",
-        "content_identity",
-        "source_identity",
-        "technical_name",
-        "observed_values",
-        "examples",
-        "raw_value",
-        "object_key",
-        "file://",
-        "postgres://",
-        "mysql://",
-        "jdbc:",
-        "c:\\\\",
-        "/home/",
-        "/users/",
-        "/root/",
-    ]
-    .iter()
-    .any(|marker| serialized.contains(marker))
+    !contains_direct_person_identifier_marker(&serialized)
+        && ![
+            "sha256",
+            "hmac",
+            "content_identity",
+            "source_identity",
+            "technical_name",
+            "observed_values",
+            "examples",
+            "raw_value",
+            "object_key",
+            "token=",
+            "password=",
+            "passwd=",
+            "secret=",
+            "api_key=",
+            "apikey=",
+            "bearer ",
+            "file://",
+            "http://",
+            "https://",
+            "postgres://",
+            "mysql://",
+            "jdbc:",
+            "c:\\\\",
+            "/home/",
+            "/users/",
+            "/root/",
+        ]
+        .iter()
+        .any(|marker| serialized.contains(marker))
+}
+
+fn contains_direct_person_identifier_marker(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if ["person_id", "person-id", "person id", "person_identifier"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+    let mut ascii_token = String::new();
+    for character in lower.chars().chain(std::iter::once(' ')) {
+        if character.is_ascii_alphanumeric() {
+            ascii_token.push(character.to_ascii_lowercase());
+            continue;
+        }
+        if ascii_token_is_direct_person_identifier(&ascii_token) {
+            return true;
+        }
+        ascii_token.clear();
+    }
+    false
+}
+
+fn ascii_token_is_direct_person_identifier(token: &str) -> bool {
+    if matches!(token, "pid" | "personid" | "personidentifier")
+        || token.contains("personid")
+        || token.contains("personidentifier")
+        || token.starts_with("pid")
+    {
+        return true;
+    }
+    token.contains("pid")
+        && [
+            "raw",
+            "hash",
+            "value",
+            "source",
+            "external",
+            "customer",
+            "visitor",
+            "user",
+            "subject",
+            "member",
+            "person",
+            "key",
+            "code",
+            "identifier",
+        ]
+        .iter()
+        .any(|marker| token.contains(marker))
 }
 
 pub fn dataset_semantic_link_public_pair_id(
@@ -501,7 +1034,8 @@ pub fn semantic_link_run_inputs_are_current(
     left_latest: &DatasetSemanticSnapshot,
     right_latest: &DatasetSemanticSnapshot,
 ) -> bool {
-    run.tenant_id == left_latest.tenant_id
+    run.generation_version == DATASET_SEMANTIC_GRAPH_GENERATION_VERSION
+        && run.tenant_id == left_latest.tenant_id
         && run.tenant_id == right_latest.tenant_id
         && run.left_dataset_id == left_latest.dataset_id
         && run.right_dataset_id == right_latest.dataset_id
@@ -915,6 +1449,30 @@ mod tests {
         snapshot
     }
 
+    fn semantic_field(
+        object_id: &str,
+        field_id: &str,
+        technical_name: &str,
+        label: &str,
+        semantic_role: &str,
+    ) -> SemanticField {
+        SemanticField {
+            id: field_id.to_string(),
+            object_id: object_id.to_string(),
+            label: label.to_string(),
+            technical_name: technical_name.to_string(),
+            semantic_role: semantic_role.to_string(),
+            value_type: "text".to_string(),
+            non_empty_count: 15,
+            distinct_count: 15,
+            examples: vec!["raw-example-must-not-enter-link-graph".to_string()],
+            status: SemanticStatus::Confirmed,
+            label_source: "fixture".to_string(),
+            confidence: 1.0,
+            evidence_refs: Vec::new(),
+        }
+    }
+
     #[test]
     fn semantic_link_rollout_is_fail_closed_and_wildcard_is_not_special() {
         let tenant_id = TenantId::new();
@@ -1041,6 +1599,320 @@ mod tests {
     }
 
     #[test]
+    fn generic_count_share_and_date_fields_do_not_receive_mall_business_concepts() {
+        let left_dataset_id = DatasetId(Uuid::from_u128(81));
+        let right_dataset_id = DatasetId(Uuid::from_u128(82));
+        let mut left = semantic_snapshot(
+            left_dataset_id,
+            "通用经营数据",
+            "object:left",
+            "field:count",
+            "count",
+            "count",
+        );
+        left.fields = vec![
+            semantic_field("object:left", "field:count", "count", "count", "quantity"),
+            semantic_field("object:left", "field:share", "share", "share", "unknown"),
+            semantic_field("object:left", "field:date", "date", "date", "date"),
+        ];
+        let right = semantic_snapshot(
+            right_dataset_id,
+            "通用库存数据",
+            "object:right",
+            "field:count",
+            "count",
+            "count",
+        );
+
+        let graph =
+            build_dataset_semantic_link_graph(&DatasetSemanticLinkMatchInput { left, right })
+                .expect("generic graph remains safe");
+
+        assert!(!graph
+            .nodes
+            .iter()
+            .any(|node| node.kind == DatasetSemanticGraphNodeKind::Concept));
+        assert!(!graph.nodes.iter().any(|node| {
+            matches!(
+                node.display_label.as_str(),
+                "分类记录数" | "结构占比" | "人群画像"
+            )
+        }));
+        assert!(!graph
+            .edges
+            .iter()
+            .any(|edge| edge.relation_type == "temporal_complementarity"));
+    }
+
+    #[test]
+    fn mall_traffic_and_profile_pair_builds_grounded_structure_and_safe_analysis_bridge() {
+        let traffic_dataset_id = DatasetId(Uuid::from_u128(101));
+        let profile_dataset_id = DatasetId(Uuid::from_u128(202));
+        let mut traffic = semantic_snapshot(
+            traffic_dataset_id,
+            "7月客流数据集",
+            "object:traffic",
+            "field:traffic-day",
+            "day",
+            "day",
+        );
+        traffic.objects[0].label = "traffic_hourly.csv".to_string();
+        traffic.objects[0].technical_name = "C:\\restricted\\traffic_hourly.csv".to_string();
+        traffic.fields = vec![
+            semantic_field("object:traffic", "field:traffic-day", "day", "day", "date"),
+            semantic_field(
+                "object:traffic",
+                "field:traffic-in",
+                "trafficIn",
+                "trafficIn",
+                "metric",
+            ),
+            semantic_field(
+                "object:traffic",
+                "field:visitors",
+                "visitors",
+                "visitors",
+                "metric",
+            ),
+            semantic_field(
+                "object:traffic",
+                "field:average-stay",
+                "averageStay",
+                "averageStay",
+                "metric",
+            ),
+            semantic_field(
+                "object:traffic",
+                "field:entity-name",
+                "entityName",
+                "entityName",
+                "location",
+            ),
+            semantic_field(
+                "object:traffic",
+                "field:retail-format",
+                "l1RetailFormat",
+                "l1RetailFormat",
+                "category",
+            ),
+        ];
+
+        let mut profile = semantic_snapshot(
+            profile_dataset_id,
+            "客流画像",
+            "object:profile",
+            "field:profile-date",
+            "date",
+            "date",
+        );
+        profile.objects[0].label = "daily_summary.csv".to_string();
+        profile.objects[0].technical_name = "C:\\restricted\\daily_summary.csv".to_string();
+        profile.fields = vec![
+            semantic_field(
+                "object:profile",
+                "field:profile-date",
+                "date",
+                "date",
+                "date",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:age-bucket",
+                "age_bucket",
+                "age_bucket",
+                "category",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:unique-profile",
+                "unique_pid_count",
+                "unique_pid_count",
+                "metric",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:invalid-age",
+                "invalid_age_count",
+                "invalid_age_count",
+                "metric",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:raw-person",
+                "PersonID",
+                "PID",
+                "identifier",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:pid-hash",
+                "PIDHash",
+                "PIDHash",
+                "identifier",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:raw-person-value",
+                "rawPersonIdValue",
+                "rawPersonIdValue",
+                "identifier",
+            ),
+            semantic_field(
+                "object:profile",
+                "field:visitor-pid",
+                "visitorPid",
+                "visitorPid",
+                "identifier",
+            ),
+        ];
+
+        let graph = build_dataset_semantic_link_graph(&DatasetSemanticLinkMatchInput {
+            left: traffic,
+            right: profile,
+        })
+        .expect("safe mall semantic graph");
+        let serialized = serde_json::to_string(&graph).unwrap();
+        let lower = serialized.to_ascii_lowercase();
+
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.kind == DatasetSemanticGraphNodeKind::Dataset)
+                .count(),
+            2
+        );
+        assert!(graph.nodes.iter().any(|node| {
+            node.display_label == "时间维度"
+                && node.dataset_refs == vec![traffic_dataset_id, profile_dataset_id]
+        }));
+        for expected in [
+            "小时客流明细",
+            "画像每日汇总",
+            "进入人次",
+            "去重到访人数",
+            "日内去重画像数",
+            "空间点位",
+            "人群画像",
+            "数据质量",
+            "隐私边界",
+            "业态分类",
+        ] {
+            assert!(
+                graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.display_label == expected),
+                "missing {expected}"
+            );
+        }
+
+        let profile_unique_id =
+            platform_api::cross_dataset_semantic_graph::scoped_semantic_endpoint_id(
+                profile_dataset_id,
+                "field:unique-profile",
+            );
+        let traffic_visitors_id =
+            platform_api::cross_dataset_semantic_graph::scoped_semantic_endpoint_id(
+                traffic_dataset_id,
+                "field:visitors",
+            );
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.id == traffic_visitors_id)
+                .map(|node| node.display_label.as_str()),
+            Some("去重到访人数")
+        );
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.id == profile_unique_id)
+                .map(|node| node.display_label.as_str()),
+            Some("日内去重画像数")
+        );
+        let profile_concept_labels = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.source_id == profile_unique_id
+                    && edge.relation_type == "field_expresses_concept"
+            })
+            .filter_map(|edge| graph.nodes.iter().find(|node| node.id == edge.target_id))
+            .map(|node| node.display_label.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(profile_concept_labels.contains("人群画像"));
+        assert!(profile_concept_labels.contains("统计规模"));
+        assert!(profile_concept_labels.contains("隐私边界"));
+        assert!(!profile_concept_labels.contains("客流指标"));
+        let traffic_visitors_concept_labels = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.source_id == traffic_visitors_id
+                    && edge.relation_type == "field_expresses_concept"
+            })
+            .filter_map(|edge| graph.nodes.iter().find(|node| node.id == edge.target_id))
+            .map(|node| node.display_label.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(traffic_visitors_concept_labels.contains("客流指标"));
+        assert!(traffic_visitors_concept_labels.contains("统计规模"));
+        assert!(!traffic_visitors_concept_labels.contains("人群画像"));
+        assert!(!traffic_visitors_concept_labels.contains("隐私边界"));
+        let average_stay_id =
+            platform_api::cross_dataset_semantic_graph::scoped_semantic_endpoint_id(
+                traffic_dataset_id,
+                "field:average-stay",
+            );
+        let average_stay_concept_labels = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.source_id == average_stay_id && edge.relation_type == "field_expresses_concept"
+            })
+            .filter_map(|edge| graph.nodes.iter().find(|node| node.id == edge.target_id))
+            .map(|node| node.display_label.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(average_stay_concept_labels.contains("客流指标"));
+        assert!(!average_stay_concept_labels.contains("人群画像"));
+
+        let temporal = graph
+            .edges
+            .iter()
+            .find(|edge| edge.relation_type == "temporal_complementarity")
+            .expect("temporal complementarity edge");
+        assert_eq!(temporal.evidence_class, SemanticEvidenceClass::Inferred);
+        assert!(temporal.cross_dataset);
+        assert_eq!(
+            temporal.supporting_dataset_ids,
+            vec![traffic_dataset_id, profile_dataset_id]
+        );
+        assert!(temporal.reason.contains("不代表可以逐记录或逐人关联"));
+        assert!(graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                matches!(
+                    edge.relation_type.as_str(),
+                    "dataset_contains_object" | "object_contains_field" | "field_expresses_concept"
+                )
+            })
+            .all(|edge| !edge.cross_dataset && edge.supporting_dataset_ids.len() == 1));
+        assert!(!lower.contains("personid"));
+        assert!(!lower.contains("pid"));
+        assert!(!lower.contains("pidhash"));
+        assert!(!lower.contains("rawpersonidvalue"));
+        assert!(!lower.contains("visitorpid"));
+        assert!(!serialized.contains("raw-example-must-not-enter-link-graph"));
+        assert!(!serialized.contains("C:\\restricted"));
+        assert!(dataset_semantic_link_manifest_is_safe(
+            &serde_json::to_value(&graph).unwrap()
+        ));
+    }
+
+    #[test]
     fn semantic_link_safe_summary_has_only_approved_receipt_fields() {
         let left_dataset_id = DatasetId(Uuid::from_u128(10));
         let right_dataset_id = DatasetId(Uuid::from_u128(20));
@@ -1090,6 +1962,61 @@ mod tests {
     }
 
     #[test]
+    fn semantic_link_run_generation_must_match_the_current_graph_builder() {
+        let tenant_id = TenantId::new();
+        let left_dataset_id = DatasetId::new();
+        let right_dataset_id = DatasetId::new();
+        let left_snapshot_id = Uuid::new_v4();
+        let right_snapshot_id = Uuid::new_v4();
+        let now = Utc::now();
+        let snapshot = |id, dataset_id| DatasetSemanticSnapshot {
+            id,
+            tenant_id,
+            dataset_id,
+            schema_version: DATASET_SEMANTIC_SCHEMA_VERSION.to_string(),
+            generation_version: DATASET_SEMANTIC_GENERATION_VERSION.to_string(),
+            source_fingerprint: "fixture".to_string(),
+            status: "ready".to_string(),
+            manifest: json!({}),
+            source_document_count: 1,
+            source_asset_count: 0,
+            source_record_count: 1,
+            node_count: 1,
+            edge_count: 0,
+            failure_code: None,
+            generated_at: Some(now),
+            created_at: now,
+            updated_at: now,
+        };
+        let left = snapshot(left_snapshot_id, left_dataset_id);
+        let right = snapshot(right_snapshot_id, right_dataset_id);
+        let mut run = DatasetSemanticLinkRun {
+            id: Uuid::new_v4(),
+            tenant_id,
+            left_dataset_id,
+            right_dataset_id,
+            left_snapshot_id,
+            right_snapshot_id,
+            generation_version: DATASET_SEMANTIC_GRAPH_GENERATION_VERSION.to_string(),
+            source_fingerprint: "fixture".to_string(),
+            status: "pending".to_string(),
+            priority: 0,
+            attempt_count: 0,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            failure_code: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(semantic_link_run_inputs_are_current(&run, &left, &right));
+        run.generation_version = "dataset_semantic_graph_v1".to_string();
+        assert!(!semantic_link_run_inputs_are_current(&run, &left, &right));
+    }
+
+    #[test]
     fn semantic_link_labels_drop_opaque_ids_and_internal_paths() {
         assert_eq!(
             safe_semantic_link_label("0123456789abcdef0123456789abcdef", "资料"),
@@ -1097,6 +2024,10 @@ mod tests {
         );
         assert_eq!(
             safe_semantic_link_label("\\\\internal-server\\share\\report.xlsx", "资料"),
+            "资料"
+        );
+        assert_eq!(
+            safe_semantic_link_label("AbCdEfGh1234567890IjKlMn", "资料"),
             "资料"
         );
         assert_eq!(safe_semantic_link_label("合同金额", "业务字段"), "合同金额");

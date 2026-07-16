@@ -276,7 +276,7 @@ pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolu
             SemanticStatus::Confirmed,
             1.0,
         )
-    } else if let Some(label) = reviewed_field_alias(raw_field_key) {
+    } else if let Some(label) = reviewed_semantic_field_alias(raw_field_key) {
         (
             label.to_string(),
             None,
@@ -334,7 +334,7 @@ pub fn resolve_semantic_label(input: &SemanticLabelInput) -> SemanticLabelResolu
     }
 }
 
-fn reviewed_field_alias(raw: &str) -> Option<&'static str> {
+pub fn reviewed_semantic_field_alias(raw: &str) -> Option<&'static str> {
     match deterministic_field_label(raw).as_str() {
         "object type" => Some("对象类型"),
         "origin id" => Some("来源记录标识"),
@@ -344,6 +344,76 @@ fn reviewed_field_alias(raw: &str) -> Option<&'static str> {
         "sales amount" => Some("销售金额"),
         "store id" => Some("门店标识"),
         "visitor count" => Some("客流数量"),
+        _ => None,
+    }
+}
+
+pub fn reviewed_mall_delivery_field_alias(raw: &str) -> Option<&'static str> {
+    match deterministic_field_label(raw).as_str() {
+        "traffic in" => Some("进入人次"),
+        "traffic out" => Some("离开人次"),
+        "visitors" => Some("去重到访人数"),
+        "average stay" => Some("平均停留时长"),
+        "day" | "date" => Some("业务日期"),
+        "hour" => Some("小时"),
+        "minute" => Some("分钟"),
+        "interval" => Some("统计粒度"),
+        "mall id" => Some("商场标识"),
+        "source mall id" => Some("接口商场标识"),
+        "entity type" => Some("空间实体类型"),
+        "entity type name" => Some("空间实体类型名称"),
+        "entity name" => Some("点位名称"),
+        "entity id" => Some("点位标识"),
+        "aibee entity id" => Some("来源点位标识"),
+        "floor" => Some("楼层编码"),
+        "floor name" => Some("楼层名称"),
+        "area" => Some("区域"),
+        "l1 retail format" => Some("一级业态"),
+        "l2 retail format" => Some("二级业态"),
+        "entity status" => Some("点位状态"),
+        "record count" => Some("画像记录数"),
+        "unique pid count" | "unique person id count" => Some("日内去重画像数"),
+        "duplicate record count" => Some("重复记录数"),
+        "missing pid count" | "missing person id count" => Some("缺失标识记录数"),
+        "date mismatch count" => Some("日期不一致记录数"),
+        "invalid age count" => Some("无效年龄记录数"),
+        "age bucket" => Some("年龄段"),
+        "age" => Some("年龄"),
+        "gender" => Some("性别"),
+        "group type" => Some("同行关系类型"),
+        "share" => Some("结构占比"),
+        "count" => Some("分类记录数"),
+        _ => None,
+    }
+}
+
+pub fn reviewed_semantic_object_alias(raw: &str) -> Option<&'static str> {
+    let file_name = raw
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let stem = [
+        ".tar.gz", ".xlsx", ".xlsm", ".xls", ".csv", ".json", ".md", ".txt",
+    ]
+    .iter()
+    .find_map(|suffix| file_name.strip_suffix(suffix))
+    .unwrap_or(&file_name);
+    match stem {
+        "traffic_hourly" => Some("小时客流明细"),
+        "point_inventory" => Some("空间点位目录"),
+        "daily_summary" => Some("画像每日汇总"),
+        "age_distribution_daily" => Some("每日年龄分布"),
+        "age_distribution_total" => Some("全期年龄分布"),
+        "gender_distribution_daily" => Some("每日性别分布"),
+        "gender_distribution_total" => Some("全期性别分布"),
+        "group_type_distribution_daily" => Some("每日同行关系分布"),
+        "group_type_distribution_total" => Some("全期同行关系分布"),
+        "validation" => Some("数据质量校验"),
+        "schema" => Some("数据字典"),
+        "manifest" => Some("数据交付清单"),
+        "readme" => Some("数据集说明"),
         _ => None,
     }
 }
@@ -748,6 +818,49 @@ mod tests {
             assert_eq!(resolution.label_source, "reviewed_alias");
             assert_eq!(resolution.status, SemanticStatus::Confirmed);
         }
+    }
+
+    #[test]
+    fn mall_delivery_field_aliases_require_the_link_projection_context() {
+        for (raw, expected) in [
+            ("trafficIn", "进入人次"),
+            ("averageStay", "平均停留时长"),
+            ("day", "业务日期"),
+            ("mallId", "商场标识"),
+            ("age_bucket", "年龄段"),
+            ("group_type", "同行关系类型"),
+            ("share", "结构占比"),
+            ("unique_pid_count", "日内去重画像数"),
+        ] {
+            assert_eq!(reviewed_mall_delivery_field_alias(raw), Some(expected));
+        }
+        for raw in ["date", "day", "count", "share", "age", "gender"] {
+            let mut value = input();
+            value.raw_field_key = raw.to_string();
+            let resolution = resolve_semantic_label(&value);
+            assert_ne!(resolution.label_source, "reviewed_alias", "raw={raw}");
+            assert_ne!(resolution.status, SemanticStatus::Confirmed, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn reviewed_mall_delivery_file_aliases_hide_technical_filenames() {
+        for (raw, expected) in [
+            ("traffic_hourly.csv", "小时客流明细"),
+            ("C:\\delivery\\point_inventory.csv", "空间点位目录"),
+            ("daily_summary.csv", "画像每日汇总"),
+            ("age_distribution_total.csv", "全期年龄分布"),
+            ("gender_distribution_daily.csv", "每日性别分布"),
+            ("group_type_distribution_total.csv", "全期同行关系分布"),
+            ("validation.json", "数据质量校验"),
+        ] {
+            assert_eq!(
+                reviewed_semantic_object_alias(raw),
+                Some(expected),
+                "raw={raw}"
+            );
+        }
+        assert_eq!(reviewed_semantic_object_alias("unknown-source.bin"), None);
     }
 
     #[test]
