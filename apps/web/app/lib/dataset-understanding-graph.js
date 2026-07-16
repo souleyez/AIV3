@@ -464,12 +464,21 @@ export function filterDatasetUnderstandingGraph(model, options = {}) {
     viewMode = 'business',
     focusNodeId = '',
     focusDepth = 'all',
+    focusNodeIds = [],
     focusDatasetId = '',
     density = 'standard',
   } = options;
-  const localIds = focusDepth === 'all'
-    ? null
-    : graphNeighborhoodIds(model, focusNodeId, focusDepth);
+  const lensFocusIds = [...new Set((Array.isArray(focusNodeIds) ? focusNodeIds : [])
+    .map(cleanText)
+    .filter(Boolean))];
+  const localIds = lensFocusIds.length
+    ? lensFocusIds.reduce((visible, id) => {
+      graphNeighborhoodIds(model, id, 1).forEach((nodeId) => visible.add(nodeId));
+      return visible;
+    }, new Set())
+    : focusDepth === 'all'
+      ? null
+      : graphNeighborhoodIds(model, focusNodeId, focusDepth);
   const revealUnresolved = activeCategory === 'unresolved';
   const candidateNodes = model.nodes.filter((node) => {
     if (
@@ -526,6 +535,61 @@ const CROSS_DATASET_CLUSTER_COLORS = [
 const CROSS_SHARED_COLOR = '#f8fafc';
 const CROSS_SHARED_KINDS = new Set(['document', 'field', 'concept']);
 
+function unsafeCrossGraphNodeLabel(value) {
+  const normalized = cleanText(value).toLocaleLowerCase('en-US').replace(/[^\p{L}\p{N}]+/gu, '');
+  const directPersonIdentifier = normalized === 'pid'
+    || normalized.includes('personid')
+    || normalized.includes('personidentifier')
+    || normalized.startsWith('pid')
+    || (normalized.includes('pid') && /raw|hash|value|source|customer|visitor|user|subject|member|person|key|code|identifier/u.test(normalized));
+  return directPersonIdentifier || new Set([
+    'token',
+    'apitoken',
+    'accesstoken',
+    'password',
+    'secret',
+    'credential',
+  ]).has(normalized);
+}
+
+const CROSS_ANALYSIS_FACETS = [
+  {
+    key: 'time',
+    name: '时间对齐',
+    color: '#38bdf8',
+    pattern: /时间维度|业务日期|日期|小时粒度|日粒度|时段|周期/u,
+    description: '识别共同日期、小时与周期口径，用于判断可否在汇总层对齐。',
+  },
+  {
+    key: 'space',
+    name: '空间层级',
+    color: '#34d399',
+    pattern: /空间层级|商场|区域|楼层|点位|门店|店铺|出入口|通道/u,
+    description: '梳理商场、区域、门店与出入口等空间实体的层级关系。',
+  },
+  {
+    key: 'traffic',
+    name: '客流指标',
+    color: '#22d3ee',
+    pattern: /客流指标|进入人次|离开人次|到访人数|客流数量|平均停留|停留时长/u,
+    description: '聚合进入、离开、到访与停留指标，理解客流规模和节奏。',
+  },
+  {
+    key: 'profile',
+    name: '人群画像',
+    color: '#a78bfa',
+    pattern: /人群画像|年龄段|性别|同行类型|同行群组|人群结构|画像/u,
+    description: '从年龄、性别与同行类型理解到访人群结构。',
+  },
+  {
+    key: 'quality',
+    name: '质量边界',
+    color: '#fbbf24',
+    pattern: /数据质量|质量边界|缺失|重复|异常|校验|错配|隐私|去重|占比/u,
+    description: '集中呈现完整性、去重、异常值和隐私使用边界。',
+  },
+];
+
 function safeSimilarityRelationLabel(value) {
   const label = cleanText(value);
   if (!label || /同一|真实共享|完全相同|确认为/u.test(label)) return '相似线索';
@@ -540,15 +604,124 @@ function safeSimilarityReason(value) {
   return reason;
 }
 
-function crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedCount) {
+function crossDatasetBusinessInsights(nodes, links, datasets, partial = false) {
+  const analysisFacets = CROSS_ANALYSIS_FACETS.map((facet) => {
+    const facetNodes = nodes
+      .filter((node) => facet.pattern.test(node.name))
+      .sort((left, right) => (
+        Number(right.shared) - Number(left.shared)
+        || Number(right.kind === 'concept') - Number(left.kind === 'concept')
+        || right.businessScore - left.businessScore
+        || left.id.localeCompare(right.id, 'en')
+      ));
+    const datasetIds = [...new Set(facetNodes.flatMap((node) => node.datasetRefs || []))];
+    return {
+      ...facet,
+      nodes: facetNodes,
+      nodeCount: facetNodes.length,
+      datasetIds,
+      shared: facetNodes.some((node) => node.shared === true),
+      focusNodeId: facetNodes[0]?.id || '',
+    };
+  }).filter((facet) => facet.nodeCount);
+
+  const facetsByDataset = new Map(datasets.map((dataset) => [dataset.id, []]));
+  analysisFacets.forEach((facet) => facet.datasetIds.forEach((datasetId) => {
+    facetsByDataset.get(datasetId)?.push(facet);
+  }));
+  const datasetStories = datasets.map((dataset) => {
+    const facets = facetsByDataset.get(dataset.id) || [];
+    const facetKeys = new Set(facets.map((facet) => facet.key));
+    const role = facetKeys.has('traffic') && facetKeys.has('profile')
+      ? '综合客流视角'
+      : facetKeys.has('traffic')
+        ? '规模与空间节奏'
+        : facetKeys.has('profile')
+          ? '到访人群结构'
+          : '业务数据视角';
+    const keyNodes = cleanList(nodes
+      .filter((node) => node.kind !== 'dataset' && node.datasetRefs?.includes(dataset.id))
+      .sort((left, right) => (
+        Number(right.kind === 'concept') - Number(left.kind === 'concept')
+        || right.businessScore - left.businessScore
+      ))
+      .map((node) => node.name), 5);
+    return {
+      id: dataset.id,
+      title: dataset.title,
+      color: nodes.find((node) => node.datasetRefs?.length === 1 && node.datasetRefs[0] === dataset.id)?.clusterColor,
+      role,
+      facets: facets.map((facet) => facet.name),
+      keyNodes,
+      summary: facets.length
+        ? `提供${facets.map((facet) => facet.name).join('、')}，形成${role}。`
+        : '当前快照尚未返回足够的业务维度。',
+    };
+  });
+  const timeFacet = analysisFacets.find((facet) => facet.key === 'time');
+  const sharedTimeConcept = timeFacet?.nodes.find((node) => (
+    node.shared === true && node.kind === 'concept'
+  ));
+  const trafficFacet = analysisFacets.find((facet) => facet.key === 'traffic');
+  const profileFacet = analysisFacets.find((facet) => facet.key === 'profile');
+  const alignmentLink = links.find((link) => (
+    link.crossDataset === true
+    && ['time_alignment', 'aggregate_alignment', 'joint_analysis', 'temporal_complementarity']
+      .includes(link.relationType)
+  ));
+  const headline = trafficFacet && profileFacet
+    ? alignmentLink || sharedTimeConcept
+      ? '客流规模 × 人群结构'
+      : '客流规模与人群结构的并列理解'
+    : alignmentLink || sharedTimeConcept
+      ? '共同时间维度上的汇总分析'
+      : '先确认共同维度，再开展联合分析';
+  const inferredAlignment = alignmentLink?.evidenceClass === 'inferred';
+  const detail = trafficFacet && profileFacet && alignmentLink && !inferredAlignment
+    ? '显式共同时间维度支持汇总趋势对照；空间客流、去重到访与画像统计仍保留各自口径，不能直接等同或逐人关联。'
+    : trafficFacet && profileFacet && alignmentLink
+      ? '时间互补关系提示汇总趋势比较候选；仍须核验日期范围、时区与统计粒度，且不能直接等同或逐人关联。'
+    : trafficFacet && profileFacet && sharedTimeConcept
+      ? '已识别共同时间概念，可作为汇总比较候选；仍须核验日期范围、时区与统计粒度，且不能据此逐记录或逐人关联。'
+      : alignmentLink
+        ? '显式跨集关系支持汇总趋势对照；各数据集仍保留自身粒度与指标口径，不代表记录可以直接关联。'
+        : sharedTimeConcept
+          ? '已识别共同时间概念，但日期范围、时区与统计粒度仍须核验后才能开展汇总对照。'
+          : '当前可以并列理解多个数据集，但尚无足够证据证明它们能在同一维度直接对齐。';
+
+  return {
+    analysisFacets,
+    datasetStories,
+    jointStory: {
+      headline,
+      detail,
+      alignmentEvidence: alignmentLink?.relation
+        || (sharedTimeConcept ? '共同时间概念（口径待核验）' : '尚无跨集对齐证据'),
+      evidenceClass: alignmentLink?.evidenceClass || (sharedTimeConcept ? 'observed' : 'inferred'),
+      alignmentState: alignmentLink && !inferredAlignment
+        ? 'explicit'
+        : alignmentLink || sharedTimeConcept
+          ? 'candidate'
+          : 'none',
+      partial,
+      guardrail: `联合图用于聚合分析与检索导航，不代表逐记录、逐点位或逐人身份关联。${partial ? ' 当前响应已截断，所有数量和结论仅代表可见部分。' : ''}`,
+    },
+  };
+}
+
+function crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedCount, insights, nodes, links) {
   const reliableCount = reliableNeighborDatasetIds.length;
+  const objectCount = nodes.filter((node) => node.kind === 'object').length;
+  const fieldCount = nodes.filter((node) => node.kind === 'field').length;
+  const inferredCount = links.filter((link) => link.type === 'inferred').length;
+  const visiblePrefix = insights.jointStory.partial ? '当前可见 ' : '';
   return [
     {
       key: 'scope',
       label: '可见范围',
-      value: `${graph.datasets.length} 个数据集`,
+      value: `${visiblePrefix}${graph.datasets.length} 个数据集`,
       detail: '逐数据集完成权限校验后进入本次图谱。',
-      status: 'complete',
+      status: insights.jointStory.partial ? 'attention' : 'complete',
       source: 'dataset_semantic_graph_v1.datasets',
       summary: `本次仅展示 ${graph.datasets.length} 个当前可见数据集。`,
       items: graph.datasets.map((dataset) => ({
@@ -562,25 +735,51 @@ function crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedCount) {
       })),
     },
     {
+      key: 'semantics',
+      label: '业务解构',
+      value: `${visiblePrefix}${objectCount} 对象 · ${fieldCount} 字段`,
+      detail: '基于当前可见语义节点，在客户端归类业务对象、关键字段和分析概念。',
+      status: objectCount || fieldCount ? 'complete' : 'empty',
+      source: 'dataset_semantic_graph_v1.nodes',
+      summary: `当前联合图包含 ${objectCount} 个业务对象和 ${fieldCount} 个关键字段。`,
+      items: insights.analysisFacets.map((facet) => ({
+        id: `facet:${facet.key}`,
+        nodeId: facet.focusNodeId,
+        label: facet.name,
+        meta: `${visiblePrefix}${facet.nodeCount} 个节点`,
+        detail: facet.description,
+        evidence: '当前可见语义节点的客户端分析归类',
+        status: facet.shared ? 'complete' : 'attention',
+      })),
+    },
+    {
       key: 'shared',
       label: '共享识别',
-      value: `${sharedCount} 个共享节点`,
-      detail: '只把有确定身份依据的资料、字段或概念显示为共享节点。',
+      value: `${visiblePrefix}${sharedCount} 个共享节点`,
+      detail: '资料或字段需有确定身份依据；概念共享仅表示映射到同一受控概念，不代表记录身份一致。',
       status: sharedCount ? 'complete' : 'empty',
       source: 'dataset_semantic_graph_v1.nodes',
-      summary: sharedCount ? `识别到 ${sharedCount} 个可追溯共享节点。` : '尚未识别到可追溯共享节点。',
+      summary: sharedCount ? `当前可见范围识别到 ${sharedCount} 个可追溯共享节点。` : '当前可见范围尚未识别到可追溯共享节点。',
       items: [],
     },
     {
       key: 'relations',
-      label: '关系证据',
+      label: '联合分析',
       value: `${reliableCount} 个可靠邻居`,
-      detail: '确认或观察关系使用实线；相似线索使用虚线。',
+      detail: insights.jointStory.headline,
       status: reliableCount ? 'complete' : 'empty',
       source: 'dataset_semantic_graph_v1.edges',
-      summary: reliableCount
-        ? `当前根数据集与 ${reliableCount} 个可见数据集存在确认或观察证据。`
-        : '尚未发现有证据的跨数据集共享。',
+      summary: insights.jointStory.detail,
+      items: [],
+    },
+    {
+      key: 'boundary',
+      label: '证据边界',
+      value: `${inferredCount} 条推断`,
+      detail: '事实、观察与推断分层；推断关系不升级为身份事实。',
+      status: inferredCount ? 'attention' : 'complete',
+      source: 'dataset_semantic_graph_v1.edges.evidence_class',
+      summary: insights.jointStory.guardrail,
       items: [],
     },
   ];
@@ -605,7 +804,7 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
   const clusterById = new Map(datasetClusters.map((cluster) => [cluster.id, cluster]));
   const datasetRootById = new Map();
 
-  const nodes = graph.nodes.map((input) => {
+  const nodes = graph.nodes.filter((input) => !unsafeCrossGraphNodeLabel(input.display_label)).map((input) => {
     const datasetRefs = [...input.dataset_refs];
     const sourceDatasets = datasetRefs.map((id) => datasetById.get(id)).filter(Boolean);
     const shared = datasetRefs.length > 1 && CROSS_SHARED_KINDS.has(input.kind);
@@ -620,7 +819,9 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
         name: input.display_label,
         kind: input.kind,
         detail: shared
-          ? `由 ${input.visible_provenance_count} 条当前可见证据共同贡献。`
+          ? input.kind === 'concept'
+            ? `由 ${sourceDatasets.length} 个当前可见数据集共同映射到该业务概念；概念共享不代表记录身份一致。`
+            : `由 ${sourceDatasets.length} 个当前可见数据集的证据共同贡献。`
           : `来自 ${sourceDatasets[0]?.title || '当前可见数据集'}。`,
         evidence: sourceDatasets.map((dataset) => dataset.title).join(' · '),
         status: sourceDatasets.some((dataset) => dataset.stale) ? '上一版可用快照' : '当前可见快照',
@@ -686,7 +887,10 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
     cluster.nodeCount += 1;
   });
 
-  const links = graph.edges.map((input) => {
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
+  const links = graph.edges.filter((input) => (
+    visibleNodeIds.has(input.source_id) && visibleNodeIds.has(input.target_id)
+  )).map((input) => {
     const similarity = input.relation_semantics === 'similarity';
     const reason = similarity ? safeSimilarityReason(input.reason) : input.reason;
     const supportingDatasets = input.supporting_dataset_ids
@@ -776,15 +980,20 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
   const observedLinks = crossLinks.filter((link) => link.evidenceClass === 'observed');
   const inferredLinks = crossLinks.filter((link) => link.evidenceClass === 'inferred');
   const rootDataset = datasetById.get(graph.root_dataset_id) || datasets[0];
+  const partial = Object.values(graph.truncated || {}).some((value) => Number(value) > 0);
+  const insights = crossDatasetBusinessInsights(nodes, links, datasets, partial);
   const emptyCrossMessage = reliableNeighborDatasetIds.length
     ? ''
     : '尚未发现有证据的跨数据集共享；系统不会使用纯相似度凑推荐。';
+  const combinedTitle = datasets.length === 2
+    ? datasets.map((dataset) => dataset.title).join(' × ')
+    : `${rootDataset?.title || '当前数据集'} + ${Math.max(0, datasets.length - 1)} 个数据集`;
 
   return {
     hasDataset: true,
     mode: 'cross',
     viewLabel: '跨数据集语义图',
-    overviewTitle: '跨数据集共享与引用',
+    overviewTitle: '数据如何共同回答业务问题',
     snapshotStatus: graph.cross_links_status,
     crossLinksStatus: graph.cross_links_status,
     statusMessage: graph.stale
@@ -794,11 +1003,13 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
     generatedAt: '',
     limitations: [
       '相似关系仅作为推断线索，不折叠节点，也不升级为确定身份或确定共享关系。',
-      ...(graph.truncated.nodes || graph.truncated.edges ? ['后端响应已按安全上限截断。'] : []),
+      insights.jointStory.guardrail,
+      ...(partial ? ['后端响应已按安全上限截断；标题、数量与分析视角仅代表当前可见部分。'] : []),
     ],
     datasetId: graph.root_dataset_id,
     rootDatasetId: graph.root_dataset_id,
-    title: rootDataset?.title || '当前数据集',
+    title: `${combinedTitle}${partial ? '（当前可见）' : ''}`,
+    partial,
     categories: DATASET_GRAPH_CATEGORIES,
     datasetClusters,
     hasReliableCrossLinks: reliableNeighborDatasetIds.length > 0,
@@ -822,10 +1033,20 @@ export function buildCrossDatasetUnderstandingGraph(graph) {
       confirmedFactCount: confirmedLinks.length,
       sharedNodeCount: sharedNodes.length,
     },
-    pipeline: crossDatasetPipeline(graph, reliableNeighborDatasetIds, sharedNodes.length),
+    pipeline: crossDatasetPipeline(
+      graph,
+      reliableNeighborDatasetIds,
+      sharedNodes.length,
+      insights,
+      nodes,
+      links,
+    ),
+    analysisFacets: insights.analysisFacets,
+    datasetStories: insights.datasetStories,
+    jointStory: insights.jointStory,
     understanding: {
       summary: reliableNeighborDatasetIds.length
-        ? `当前数据集与 ${reliableNeighborDatasetIds.length} 个可见邻居存在确认或观察证据，识别到 ${sharedNodes.length} 个共享节点。`
+        ? `${insights.jointStory.headline}：当前识别到 ${insights.analysisFacets.length} 个分析视角、${sharedNodes.length} 个共享节点，并与 ${reliableNeighborDatasetIds.length} 个可见邻居形成证据连接。`
         : emptyCrossMessage,
       keyConcepts: cleanList(sharedNodes.map((node) => node.name), 10),
       keyFields: cleanList(nodes.filter((node) => node.kind === 'field').map((node) => node.name), 10),

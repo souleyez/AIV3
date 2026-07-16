@@ -332,6 +332,69 @@ function PipelineStage({ stage, index, last, active, onSelect }) {
   );
 }
 
+function CrossDatasetStory({ model, activeLensKey, onSelectLens }) {
+  if (model.mode !== 'cross' || !model.jointStory) return null;
+  return (
+    <section className="dataset-understanding-joint-story" aria-label="联合数据理解">
+      <div className="dataset-understanding-joint-story-head">
+        <span>JOINT ANALYSIS MAP</span>
+        <strong>{model.jointStory.headline}</strong>
+        <p>{model.jointStory.detail}</p>
+        <small className={model.jointStory.evidenceClass}>
+          {relationClassLabel(model.jointStory.evidenceClass)} · {model.jointStory.alignmentEvidence}
+          {model.jointStory.partial ? ' · 当前可见部分' : ''}
+        </small>
+      </div>
+      <div className="dataset-understanding-joint-story-grid">
+        {model.datasetStories.map((story) => (
+          <article key={story.id} style={{ '--story-color': story.color || '#38bdf8' }}>
+            <i />
+            <span>{story.role}</span>
+            <strong>{story.title}</strong>
+            <p>{story.summary}</p>
+            <small>{story.keyNodes.slice(0, 4).join(' · ') || '业务语义生成中'}</small>
+          </article>
+        ))}
+        <article className="joint-bridge">
+          <i />
+          <span>联合理解</span>
+          <strong>{model.jointStory.headline}</strong>
+          <p>{model.jointStory.alignmentState === 'explicit'
+            ? '显式共同维度负责对齐，互补指标负责解释，质量边界负责约束结论。'
+            : model.jointStory.alignmentState === 'candidate'
+              ? '已找到共同概念候选；先核验时间口径，再用互补指标解释业务。'
+              : '待确认共同维度；当前只并列展示业务视角，不声称数据已经对齐。'}</p>
+          <small>{model.analysisFacets.map((facet) => facet.name).join(' · ') || '共同维度待识别'}</small>
+        </article>
+      </div>
+      <div className="dataset-understanding-analysis-lenses" role="group" aria-label="联合分析视角">
+        <span>分析镜头</span>
+        <button
+          type="button"
+          className={!activeLensKey ? 'active' : ''}
+          aria-pressed={!activeLensKey}
+          onClick={() => onSelectLens(null)}
+        >
+          业务全景 <small>{model.partial ? '可见 ' : ''}{model.nodes.length}</small>
+        </button>
+        {model.analysisFacets.map((facet) => (
+          <button
+            key={facet.key}
+            type="button"
+            className={activeLensKey === facet.key ? 'active' : ''}
+            aria-pressed={activeLensKey === facet.key}
+            style={{ '--lens-color': facet.color }}
+            onClick={() => onSelectLens(facet)}
+          >
+            {facet.name} <small>{model.partial ? '可见 ' : ''}{facet.nodeCount}</small>
+          </button>
+        ))}
+      </div>
+      <small className="dataset-understanding-joint-guardrail">{model.jointStory.guardrail}</small>
+    </section>
+  );
+}
+
 function UnderstandingOverview({ model }) {
   const { understanding } = model;
   const hiddenQualityEntries = Object.entries(model.fallbackQuality?.hiddenByClass || {});
@@ -345,14 +408,14 @@ function UnderstandingOverview({ model }) {
   };
   return (
     <>
-      <span>{model.mode === 'semantic' ? '系统理解摘要' : '资料来源摘要'}</span>
+      <span>{model.mode === 'cross' ? '联合理解摘要' : model.mode === 'semantic' ? '系统理解摘要' : '资料来源摘要'}</span>
       <div className={`dataset-understanding-node-kind overview ${model.mode}`.trim()}>
         <i />{model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}
       </div>
       <h4>{model.overviewTitle || (model.mode === 'semantic' ? '系统已经理解到什么' : '当前资料来源包含什么')}</h4>
       <p>{understanding.summary}</p>
       <div className="dataset-understanding-insight-group">
-        <strong>{model.mode === 'semantic' ? '核心概念' : '可信中文线索'}</strong>
+        <strong>{model.mode === 'cross' ? '联合分析概念' : model.mode === 'semantic' ? '核心概念' : '可信中文线索'}</strong>
         <div className="dataset-understanding-insight-tags">
           {understanding.keyConcepts.length
             ? understanding.keyConcepts.slice(0, 10).map((term) => <span key={term}>{term}</span>)
@@ -393,7 +456,9 @@ function UnderstandingOverview({ model }) {
         </div>
       ) : null}
       <small className="dataset-understanding-honesty-note">
-        {model.mode === 'semantic'
+        {model.mode === 'cross'
+          ? model.jointStory?.guardrail || '跨数据集关系只用于当前可见范围内的理解导航。'
+          : model.mode === 'semantic'
           ? '摘要、对象、字段和关系均来自版本化语义快照；推断关系不等同于已确认事实。'
           : '资料来源图只归纳通过质量门禁的摘要字段和可见资料；语义快照生成前不声称系统已经理解业务。'}
       </small>
@@ -455,7 +520,11 @@ function NodeInspector({ model, node, onSelectLink, onFocusDataset }) {
           <div><dt>节点类型</dt><dd>{graphCategory(model, node.kind).name}</dd></div>
           <div><dt>可见来源</dt><dd>{sourceDatasets.map((dataset) => dataset.title).join(' · ') || '未返回'}</dd></div>
           <div><dt>可见贡献数</dt><dd>{compactNumber(node.visibleProvenanceCount)}</dd></div>
-          <div><dt>共享状态</dt><dd>{node.shared ? '确定身份依据形成共享节点' : '当前数据集内节点'}</dd></div>
+          <div><dt>共享状态</dt><dd>{node.shared
+            ? node.kind === 'concept'
+              ? '多个数据集映射到同一受控业务概念，不代表记录身份一致'
+              : '确定身份依据形成共享节点'
+            : '当前数据集内节点'}</dd></div>
           <div><dt>证据范围</dt><dd>{node.evidence || '本次可见数据集范围'}</dd></div>
         </dl>
         {sourceDatasets.length ? (
@@ -599,6 +668,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const [graphMode, setGraphMode] = useState('single');
   const [crossDatasetIds, setCrossDatasetIds] = useState(() => dataset?.id ? [dataset.id] : []);
   const [focusDatasetId, setFocusDatasetId] = useState('');
+  const [activeLensKey, setActiveLensKey] = useState('');
   const singleModel = useMemo(
     () => buildDatasetUnderstandingGraph(dataset, documents, understandingState?.data || null),
     [dataset, documents, understandingState?.data],
@@ -660,12 +730,17 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     observed: overviewGraph.links.filter((link) => link.type === 'observed').length,
     inferred: overviewGraph.links.filter((link) => link.type === 'inferred').length,
   }), [overviewGraph.links]);
+  const activeLensNodeIds = useMemo(() => {
+    const facet = model.analysisFacets?.find((item) => item.key === activeLensKey);
+    return facet ? facet.nodes.map((node) => node.id) : [];
+  }, [model.analysisFacets, activeLensKey]);
   const activeGraph = useMemo(() => filterDatasetUnderstandingGraph(model, {
     activeCategory,
     activeRelationType,
     viewMode,
     focusNodeId: selectedNodeId,
     focusDepth,
+    focusNodeIds: activeLensNodeIds,
     focusDatasetId,
     density: graphDensity,
   }), [
@@ -675,6 +750,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     viewMode,
     selectedNodeId,
     focusDepth,
+    activeLensNodeIds,
     focusDatasetId,
     graphDensity,
   ]);
@@ -685,6 +761,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       viewMode,
       focusNodeId: selectedNodeId,
       focusDepth,
+      focusNodeIds: activeLensNodeIds,
       focusDatasetId,
       density: graphDensity,
     }, activeGraph),
@@ -695,6 +772,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       viewMode,
       selectedNodeId,
       focusDepth,
+      activeLensNodeIds,
       focusDatasetId,
       graphDensity,
       activeGraph,
@@ -719,6 +797,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const selectGraphMode = (nextMode) => {
     setGraphMode(nextMode);
     setFocusDatasetId('');
+    setActiveLensKey('');
     if (nextMode !== 'cross') return;
     const rootDatasetId = String(dataset?.id || '').trim();
     const selection = rootDatasetId ? [rootDatasetId] : [];
@@ -736,12 +815,14 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     const normalized = [rootDatasetId, ...next.filter((id) => id && id !== rootDatasetId)].slice(0, 8);
     setCrossDatasetIds(normalized);
     setFocusDatasetId('');
+    setActiveLensKey('');
     requestCrossGraph(normalized, 0);
   };
 
   const focusDatasetCluster = (datasetId) => {
     const nextDatasetId = focusDatasetId === datasetId ? '' : datasetId;
     setFocusDatasetId(nextDatasetId);
+    setActiveLensKey('');
     if (!nextDatasetId) return;
     const datasetNode = model.nodes.find((node) => (
       node.kind === 'dataset' && node.datasetRefs?.includes(nextDatasetId)
@@ -753,11 +834,45 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     }
   };
 
+  const selectAnalysisLens = (facet) => {
+    const nextKey = facet?.key && facet.key !== activeLensKey ? facet.key : '';
+    setActiveLensKey(nextKey);
+    setFocusDatasetId('');
+    setActiveCategory('all');
+    setActiveRelationType('all');
+    setSelectedLinkId('');
+    setSelectedStageKey('');
+    if (nextKey && facet?.focusNodeId) {
+      setSelectedNodeId(facet.focusNodeId);
+      setFocusDepth('all');
+      return;
+    }
+    const root = model.nodes.find((node) => node.rootDataset || node.kind === 'dataset');
+    setSelectedNodeId(root?.id || model.nodes[0]?.id || '');
+    setFocusDepth('all');
+  };
+
+  const selectCategory = (category) => {
+    setActiveLensKey('');
+    setActiveCategory(category);
+  };
+
+  const selectRelationType = (relationType) => {
+    setActiveLensKey('');
+    setActiveRelationType(relationType);
+  };
+
+  const selectFocusDepth = (depth) => {
+    setActiveLensKey('');
+    setFocusDepth(depth);
+  };
+
   useEffect(() => {
     const rootDatasetId = String(dataset?.id || '').trim();
     setGraphMode('single');
     setCrossDatasetIds(rootDatasetId ? [rootDatasetId] : []);
     setFocusDatasetId('');
+    setActiveLensKey('');
   }, [dataset?.id]);
 
   useEffect(() => {
@@ -781,11 +896,12 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setActiveRelationType('all');
     setViewMode('business');
     setFocusDepth('all');
+    setActiveLensKey('');
     setDensityPreference('auto');
     setFocusMode(false);
     graphZoomRef.current = 1;
     graphCenterRef.current = null;
-  }, [model.datasetId, model.mode]);
+  }, [model.datasetId, model.mode, crossGraphState?.selectionKey]);
 
   useEffect(() => {
     setSelectedLinkId('');
@@ -853,11 +969,13 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       });
       const handleClick = (params) => {
         if (params.dataType === 'node' && params.data?.id) {
+          setActiveLensKey('');
           setSelectedNodeId(params.data.id);
           setSelectedLinkId('');
           setSelectedStageKey('');
         }
         if (params.dataType === 'edge' && params.data?.id) {
+          setActiveLensKey('');
           setSelectedLinkId(params.data.id);
           setSelectedStageKey('');
         }
@@ -959,7 +1077,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <span className="dataset-understanding-eyebrow">DATASET INTELLIGENCE · {graphMode === 'cross' ? '跨数据集语义图' : model.viewLabel || (model.mode === 'semantic' ? '真实语义快照' : '资料来源图')}</span>
           <h3>{model.title}</h3>
           <p>{graphMode === 'cross'
-            ? '以当前数据集为根，只展示可见数据集之间有证据的共享、引用和明确标注的相似线索。'
+            ? '把可见数据集组织为业务对象、共同维度和互补指标；事实、观察与分析推断保持分层。'
             : model.mode === 'semantic'
             ? '业务对象、字段与关系来自版本化语义快照；点击节点可查看入向依据、出向理解和原始字段。'
             : '语义快照尚未生成；当前只展示通过质量门禁的资料来源与摘要连线，不能代表系统已经形成业务理解。'}</p>
@@ -980,7 +1098,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <span>图谱范围</span>
           <button type="button" className={graphMode === 'single' ? 'active' : ''} onClick={() => selectGraphMode('single')}>当前数据集</button>
           {crossGraphAvailable ? (
-            <button type="button" className={graphMode === 'cross' ? 'active' : ''} onClick={() => selectGraphMode('cross')}>跨数据集</button>
+            <button type="button" aria-label="联合图谱（跨数据集）" className={graphMode === 'cross' ? 'active' : ''} onClick={() => selectGraphMode('cross')}>联合图谱</button>
           ) : null}
         </div>
         {graphMode === 'cross' ? (
@@ -1030,6 +1148,14 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         </div>
       ) : null}
 
+      {graphMode === 'cross' && model.mode === 'cross' ? (
+        <CrossDatasetStory
+          model={model}
+          activeLensKey={activeLensKey}
+          onSelectLens={selectAnalysisLens}
+        />
+      ) : null}
+
       {graphMode === 'cross' && model.mode === 'cross' && model.emptyCrossMessage ? (
         <div className="dataset-understanding-cross-empty">{model.emptyCrossMessage}</div>
       ) : null}
@@ -1042,7 +1168,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
             : graphMode === 'cross' && graphRequestStatus === 'failed'
               ? `跨数据集图谱暂时不可用：${crossGraphState?.error || '请求失败'}`
               : graphMode === 'cross' && model.mode !== 'cross'
-                ? '切换到跨数据集后，将自动寻找最多 3 个有确认或观察证据的可见邻居。'
+                ? '切换到联合图谱后，将自动寻找最多 3 个有确认或观察证据的可见邻居。'
                 : understandingState?.status === 'loading'
             ? '正在读取真实语义理解快照；暂时保留当前可用视图。'
             : understandingState?.status === 'failed'
@@ -1068,13 +1194,13 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       </div>
 
       <div className="dataset-understanding-semantic-brief" aria-label={model.mode === 'cross' ? '跨数据集概览' : model.mode === 'semantic' ? '系统理解概览' : '资料来源概览'}>
-        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'shared' : model.mode === 'semantic' ? 'structure' : 'knowledge')}>
-          <span>{model.mode === 'cross' ? '共享节点' : model.mode === 'semantic' ? '业务对象' : '可信线索'}</span>
+        <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'semantics' : model.mode === 'semantic' ? 'structure' : 'knowledge')}>
+          <span>{model.mode === 'cross' ? '分析视角' : model.mode === 'semantic' ? '业务对象' : '可信线索'}</span>
           <strong>{model.understanding.keyConcepts.slice(0, 4).join(' · ') || '待识别'}</strong>
-          <small>{model.understanding.keyConcepts.length} 个{model.mode === 'cross' ? '有身份依据的共享项' : model.mode === 'semantic' ? '业务语义词' : '可信中文线索'}</small>
+          <small>{model.mode === 'cross' ? `${model.analysisFacets?.length || 0} 个业务镜头，${model.metrics.sharedNodeCount} 个共享节点` : `${model.understanding.keyConcepts.length} 个${model.mode === 'semantic' ? '业务语义词' : '可信中文线索'}`}</small>
         </button>
         <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' ? 'scope' : model.mode === 'semantic' ? 'labels' : 'structure')}>
-          <span>{model.mode === 'cross' ? '数据集集群' : model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
+          <span>{model.mode === 'cross' ? '联合结构' : model.mode === 'semantic' ? '关键字段' : '结构主线'}</span>
           <strong>{(model.mode === 'semantic' ? model.understanding.keyFields : model.understanding.structurePath).slice(0, 4).join(' → ') || '待识别'}</strong>
           <small>{model.mode === 'cross' ? `${model.datasetClusters.length} 个可见集群` : model.mode === 'semantic' ? `${model.metrics.fieldCount} 个字段，${model.metrics.unresolvedFieldCount} 个待解释` : `${model.understanding.structurePath.length} 个结构线索`}</small>
         </button>
@@ -1084,7 +1210,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <small>{model.mode === 'cross' ? '当前快照 / 本次可见数据集' : model.mode === 'semantic' ? '可追溯覆盖情况' : '明确进入检索的资料'}</small>
         </button>
         <button type="button" onClick={() => setSelectedStageKey(model.mode === 'cross' || model.mode === 'semantic' ? 'relations' : 'overview')}>
-          <span>{model.mode === 'cross' ? '跨集证据' : model.mode === 'semantic' ? '关系理解' : '关系线索'}</span>
+          <span>{model.mode === 'cross' ? '联合证据' : model.mode === 'semantic' ? '关系理解' : '关系线索'}</span>
           <strong>{model.metrics.confirmedRelationCount || 0} 确 · {model.metrics.observedRelationCount} 观 · {model.metrics.inferredRelationCount} 推</strong>
           <small>点击图中节点查看关联依据</small>
         </button>
@@ -1094,7 +1220,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         <button
           type="button"
           className={activeCategory === 'all' ? 'active' : ''}
-          onClick={() => setActiveCategory('all')}
+          onClick={() => selectCategory('all')}
         >
           全部 <small>{Math.max(0, overviewGraph.nodes.length - 1)}</small>
         </button>
@@ -1112,7 +1238,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
             className={activeCategory === category.key ? 'active' : ''}
             style={{ '--category-color': category.color }}
             disabled={!categoryCounts[category.key]}
-            onClick={() => setActiveCategory(category.key)}
+            onClick={() => selectCategory(category.key)}
           >
             {category.name} <small>{categoryCounts[category.key]}</small>
           </button>
@@ -1138,7 +1264,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
               key={key}
               type="button"
               className={activeRelationType === key ? 'active' : ''}
-              onClick={() => setActiveRelationType(key)}
+              onClick={() => selectRelationType(key)}
             >
               {label} <small>{relationCounts[key]}</small>
             </button>
@@ -1159,7 +1285,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
               key={depth}
               type="button"
               className={focusDepth === depth ? 'active' : ''}
-              onClick={() => setFocusDepth(depth)}
+              onClick={() => selectFocusDepth(depth)}
             >
               {label}
             </button>

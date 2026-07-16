@@ -676,8 +676,9 @@ fn sanitize_graph_for_visible_scope(
             } else {
                 edge.confidence.clamp(0.0, 1.0)
             },
-            reason: safe_relation_reason(relation_semantics, evidence_class).to_string(),
-            cross_dataset: supporting_dataset_ids.len() >= 2,
+            reason: safe_relation_reason(&edge.relation_type, relation_semantics, evidence_class)
+                .to_string(),
+            cross_dataset: edge.cross_dataset && supporting_dataset_ids.len() >= 2,
             supporting_dataset_ids,
         };
         edges_by_key
@@ -901,12 +902,20 @@ fn safe_relation_semantics(relation_type: &str) -> Option<SemanticRelationSemant
         "foreign_key" | "explicit_reference" | "reference" => {
             Some(SemanticRelationSemantics::Reference)
         }
-        "parent_child" | "contains" | "collection_membership" | "membership" | "structure" => {
-            Some(SemanticRelationSemantics::Structure)
-        }
-        "label_similarity" | "shared_key" | "cooccurrence" | "text_similarity" | "similarity" => {
-            Some(SemanticRelationSemantics::Similarity)
-        }
+        "parent_child"
+        | "contains"
+        | "collection_membership"
+        | "membership"
+        | "structure"
+        | "dataset_contains_object"
+        | "object_contains_field"
+        | "field_expresses_concept" => Some(SemanticRelationSemantics::Structure),
+        "label_similarity"
+        | "shared_key"
+        | "cooccurrence"
+        | "text_similarity"
+        | "similarity"
+        | "temporal_complementarity" => Some(SemanticRelationSemantics::Similarity),
         _ => None,
     }
 }
@@ -921,6 +930,10 @@ fn safe_relation_label(relation_type: &str, evidence_class: SemanticEvidenceClas
         ("contains", _) => "包含字段",
         ("collection_membership", _) => "集合归属",
         ("membership", _) => "共享归属",
+        ("dataset_contains_object", _) => "包含业务对象",
+        ("object_contains_field", _) => "包含业务字段",
+        ("field_expresses_concept", _) => "表达业务概念",
+        ("temporal_complementarity", _) => "可按时间联合分析",
         ("identity" | "same_identity", SemanticEvidenceClass::Confirmed) => "身份一致",
         ("identity" | "same_identity", _) => "身份关系线索",
         ("label_similarity", _) => "名称相近",
@@ -934,9 +947,25 @@ fn safe_relation_label(relation_type: &str, evidence_class: SemanticEvidenceClas
 }
 
 fn safe_relation_reason(
+    relation_type: &str,
     semantics: SemanticRelationSemantics,
     evidence_class: SemanticEvidenceClass,
 ) -> &'static str {
+    match relation_type {
+        "dataset_contains_object" => {
+            return "可见语义快照表明该业务对象属于此数据集。";
+        }
+        "object_contains_field" => {
+            return "可见语义快照表明该字段属于此业务对象。";
+        }
+        "field_expresses_concept" => {
+            return "字段的已复核名称或语义角色映射到该业务概念；这不是外键或记录关联。";
+        }
+        "temporal_complementarity" => {
+            return "两个数据集都有时间维度并提供互补业务视角，形成汇总比较候选；仍需核验日期范围、时区与统计粒度，且不代表逐记录或逐人关联。";
+        }
+        _ => {}
+    }
     match (semantics, evidence_class) {
         (SemanticRelationSemantics::Identity, SemanticEvidenceClass::Confirmed) => {
             "可见证据确认两个节点具有一致身份。"
@@ -1158,7 +1187,12 @@ fn project_single_understanding(
             relation_semantics,
             evidence_class: relation.evidence_class,
             confidence: relation.confidence,
-            reason: safe_relation_reason(relation_semantics, relation.evidence_class).to_string(),
+            reason: safe_relation_reason(
+                &relation.relation_type,
+                relation_semantics,
+                relation.evidence_class,
+            )
+            .to_string(),
             cross_dataset: false,
             supporting_dataset_ids: vec![dataset.id],
         });
@@ -1614,6 +1648,42 @@ mod tests {
         }
         assert_eq!(safe_dataset_title("新百项目资料"), "新百项目资料");
         assert_eq!(safe_dataset_title("New Bai Project"), "New Bai Project");
+    }
+
+    #[test]
+    fn joint_analysis_relation_vocabulary_preserves_structure_and_analysis_boundaries() {
+        assert_eq!(
+            safe_relation_semantics("dataset_contains_object"),
+            Some(SemanticRelationSemantics::Structure)
+        );
+        assert_eq!(
+            safe_relation_semantics("object_contains_field"),
+            Some(SemanticRelationSemantics::Structure)
+        );
+        assert_eq!(
+            safe_relation_semantics("field_expresses_concept"),
+            Some(SemanticRelationSemantics::Structure)
+        );
+        assert_eq!(
+            safe_relation_semantics("temporal_complementarity"),
+            Some(SemanticRelationSemantics::Similarity)
+        );
+        assert_eq!(
+            safe_relation_label("temporal_complementarity", SemanticEvidenceClass::Inferred),
+            "可按时间联合分析"
+        );
+        assert!(safe_relation_reason(
+            "field_expresses_concept",
+            SemanticRelationSemantics::Structure,
+            SemanticEvidenceClass::Observed,
+        )
+        .contains("不是外键或记录关联"));
+        assert!(safe_relation_reason(
+            "temporal_complementarity",
+            SemanticRelationSemantics::Similarity,
+            SemanticEvidenceClass::Inferred,
+        )
+        .contains("不代表逐记录或逐人关联"));
     }
 
     #[test]
@@ -2163,7 +2233,7 @@ mod tests {
         graph_request.dataset_ids = vec![right.id];
         let query = normalize_query(graph_request).expect("two-dataset query");
 
-        let project = |reported_dataset_ids: Vec<DatasetId>| {
+        let project = |reported_dataset_ids: Vec<DatasetId>, reported_cross_dataset: bool| {
             sanitize_graph_for_visible_scope(
                 DatasetSemanticGraphV1 {
                     schema_version: DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION.to_string(),
@@ -2195,7 +2265,7 @@ mod tests {
                         evidence_class: SemanticEvidenceClass::Observed,
                         confidence: 0.72,
                         reason: "内部依据".to_string(),
-                        cross_dataset: reported_dataset_ids.len() >= 2,
+                        cross_dataset: reported_cross_dataset,
                         supporting_dataset_ids: reported_dataset_ids,
                     }],
                     truncated: DatasetSemanticGraphTruncation::default(),
@@ -2210,11 +2280,18 @@ mod tests {
             .expect("safe projected edge")
         };
 
-        let single_support = project(vec![left.id]);
+        let single_support = project(vec![left.id], false);
         assert_eq!(single_support.supporting_dataset_ids, vec![left.id]);
         assert!(!single_support.cross_dataset);
 
-        let cross_support = project(vec![left.id, right.id]);
+        let multi_support_structure = project(vec![left.id, right.id], false);
+        assert_eq!(
+            multi_support_structure.supporting_dataset_ids,
+            vec![left.id, right.id]
+        );
+        assert!(!multi_support_structure.cross_dataset);
+
+        let cross_support = project(vec![left.id, right.id], true);
         assert_eq!(
             cross_support.supporting_dataset_ids,
             vec![left.id, right.id]

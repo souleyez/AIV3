@@ -870,7 +870,7 @@ async function verifyCrossEnabledUi(page, chart, targetDatasetId, requestBody = 
     requestedRevision: Number(element.dataset.echartsRequestedRevision || 0),
     renderedRevision: Number(element.dataset.echartsRenderedRevision || 0),
   }));
-  const crossButton = page.getByRole('button', { name: '跨数据集', exact: true });
+  const crossButton = page.getByRole('button', { name: '联合图谱（跨数据集）', exact: true });
   assert.equal(await crossButton.count(), 1, 'cross-dataset mode must be visible when the feature is enabled');
   const uiRequest = page.waitForResponse((response) => (
     new URL(response.url()).pathname === '/api/v3/dataset-semantic-graphs/query'
@@ -1133,7 +1133,7 @@ async function liveBrowserSmoke(targetUrl) {
     let featureOff = { status: 'skipped', reason: 'pass --expect-feature-off during a feature-off deployment' };
     if (expectFeatureOff) {
       const currentDatasetButton = page.getByRole('button', { name: '当前数据集', exact: true });
-      const crossDatasetButton = page.getByRole('button', { name: '跨数据集', exact: true });
+      const crossDatasetButton = page.getByRole('button', { name: '联合图谱（跨数据集）', exact: true });
       assert.equal(await currentDatasetButton.count(), 1, 'single-dataset graph mode must remain visible while cross graph is off');
       assert.equal(await crossDatasetButton.count(), 0, 'cross-dataset graph mode must be hidden while the feature is off');
       assert.equal(await page.locator('.dataset-understanding-cross-selection').count(), 0, 'cross-dataset selection must be absent while the feature is off');

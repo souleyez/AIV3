@@ -9,7 +9,7 @@ use crate::semantic_understanding::{
 };
 
 pub const DATASET_SEMANTIC_GRAPH_SCHEMA_VERSION: &str = "1.0.0";
-pub const DATASET_SEMANTIC_GRAPH_GENERATION_VERSION: &str = "dataset_semantic_graph_v1";
+pub const DATASET_SEMANTIC_GRAPH_GENERATION_VERSION: &str = "dataset_semantic_graph_v2";
 
 const ABSOLUTE_MAX_DATASETS: usize = 8;
 const ABSOLUTE_MAX_ENDPOINTS: usize = 360;
@@ -136,6 +136,10 @@ pub struct CrossDatasetSemanticEndpointInput {
 pub enum CrossDatasetExplicitRelationKind {
     ForeignKey,
     ExplicitReference,
+    DatasetContainsObject,
+    ObjectContainsField,
+    FieldExpressesConcept,
+    TemporalComplementarity,
 }
 
 impl CrossDatasetExplicitRelationKind {
@@ -143,6 +147,10 @@ impl CrossDatasetExplicitRelationKind {
         match self {
             Self::ForeignKey => "foreign_key",
             Self::ExplicitReference => "explicit_reference",
+            Self::DatasetContainsObject => "dataset_contains_object",
+            Self::ObjectContainsField => "object_contains_field",
+            Self::FieldExpressesConcept => "field_expresses_concept",
+            Self::TemporalComplementarity => "temporal_complementarity",
         }
     }
 
@@ -154,6 +162,10 @@ impl CrossDatasetExplicitRelationKind {
             (Self::ExplicitReference, SemanticEvidenceClass::Confirmed) => "明确引用",
             (Self::ExplicitReference, SemanticEvidenceClass::Observed) => "引用关系线索",
             (Self::ExplicitReference, SemanticEvidenceClass::Inferred) => "可能引用",
+            (Self::DatasetContainsObject, _) => "包含业务对象",
+            (Self::ObjectContainsField, _) => "包含业务字段",
+            (Self::FieldExpressesConcept, _) => "表达业务概念",
+            (Self::TemporalComplementarity, _) => "可按时间联合分析",
         }
     }
 
@@ -177,6 +189,55 @@ impl CrossDatasetExplicitRelationKind {
             (Self::ExplicitReference, SemanticEvidenceClass::Inferred) => {
                 "现有证据提示可能存在引用关系，尚未确认。"
             }
+            (Self::DatasetContainsObject, _) => {
+                "数据集快照的可见结构表明该业务对象属于此数据集。"
+            }
+            (Self::ObjectContainsField, _) => {
+                "数据集快照的可见结构表明该字段属于此业务对象。"
+            }
+            (Self::FieldExpressesConcept, _) => {
+                "该字段的已复核名称或语义角色可归入此通用业务概念；这是图谱组织关系，不是外键或逐记录关联。"
+            }
+            (Self::TemporalComplementarity, _) => {
+                "两个数据集均包含日期维度，且客流指标与人群画像在业务上互补，形成按日期汇总比较的候选；仍需核验日期范围、时区与统计粒度，且不代表可以逐记录或逐人关联。"
+            }
+        }
+    }
+
+    fn relation_semantics(self) -> SemanticRelationSemantics {
+        match self {
+            Self::ForeignKey | Self::ExplicitReference => SemanticRelationSemantics::Reference,
+            Self::DatasetContainsObject
+            | Self::ObjectContainsField
+            | Self::FieldExpressesConcept => SemanticRelationSemantics::Structure,
+            Self::TemporalComplementarity => SemanticRelationSemantics::Similarity,
+        }
+    }
+
+    fn strongest_evidence_class(self) -> SemanticEvidenceClass {
+        match self {
+            Self::ForeignKey | Self::ExplicitReference => SemanticEvidenceClass::Confirmed,
+            Self::DatasetContainsObject
+            | Self::ObjectContainsField
+            | Self::FieldExpressesConcept => SemanticEvidenceClass::Observed,
+            Self::TemporalComplementarity => SemanticEvidenceClass::Inferred,
+        }
+    }
+
+    fn confidence(self, evidence_class: SemanticEvidenceClass) -> f64 {
+        match self {
+            Self::DatasetContainsObject | Self::ObjectContainsField => match evidence_class {
+                SemanticEvidenceClass::Confirmed => 1.0,
+                SemanticEvidenceClass::Observed => 0.95,
+                SemanticEvidenceClass::Inferred => 0.55,
+            },
+            Self::FieldExpressesConcept => match evidence_class {
+                SemanticEvidenceClass::Confirmed => 1.0,
+                SemanticEvidenceClass::Observed => 0.82,
+                SemanticEvidenceClass::Inferred => 0.52,
+            },
+            Self::TemporalComplementarity => 0.58,
+            Self::ForeignKey | Self::ExplicitReference => evidence_confidence(evidence_class),
         }
     }
 }
@@ -364,8 +425,8 @@ pub fn match_cross_dataset_semantic_graph(
         .collect::<BTreeMap<_, _>>();
     let mut all_nodes = nodes_by_id.into_values().collect::<Vec<_>>();
     all_nodes.sort_by(|left, right| {
-        node_sort_rank(&left.id)
-            .cmp(&node_sort_rank(&right.id))
+        node_sort_rank(left)
+            .cmp(&node_sort_rank(right))
             .then_with(|| left.id.cmp(&right.id))
     });
     let total_node_count = all_nodes.len().saturating_add(endpoints_truncated);
@@ -412,19 +473,27 @@ pub fn match_cross_dataset_semantic_graph(
         if source_id == target_id {
             continue;
         }
-        let evidence_class =
-            cap_semantic_evidence_class(relation.evidence_class, SemanticEvidenceClass::Confirmed);
-        let edge = build_edge(
+        let evidence_class = cap_semantic_evidence_class(
+            relation.evidence_class,
+            relation.kind.strongest_evidence_class(),
+        );
+        let mut edge = build_edge(
             source_id,
             target_id,
             relation.kind.relation_type(),
             relation.kind.label(evidence_class),
-            SemanticRelationSemantics::Reference,
+            relation.kind.relation_semantics(),
             evidence_class,
-            evidence_confidence(evidence_class),
+            relation.kind.confidence(evidence_class),
             relation.kind.reason(evidence_class),
             &all_node_dataset_refs,
         );
+        edge.supporting_dataset_ids = [relation.source_dataset_id, relation.target_dataset_id]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        edge.cross_dataset = edge.supporting_dataset_ids.len() >= 2;
         insert_edge_candidate(&mut edge_candidates, edge);
     }
 
@@ -770,7 +839,24 @@ fn insert_edge_candidate(
         edge.relation_type.clone(),
         evidence_rank(edge.evidence_class),
     );
-    candidates.entry(key).or_insert(edge);
+    match candidates.entry(key) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(edge);
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let existing = entry.get_mut();
+            existing.supporting_dataset_ids = existing
+                .supporting_dataset_ids
+                .iter()
+                .chain(edge.supporting_dataset_ids.iter())
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            existing.cross_dataset |= edge.cross_dataset;
+            existing.confidence = existing.confidence.max(edge.confidence);
+        }
+    }
 }
 
 fn evidence_confidence(class: SemanticEvidenceClass) -> f64 {
@@ -789,12 +875,17 @@ fn evidence_rank(class: SemanticEvidenceClass) -> u8 {
     }
 }
 
-fn node_sort_rank(id: &str) -> u8 {
-    if id.starts_with("shared:") {
-        0
-    } else {
-        1
-    }
+fn node_sort_rank(node: &DatasetSemanticGraphNode) -> (u8, u8) {
+    let scope_rank = if node.id.starts_with("shared:") { 0 } else { 1 };
+    let kind_rank = match node.kind {
+        DatasetSemanticGraphNodeKind::Dataset => 0,
+        DatasetSemanticGraphNodeKind::Concept => 1,
+        DatasetSemanticGraphNodeKind::Object => 2,
+        DatasetSemanticGraphNodeKind::Structure => 3,
+        DatasetSemanticGraphNodeKind::Document => 4,
+        DatasetSemanticGraphNodeKind::Field => 5,
+    };
+    (scope_rank, kind_rank)
 }
 
 #[derive(Debug)]
@@ -1318,6 +1409,210 @@ mod tests {
         );
         assert!(!graph.edges[0].label.contains("已确认"));
         assert!(graph.edges[0].reason.contains("尚未确认"));
+    }
+
+    #[test]
+    fn dataset_object_field_and_concept_edges_are_structure_not_reference() {
+        let left = dataset(35, "7月客流数据集");
+        let endpoints = vec![
+            endpoint(
+                left.id,
+                "dataset:root",
+                DatasetSemanticGraphNodeKind::Dataset,
+                "7月客流数据集",
+                Vec::new(),
+            ),
+            endpoint(
+                left.id,
+                "object:traffic",
+                DatasetSemanticGraphNodeKind::Object,
+                "小时客流明细",
+                Vec::new(),
+            ),
+            endpoint(
+                left.id,
+                "field:traffic-in",
+                DatasetSemanticGraphNodeKind::Field,
+                "进入人次",
+                Vec::new(),
+            ),
+            endpoint(
+                left.id,
+                "concept:traffic-metric",
+                DatasetSemanticGraphNodeKind::Concept,
+                "客流指标",
+                Vec::new(),
+            ),
+        ];
+        let mut graph_input = input(vec![left.clone()], endpoints);
+        graph_input.explicit_relations = vec![
+            CrossDatasetExplicitRelationInput {
+                source_dataset_id: left.id,
+                source_local_node_id: "dataset:root".to_string(),
+                target_dataset_id: left.id,
+                target_local_node_id: "object:traffic".to_string(),
+                kind: CrossDatasetExplicitRelationKind::DatasetContainsObject,
+                evidence_class: SemanticEvidenceClass::Confirmed,
+            },
+            CrossDatasetExplicitRelationInput {
+                source_dataset_id: left.id,
+                source_local_node_id: "object:traffic".to_string(),
+                target_dataset_id: left.id,
+                target_local_node_id: "field:traffic-in".to_string(),
+                kind: CrossDatasetExplicitRelationKind::ObjectContainsField,
+                evidence_class: SemanticEvidenceClass::Observed,
+            },
+            CrossDatasetExplicitRelationInput {
+                source_dataset_id: left.id,
+                source_local_node_id: "field:traffic-in".to_string(),
+                target_dataset_id: left.id,
+                target_local_node_id: "concept:traffic-metric".to_string(),
+                kind: CrossDatasetExplicitRelationKind::FieldExpressesConcept,
+                evidence_class: SemanticEvidenceClass::Observed,
+            },
+        ];
+
+        let graph = match_cross_dataset_semantic_graph(&graph_input);
+
+        assert_eq!(graph.edges.len(), 3);
+        assert!(graph.edges.iter().all(|edge| {
+            edge.relation_semantics == SemanticRelationSemantics::Structure
+                && edge.evidence_class == SemanticEvidenceClass::Observed
+                && !edge.cross_dataset
+        }));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.relation_type == "dataset_contains_object"));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.relation_type == "object_contains_field"));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.relation_type == "field_expresses_concept"
+                && edge.reason.contains("不是外键或逐记录关联")
+        }));
+    }
+
+    #[test]
+    fn duplicate_shared_structure_edges_merge_provenance_without_becoming_cross_links() {
+        let left = dataset(38, "左数据集");
+        let right = dataset(39, "右数据集");
+        let shared_field_identity = CrossDatasetCanonicalIdentity::ExactSourceField {
+            source_system_key: "reviewed-source".to_string(),
+            source_schema_key: "reviewed-schema".to_string(),
+            source_object_key: "reviewed-object".to_string(),
+            source_field_key: "reviewed-field".to_string(),
+        };
+        let shared_concept_identity = CrossDatasetCanonicalIdentity::ConfirmedConcept {
+            concept_id: "business-time".to_string(),
+        };
+        let mut graph_input = input(
+            vec![left.clone(), right.clone()],
+            vec![
+                endpoint(
+                    left.id,
+                    "field:left",
+                    DatasetSemanticGraphNodeKind::Field,
+                    "业务日期",
+                    vec![shared_field_identity.clone()],
+                ),
+                endpoint(
+                    right.id,
+                    "field:right",
+                    DatasetSemanticGraphNodeKind::Field,
+                    "业务日期",
+                    vec![shared_field_identity],
+                ),
+                endpoint(
+                    left.id,
+                    "concept:left",
+                    DatasetSemanticGraphNodeKind::Concept,
+                    "时间维度",
+                    vec![shared_concept_identity.clone()],
+                ),
+                endpoint(
+                    right.id,
+                    "concept:right",
+                    DatasetSemanticGraphNodeKind::Concept,
+                    "时间维度",
+                    vec![shared_concept_identity],
+                ),
+            ],
+        );
+        graph_input.explicit_relations = vec![
+            CrossDatasetExplicitRelationInput {
+                source_dataset_id: left.id,
+                source_local_node_id: "field:left".to_string(),
+                target_dataset_id: left.id,
+                target_local_node_id: "concept:left".to_string(),
+                kind: CrossDatasetExplicitRelationKind::FieldExpressesConcept,
+                evidence_class: SemanticEvidenceClass::Observed,
+            },
+            CrossDatasetExplicitRelationInput {
+                source_dataset_id: right.id,
+                source_local_node_id: "field:right".to_string(),
+                target_dataset_id: right.id,
+                target_local_node_id: "concept:right".to_string(),
+                kind: CrossDatasetExplicitRelationKind::FieldExpressesConcept,
+                evidence_class: SemanticEvidenceClass::Observed,
+            },
+        ];
+
+        let graph = match_cross_dataset_semantic_graph(&graph_input);
+
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].relation_type, "field_expresses_concept");
+        assert_eq!(
+            graph.edges[0].supporting_dataset_ids,
+            vec![left.id, right.id]
+        );
+        assert!(!graph.edges[0].cross_dataset);
+    }
+
+    #[test]
+    fn temporal_complementarity_is_inferred_and_disclaims_record_level_linkage() {
+        let left = dataset(36, "7月客流数据集");
+        let right = dataset(37, "客流画像");
+        let endpoints = vec![
+            endpoint(
+                left.id,
+                "dataset:root",
+                DatasetSemanticGraphNodeKind::Dataset,
+                "7月客流数据集",
+                Vec::new(),
+            ),
+            endpoint(
+                right.id,
+                "dataset:root",
+                DatasetSemanticGraphNodeKind::Dataset,
+                "客流画像",
+                Vec::new(),
+            ),
+        ];
+        let mut graph_input = input(vec![left.clone(), right.clone()], endpoints);
+        graph_input.explicit_relations = vec![CrossDatasetExplicitRelationInput {
+            source_dataset_id: left.id,
+            source_local_node_id: "dataset:root".to_string(),
+            target_dataset_id: right.id,
+            target_local_node_id: "dataset:root".to_string(),
+            kind: CrossDatasetExplicitRelationKind::TemporalComplementarity,
+            evidence_class: SemanticEvidenceClass::Confirmed,
+        }];
+
+        let graph = match_cross_dataset_semantic_graph(&graph_input);
+
+        assert_eq!(graph.edges.len(), 1);
+        let edge = &graph.edges[0];
+        assert_eq!(edge.relation_type, "temporal_complementarity");
+        assert_eq!(edge.label, "可按时间联合分析");
+        assert_eq!(
+            edge.relation_semantics,
+            SemanticRelationSemantics::Similarity
+        );
+        assert_eq!(edge.evidence_class, SemanticEvidenceClass::Inferred);
+        assert!(edge.cross_dataset);
+        assert!(edge.reason.contains("不代表可以逐记录或逐人关联"));
     }
 
     #[test]

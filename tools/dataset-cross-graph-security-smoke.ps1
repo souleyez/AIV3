@@ -127,7 +127,10 @@ $suites = @(
         "exact_document_field_and_confirmed_concept_identities_fold_but_source_name_does_not",
         "equal_chinese_labels_are_inferred_only_when_explicitly_enabled_and_never_fold",
         "explicit_fk_and_reference_edges_preserve_requested_evidence_class",
-        "non_confirmed_fk_never_uses_confirmed_public_wording"
+        "non_confirmed_fk_never_uses_confirmed_public_wording",
+        "dataset_object_field_and_concept_edges_are_structure_not_reference",
+        "duplicate_shared_structure_edges_merge_provenance_without_becoming_cross_links",
+        "temporal_complementarity_is_inferred_and_disclaims_record_level_linkage"
     )),
     (Invoke-CargoFixtureGate -Name "relation-evidence-cap" -Filter "semantic_relation_builder" -ExpectedTests @(
         "explicit_fk_parent_reference_and_observed_containment_keep_evidence_classes",
@@ -139,6 +142,8 @@ $suites = @(
         "auto_neighbors_filter_visibility_then_rank_reliable_evidence_only",
         "etag_is_deterministic_but_changes_with_scope_and_query_limits",
         "public_projection_recomputes_visible_scope_and_drops_internal_material",
+        "public_projection_never_promotes_reported_single_dataset_support_to_cross_dataset",
+        "joint_analysis_relation_vocabulary_preserves_structure_and_analysis_boundaries",
         "pair_missing_is_non_error_status_and_cache_response_supports_304",
         "absolute_node_and_edge_budget_stays_below_two_megabytes"
     )),
