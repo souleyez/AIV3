@@ -62,7 +62,13 @@ jobs:
           echo "${RUNNER_TEMP}/node-${node_version}/bin" >> "${GITHUB_PATH}"
 
       - name: Install pnpm
-        run: npm install --global pnpm@10.33.2
+        shell: pwsh
+        run: |
+          $prefixName = 'pnpm-{0}-{1}-{2}' -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT, $env:GITHUB_JOB
+          $prefix = Join-Path $env:RUNNER_TEMP $prefixName
+          npm install --prefix $prefix pnpm@10.33.2
+          Join-Path (Join-Path $prefix 'node_modules') '.bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Check Node toolchain
         run: |
@@ -290,7 +296,13 @@ jobs:
           echo "${RUNNER_TEMP}/node-${node_version}/bin" >> "${GITHUB_PATH}"
 
       - name: Install pnpm
-        run: npm install --global pnpm@10.33.2
+        shell: pwsh
+        run: |
+          $prefixName = 'pnpm-{0}-{1}-{2}' -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT, $env:GITHUB_JOB
+          $prefix = Join-Path $env:RUNNER_TEMP $prefixName
+          npm install --prefix $prefix pnpm@10.33.2
+          Join-Path (Join-Path $prefix 'node_modules') '.bin' |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Check Node toolchain
         run: |
