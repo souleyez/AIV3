@@ -374,7 +374,7 @@ async fn main() -> Result<()> {
         worker_concurrency,
         %runtime_mode,
         %runtime_stream_mode,
-        %database_url,
+        database_endpoint = %observability::redact_connection_endpoint(&database_url),
         "chat-session-worker polling started"
     );
 

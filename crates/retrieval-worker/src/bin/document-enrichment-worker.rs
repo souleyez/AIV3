@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         error_backoff_seconds = config.error_backoff.num_seconds(),
         once = config.once,
         max_runs = config.max_runs.unwrap_or(0),
-        %database_url,
+        database_endpoint = %observability::redact_connection_endpoint(&database_url),
         "document enrichment worker polling started"
     );
 

@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
-        %database_url,
+        database_endpoint = %observability::redact_connection_endpoint(&database_url),
         "assistant-run-worker polling started"
     );
 

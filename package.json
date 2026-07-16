@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "check:sensitive-log-fields": "node tools/check-sensitive-log-fields.mjs",
     "test:web": "npm --prefix apps/web test",
     "capture:authorized-video": "node scripts/capture-authorized-video.mjs",
     "smoke:external-channel-20way": "node scripts/smoke/external-channel-20way.mjs",

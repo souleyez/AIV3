@@ -99,12 +99,11 @@ pub async fn local_postgres_storage() -> std::result::Result<PgStorage, String> 
     ensure_safe_local_postgres_fixture_url(&database_url)?;
     let storage = PgStorage::connect_with_settings(&database_url, 4, Duration::from_secs(10))
         .await
-        .map_err(|error| {
-            format!("failed to connect local postgres fixture at {database_url}: {error}")
-        })?;
-    storage.migrate().await.map_err(|error| {
-        format!("failed to migrate local postgres fixture at {database_url}: {error}")
-    })?;
+        .map_err(|_| local_postgres_fixture_error("connect", &database_url))?;
+    storage
+        .migrate()
+        .await
+        .map_err(|_| local_postgres_fixture_error("migrate", &database_url))?;
     Ok(storage)
 }
 
@@ -127,6 +126,7 @@ fn ensure_safe_local_postgres_fixture_url(database_url: &str) -> std::result::Re
     if database_name_looks_disposable(&database_name) {
         return Ok(());
     }
+    let database_name = safe_database_name_for_logging(&database_name);
     Err(format!(
         "refusing to use non-test postgres fixture database '{database_name}'. \
          Point PLATFORM_DATABASE_URL at a disposable test database, or set \
@@ -144,6 +144,7 @@ async fn ensure_safe_local_postgres_fixture_database(storage: &PgStorage) -> Res
     if database_name_looks_disposable(&database_name) {
         return Ok(());
     }
+    let database_name = safe_database_name_for_logging(&database_name);
     bail!(
         "refusing to reset non-test postgres fixture database '{database_name}'. \
          Point PLATFORM_DATABASE_URL at a disposable test database, or set \
@@ -173,6 +174,36 @@ fn database_name_from_url(database_url: &str) -> Option<String> {
     (!raw_name.is_empty()).then(|| raw_name.to_ascii_lowercase())
 }
 
+fn local_postgres_fixture_error(operation: &str, database_url: &str) -> String {
+    let database_endpoint = observability::redact_connection_endpoint(database_url);
+    let database_name = if database_endpoint == "<redacted-endpoint>" {
+        "<unknown>".to_string()
+    } else {
+        database_name_from_url(database_url)
+            .map(|name| safe_database_name_for_logging(&name))
+            .unwrap_or_else(|| "<unknown>".to_string())
+    };
+    format!(
+        "failed to {operation} local postgres fixture at {database_endpoint}, database '{database_name}'"
+    )
+}
+
+fn safe_database_name_for_logging(database_name: &str) -> String {
+    let safe_name: String = database_name
+        .chars()
+        .take(128)
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '.' => character,
+            _ => '_',
+        })
+        .collect();
+    if safe_name.is_empty() {
+        "<unknown>".to_string()
+    } else {
+        safe_name
+    }
+}
+
 fn database_name_looks_disposable(database_name: &str) -> bool {
     let normalized = database_name.trim().to_ascii_lowercase().replace('-', "_");
     normalized.contains("test")
@@ -199,5 +230,41 @@ mod tests {
         assert!(!database_name_looks_disposable("ai_data_platform_v3"));
         assert!(database_name_looks_disposable("ai_data_platform_v3_test"));
         assert!(database_name_looks_disposable("scratch_aiv3"));
+    }
+
+    #[test]
+    fn fixture_failure_message_never_contains_database_credentials() {
+        let raw = "postgresql://pilot%40user:s%40per-secret@db.internal:5432/aiv3_test?sslmode=require&token=hidden#credential";
+
+        for operation in ["connect", "migrate"] {
+            let message = local_postgres_fixture_error(operation, raw);
+
+            assert_eq!(
+                message,
+                format!(
+                    "failed to {operation} local postgres fixture at postgresql://db.internal:5432, database 'aiv3_test'"
+                )
+            );
+            assert!(!message.contains("pilot"));
+            assert!(!message.contains("secret"));
+            assert!(!message.contains("sslmode"));
+            assert!(!message.contains("hidden"));
+            assert!(!message.contains("credential"));
+        }
+
+        let malformed = local_postgres_fixture_error("connect", "secret-only-value");
+        assert_eq!(
+            malformed,
+            "failed to connect local postgres fixture at <redacted-endpoint>, database '<unknown>'"
+        );
+        assert!(!malformed.contains("secret-only-value"));
+    }
+
+    #[test]
+    fn fixture_database_name_logging_removes_control_characters() {
+        assert_eq!(
+            safe_database_name_for_logging("production\nforged-log\tentry"),
+            "production_forged-log_entry"
+        );
     }
 }

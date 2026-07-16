@@ -812,6 +812,7 @@ dependencies = [
  "async-nats",
  "chrono",
  "futures-util",
+ "observability",
  "serde",
  "serde_json",
  "tokio",
@@ -1761,7 +1762,9 @@ name = "observability"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -2985,6 +2988,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "domain-model",
+ "observability",
  "serde_json",
  "sqlx",
  "storage",

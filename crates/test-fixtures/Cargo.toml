@@ -9,6 +9,7 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 domain-model = { path = "../domain-model" }
+observability = { path = "../observability" }
 serde_json.workspace = true
 sqlx.workspace = true
 storage = { path = "../storage" }

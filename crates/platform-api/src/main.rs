@@ -25,7 +25,12 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("PLATFORM_API_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!(%addr, %database_url, tenant_key = %tenant.key, "platform-api listening");
+    tracing::info!(
+        %addr,
+        database_endpoint = %observability::redact_connection_endpoint(&database_url),
+        tenant_key = %tenant.key,
+        "platform-api listening"
+    );
     axum::serve(
         listener,
         platform_api::router(storage, workflow_catalog, tenant.id, event_bus),

@@ -1,4 +1,5 @@
 use external_source_connectors::MySqlSourceConfig;
+use observability::redact_connection_endpoint;
 use serde_json::{json, Value};
 
 use crate::{
@@ -73,12 +74,7 @@ pub(crate) fn infer_database_name_from_connection_url(url: &str) -> Option<Strin
 }
 
 pub(crate) fn redact_database_connection_url(url: &str) -> String {
-    let without_query = url.split(['?', '#']).next().unwrap_or(url.trim());
-    let Some((scheme, rest)) = without_query.split_once("://") else {
-        return "[redacted-database-url]".to_string();
-    };
-    let rest = rest.rsplit_once('@').map(|(_, host)| host).unwrap_or(rest);
-    format!("{scheme}://{rest}")
+    redact_connection_endpoint(url)
 }
 
 pub(crate) fn external_database_source_config_summary(config: &Value) -> Value {
@@ -177,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn database_name_and_redacted_url_preserve_existing_connection_url_semantics() {
+    fn database_name_and_redacted_url_keep_database_name_but_hide_connection_details() {
         assert_eq!(
             infer_database_name_from_connection_url(
                 "mysql://user:pass@db.example.com:3306/xinbai?ssl=true",
@@ -199,15 +195,15 @@ mod tests {
 
         assert_eq!(
             redact_database_connection_url("mysql://user:pass@db.example.com:3306/xinbai?token=x"),
-            "mysql://db.example.com:3306/xinbai"
+            "mysql://db.example.com:3306"
         );
         assert_eq!(
             redact_database_connection_url("jdbc:mysql://db.example.com/reporting#secret"),
-            "jdbc:mysql://db.example.com/reporting"
+            "jdbc:mysql://db.example.com"
         );
         assert_eq!(
             redact_database_connection_url("not-a-url"),
-            "[redacted-database-url]"
+            "<redacted-endpoint>"
         );
     }
 
