@@ -2,7 +2,7 @@
 
 **Plan:** `docs/plans/2026-07-16-datamax-v3-quality-and-production-readiness.md`
 
-**Status:** OPEN — TASK 1 IMPLEMENTATION COMPLETE; TASK 2 NEXT
+**Status:** OPEN — TASK 2 IN PROGRESS
 
 **Created:** 2026-07-16
 
@@ -38,7 +38,7 @@
 | Task | Gate | State | Required proof |
 |---|---|---|---|
 | 1 | Connection URL redaction | implementation complete; runtime closure in Task 2 | commit `6bc3ac45`; local gates green; count-only journal audit set `rotation_required=postgresql` |
-| 2 | Main/CI/server identity | pending | one SHA across main, required CI and server |
+| 2 | Main/CI/server identity | in progress | exact PR-head passes from `No-Credential Smoke`, `Rust P0`, `Web`; preserved ancestry; one release SHA across main and server |
 | 3 | Disposable PostgreSQL and mock integration | pending | zero silent early returns; disposable DB removed |
 | 4 | Migration runner | pending | ledger/checksum/concurrency/legacy/no-op tests |
 | 5 | Field semantic contract | pending | confirmed scoped contract round-trip and fail-closed negatives |

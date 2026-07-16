@@ -10,13 +10,13 @@
 
 ---
 
-**Status:** READY FOR TASK 2 — TASK 1 CODE COMPLETE; RUNTIME CLOSURE MOVES WITH TASK 2
+**Status:** IN PROGRESS — TASK 2 MAIN/CI/SERVER RECONCILIATION
 
 **Created:** 2026-07-16
 
 **Last completed implementation:** Task 1 — 连接串和启动日志脱敏，commit `6bc3ac45c42d4242a5d3dc1209e7e2ba17300ba7`
 
-**Next task:** Task 2 — 主线、CI 与 8 服务器发布线归一
+**Current task:** Task 2 — 主线、CI 与 8 服务器发布线归一
 
 **Validation ledger:** `docs/validation/2026-07-16-datamax-v3-quality-readiness.md`
 
@@ -142,7 +142,7 @@ cargo test -p event-bus
 cargo test -p test-fixtures
 node --test tools/check-sensitive-log-fields.test.mjs
 node tools/check-sensitive-log-fields.mjs
-cargo check --workspace
+cargo check --workspace --locked
 rg -n "%database_url|%nats_url|\{database_url\}" crates
 git diff --check
 ```
@@ -173,9 +173,11 @@ git commit -m "fix: redact runtime connection endpoints"
 - Create: `docs/operations/datamax-release-line.md`
 - Modify: `docs/validation/2026-07-16-datamax-v3-quality-readiness.md`
 
+**Discovered GitHub control-plane constraint (2026-07-16):** this repository is private and its current GitHub plan rejects branch protection, rulesets and protected-environment reviewers with an upgrade-required response. The repository will not be made public to bypass that limit. For this cycle, the three named PR jobs are an operator-enforced merge gate: the merge may proceed only after all three pass on the exact PR head. The manual server8 workflow still validates `main` plus an exact SHA and names an environment for audit grouping, but does not claim unavailable platform protection and performs no deployment mutation. Root SSH follows the versioned runbook. Platform-enforced required checks remain a recorded account-level limitation rather than a hidden pass.
+
 **Step 1: Remove pull-request execution from the deployment host**
 
-Move untrusted PR jobs from the `server8` self-hosted label to an isolated runner or `ubuntu-24.04`. Keep any 8-server action in a separate `workflow_dispatch` release workflow protected by a GitHub environment. The release workflow must check out an exact merged `main` SHA and may not accept an arbitrary ref.
+Move untrusted PR jobs from the `server8` self-hosted label to `ubuntu-24.04`. Keep any 8-server action in a separate `workflow_dispatch` release identity workflow. It must run only from `main`, check out `${{ github.sha }}` rather than a user-supplied ref, compare it with a required exact-SHA confirmation, and perform only a clean/ancestry preflight. Reference the `datamax-server8` environment for audit grouping; current-plan protection limits are recorded above. Actual deployment remains in the root-SSH runbook.
 
 **Step 2: Add the current P0 deterministic gates**
 
@@ -208,11 +210,11 @@ Expected: local gates are green and the workflow diff contains no secret values 
 
 **Step 4: Open the one-time reconciliation PR**
 
-Push Task 1 plus this docs/CI cutover branch, open a PR into `main`, and require the no-credential, Rust and Web jobs. Review the 43-commit difference explicitly; do not force-push or rewrite the deployed history.
+Push Task 1 plus this docs/CI cutover branch and open a PR into `main`. Treat `No-Credential Smoke`, `Rust P0` and `Web` as mandatory: verify all three on the exact PR head and do not merge while any is missing, pending, cancelled or failed. Review the 43-commit deployed-branch difference plus the Task 1/2 commits explicitly; do not force-push, squash, rebase or otherwise rewrite the deployed history.
 
 **Step 5: Merge and align the server**
 
-After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Rebuild/restart only services changed by Task 1. Verify their new startup records contain only redacted endpoints; if Task 1 recorded `rotation_required`, rotate the affected database/NATS credential now through the approved secret channel and restart the dependent services once more. Do not change feature flags.
+After required checks pass, merge to `main`. Fast-forward `/srv/aiv3/repo` to the exact merged SHA and make its upstream `origin/main`. Because the redaction helpers are statically linked shared crates, rebuild every Rust runtime package and restart all 16 Rust services with the old credential. Verify a fresh count-only journal window is zero; Task 1 recorded `rotation_required=postgresql`, so rotate only the PostgreSQL credential through the root-only channel, restart the 17 environment dependents, and verify again. Do not change feature flags.
 
 **Step 6: Verify identity and runtime**
 
@@ -222,17 +224,15 @@ server worktree == clean
 healthz == 200
 readyz == 200
 both public Web entry points == 200
-changed services == active/running, NRestarts == 0
+all 18 AIV3 services == active/running, NRestarts == 0
+pre/post-rotation fresh-window credential URL counts == 0
 ```
 
 **Step 7: Commit the release receipt**
 
-```powershell
-git add docs/operations/datamax-release-line.md docs/validation/2026-07-16-datamax-v3-quality-readiness.md
-git commit -m "docs: record mainline reconciliation receipt"
-```
+After runtime evidence exists, create a second short-lived docs-only branch from the merged runtime `main`; update only the runbook, active plan/pointer and validation ledger, then commit `docs: record mainline reconciliation receipt`. Open a second PR, require the same three Ubuntu jobs, merge without squash/rebase, and wait for the `main` jobs. Fast-forward the server checkout and local `main` to this receipt SHA only after proving the runtime-to-receipt delta contains those four documentation paths and nothing else; no rebuild or restart is required. Dispatch the read-only release identity gate again on the final receipt SHA.
 
-**Completion standard:** deployed code, GitHub `main`, local `main` and required CI all identify the same SHA; future work starts from short-lived branches off main.
+**Completion standard:** 8-server checkout, GitHub `main` and local `main` identify the same final receipt SHA; its runtime ancestor supplied the running binaries and passed the same three jobs; both SHAs contain the redaction floor; the final identity workflow succeeds. Future work starts from short-lived branches off main. The validation ledger must state that GitHub cannot platform-enforce those jobs until the private-repository plan supports protection rules.
 
 ## Task 3: Make PostgreSQL and mock integration tests fail instead of silently skipping
 

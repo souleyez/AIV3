@@ -2,6 +2,8 @@ name: DataMax CI
 
 on:
   pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -10,18 +12,29 @@ on:
 permissions:
   contents: read
 
-env:
-  PATH: /home/github-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+concurrency:
+  group: datamax-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   no-credential-smoke:
     name: No-Credential Smoke
-    runs-on: [self-hosted, Linux, X64, aiv3, server8, light]
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.1
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.33.2
 
       - name: Check Node toolchain
         run: |
@@ -31,6 +44,9 @@ jobs:
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Guard sensitive connection log fields
+        run: node tools/check-sensitive-log-fields.mjs
 
       - name: Check smoke script syntax
         run: |
@@ -63,6 +79,7 @@ jobs:
           npm run smoke:document-object-filesystem-preflight -- --self-test
           npm run smoke:document-object-repair-plan -- --self-test
           npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout
+          npm run smoke:newbai-customer-answer-live-capture -- --self-test
 
       - name: Guard asset and public integration contracts
         run: |
@@ -76,23 +93,42 @@ jobs:
       - name: Check generated public integration guide
         run: npm run check:pure-third-party-guide-html
 
-      - name: Run web unit tests
-        run: npm run test:web
-
-      - name: Build web app
-        run: npm --prefix apps/web run build
-
   rust-minimal:
-    name: Rust Minimal
-    runs-on: [self-hosted, Linux, X64, aiv3, server8, light]
-    timeout-minutes: 45
+    name: Rust P0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       CC: clang
       CXX: clang++
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.95.0
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential clang cmake libsqlite3-dev libssl-dev pkg-config
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: datamax-rust-1.95.0-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            datamax-rust-1.95.0-${{ runner.os }}-
 
       - name: Check Rust and native toolchain
         run: |
@@ -103,28 +139,98 @@ jobs:
           command -v clang++
 
       - name: Rust format
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
       - name: Rust workspace check
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
+
+      - name: Connection redaction gates
+        run: cargo test --locked -p observability -p event-bus -p test-fixtures
+
+      - name: Current P0 filtered tests
+        shell: bash
+        run: |
+          run_filtered_test() {
+            local name="$1"
+            shift
+            local output
+            output="$(mktemp)"
+            echo "== ${name} =="
+            set +e
+            "$@" 2>&1 | tee "${output}"
+            local command_status=${PIPESTATUS[0]}
+            set -e
+            if (( command_status != 0 )); then
+              rm -f "${output}"
+              return "${command_status}"
+            fi
+            if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "${output}"; then
+              echo "filtered test gate executed zero tests: ${name}" >&2
+              rm -f "${output}"
+              return 1
+            fi
+            rm -f "${output}"
+          }
+
+          run_filtered_test "external channel action prompt" \
+            cargo test --locked -p platform-api external_channel_action_prompt_support::tests --lib
+          run_filtered_test "database field support" \
+            cargo test --locked -p platform-api database_field_support --lib
+          run_filtered_test "database prompt support" \
+            cargo test --locked -p platform-api database_prompt_support --lib
+          run_filtered_test "aggregate query" \
+            cargo test --locked -p external-source-connectors aggregate_query --lib
+
+      - name: Assistant answer contract smokes
+        run: |
+          bash scripts/run-assistant-chat-contract-smoke.sh
+          bash scripts/run-external-direct-reply-smoke.sh
 
       - name: Guard asset import modules
         run: |
-          cargo test -p platform-api asset_import --lib
-          cargo test -p platform-api fashion_postchain_adapter --lib
+          cargo test --locked -p platform-api asset_import --lib
+          cargo test --locked -p platform-api fashion_postchain_adapter --lib
 
       - name: Dataset semantic understanding gates
         run: |
-          cargo test -p storage dataset_semantic --lib
-          cargo test -p platform-api semantic_understanding --lib
-          cargo test -p platform-api dataset_semantic --lib
-          cargo test -p retrieval-worker semantic_profile
+          cargo test --locked -p storage dataset_semantic --lib
+          cargo test --locked -p platform-api semantic_understanding --lib
+          cargo test --locked -p platform-api dataset_semantic --lib
+          cargo test --locked -p retrieval-worker semantic_profile
 
       - name: Model gateway tests
         run: |
-          cargo test -p platform-api gateway_limiter --lib
-          cargo test -p platform-api model_gateway_profile --lib
-          cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
+          cargo test --locked -p platform-api gateway_limiter --lib
+          cargo test --locked -p platform-api model_gateway_profile --lib
+          cargo test --locked -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
 
       - name: Static page worker tests
-        run: cargo test -p static-page-worker --lib
+        run: cargo test --locked -p static-page-worker --lib
+
+  web:
+    name: Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.1
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.33.2
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run web unit tests
+        run: npm run test:web
+
+      - name: Build web app
+        run: npm --prefix apps/web run build
