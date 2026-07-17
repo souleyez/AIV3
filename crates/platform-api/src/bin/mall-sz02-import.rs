@@ -729,7 +729,7 @@ fn parse_i16_range(
 
 fn parse_entity_type(record: &CsvRecord, index: usize) -> Result<i16> {
     let value = parse_i16_range(record, index, "entityType", 0, i16::MAX)?;
-    if !matches!(value, 20 | 40 | 60 | 70 | 80) {
+    if !matches!(value, 20 | 30 | 40 | 60 | 70 | 80) {
         bail!(
             "record {} field entityType is unsupported",
             record.record_number
@@ -2401,6 +2401,21 @@ mod tests {
         assert!(parse_nonnegative_decimal(&record(&["-0.1"]), 0, "averageStay").is_err());
         assert!(parse_share(&record(&["1.0001"]), 0).is_err());
         assert!(parse_share(&record(&["not-a-number"]), 0).is_err());
+    }
+
+    #[test]
+    fn entity_type_whitelist_accepts_inventory_only_30_and_rejects_unlisted_values() {
+        for supported in [20, 30, 40, 60, 70, 80] {
+            let value = supported.to_string();
+            assert_eq!(
+                parse_entity_type(&record(&[&value]), 0).expect("supported entityType"),
+                supported
+            );
+        }
+
+        let error = parse_entity_type(&record(&["50"]), 0)
+            .expect_err("unlisted entityType must remain unsupported");
+        assert!(error.to_string().contains("entityType is unsupported"));
     }
 
     #[test]
