@@ -408,6 +408,7 @@ pub mod external_wecom;
 pub mod fact_index;
 #[allow(dead_code)]
 mod fashion_postchain_adapter_support;
+mod mall_sz02_analytics_support;
 pub mod semantic_label_resolver;
 pub mod semantic_profile_adapters;
 pub mod semantic_relation_builder;
@@ -1253,6 +1254,14 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}/tabular-schema",
             get(dataset_tabular_schema_support::get_dataset_tabular_schema),
+        )
+        .route(
+            "/v1/public/malls/{mall_id}/traffic/report-data",
+            get(mall_sz02_analytics_support::get_public_mall_traffic_report_data),
+        )
+        .route(
+            "/v1/public/malls/{mall_id}/profile/summary",
+            get(mall_sz02_analytics_support::get_public_mall_profile_summary),
         )
         .route(
             "/v1/dataset-semantic-graphs/query",

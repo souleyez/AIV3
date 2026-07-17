@@ -149,6 +149,12 @@ pub const DATASET_SEMANTIC_CROSS_GRAPH_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0020_dataset_semantic_cross_graph.sql"),
 };
 
+pub const MALL_SZ02_ANALYTICS_SCHEMA: Migration = Migration {
+    version: "0022",
+    description: "mall SZ02 relational traffic and profile analytics",
+    sql: include_str!("../migrations/0022_mall_sz02_analytics.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -169,6 +175,7 @@ pub const MIGRATIONS: &[Migration] = &[
     ASSET_RETRIEVAL_EVIDENCES_SCHEMA,
     DATASET_SEMANTIC_UNDERSTANDING_SCHEMA,
     DATASET_SEMANTIC_CROSS_GRAPH_SCHEMA,
+    MALL_SZ02_ANALYTICS_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -242,6 +249,12 @@ pub const TABLES: &[&str] = &[
     "v3_client_config_packages",
     "v3_client_artifacts",
     "v3_client_artifact_files",
+    "mall_sz02.ingest_batch",
+    "mall_sz02.traffic_point_dim",
+    "mall_sz02.traffic_hourly_fact",
+    "mall_sz02.profile_daily_summary",
+    "mall_sz02.profile_distribution_daily",
+    "mall_sz02.profile_distribution_period",
 ];
 
 pub const DEFAULT_LOCAL_DATABASE_URL: &str =
@@ -12732,10 +12745,15 @@ mod tests {
 
     #[test]
     fn dataset_semantic_link_migration_has_pair_and_state_machine_constraints() {
-        assert_eq!(
-            MIGRATIONS.last().map(|migration| migration.version),
-            Some("0020")
-        );
+        let cross_graph_position = MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == "0020")
+            .expect("dataset semantic cross-graph migration registered");
+        let mall_analytics_position = MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == "0022")
+            .expect("mall SZ02 analytics migration registered");
+        assert!(cross_graph_position < mall_analytics_position);
         for table in [
             "dataset_semantic_link_snapshots",
             "dataset_semantic_link_runs",
@@ -12783,6 +12801,154 @@ mod tests {
         assert!(
             !sql.contains("snapshot_id uuid not null references dataset_semantic_snapshots (id)")
         );
+    }
+
+    #[test]
+    fn mall_sz02_analytics_migration_has_relational_contract_and_provenance() {
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some("0022")
+        );
+        assert_eq!(
+            MALL_SZ02_ANALYTICS_SCHEMA.description,
+            "mall SZ02 relational traffic and profile analytics"
+        );
+
+        let tables = [
+            "ingest_batch",
+            "traffic_point_dim",
+            "traffic_hourly_fact",
+            "profile_daily_summary",
+            "profile_distribution_daily",
+            "profile_distribution_period",
+        ];
+        let sql = MALL_SZ02_ANALYTICS_SCHEMA.sql;
+        let compact_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(sql.contains("create schema if not exists mall_sz02"));
+        assert_eq!(
+            sql.matches("create table if not exists mall_sz02.").count(),
+            tables.len()
+        );
+        for table in tables {
+            let qualified = format!("mall_sz02.{table}");
+            assert!(TABLES.contains(&qualified.as_str()));
+            assert!(sql.contains(&format!("create table if not exists {qualified}")));
+        }
+
+        assert_eq!(sql.matches("references public.tenants").count(), 6);
+        assert_eq!(sql.matches("references public.datasets").count(), 6);
+        assert_eq!(sql.matches("references public.documents").count(), 5);
+        assert!(sql.contains("on public.documents (tenant_id, id)"));
+        assert_eq!(
+            sql.matches("foreign key (tenant_id, source_document_id)")
+                .count(),
+            5
+        );
+        assert_eq!(sql.matches("batch_id uuid not null").count(), 5);
+        assert_eq!(sql.matches("source_document_id uuid not null").count(), 5);
+        assert_eq!(sql.matches("source_row_number bigint not null").count(), 5);
+        assert_eq!(sql.matches("mall_code text not null").count(), 6);
+        assert_eq!(
+            sql.matches("foreign key (tenant_id, dataset_id, mall_code, batch_id)")
+                .count(),
+            5
+        );
+        assert_eq!(
+            sql.matches("references mall_sz02.ingest_batch (tenant_id, dataset_id, mall_code, id)")
+                .count(),
+            5
+        );
+
+        for required in [
+            "file_manifest jsonb not null",
+            "combined_content_sha256 text not null",
+            "source_row_count bigint not null",
+            "loaded_row_count bigint not null",
+            "business_date_from date",
+            "business_date_to date",
+            "quality_flags jsonb not null",
+            "source_inventory_mall_id text",
+            "source_mall_id text not null",
+            "source_internal_mall_id text not null",
+            "entity_type smallint not null",
+            "entity_type_name text",
+            "entity_name text not null",
+            "source_entity_id text not null",
+            "aibee_entity_id text not null",
+            "entity_status smallint",
+            "area numeric",
+            "inventory_present boolean not null default true",
+            "traffic_in bigint not null",
+            "traffic_out bigint not null",
+            "visitors bigint not null",
+            "average_stay numeric not null",
+            "visitors_metric_available boolean not null",
+            "average_stay_metric_available boolean not null",
+            "interval_code text not null default 'H'",
+            "check (interval_code = 'H')",
+            "check (minute = 0)",
+            "check (source_kind in ('aibee_traffic_hourly', 'aibee_profile_aggregate'))",
+            "check (combined_content_sha256 ~ '^[0-9a-f]{64}$')",
+            "check (status <> 'ready' or completed_at is not null)",
+        ] {
+            assert!(sql.contains(required), "missing analytics DDL: {required}");
+        }
+        assert_eq!(sql.matches("source_inventory_mall_id text,").count(), 1);
+        assert_eq!(sql.matches("source_mall_id text not null").count(), 1);
+        assert_eq!(
+            sql.matches("source_internal_mall_id text not null").count(),
+            1
+        );
+        assert_eq!(sql.matches("entity_type smallint not null").count(), 2);
+        assert_eq!(
+            sql.matches("check (entity_type in (20, 40, 60, 70, 80))")
+                .count(),
+            2
+        );
+        assert!(!sql.contains("visitors_metric_available and visitors is not null"));
+        assert!(!sql.contains("average_stay_metric_available and average_stay is not null"));
+
+        for unique_key in [
+            "unique (tenant_id, dataset_id, mall_code, id)",
+            "unique (tenant_id, dataset_id, mall_code, batch_key)",
+            "unique (tenant_id, dataset_id, mall_code, combined_content_sha256)",
+            "unique (tenant_id, dataset_id, mall_code, entity_type, aibee_entity_id)",
+            "unique ( tenant_id, dataset_id, mall_code, entity_type, aibee_entity_id, business_date, hour, minute, interval_code )",
+            "unique (tenant_id, dataset_id, mall_code, business_date)",
+            "unique ( tenant_id, dataset_id, mall_code, business_date, dimension_key, bucket_key )",
+            "unique ( tenant_id, dataset_id, mall_code, period_start_date, period_end_date, dimension_key, bucket_key )",
+        ] {
+            assert!(
+                compact_sql.contains(unique_key),
+                "missing analytics uniqueness contract: {unique_key}"
+            );
+        }
+        for batch_index in [
+            "on mall_sz02.ingest_batch ( tenant_id, dataset_id, mall_code, status, created_at desc )",
+            "on mall_sz02.ingest_batch ( tenant_id, dataset_id, mall_code, business_date_from, business_date_to )",
+        ] {
+            assert!(
+                compact_sql.contains(batch_index),
+                "missing mall-scoped ingest batch index: {batch_index}"
+            );
+        }
+        assert_eq!(
+            sql.matches("check (mall_code = upper(btrim(mall_code)) and length(mall_code) > 0)")
+                .count(),
+            6
+        );
+
+        let lower_sql = sql.to_ascii_lowercase();
+        for forbidden in ["person_id", "personid", "pid_value", "pid_hash"] {
+            assert!(
+                !lower_sql.contains(forbidden),
+                "raw profile identifier column is forbidden: {forbidden}"
+            );
+        }
+        assert!(!lower_sql.contains("average_stay_unit"));
+        assert!(!lower_sql.contains("drop table"));
+        assert!(!lower_sql.contains("drop schema"));
     }
 
     #[test]
@@ -13138,7 +13304,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020"
+                "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020", "0022"
             ]
         );
         assert!(MIGRATIONS
