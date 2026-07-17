@@ -314,6 +314,7 @@ pub mod dataset_semantic_snapshot;
 pub mod dataset_semantic_source_support;
 mod dataset_semantic_understanding_support;
 mod dataset_summary_support;
+mod dataset_tabular_schema_support;
 mod dataset_update_support;
 mod default_public_dataset_support;
 mod document_chunk_list_support;
@@ -1248,6 +1249,10 @@ pub fn router(
         .route(
             "/v1/datasets/{dataset_id}/understanding",
             get(dataset_semantic_understanding_support::get_dataset_semantic_understanding),
+        )
+        .route(
+            "/v1/datasets/{dataset_id}/tabular-schema",
+            get(dataset_tabular_schema_support::get_dataset_tabular_schema),
         )
         .route(
             "/v1/dataset-semantic-graphs/query",

@@ -5114,6 +5114,89 @@ body {
   gap: 7px;
 }
 
+.source-change-schema-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.65fr) minmax(0, 1.35fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.source-change-column,
+.source-inline-schema-column,
+.source-inline-schema-detail,
+.source-dictionary-content {
+  min-width: 0;
+}
+
+.source-inline-schema-column {
+  padding: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(14, 165, 233, 0.055), rgba(15, 23, 42, 0.18));
+}
+
+.source-inline-schema-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-inline-schema-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.source-inline-schema-head .source-section-label {
+  margin-bottom: 1px;
+}
+
+.source-inline-schema-head strong {
+  color: #e9f4ff;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.source-inline-schema-head small,
+.source-inline-schema-placeholder,
+.source-dictionary-inline-intro {
+  color: #8292a8;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.source-detail-toggle {
+  flex: none;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.source-inline-schema-placeholder {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.source-inline-schema-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.source-dictionary-content {
+  display: grid;
+  gap: 10px;
+}
+
+.source-dictionary-inline-intro {
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: rgba(2, 8, 15, 0.32);
+}
+
 .source-change-item {
   min-width: 0;
   display: grid;
@@ -5396,8 +5479,97 @@ body {
 
 .source-dictionary-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 10px;
+}
+
+.source-dictionary-note {
+  padding: 10px 12px;
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 14px;
+  background: rgba(14, 165, 233, 0.065);
+  color: #a9d9ee;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.source-dictionary-note.warning {
+  border-color: rgba(251, 191, 36, 0.2);
+  background: rgba(245, 158, 11, 0.07);
+  color: #fde68a;
+}
+
+.source-dictionary-groups {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.source-dictionary-group {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.11);
+  border-radius: 18px;
+  background: rgba(7, 12, 19, 0.26);
+}
+
+.source-dictionary-group > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.source-dictionary-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-dictionary-group > summary::after {
+  content: '展开';
+  flex: none;
+  color: #5eead4;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.source-dictionary-group[open] > summary::after {
+  content: '收起';
+}
+
+.source-dictionary-group-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.08), rgba(45, 212, 191, 0.035));
+}
+
+.source-dictionary-group-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.source-dictionary-group-head strong {
+  color: #f8fbff;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.source-dictionary-group-head span,
+.source-dictionary-group-head time {
+  color: #8fa2b8;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.source-dictionary-group-head time {
+  flex: none;
+}
+
+.source-dictionary-group .source-dictionary-table-wrap {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .source-dictionary-table-wrap {
@@ -9194,9 +9366,18 @@ body {
   }
 
   .connected-source-toolbar,
-  .connected-source-card-head {
+  .connected-source-card-head,
+  .source-inline-schema-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .source-change-schema-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .source-detail-toggle {
+    align-self: flex-start;
   }
 
   .source-display-name-actions {
@@ -9240,7 +9421,8 @@ body {
   }
 
   .connected-source-document,
-  .database-table-inspector-head {
+  .database-table-inspector-head,
+  .source-dictionary-group-head {
     align-items: flex-start;
     flex-direction: column;
   }

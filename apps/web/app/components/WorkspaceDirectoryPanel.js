@@ -18,6 +18,8 @@ import {
   filterAssetProfileHints,
 } from '../lib/asset-library-view-model';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
+import { buildDatasetDictionaryView } from '../lib/dataset-dictionary-view-model';
+import { fetchDatasetTabularSchema } from '../lib/dataset-tabular-schema-api';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import {
   buildConnectedSourceCards,
@@ -251,6 +253,7 @@ function SourceDisplayNameEditor({
 
 function SourceLiveMonitor({
   sources,
+  understandingState,
   uniqueConnectedDocumentCount = 0,
   loading = false,
   lastCheckedAt,
@@ -265,6 +268,13 @@ function SourceLiveMonitor({
   onRefresh,
   onOpenDocumentPage,
 }) {
+  const [expandedSourceId, setExpandedSourceId] = useState('');
+
+  function toggleSourceDetails(sourceId) {
+    const opening = expandedSourceId !== sourceId;
+    setExpandedSourceId(opening ? sourceId : '');
+  }
+
   return (
     <section className="directory-card connected-source-card">
       <div className="directory-section-head connected-source-toolbar">
@@ -294,6 +304,7 @@ function SourceLiveMonitor({
               .map(([status, count]) => `${formatSnakeCaseLabel(status)} ${count}`)
               .join(' · ');
             const sourceKinds = [...new Set((source.contentTypes || []).map(documentKind))];
+            const detailsExpanded = expandedSourceId === source.id;
             return (
               <article className="connected-source-card-item" key={source.id}>
                 <div className="connected-source-card-head">
@@ -327,18 +338,48 @@ function SourceLiveMonitor({
                   </div>
                 </div>
 
-                <div>
-                  <span className="source-section-label">最近变化</span>
-                  <div className="source-change-list">
-                    {source.recentDocuments.length ? source.recentDocuments.map((document) => (
-                      <div className="source-change-item" key={document.id}>
-                        <span className="source-live-dot" />
-                        <div>
-                          <strong>{document.title || '未命名资料'}</strong>
-                          <span>{formatRelativeTime(document.updated_at || document.updatedAt || document.created_at || document.createdAt)} · {formatSnakeCaseLabel(document.parse_status || document.parseStatus || document.lifecycle || 'unknown')}</span>
+                <div className="source-change-schema-grid">
+                  <div className="source-change-column">
+                    <span className="source-section-label">最近变化</span>
+                    <div className="source-change-list">
+                      {source.recentDocuments.length ? source.recentDocuments.map((document) => (
+                        <div className="source-change-item" key={document.id}>
+                          <span className="source-live-dot" />
+                          <div>
+                            <strong>{document.title || '未命名资料'}</strong>
+                            <span>{formatRelativeTime(document.updated_at || document.updatedAt || document.created_at || document.createdAt)} · {formatSnakeCaseLabel(document.parse_status || document.parseStatus || document.lifecycle || 'unknown')}</span>
+                          </div>
                         </div>
+                      )) : <span className="source-field-empty">暂无变化记录</span>}
+                    </div>
+                  </div>
+                  <div className="source-inline-schema-column">
+                    <div className="source-inline-schema-head">
+                      <div>
+                        <span className="source-section-label">响应字段</span>
+                        <strong>业务表字段与字典</strong>
+                        <small>CSV / TSV 真实表头；JSON 和 Markdown 仅作配置、质量或说明对象。</small>
                       </div>
-                    )) : <span className="source-field-empty">暂无变化记录</span>}
+                      <button
+                        type="button"
+                        className="ghost-btn compact-action-btn source-detail-toggle"
+                        aria-expanded={detailsExpanded}
+                        aria-controls={`source-detail-${source.id}`}
+                        onClick={() => toggleSourceDetails(source.id)}
+                      >
+                        {detailsExpanded ? '收起详情' : '展开详情'}
+                      </button>
+                    </div>
+                    {detailsExpanded ? (
+                      <div id={`source-detail-${source.id}`} className="source-inline-schema-detail">
+                        <SourceDatasetDetails
+                          dataset={source}
+                          understandingState={understandingState}
+                        />
+                      </div>
+                    ) : (
+                      <div className="source-inline-schema-placeholder">展开后显示结构表、字段中文释义、类型、语义角色和质量统计。</div>
+                    )}
                   </div>
                 </div>
 
@@ -458,91 +499,187 @@ function dictionaryConfidenceLabel(value) {
   return `${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`;
 }
 
-function DatasetDictionaryPanel({
-  datasets,
-  documents,
-  selectedDatasetId,
-  understandingState,
-}) {
-  const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
-  const stateMatches = understandingState?.datasetId === selectedDatasetId;
-  const understanding = stateMatches ? understandingState?.data : null;
-  const fields = Array.isArray(understanding?.fields) ? understanding.fields : [];
-  const estimatedRecordCount = fields.reduce(
-    (maximum, field) => Math.max(maximum, Number(field?.non_empty_count) || 0),
-    0,
-  );
-  const datasetDocuments = selectedDatasetId
-    ? documents.filter((document) => documentDatasetIds(document).includes(selectedDatasetId))
-    : [];
-  const latestUpdatedAt = latestDocumentUpdatedAt(datasetDocuments);
+function SourceDatasetDetails({ dataset, understandingState }) {
+  const datasetId = String(dataset?.id || '').trim();
+  const requestScope = String(understandingState?.requestScope || '');
+  const sourceVersion = `${dataset?.documentCount || 0}:${dataset?.latestUpdatedAt || ''}`;
+  const [tabularSchemaState, setTabularSchemaState] = useState({
+    datasetId,
+    scopeKey: requestScope,
+    requestScope,
+    status: 'loading',
+    data: null,
+    error: '',
+  });
+
+  useEffect(() => {
+    if (!datasetId) return undefined;
+    const controller = new AbortController();
+    let active = true;
+    setTabularSchemaState({
+      datasetId,
+      scopeKey: requestScope,
+      requestScope,
+      status: 'loading',
+      data: null,
+      error: '',
+    });
+    fetchDatasetTabularSchema(datasetId, { signal: controller.signal }).then((data) => {
+      if (!active) return;
+      setTabularSchemaState({
+        datasetId,
+        scopeKey: requestScope,
+        requestScope,
+        status: data.tables.length ? 'ready' : 'empty',
+        data,
+        error: '',
+      });
+    }).catch((loadError) => {
+      if (!active || loadError?.name === 'AbortError') return;
+      setTabularSchemaState({
+        datasetId,
+        scopeKey: requestScope,
+        requestScope,
+        status: 'failed',
+        data: null,
+        error: loadError instanceof Error ? loadError.message : '真实表头读取失败',
+      });
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [datasetId, requestScope, sourceVersion]);
 
   return (
-    <section className="directory-card source-dictionary-card">
-      <div className="directory-section-head">
-        <div>
-          <h3>数据字典</h3>
-          <p>
-            {selectedDataset
-              ? `当前数据集：${selectedDataset.title || selectedDataset.key}。字段中文名来自数据理解，系统解释与源字段名分开展示。`
-              : '请先在顶部选择数据集，再查看字段中文名、类型、语义角色和质量统计。'}
-          </p>
-        </div>
+    <DatasetDictionaryContent
+      dataset={dataset}
+      understandingState={understandingState}
+      tabularSchemaState={tabularSchemaState}
+    />
+  );
+}
+
+function DatasetDictionaryContent({
+  dataset,
+  understandingState,
+  tabularSchemaState,
+}) {
+  const selectedDataset = dataset || null;
+  const selectedDatasetId = String(selectedDataset?.id || '').trim();
+  const requestScope = String(
+    understandingState?.requestScope || tabularSchemaState?.requestScope || '',
+  );
+  const stateMatches = understandingState?.datasetId === selectedDatasetId
+    && (!requestScope || understandingState?.scopeKey === requestScope);
+  const understanding = stateMatches ? understandingState?.data : null;
+  const schemaStateMatches = tabularSchemaState?.datasetId === selectedDatasetId
+    && (!requestScope || tabularSchemaState?.scopeKey === requestScope);
+  const tabularSchema = schemaStateMatches ? tabularSchemaState?.data : null;
+  const schemaStatus = schemaStateMatches ? tabularSchemaState?.status : 'loading';
+  const schemaError = schemaStateMatches ? tabularSchemaState?.error : '';
+  const dictionary = useMemo(
+    () => buildDatasetDictionaryView({ understanding, tabularSchema }),
+    [understanding, tabularSchema],
+  );
+  const fields = dictionary.allFields;
+  const documentCount = Number(selectedDataset?.documentCount || 0);
+  const latestUpdatedAt = selectedDataset?.latestUpdatedAt || '';
+
+  return (
+    <div className="source-dictionary-content">
+      <div className="source-dictionary-inline-intro">
+        当前数据集：{selectedDataset?.title || selectedDataset?.key || '未命名数据集'}。字段清单以 CSV / TSV 真实表头为准，业务释义与源字段名分开展示。
       </div>
 
       {selectedDataset ? (
         <div className="source-dictionary-summary">
-          <MiniMetric label="资料对象" value={datasetDocuments.length} />
-          <MiniMetric label="识别字段" value={fields.length} />
-          <MiniMetric label="估算记录" value={estimatedRecordCount ? estimatedRecordCount.toLocaleString('zh-CN') : '待统计'} />
+          <MiniMetric label="资料对象" value={documentCount} />
+          <MiniMetric label="结构表" value={dictionary.tableCount || '待识别'} />
+          <MiniMetric label="字段列" value={dictionary.fieldCount || '待识别'} />
+          <MiniMetric label="唯一字段" value={dictionary.uniqueFieldCount || '待识别'} />
           <MiniMetric label="最近变化" value={latestUpdatedAt ? formatRelativeTime(latestUpdatedAt) : '暂无'} />
         </div>
       ) : null}
 
-      {selectedDataset && understandingState?.status === 'loading' ? (
-        <div className="directory-empty">正在读取字段字典。</div>
+      {selectedDataset && schemaStatus === 'loading' && !fields.length ? (
+        <div className="directory-empty">正在读取真实表头并生成字段字典。</div>
       ) : null}
-      {selectedDataset && understandingState?.status === 'failed' ? (
-        <div className="database-source-error">字段字典暂不可用：{understandingState.error || '数据理解读取失败'}</div>
-      ) : null}
-      {fields.length ? (
-        <div className="source-dictionary-table-wrap">
-          <table className="source-detail-table source-dictionary-table">
-            <thead>
-              <tr>
-                <th>字段</th>
-                <th>字典说明</th>
-                <th>类型 / 角色</th>
-                <th>质量统计</th>
-                <th>安全样例</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fields.map((field) => (
-                <tr key={field.id || `${field.object_id}:${field.technical_name}`}>
-                  <td>
-                    <strong>{field.label || field.technical_name || '待解释字段'}</strong>
-                    <code>{field.technical_name || '—'}</code>
-                  </td>
-                  <td>{dictionaryFieldDescription(field)}</td>
-                  <td>
-                    <span>{field.value_type || 'unknown'}</span>
-                    <small>{semanticRoleLabel(field.semantic_role)} · 置信 {dictionaryConfidenceLabel(field.confidence)}</small>
-                  </td>
-                  <td>
-                    <span>非空 {Number(field.non_empty_count) || 0}</span>
-                    <small>去重 {Number(field.distinct_count) || 0}</small>
-                  </td>
-                  <td>{Array.isArray(field.examples) && field.examples.length ? field.examples.slice(0, 3).join('、') : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {selectedDataset && schemaStatus === 'failed' ? (
+        <div className="database-source-error">
+          真实表头暂不可用：{schemaError || '字段结构读取失败'}
+          {fields.length ? '；当前显示可核验的结构化回退结果。' : ''}
         </div>
-      ) : selectedDataset && understandingState?.status !== 'loading' && understandingState?.status !== 'failed' ? (
-        <div className="directory-empty">当前数据集尚未形成结构化字段字典；仍可从上方已接入资料进入 README 或 schema.json 查看源说明。</div>
       ) : null}
-    </section>
+      {dictionary.businessClueCount ? (
+        <div className="source-dictionary-note">
+          已识别 {dictionary.businessClueCount} 条 README / 说明文档业务线索；它们继续用于口径理解，但不再冒充结构字段或计入字段数量。
+        </div>
+      ) : null}
+      {dictionary.skippedTabularDocumentCount ? (
+        <div className="source-dictionary-note warning">
+          {dictionary.skippedTabularDocumentCount} 个表格文档未能在安全对象目录内读取表头，已跳过且未回退读取数据行。
+        </div>
+      ) : null}
+      {dictionary.tables.length ? (
+        <div className="source-dictionary-groups">
+          {dictionary.tables.map((table, index) => (
+            <details className="source-dictionary-group" key={table.id} open={index === 0}>
+              <summary className="source-dictionary-group-head">
+                <div>
+                  <strong>{table.title}</strong>
+                  <span>{table.fields.length} 列 · {table.structuralSource === 'file_header' ? '真实文件表头' : '结构化回退'}</span>
+                </div>
+                {table.updatedAt ? <time>{formatRelativeTime(table.updatedAt)}</time> : null}
+              </summary>
+              <div className="source-dictionary-table-wrap">
+                <table className="source-detail-table source-dictionary-table">
+                  <thead>
+                    <tr>
+                      <th>字段</th>
+                      <th>字典说明</th>
+                      <th>类型 / 角色</th>
+                      <th>质量统计</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {table.fields.map((field) => (
+                      <tr key={field.id || `${field.object_id}:${field.technical_name}`}>
+                        <td>
+                          <strong>{field.label || field.technical_name || '待解释字段'}</strong>
+                          <code>{field.technical_name || '—'}</code>
+                        </td>
+                        <td>{dictionaryFieldDescription(field)}</td>
+                        <td>
+                          <span>{field.value_type || 'unknown'}</span>
+                          <small>
+                            {semanticRoleLabel(field.semantic_role)} · {field.structure_confirmed
+                              ? '表头确认'
+                              : `置信 ${dictionaryConfidenceLabel(field.confidence)}`}
+                          </small>
+                        </td>
+                        <td>
+                          {field.non_empty_count !== null && field.non_empty_count !== undefined ? (
+                            <>
+                              <span>非空 {Number(field.non_empty_count).toLocaleString('zh-CN')}</span>
+                              <small>去重 {Number(field.distinct_count || 0).toLocaleString('zh-CN')}</small>
+                            </>
+                          ) : (
+                            <span>待统计</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          ))}
+        </div>
+      ) : selectedDataset && schemaStatus !== 'loading' && schemaStatus !== 'failed' ? (
+        <div className="directory-empty">当前数据集没有可公开核验的 CSV / TSV 表头；README、manifest 和说明文字不会被当作字段。</div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1730,7 +1867,6 @@ function DocumentDetailPage({
 function SourcesPage({
   documents,
   datasets,
-  selectedDatasetId,
   datasetUnderstandingState,
   documentsLoading = false,
   onRefreshDocuments,
@@ -1825,6 +1961,7 @@ function SourcesPage({
       <div className="source-workspace-main">
         <SourceLiveMonitor
           sources={sources}
+          understandingState={datasetUnderstandingState}
           uniqueConnectedDocumentCount={uniqueConnectedDocuments}
           loading={documentsLoading}
           lastCheckedAt={lastCheckedAt}
@@ -1836,12 +1973,6 @@ function SourcesPage({
           datasets={datasets}
           loading={documentsLoading}
           onOpenDocumentPage={onOpenDocumentPage}
-        />
-        <DatasetDictionaryPanel
-          datasets={datasets}
-          documents={documents}
-          selectedDatasetId={selectedDatasetId}
-          understandingState={datasetUnderstandingState}
         />
         <DatabaseSourcePanel datasets={datasets} {...aliasEditorProps} />
       </div>
@@ -2060,7 +2191,6 @@ export default function WorkspaceDirectoryPanel({
         <SourcesPage
           documents={documents}
           datasets={datasets}
-          selectedDatasetId={selectedDatasetId}
           datasetUnderstandingState={datasetUnderstandingState}
           documentsLoading={documentsLoading}
           onRefreshDocuments={onRefreshDocuments}

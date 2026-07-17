@@ -415,6 +415,7 @@ export default function HomePageClient() {
   const [selectedDocumentDetail, setSelectedDocumentDetail] = useState(null);
   const [datasetUnderstandingState, setDatasetUnderstandingState] = useState({
     datasetId: '',
+    scopeKey: '',
     status: 'idle',
     data: null,
     error: '',
@@ -467,15 +468,23 @@ export default function HomePageClient() {
   useEffect(() => {
     const datasetId = String(selectedDatasetId || '').trim();
     if (!datasetId) {
-      setDatasetUnderstandingState({ datasetId: '', status: 'idle', data: null, error: '' });
+      setDatasetUnderstandingState({
+        datasetId: '',
+        scopeKey: datasetSemanticGraphRequestScope,
+        status: 'idle',
+        data: null,
+        error: '',
+      });
       return undefined;
     }
 
     const controller = new AbortController();
     let active = true;
-    const cached = datasetUnderstandingCacheRef.current.get(datasetId) || null;
+    const cacheKey = `${datasetSemanticGraphRequestScope}|${datasetId}`;
+    const cached = datasetUnderstandingCacheRef.current.get(cacheKey) || null;
     setDatasetUnderstandingState({
       datasetId,
+      scopeKey: datasetSemanticGraphRequestScope,
       status: 'loading',
       data: cached?.data || null,
       error: '',
@@ -490,9 +499,10 @@ export default function HomePageClient() {
       if (!resolved?.data) {
         throw new Error('语义理解接口返回 304，但浏览器没有可复用快照。');
       }
-      datasetUnderstandingCacheRef.current.set(datasetId, resolved);
+      datasetUnderstandingCacheRef.current.set(cacheKey, resolved);
       setDatasetUnderstandingState({
         datasetId,
+        scopeKey: datasetSemanticGraphRequestScope,
         status: resolved.data.status === 'empty' ? 'empty' : 'ready',
         data: resolved.data,
         error: '',
@@ -501,6 +511,7 @@ export default function HomePageClient() {
       if (!active || loadError?.name === 'AbortError') return;
       setDatasetUnderstandingState({
         datasetId,
+        scopeKey: datasetSemanticGraphRequestScope,
         status: 'failed',
         data: cached?.data || null,
         error: loadError instanceof Error ? loadError.message : '数据集语义理解加载失败',
@@ -511,7 +522,7 @@ export default function HomePageClient() {
       active = false;
       controller.abort();
     };
-  }, [selectedDatasetId]);
+  }, [datasetSemanticGraphRequestScope, selectedDatasetId]);
 
   useEffect(() => {
     datasetSemanticGraphAbortRef.current?.abort();
@@ -4789,6 +4800,7 @@ export default function HomePageClient() {
     selectedDatasetIds,
     datasetUnderstandingState: {
       ...datasetUnderstandingState,
+      requestScope: datasetSemanticGraphRequestScope,
       crossGraphState: datasetSemanticGraphState,
       crossGraphAvailable: datasetSemanticGraphState.available,
       availableDatasets: datasets,
