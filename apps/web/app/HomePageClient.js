@@ -432,6 +432,8 @@ export default function HomePageClient() {
   const workspaceLoadingIdRef = useRef(0);
   const messageLoadIdRef = useRef(0);
   const reportDetailLoadIdRef = useRef(0);
+  const documentDetailLoadIdRef = useRef(0);
+  const selectedDocumentIdRef = useRef('');
   const fileInputRef = useRef(null);
   const staticPageAutoRenderKeysRef = useRef(new Set());
   const staticPageProgressMessageKeysRef = useRef(new Set());
@@ -796,12 +798,14 @@ export default function HomePageClient() {
       setSelectedDatasetId(selectionUpdate.selectedDatasetId);
       setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
     }
+    selectedDocumentIdRef.current = documentId;
     setSelectedDocumentId(documentId);
     setActivePage('document-detail');
   }
 
   function handleFocusDocumentMembership(documentId) {
     if (!documentId) {
+      selectedDocumentIdRef.current = '';
       setSelectedDocumentId('');
       setSelectedDocumentDetail(null);
       return;
@@ -812,10 +816,12 @@ export default function HomePageClient() {
       setSelectedDatasetId(selectionUpdate.selectedDatasetId);
       setSelectedDatasetIds(selectionUpdate.selectedDatasetIds);
     }
+    selectedDocumentIdRef.current = documentId;
     setSelectedDocumentId(documentId);
   }
 
   function handleClearDocumentSelection() {
+    selectedDocumentIdRef.current = '';
     setSelectedDocumentId('');
     setSelectedDocumentDetail(null);
   }
@@ -1855,20 +1861,31 @@ export default function HomePageClient() {
   }
 
   async function refreshDocumentDetail(documentId) {
-    if (!documentId) {
+    const requestedDocumentId = String(documentId || '');
+    if (requestedDocumentId !== selectedDocumentIdRef.current) {
+      return;
+    }
+    const loadId = documentDetailLoadIdRef.current + 1;
+    documentDetailLoadIdRef.current = loadId;
+    if (!requestedDocumentId) {
       setSelectedDocumentDetail(null);
+      setDocumentDetailLoading(false);
       return;
     }
 
     setDocumentDetailLoading(true);
     try {
-      const detail = await fetchJson(`/api/v3/documents/${documentId}/detail`);
+      const detail = await fetchJson(`/api/v3/documents/${encodeURIComponent(requestedDocumentId)}/detail`);
+      if (loadId !== documentDetailLoadIdRef.current || requestedDocumentId !== selectedDocumentIdRef.current) return;
       setSelectedDocumentDetail(detail);
       setError('');
     } catch (loadError) {
+      if (loadId !== documentDetailLoadIdRef.current || requestedDocumentId !== selectedDocumentIdRef.current) return;
       setError(loadError instanceof Error ? loadError.message : '文档解析详情加载失败');
     } finally {
-      setDocumentDetailLoading(false);
+      if (loadId === documentDetailLoadIdRef.current && requestedDocumentId === selectedDocumentIdRef.current) {
+        setDocumentDetailLoading(false);
+      }
     }
   }
 
@@ -1925,7 +1942,11 @@ export default function HomePageClient() {
       setBanner(payload.lifecycle === 'archived' ? '文档已归档。' : '文档已更新。');
       await refreshDocuments({ silent: true });
       if (payload.lifecycle === 'archived') {
-        setSelectedDocumentId((current) => (current === documentId ? '' : current));
+        setSelectedDocumentId((current) => {
+          const nextDocumentId = current === documentId ? '' : current;
+          selectedDocumentIdRef.current = nextDocumentId;
+          return nextDocumentId;
+        });
         setSelectedDocumentDetail((current) => (
           current?.document?.id === documentId ? null : current
         ));
@@ -1954,6 +1975,7 @@ export default function HomePageClient() {
       setBanner(ids.length === 1 ? '文档已归档。' : `已归档 ${ids.length} 个文档。`);
       await refreshDocuments({ silent: true });
       if (ids.includes(selectedDocumentId)) {
+        selectedDocumentIdRef.current = '';
         setSelectedDocumentId('');
         setSelectedDocumentDetail(null);
       }
@@ -4161,10 +4183,7 @@ export default function HomePageClient() {
   }, [activePage, selectedDatasetId]);
 
   useEffect(() => {
-    if (!selectedDocumentId) {
-      setSelectedDocumentDetail(null);
-      return;
-    }
+    selectedDocumentIdRef.current = selectedDocumentId;
     refreshDocumentDetail(selectedDocumentId);
   }, [selectedDocumentId]);
 
