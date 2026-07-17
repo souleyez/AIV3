@@ -119,12 +119,18 @@ create table if not exists mall_sz02.traffic_point_dim (
         source_inventory_mall_id is null
         or length(btrim(source_inventory_mall_id)) > 0
     ),
-    check (entity_type in (20, 40, 60, 70, 80)),
     check (length(btrim(entity_name)) > 0),
     check (length(btrim(source_entity_id)) > 0),
     check (length(btrim(aibee_entity_id)) > 0),
     check (area is null or area >= 0)
 );
+
+alter table mall_sz02.traffic_point_dim
+    drop constraint if exists traffic_point_dim_entity_type_check;
+
+alter table mall_sz02.traffic_point_dim
+    add constraint traffic_point_dim_entity_type_check
+    check (entity_type in (20, 30, 40, 60, 70, 80));
 
 create index if not exists traffic_point_dim_browse_idx
     on mall_sz02.traffic_point_dim (

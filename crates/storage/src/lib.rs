@@ -12902,10 +12902,34 @@ mod tests {
         );
         assert_eq!(sql.matches("entity_type smallint not null").count(), 2);
         assert_eq!(
+            sql.matches("check (entity_type in (20, 30, 40, 60, 70, 80))")
+                .count(),
+            1
+        );
+        assert_eq!(
             sql.matches("check (entity_type in (20, 40, 60, 70, 80))")
                 .count(),
-            2
+            1
         );
+        assert_eq!(
+            sql.matches("drop constraint if exists traffic_point_dim_entity_type_check")
+                .count(),
+            1
+        );
+        assert_eq!(
+            sql.matches("add constraint traffic_point_dim_entity_type_check")
+                .count(),
+            1
+        );
+        for point_constraint_upgrade in [
+            "alter table mall_sz02.traffic_point_dim drop constraint if exists traffic_point_dim_entity_type_check",
+            "alter table mall_sz02.traffic_point_dim add constraint traffic_point_dim_entity_type_check check (entity_type in (20, 30, 40, 60, 70, 80))",
+        ] {
+            assert!(
+                compact_sql.contains(point_constraint_upgrade),
+                "missing idempotent point entity type constraint upgrade: {point_constraint_upgrade}"
+            );
+        }
         assert!(!sql.contains("visitors_metric_available and visitors is not null"));
         assert!(!sql.contains("average_stay_metric_available and average_stay is not null"));
 
