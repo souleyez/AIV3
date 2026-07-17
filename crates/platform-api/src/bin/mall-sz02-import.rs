@@ -932,7 +932,7 @@ fn prepare_traffic(documents: &[SourceDocument]) -> Result<PreparedTraffic> {
     let mut point_indexes = HashMap::<(i16, String), usize>::new();
     for record in &inventory_document.csv.records {
         let source_inventory_mall_id = required_text(record, 0, "mallId")?;
-        if &source_inventory_mall_id != expected_internal_mall_id {
+        if !source_inventory_mall_id.eq_ignore_ascii_case(expected_internal_mall_id) {
             bail!(
                 "record {} inventory mallId differs from traffic mallId",
                 record.record_number
@@ -2412,6 +2412,36 @@ mod tests {
         );
         let error = prepare_traffic(&documents).expect_err("duplicate key must fail");
         assert!(error.to_string().contains("duplicate traffic natural key"));
+    }
+
+    #[test]
+    fn traffic_and_inventory_mall_ids_ignore_ascii_case_and_preserve_source_values() {
+        let documents = traffic_documents(
+            &["SZ02,Internal-Mall,40,shop,Gate,source-1,aibee-1,20260701,10,0,H,1,2,1,0"],
+            &["iNTERNAL-mALL,40,Gate,source-1,aibee-1,F1,First,1,10,retail,shop"],
+        );
+
+        let prepared = prepare_traffic(&documents).expect("mallId case differences should load");
+
+        assert_eq!(prepared.facts[0].source_internal_mall_id, "Internal-Mall");
+        assert_eq!(
+            prepared.points[0].source_inventory_mall_id.as_deref(),
+            Some("iNTERNAL-mALL")
+        );
+    }
+
+    #[test]
+    fn traffic_and_inventory_mall_ids_still_reject_different_values() {
+        let documents = traffic_documents(
+            &["SZ02,internal-one,40,shop,Gate,source-1,aibee-1,20260701,10,0,H,1,2,1,0"],
+            &["internal-two,40,Gate,source-1,aibee-1,F1,First,1,10,retail,shop"],
+        );
+
+        let error = prepare_traffic(&documents).expect_err("different mallIds must fail");
+
+        assert!(error
+            .to_string()
+            .contains("inventory mallId differs from traffic mallId"));
     }
 
     #[test]
