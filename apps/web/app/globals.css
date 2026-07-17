@@ -542,7 +542,7 @@ button {
   align-self: stretch;
 }
 
-.page-directory-workspace {
+.workspace-grid.page-directory-workspace {
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
   overflow-y: auto;
