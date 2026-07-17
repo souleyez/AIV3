@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   applyDatabaseSourceProfile,
   fetchDatabaseSourceOptions,
@@ -19,8 +19,15 @@ import {
 } from '../lib/asset-library-view-model';
 import { buildDocumentDetailViewModel, chunkSectionHints } from '../lib/document-detail-view';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import {
+  buildConnectedSourceCards,
+  connectedDocumentCount,
+  sourceDisplayName,
+} from '../lib/source-workspace-view-model';
 import DatasetUnderstandingGraph from './DatasetUnderstandingGraph';
 import ModelPoolPanel from './ModelPoolPanel';
+
+const SOURCE_DISPLAY_ALIAS_STORAGE_KEY = 'datamax-v3:source-display-aliases:v1';
 
 const PAGE_COPY = {
   datasets: {
@@ -79,18 +86,6 @@ function documentKind(contentType = '') {
   return '未分类';
 }
 
-function sourceGroups(documents = []) {
-  const groups = new Map();
-  documents.forEach((document) => {
-    const kind = documentKind(document.content_type);
-    if (!groups.has(kind)) {
-      groups.set(kind, []);
-    }
-    groups.get(kind).push(document);
-  });
-  return [...groups.entries()].map(([kind, items]) => ({ kind, items }));
-}
-
 const SOURCE_ACCESS_METHODS = [
   {
     title: '网页采集',
@@ -124,24 +119,16 @@ const SOURCE_ACCESS_METHODS = [
   },
 ];
 
-function latestDocumentUpdatedAt(items = []) {
-  const latest = items
-    .map((item) => new Date(item.updated_at || item.updatedAt || item.created_at || item.createdAt || 0).getTime())
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .sort((left, right) => right - left)[0];
-  return latest ? new Date(latest).toISOString() : '';
-}
-
 function AccessMethodGuide({ documents, datasets }) {
   return (
-    <section className="directory-card source-guide-card">
+    <aside className="directory-card source-guide-card source-access-rail">
       <div className="directory-section-head">
         <div>
           <h3>接入方式</h3>
-          <p>按客户资料来源选择接入路径；接入后统一归档到数据集，供问答、报表和产物生成使用。</p>
+          <p>选择资料入口；接入后统一进入左侧动态监测。</p>
         </div>
       </div>
-      <div className="source-method-grid">
+      <div className="source-method-list">
         {SOURCE_ACCESS_METHODS.map((item) => (
           <article key={item.title} className="source-method-card">
             <div>
@@ -157,53 +144,191 @@ function AccessMethodGuide({ documents, datasets }) {
         <MiniMetric label="可归档数据集" value={datasets.length} />
         <MiniMetric label="支持方式" value={SOURCE_ACCESS_METHODS.length} />
       </div>
-    </section>
+    </aside>
   );
 }
 
-function ConnectedDataSummary({ groups, datasets, loading = false }) {
-  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
+function normalizedSourceAliases(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([sourceId, displayName]) => [String(sourceId || '').trim(), String(displayName || '').trim()])
+    .filter(([sourceId, displayName]) => sourceId && displayName));
+}
+
+function readSourceDisplayAliases() {
+  if (typeof window === 'undefined') return {};
+  try {
+    return normalizedSourceAliases(JSON.parse(window.localStorage.getItem(SOURCE_DISPLAY_ALIAS_STORAGE_KEY) || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+function writeSourceDisplayAliases(aliases) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SOURCE_DISPLAY_ALIAS_STORAGE_KEY, JSON.stringify(normalizedSourceAliases(aliases)));
+  } catch {
+    // A blocked storage surface should not prevent the source page from working.
+  }
+}
+
+function formatCompactCount(value) {
+  const count = Number(value || 0);
+  if (!Number.isFinite(count)) return '0';
+  return new Intl.NumberFormat('zh-CN', { notation: count >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(count);
+}
+
+function SourceDisplayNameEditor({
+  sourceId,
+  defaultName,
+  aliases,
+  editingSourceId,
+  aliasDraft,
+  onAliasDraftChange,
+  onStartEditing,
+  onSave,
+  onCancel,
+  onReset,
+}) {
+  const displayName = sourceDisplayName({ id: sourceId, title: defaultName }, aliases);
+  const hasAlias = Boolean(aliases[sourceId]);
+  const editing = editingSourceId === sourceId;
+
+  if (editing) {
+    return (
+      <div className="source-alias-editor">
+        <input
+          className="source-alias-input"
+          value={aliasDraft}
+          maxLength={64}
+          autoFocus
+          aria-label={`${defaultName}的显示名称`}
+          onChange={(event) => onAliasDraftChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onSave(sourceId, defaultName);
+            if (event.key === 'Escape') onCancel();
+          }}
+        />
+        <button type="button" className="primary-btn compact-action-btn" onClick={() => onSave(sourceId, defaultName)}>保存</button>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onCancel}>取消</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="source-display-name">
+      <div>
+        <strong>{displayName}</strong>
+        <span>{hasAlias ? `原始名称：${defaultName} · 别名仅当前浏览器可见` : '显示名称仅用于当前浏览器查看'}</span>
+      </div>
+      <div className="source-display-name-actions">
+        <button type="button" className="ghost-btn compact-action-btn" onClick={() => onStartEditing(sourceId, displayName)}>命名</button>
+        {hasAlias ? <button type="button" className="ghost-btn compact-action-btn" onClick={() => onReset(sourceId)}>恢复</button> : null}
+      </div>
+    </div>
+  );
+}
+
+function ConnectedDataSummary({
+  sources,
+  uniqueConnectedDocumentCount = 0,
+  loading = false,
+  lastCheckedAt,
+  aliases,
+  editingSourceId,
+  aliasDraft,
+  onAliasDraftChange,
+  onStartEditing,
+  onSave,
+  onCancel,
+  onReset,
+  onRefresh,
+}) {
   return (
     <section className="directory-card connected-source-card">
-      <div className="directory-section-head">
+      <div className="directory-section-head connected-source-toolbar">
         <div>
-          <h3>已接入数据</h3>
-          <p>{total ? `当前已归档 ${total} 个采集对象，可按类型展开查看。` : '暂无已接入数据，上传或采集完成后会显示在这里。'}</p>
+          <h3>动态导入监测</h3>
+          <p>{uniqueConnectedDocumentCount ? `${sources.length} 个有内容数据集 · ${uniqueConnectedDocumentCount} 个去重可见对象；共享对象可能出现在多个分组。` : '暂无已接入数据，上传或采集完成后会显示在这里。'}</p>
+        </div>
+        <div className="source-live-state" aria-live="polite">
+          <span className={`source-live-dot ${loading ? 'loading' : ''}`.trim()} />
+          <div>
+            <strong>{loading ? '正在抓取变化' : '动态监测中'}</strong>
+            <span>{lastCheckedAt ? `最近检查 ${formatRelativeTime(lastCheckedAt)} · 每 60 秒` : '等待首次检查'}</span>
+          </div>
+          <button type="button" className="ghost-btn compact-action-btn" onClick={onRefresh} disabled={loading}>
+            {loading ? '刷新中' : '立即刷新'}
+          </button>
         </div>
       </div>
-      {loading ? (
-        <div className="directory-empty">正在读取已接入数据。</div>
-      ) : groups.length ? (
-        <div className="connected-source-list">
-          {groups.map((group, index) => {
-            const latestUpdatedAt = latestDocumentUpdatedAt(group.items);
+      {loading && !sources.length ? (
+        <div className="directory-empty">正在读取已接入数据和最近变化。</div>
+      ) : sources.length ? (
+        <div className="connected-source-grid">
+          {sources.map((source) => {
+            const parseSummary = Object.entries(source.parseCounts || {})
+              .filter(([, count]) => Number(count) > 0)
+              .slice(0, 3)
+              .map(([status, count]) => `${formatSnakeCaseLabel(status)} ${count}`)
+              .join(' · ');
+            const sourceKinds = [...new Set((source.contentTypes || []).map(documentKind))];
             return (
-              <details className="connected-source-group" key={group.kind} open={index === 0}>
-                <summary>
-                  <div>
-                    <strong>{group.kind}</strong>
-                    <span>
-                      {group.items.length} 个对象
-                      {latestUpdatedAt ? ` · 最近更新 ${formatRelativeTime(latestUpdatedAt)}` : ''}
-                    </span>
-                  </div>
-                  <em>展开</em>
-                </summary>
-                <div className="directory-source-list connected-source-documents">
-                  {group.items.map((document) => (
-                    <article key={document.id}>
-                      <strong>{document.title || '未命名资料'}</strong>
-                      <span>{documentDatasetTitles(document, datasets)} · {formatRelativeTime(document.updated_at || document.updatedAt)}</span>
-                      <em>{truncateText(document.object_key || document.objectKey || document.external_id || document.id, 88)}</em>
-                    </article>
-                  ))}
+              <article className="connected-source-card-item" key={source.id}>
+                <div className="connected-source-card-head">
+                  <SourceDisplayNameEditor
+                    sourceId={source.id}
+                    defaultName={source.title}
+                    aliases={aliases}
+                    editingSourceId={editingSourceId}
+                    aliasDraft={aliasDraft}
+                    onAliasDraftChange={onAliasDraftChange}
+                    onStartEditing={onStartEditing}
+                    onSave={onSave}
+                    onCancel={onCancel}
+                    onReset={onReset}
+                  />
+                  <span className="source-original-name">{sourceKinds.join(' / ') || '未分类'} · {source.latestUpdatedAt ? `更新于 ${formatRelativeTime(source.latestUpdatedAt)}` : '暂无更新时间'}</span>
                 </div>
-              </details>
+
+                <div className="source-stat-row" aria-label={`${source.title}数量概览`}>
+                  <div className="source-stat"><span>采集对象</span><strong>{formatCompactCount(source.documentCount)}</strong></div>
+                  <div className="source-stat"><span>预估字数</span><strong>{formatCompactCount(source.estimatedWordCount)}</strong></div>
+                  <div className="source-stat"><span>近 24 小时</span><strong>{formatCompactCount(source.recent24hCount)}</strong></div>
+                </div>
+
+                <div>
+                  <span className="source-section-label">结构 / 主题提示</span>
+                  <div className="source-field-list">
+                    {source.fieldHints.length ? source.fieldHints.map((field) => (
+                      <span className="source-field-chip" key={field}>{field}</span>
+                    )) : <span className="source-field-empty">暂无可用结构提示</span>}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="source-section-label">最近变化</span>
+                  <div className="source-change-list">
+                    {source.recentDocuments.length ? source.recentDocuments.map((document) => (
+                      <div className="source-change-item" key={document.id}>
+                        <span className="source-live-dot" />
+                        <div>
+                          <strong>{document.title || '未命名资料'}</strong>
+                          <span>{formatRelativeTime(document.updated_at || document.updatedAt || document.created_at || document.createdAt)} · {formatSnakeCaseLabel(document.parse_status || document.parseStatus || document.lifecycle || 'unknown')}</span>
+                        </div>
+                      </div>
+                    )) : <span className="source-field-empty">暂无变化记录</span>}
+                  </div>
+                </div>
+
+                <span className="source-parse-summary">{parseSummary || '暂无解析状态'}</span>
+              </article>
             );
           })}
         </div>
       ) : (
-        <div className="directory-empty">暂无采集源。上传文件、网页采集或业务系统同步完成后，会按类型进入这里。</div>
+        <div className="directory-empty">暂无采集源。上传文件、网页采集或业务系统同步完成后，会进入动态监测。</div>
       )}
     </section>
   );
@@ -532,7 +657,28 @@ function AssetLibraryManager({
   );
 }
 
-function DatabaseSourcePanel({ datasets }) {
+function databaseSourceAliasId(sourceId) {
+  return `database:${sourceId}`;
+}
+
+function databaseSyncIsLive(syncReadiness, recentSyncRuns = []) {
+  const liveStates = new Set(['sync_running', 'sync_queued', 'running', 'queued', 'processing', 'indexing', 'pending']);
+  const signal = String(syncReadiness?.signal || syncReadiness?.latestStatus || '').toLowerCase();
+  const latestRunStatus = String(recentSyncRuns[0]?.status || '').toLowerCase();
+  return liveStates.has(signal) || liveStates.has(latestRunStatus);
+}
+
+function DatabaseSourcePanel({
+  datasets,
+  aliases,
+  editingSourceId,
+  aliasDraft,
+  onAliasDraftChange,
+  onStartEditing,
+  onSave,
+  onCancel,
+  onReset,
+}) {
   const [sources, setSources] = useState([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
@@ -568,18 +714,18 @@ function DatabaseSourcePanel({ datasets }) {
     }
   }
 
-  async function loadStatus(sourceId = selectedSourceId) {
+  async function loadStatus(sourceId = selectedSourceId, { silent = false } = {}) {
     if (!sourceId) {
       setStatus(null);
       return;
     }
-    setActionBusy('status');
+    if (!silent) setActionBusy('status');
     try {
       setStatus(await fetchDatabaseSourceStatus(sourceId));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '数据库源状态读取失败');
     } finally {
-      setActionBusy('');
+      if (!silent) setActionBusy('');
     }
   }
 
@@ -657,17 +803,26 @@ function DatabaseSourcePanel({ datasets }) {
   const syncReadiness = status?.syncReadiness || null;
   const tableReadiness = status?.tableReadiness || [];
   const recentSyncRuns = status?.recentSyncRuns || [];
+  const liveSync = databaseSyncIsLive(syncReadiness, recentSyncRuns);
   const busy = Boolean(actionBusy);
   const canSync = syncTargetMode === 'external'
     ? Boolean(targetExternalId.trim())
     : Boolean(selectedDatasetId);
+
+  useEffect(() => {
+    if (!selectedSourceId || !liveSync) return undefined;
+    const intervalId = window.setInterval(() => {
+      loadStatus(selectedSourceId, { silent: true });
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [selectedSourceId, liveSync]);
 
   return (
     <section className="directory-card database-source-card">
       <div className="directory-section-head">
         <div>
           <h3>数据库源</h3>
-          <p>数据库先同步到目标数据集，再进入问答、报表和模板产物链路。</p>
+          <p>数据库先同步到目标数据集；运行中的同步每 5 秒抓取一次真实状态。</p>
         </div>
         <button type="button" className="ghost-btn compact-action-btn" onClick={loadSources} disabled={loading || busy}>
           {loading ? '刷新中' : '刷新'}
@@ -676,13 +831,30 @@ function DatabaseSourcePanel({ datasets }) {
 
       {sources.length ? (
         <>
+          {selectedSource ? (
+            <div className="database-source-display-name">
+              <SourceDisplayNameEditor
+                sourceId={databaseSourceAliasId(selectedSource.id)}
+                defaultName={selectedSource.displayName}
+                aliases={aliases}
+                editingSourceId={editingSourceId}
+                aliasDraft={aliasDraft}
+                onAliasDraftChange={onAliasDraftChange}
+                onStartEditing={onStartEditing}
+                onSave={onSave}
+                onCancel={onCancel}
+                onReset={onReset}
+              />
+              {liveSync ? <span className="database-live-sync"><span className="source-live-dot loading" />同步进行中</span> : null}
+            </div>
+          ) : null}
           <div className="database-source-controls">
             <label>
               <span>连接</span>
               <select value={selectedSourceId} onChange={(event) => setSelectedSourceId(event.target.value)} disabled={busy}>
                 {sources.map((source) => (
                   <option key={source.id} value={source.id}>
-                    {source.displayName}
+                    {sourceDisplayName({ id: databaseSourceAliasId(source.id), title: source.displayName }, aliases)}
                   </option>
                 ))}
               </select>
@@ -792,6 +964,17 @@ function DatabaseSourcePanel({ datasets }) {
                 <article key={table.table || table.name}>
                   <strong>{table.table || table.name}</strong>
                   <span>列 {table.columnCount} · 预估行 {table.approximateRowCount}</span>
+                  {table.columns?.length ? (
+                    <div className="database-schema-fields" aria-label={`${table.table || table.name}字段`}>
+                      {table.columns.slice(0, 12).map((column) => (
+                        <span className="database-schema-field" key={column.name}>
+                          <strong>{column.name}</strong>
+                          <em>{column.dataType || 'unknown'}</em>
+                        </span>
+                      ))}
+                      {table.columns.length > 12 ? <span className="database-schema-field more">+{table.columns.length - 12} 字段</span> : null}
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
@@ -1204,13 +1387,110 @@ function DocumentDetailPage({
   );
 }
 
-function SourcesPage({ documents, datasets, documentsLoading = false }) {
-  const groups = sourceGroups(documents);
+function SourcesPage({
+  documents,
+  datasets,
+  documentsLoading = false,
+  onRefreshDocuments,
+}) {
+  const [sourceAliases, setSourceAliases] = useState({});
+  const [editingSourceId, setEditingSourceId] = useState('');
+  const [aliasDraft, setAliasDraft] = useState('');
+  const [lastCheckedAt, setLastCheckedAt] = useState('');
+  const refreshDocumentsRef = useRef(onRefreshDocuments);
+  const documentsLoadingRef = useRef(documentsLoading);
+  const refreshInFlightRef = useRef(false);
+  const sources = buildConnectedSourceCards(datasets, documents).filter((source) => source.documentCount > 0);
+  const uniqueConnectedDocuments = connectedDocumentCount(datasets, documents);
+
+  useEffect(() => {
+    setSourceAliases(readSourceDisplayAliases());
+  }, []);
+
+  useEffect(() => {
+    refreshDocumentsRef.current = onRefreshDocuments;
+  }, [onRefreshDocuments]);
+
+  useEffect(() => {
+    documentsLoadingRef.current = documentsLoading;
+    if (!documentsLoading) setLastCheckedAt(new Date().toISOString());
+  }, [documentsLoading]);
+
+  async function refreshSourceChanges() {
+    if (documentsLoadingRef.current || refreshInFlightRef.current || !refreshDocumentsRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      await refreshDocumentsRef.current();
+      setLastCheckedAt(new Date().toISOString());
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }
+
+  const refreshSourceChangesRef = useRef(refreshSourceChanges);
+  refreshSourceChangesRef.current = refreshSourceChanges;
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshSourceChangesRef.current();
+    }, 60000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  function startEditingSourceAlias(sourceId, displayName) {
+    setEditingSourceId(sourceId);
+    setAliasDraft(displayName);
+  }
+
+  function saveSourceAlias(sourceId, defaultName) {
+    const displayName = aliasDraft.trim();
+    const nextAliases = { ...sourceAliases };
+    if (!displayName || displayName === defaultName) {
+      delete nextAliases[sourceId];
+    } else {
+      nextAliases[sourceId] = displayName;
+    }
+    setSourceAliases(nextAliases);
+    writeSourceDisplayAliases(nextAliases);
+    setEditingSourceId('');
+    setAliasDraft('');
+  }
+
+  function resetSourceAlias(sourceId) {
+    const nextAliases = { ...sourceAliases };
+    delete nextAliases[sourceId];
+    setSourceAliases(nextAliases);
+    writeSourceDisplayAliases(nextAliases);
+  }
+
+  const aliasEditorProps = {
+    aliases: sourceAliases,
+    editingSourceId,
+    aliasDraft,
+    onAliasDraftChange: setAliasDraft,
+    onStartEditing: startEditingSourceAlias,
+    onSave: saveSourceAlias,
+    onCancel: () => {
+      setEditingSourceId('');
+      setAliasDraft('');
+    },
+    onReset: resetSourceAlias,
+  };
+
   return (
-    <div className="directory-grid-cards">
+    <div className="source-workspace-layout">
+      <div className="source-workspace-main">
+        <ConnectedDataSummary
+          sources={sources}
+          uniqueConnectedDocumentCount={uniqueConnectedDocuments}
+          loading={documentsLoading}
+          lastCheckedAt={lastCheckedAt}
+          onRefresh={refreshSourceChanges}
+          {...aliasEditorProps}
+        />
+        <DatabaseSourcePanel datasets={datasets} {...aliasEditorProps} />
+      </div>
       <AccessMethodGuide documents={documents} datasets={datasets} />
-      <ConnectedDataSummary groups={groups} datasets={datasets} loading={documentsLoading} />
-      <DatabaseSourcePanel datasets={datasets} />
     </div>
   );
 }
@@ -1421,7 +1701,14 @@ export default function WorkspaceDirectoryPanel({
           onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
         />
       ) : null}
-      {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} documentsLoading={documentsLoading} /> : null}
+      {activePage === 'sources' ? (
+        <SourcesPage
+          documents={documents}
+          datasets={datasets}
+          documentsLoading={documentsLoading}
+          onRefreshDocuments={onRefreshDocuments}
+        />
+      ) : null}
       {activePage === 'members' ? <MembersPage accountStatusSummary={accountStatusSummary} /> : null}
       {activePage === 'audit' ? <AuditPage stats={stats} activityEvents={activityEvents} htmlArtifacts={htmlArtifacts} /> : null}
       {activePage === 'model-pool' ? <ModelPoolPanel accountStatusSummary={accountStatusSummary} /> : null}
