@@ -50,11 +50,22 @@ test('normalizeDatabaseSchema accepts server schema payload shape', () => {
       database: 'hy_sql',
       tables: [
         {
-          table: 'bi_traffic_area',
+          name: 'bi_traffic_area',
+          table_type: 'BASE TABLE',
+          comment: '小时客流明细',
           approximate_row_count: 12,
+          primary_key_columns: ['city'],
+          indexes: [{ name: 'PRIMARY', columns: ['city'], is_unique: true }],
           columns: [
-            { name: 'city', data_type: 'varchar', nullable: false },
-            { name: 'count', data_type: 'int' },
+            {
+              name: 'city',
+              ordinal_position: 1,
+              data_type: 'varchar',
+              column_type: 'varchar(64)',
+              is_nullable: false,
+              comment: '城市',
+            },
+            { name: 'count', ordinal_position: 2, data_type: 'int', is_nullable: true },
           ],
         },
       ],
@@ -65,6 +76,9 @@ test('normalizeDatabaseSchema accepts server schema payload shape', () => {
   assert.equal(schema.tableCount, 1);
   assert.equal(schema.tables[0].columnCount, 2);
   assert.equal(schema.tables[0].columns[0].nullable, false);
+  assert.equal(schema.tables[0].columns[0].primaryKey, true);
+  assert.equal(schema.tables[0].columns[0].comment, '城市');
+  assert.equal(schema.tables[0].comment, '小时客流明细');
 });
 
 test('normalizeDatabaseProfile compacts semantic counts for UI', () => {
@@ -75,11 +89,22 @@ test('normalizeDatabaseProfile compacts semantic counts for UI', () => {
       dimension_count: 4,
       tables: [
         {
-          table: 'bi_traffic_area',
-          metric_count: 2,
-          dimension_count: 3,
-          time_dimension_count: 1,
-          mapping_confidence: 86,
+          name: 'bi_traffic_area',
+          metrics: ['traffic_in', 'traffic_out'],
+          dimensions: ['point_id', 'area_name', 'floor_name'],
+          time_dimensions: ['hour'],
+          suggested_mapping: { confidence: 86 },
+          columns: [{
+            name: 'traffic_in',
+            data_type: 'bigint',
+            column_type: 'bigint unsigned',
+            semantic_role: 'metric',
+            role_confidence: 92,
+            nullable: false,
+            sample_values: ['18', '27'],
+            distinct_sample_count: 2,
+            null_sample_count: 0,
+          }],
         },
       ],
     },
@@ -89,6 +114,8 @@ test('normalizeDatabaseProfile compacts semantic counts for UI', () => {
   assert.equal(profile.metricCount, 3);
   assert.equal(profile.dimensionCount, 4);
   assert.equal(profile.tables[0].mappingConfidence, 86);
+  assert.equal(profile.tables[0].metricCount, 2);
+  assert.equal(profile.tables[0].columns[0].semanticRole, 'metric');
 });
 
 test('databaseSourceSyncRequestBody supports dataset id and external dataset binding', () => {

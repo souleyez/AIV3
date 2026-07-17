@@ -57,22 +57,54 @@ export function databaseSourceOptionsFromIntegrations(payload = {}) {
 export function normalizeDatabaseSchema(payload = {}) {
   const schema = payload?.schema && typeof payload.schema === 'object' ? payload.schema : payload;
   const tables = Array.isArray(schema?.tables)
-    ? schema.tables.map((table) => ({
-      name: String(table?.name || table?.table || ''),
-      table: String(table?.table || table?.name || ''),
-      columnCount: numberOrZero(table?.column_count ?? table?.columnCount ?? table?.columns?.length),
-      approximateRowCount: numberOrZero(table?.approximate_row_count ?? table?.approximateRowCount ?? table?.row_count),
-      columns: Array.isArray(table?.columns)
-        ? table.columns.map((column) => ({
-          name: String(column?.name || column?.column || ''),
-          dataType: String(column?.data_type || column?.dataType || column?.type || ''),
-          nullable: column?.nullable !== false,
-        })).filter((column) => column.name)
-        : [],
-    })).filter((table) => table.table || table.name)
+    ? schema.tables.map((table) => {
+      const primaryKeyColumns = Array.isArray(table?.primary_key_columns ?? table?.primaryKeyColumns)
+        ? (table.primary_key_columns ?? table.primaryKeyColumns).map((column) => String(column || '')).filter(Boolean)
+        : [];
+      const indexes = Array.isArray(table?.indexes)
+        ? table.indexes.map((index) => ({
+          name: String(index?.name || ''),
+          columns: Array.isArray(index?.columns)
+            ? index.columns.map((column) => String(column || '')).filter(Boolean)
+            : [],
+          unique: index?.is_unique === true || index?.isUnique === true,
+        })).filter((index) => index.name)
+        : [];
+      const columns = Array.isArray(table?.columns)
+        ? table.columns.map((column, index) => {
+          const name = String(column?.name || column?.column || '');
+          const nullableValue = column?.is_nullable ?? column?.isNullable ?? column?.nullable;
+          return {
+            name,
+            ordinalPosition: numberOrZero(column?.ordinal_position ?? column?.ordinalPosition ?? index + 1),
+            dataType: String(column?.data_type || column?.dataType || column?.type || ''),
+            columnType: String(column?.column_type || column?.columnType || column?.data_type || column?.dataType || column?.type || ''),
+            nullable: nullableValue !== false,
+            defaultValue: column?.default_value ?? column?.defaultValue ?? null,
+            comment: String(column?.comment || column?.description || ''),
+            primaryKey: primaryKeyColumns.includes(name),
+            indexed: indexes.some((item) => item.columns.includes(name)),
+          };
+        }).filter((column) => column.name)
+        : [];
+      return {
+        name: String(table?.name || table?.table || ''),
+        table: String(table?.table || table?.name || ''),
+        tableType: String(table?.table_type || table?.tableType || ''),
+        comment: String(table?.comment || table?.description || ''),
+        columnCount: numberOrZero(table?.column_count ?? table?.columnCount ?? columns.length),
+        approximateRowCount: numberOrZero(table?.approximate_row_count ?? table?.approximateRowCount ?? table?.row_count),
+        updateTime: table?.update_time || table?.updateTime || null,
+        primaryKeyColumns,
+        indexes,
+        columns,
+      };
+    }).filter((table) => table.table || table.name)
     : [];
   return {
     database: String(schema?.database || ''),
+    kind: String(schema?.kind || ''),
+    serverVersion: String(schema?.server_version || schema?.serverVersion || ''),
     tableCount: numberOrZero(schema?.table_count ?? schema?.tableCount ?? tables.length),
     tables,
   };
@@ -81,22 +113,61 @@ export function normalizeDatabaseSchema(payload = {}) {
 export function normalizeDatabaseProfile(payload = {}) {
   const profile = payload?.profile && typeof payload.profile === 'object' ? payload.profile : payload;
   const tables = Array.isArray(profile?.tables)
-    ? profile.tables.map((table) => ({
-      table: String(table?.table || table?.name || ''),
-      approximateRowCount: numberOrZero(table?.approximate_row_count ?? table?.approximateRowCount),
-      dimensionCount: numberOrZero(table?.dimension_count ?? table?.dimensionCount),
-      metricCount: numberOrZero(table?.metric_count ?? table?.metricCount),
-      timeDimensionCount: numberOrZero(table?.time_dimension_count ?? table?.timeDimensionCount),
-      entityColumnCount: numberOrZero(table?.entity_column_count ?? table?.entityColumnCount),
-      textColumnCount: numberOrZero(table?.text_column_count ?? table?.textColumnCount),
-      mappingConfidence: numberOrZero(table?.mapping_confidence ?? table?.mappingConfidence),
-    })).filter((table) => table.table)
+    ? profile.tables.map((table) => {
+      const dimensions = Array.isArray(table?.dimensions) ? table.dimensions.map(String) : [];
+      const metrics = Array.isArray(table?.metrics) ? table.metrics.map(String) : [];
+      const timeDimensions = Array.isArray(table?.time_dimensions ?? table?.timeDimensions)
+        ? (table.time_dimensions ?? table.timeDimensions).map(String)
+        : [];
+      const entityColumns = Array.isArray(table?.entity_columns ?? table?.entityColumns)
+        ? (table.entity_columns ?? table.entityColumns).map(String)
+        : [];
+      const textColumns = Array.isArray(table?.text_columns ?? table?.textColumns)
+        ? (table.text_columns ?? table.textColumns).map(String)
+        : [];
+      const columns = Array.isArray(table?.columns)
+        ? table.columns.map((column) => ({
+          name: String(column?.name || ''),
+          dataType: String(column?.data_type || column?.dataType || ''),
+          columnType: String(column?.column_type || column?.columnType || column?.data_type || column?.dataType || ''),
+          semanticRole: String(column?.semantic_role || column?.semanticRole || 'unknown'),
+          roleConfidence: numberOrZero(column?.role_confidence ?? column?.roleConfidence),
+          nullable: column?.nullable !== false,
+          distinctSampleCount: numberOrZero(column?.distinct_sample_count ?? column?.distinctSampleCount),
+          nullSampleCount: numberOrZero(column?.null_sample_count ?? column?.nullSampleCount),
+        })).filter((column) => column.name)
+        : [];
+      return {
+        table: String(table?.table || table?.name || ''),
+        approximateRowCount: numberOrZero(table?.approximate_row_count ?? table?.approximateRowCount),
+        columnCount: numberOrZero(table?.column_count ?? table?.columnCount ?? columns.length),
+        dimensionCount: numberOrZero(table?.dimension_count ?? table?.dimensionCount ?? dimensions.length),
+        metricCount: numberOrZero(table?.metric_count ?? table?.metricCount ?? metrics.length),
+        timeDimensionCount: numberOrZero(table?.time_dimension_count ?? table?.timeDimensionCount ?? timeDimensions.length),
+        entityColumnCount: numberOrZero(table?.entity_column_count ?? table?.entityColumnCount ?? entityColumns.length),
+        textColumnCount: numberOrZero(table?.text_column_count ?? table?.textColumnCount ?? textColumns.length),
+        mappingConfidence: numberOrZero(
+          table?.mapping_confidence
+          ?? table?.mappingConfidence
+          ?? table?.suggested_mapping?.confidence
+          ?? table?.suggestedMapping?.confidence,
+        ),
+        dimensions,
+        metrics,
+        timeDimensions,
+        entityColumns,
+        textColumns,
+        columns,
+      };
+    }).filter((table) => table.table)
     : [];
+  const derivedMetricCount = tables.reduce((sum, table) => sum + table.metricCount, 0);
+  const derivedDimensionCount = tables.reduce((sum, table) => sum + table.dimensionCount, 0);
   return {
     database: String(profile?.database || ''),
     tableCount: numberOrZero(profile?.table_count ?? profile?.tableCount ?? tables.length),
-    metricCount: numberOrZero(profile?.metric_count ?? profile?.metricCount),
-    dimensionCount: numberOrZero(profile?.dimension_count ?? profile?.dimensionCount),
+    metricCount: numberOrZero(profile?.metric_count ?? profile?.metricCount ?? derivedMetricCount),
+    dimensionCount: numberOrZero(profile?.dimension_count ?? profile?.dimensionCount ?? derivedDimensionCount),
     tables,
   };
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyDatabaseSourceProfile,
   fetchDatabaseSourceOptions,
@@ -24,6 +24,7 @@ import {
   connectedDocumentCount,
   sourceDisplayName,
 } from '../lib/source-workspace-view-model';
+import { buildTabularDocumentPreview, isTabularDocument } from '../lib/tabular-document-view';
 import DatasetUnderstandingGraph from './DatasetUnderstandingGraph';
 import ModelPoolPanel from './ModelPoolPanel';
 
@@ -84,6 +85,24 @@ function documentKind(contentType = '') {
   if (lower.includes('sheet') || lower.includes('excel') || lower.includes('csv')) return '表格';
   if (lower.startsWith('image/')) return '图片';
   return '未分类';
+}
+
+function sourceGroups(documents = []) {
+  const groups = new Map();
+  documents.forEach((document) => {
+    const kind = documentKind(document.content_type);
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind).push(document);
+  });
+  return [...groups.entries()].map(([kind, items]) => ({ kind, items }));
+}
+
+function latestDocumentUpdatedAt(items = []) {
+  const latest = items
+    .map((item) => new Date(item.updated_at || item.updatedAt || item.created_at || item.createdAt || 0).getTime())
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => right - left)[0];
+  return latest ? new Date(latest).toISOString() : '';
 }
 
 const SOURCE_ACCESS_METHODS = [
@@ -230,7 +249,7 @@ function SourceDisplayNameEditor({
   );
 }
 
-function ConnectedDataSummary({
+function SourceLiveMonitor({
   sources,
   uniqueConnectedDocumentCount = 0,
   loading = false,
@@ -244,6 +263,7 @@ function ConnectedDataSummary({
   onCancel,
   onReset,
   onRefresh,
+  onOpenDocumentPage,
 }) {
   return (
     <section className="directory-card connected-source-card">
@@ -334,12 +354,195 @@ function ConnectedDataSummary({
   );
 }
 
+function ConnectedObjectDirectory({ groups, datasets, loading = false, onOpenDocumentPage }) {
+  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
+  return (
+    <section className="directory-card connected-source-card connected-object-browser">
+      <div className="directory-section-head">
+        <div>
+          <h3>已接入数据明细</h3>
+          <p>{total ? `当前已归档 ${total} 个采集对象，可按类型展开查看。` : '暂无已接入数据，上传或采集完成后会显示在这里。'}</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="directory-empty">正在读取已接入数据。</div>
+      ) : groups.length ? (
+        <div className="connected-source-list">
+          {groups.map((group, index) => {
+            const latestUpdatedAt = latestDocumentUpdatedAt(group.items);
+            return (
+              <details className="connected-source-group" key={group.kind} open={index === 0}>
+                <summary>
+                  <div>
+                    <strong>{group.kind}</strong>
+                    <span>
+                      {group.items.length} 个对象
+                      {latestUpdatedAt ? ` · 最近更新 ${formatRelativeTime(latestUpdatedAt)}` : ''}
+                    </span>
+                  </div>
+                  <em>展开</em>
+                </summary>
+                <div className="directory-source-list connected-source-documents">
+                  {group.items.map((document) => (
+                    <button
+                      key={document.id}
+                      type="button"
+                      className="connected-source-document"
+                      onClick={() => onOpenDocumentPage?.(document.id)}
+                      disabled={!document.id || !onOpenDocumentPage}
+                    >
+                      <div>
+                        <strong>{document.title || '未命名资料'}</strong>
+                        <span>
+                          {documentDatasetTitles(document, datasets)}
+                          {' · '}{formatRelativeTime(document.updated_at || document.updatedAt)}
+                          {document.lifecycle ? ` · ${formatSnakeCaseLabel(document.lifecycle)}` : ''}
+                        </span>
+                        <small>{truncateText(document.object_key || document.objectKey || document.external_id || document.id, 88)}</small>
+                      </div>
+                      <em>查看明细</em>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="directory-empty">暂无采集源。上传文件、网页采集或业务系统同步完成后，会按类型进入这里。</div>
+      )}
+    </section>
+  );
+}
+
 function MiniMetric({ label, value }) {
   return (
     <div className="directory-mini-metric">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+const SEMANTIC_ROLE_LABELS = {
+  primary_key: '主键标识',
+  identifier: '标识字段',
+  entity: '业务实体',
+  dimension: '分析维度',
+  metric: '统计指标',
+  amount: '金额指标',
+  time: '时间维度',
+  name: '名称字段',
+  text: '文本内容',
+  boolean: '布尔状态',
+  category: '分类维度',
+  unknown: '待确认',
+};
+
+function semanticRoleLabel(role = '') {
+  const normalized = String(role || '').toLowerCase();
+  return SEMANTIC_ROLE_LABELS[normalized] || formatSnakeCaseLabel(normalized || 'unknown');
+}
+
+function dictionaryFieldDescription(field = {}) {
+  if (field.description) return field.description;
+  const label = field.label || field.technical_name || '当前字段';
+  const role = semanticRoleLabel(field.semantic_role);
+  const valueType = field.value_type && field.value_type !== 'unknown' ? `，值类型 ${field.value_type}` : '';
+  return `${label}；系统识别为${role}${valueType}。`;
+}
+
+function dictionaryConfidenceLabel(value) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence <= 0) return '0%';
+  return `${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`;
+}
+
+function DatasetDictionaryPanel({
+  datasets,
+  documents,
+  selectedDatasetId,
+  understandingState,
+}) {
+  const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
+  const stateMatches = understandingState?.datasetId === selectedDatasetId;
+  const understanding = stateMatches ? understandingState?.data : null;
+  const fields = Array.isArray(understanding?.fields) ? understanding.fields : [];
+  const estimatedRecordCount = fields.reduce(
+    (maximum, field) => Math.max(maximum, Number(field?.non_empty_count) || 0),
+    0,
+  );
+  const datasetDocuments = selectedDatasetId
+    ? documents.filter((document) => documentDatasetIds(document).includes(selectedDatasetId))
+    : [];
+  const latestUpdatedAt = latestDocumentUpdatedAt(datasetDocuments);
+
+  return (
+    <section className="directory-card source-dictionary-card">
+      <div className="directory-section-head">
+        <div>
+          <h3>数据字典</h3>
+          <p>
+            {selectedDataset
+              ? `当前数据集：${selectedDataset.title || selectedDataset.key}。字段中文名来自数据理解，系统解释与源字段名分开展示。`
+              : '请先在顶部选择数据集，再查看字段中文名、类型、语义角色和质量统计。'}
+          </p>
+        </div>
+      </div>
+
+      {selectedDataset ? (
+        <div className="source-dictionary-summary">
+          <MiniMetric label="资料对象" value={datasetDocuments.length} />
+          <MiniMetric label="识别字段" value={fields.length} />
+          <MiniMetric label="估算记录" value={estimatedRecordCount ? estimatedRecordCount.toLocaleString('zh-CN') : '待统计'} />
+          <MiniMetric label="最近变化" value={latestUpdatedAt ? formatRelativeTime(latestUpdatedAt) : '暂无'} />
+        </div>
+      ) : null}
+
+      {selectedDataset && understandingState?.status === 'loading' ? (
+        <div className="directory-empty">正在读取字段字典。</div>
+      ) : null}
+      {selectedDataset && understandingState?.status === 'failed' ? (
+        <div className="database-source-error">字段字典暂不可用：{understandingState.error || '数据理解读取失败'}</div>
+      ) : null}
+      {fields.length ? (
+        <div className="source-dictionary-table-wrap">
+          <table className="source-detail-table source-dictionary-table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>字典说明</th>
+                <th>类型 / 角色</th>
+                <th>质量统计</th>
+                <th>安全样例</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fields.map((field) => (
+                <tr key={field.id || `${field.object_id}:${field.technical_name}`}>
+                  <td>
+                    <strong>{field.label || field.technical_name || '待解释字段'}</strong>
+                    <code>{field.technical_name || '—'}</code>
+                  </td>
+                  <td>{dictionaryFieldDescription(field)}</td>
+                  <td>
+                    <span>{field.value_type || 'unknown'}</span>
+                    <small>{semanticRoleLabel(field.semantic_role)} · 置信 {dictionaryConfidenceLabel(field.confidence)}</small>
+                  </td>
+                  <td>
+                    <span>非空 {Number(field.non_empty_count) || 0}</span>
+                    <small>去重 {Number(field.distinct_count) || 0}</small>
+                  </td>
+                  <td>{Array.isArray(field.examples) && field.examples.length ? field.examples.slice(0, 3).join('、') : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : selectedDataset && understandingState?.status !== 'loading' && understandingState?.status !== 'failed' ? (
+        <div className="directory-empty">当前数据集尚未形成结构化字段字典；仍可从上方已接入资料进入 README 或 schema.json 查看源说明。</div>
+      ) : null}
+    </section>
   );
 }
 
@@ -668,6 +871,73 @@ function databaseSyncIsLive(syncReadiness, recentSyncRuns = []) {
   return liveStates.has(signal) || liveStates.has(latestRunStatus);
 }
 
+function DatabaseTableInspector({
+  table,
+  profileTable,
+}) {
+  if (!table) return null;
+  const profileColumns = new Map(
+    (profileTable?.columns || []).map((column) => [column.name, column]),
+  );
+  const tableName = table.table || table.name;
+
+  return (
+    <section className="database-table-inspector" aria-label={`${tableName} 字段字典`}>
+      <div className="database-table-inspector-head">
+        <div>
+          <strong>{tableName}</strong>
+          <span>
+            {table.comment || '暂无源表注释'} · 字段 {table.columnCount}
+            {table.approximateRowCount ? ` · 预估行 ${table.approximateRowCount}` : ''}
+            {table.updateTime ? ` · 更新 ${formatRelativeTime(table.updateTime)}` : ''}
+          </span>
+        </div>
+        <span className="database-table-access-note">源库行明细需在具备访问控制的环境中开放</span>
+      </div>
+
+      <div className="source-dictionary-table-wrap">
+        <table className="source-detail-table database-dictionary-table">
+          <thead>
+            <tr>
+              <th>字段</th>
+              <th>源库注释</th>
+              <th>数据类型</th>
+              <th>约束</th>
+              <th>系统语义</th>
+              <th>样本统计</th>
+            </tr>
+          </thead>
+          <tbody>
+            {table.columns.map((column) => {
+              const semantic = profileColumns.get(column.name);
+              return (
+                <tr key={column.name}>
+                  <td><code>{column.name}</code></td>
+                  <td>{column.comment || '—'}</td>
+                  <td>{column.columnType || column.dataType || 'unknown'}</td>
+                  <td>
+                    <span>{column.primaryKey ? '主键' : column.indexed ? '索引' : '普通字段'}</span>
+                    <small>{column.nullable ? '可为空' : '必填'}{column.defaultValue !== null ? ` · 默认 ${column.defaultValue}` : ''}</small>
+                  </td>
+                  <td>
+                    <span>{semantic ? semanticRoleLabel(semantic.semanticRole) : '待读取画像'}</span>
+                    <small>{semantic ? `置信 ${semantic.roleConfidence}` : '源库定义与系统推断分开'}</small>
+                  </td>
+                  <td>
+                    <span>{semantic ? `去重 ${semantic.distinctSampleCount}` : '—'}</span>
+                    <small>{semantic ? `空值 ${semantic.nullSampleCount}` : '点击“语义画像”补充'}</small>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+    </section>
+  );
+}
+
 function DatabaseSourcePanel({
   datasets,
   aliases,
@@ -688,6 +958,7 @@ function DatabaseSourcePanel({
   const [status, setStatus] = useState(null);
   const [schema, setSchema] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [selectedTableName, setSelectedTableName] = useState('');
   const [loading, setLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState('');
   const [notice, setNotice] = useState('');
@@ -741,10 +1012,16 @@ function DatabaseSourcePanel({
       } else if (kind === 'schema') {
         const nextSchema = await inspectDatabaseSourceSchema(selectedSourceId);
         setSchema(nextSchema);
+        setSelectedTableName((current) => (
+          current && nextSchema.tables.some((table) => (table.table || table.name) === current)
+            ? current
+            : nextSchema.tables[0]?.table || nextSchema.tables[0]?.name || ''
+        ));
         setNotice(`结构已读取 · ${nextSchema.tableCount} 张表`);
       } else if (kind === 'profile') {
         const nextProfile = await profileDatabaseSource(selectedSourceId);
         setProfile(nextProfile);
+        setSelectedTableName((current) => current || nextProfile.tables[0]?.table || '');
         setNotice(`语义画像已更新 · 指标 ${nextProfile.metricCount} · 维度 ${nextProfile.dimensionCount}`);
       } else if (kind === 'applyProfile') {
         const nextProfile = await applyDatabaseSourceProfile(selectedSourceId);
@@ -787,6 +1064,7 @@ function DatabaseSourcePanel({
       setStatus(null);
       setSchema(null);
       setProfile(null);
+      setSelectedTableName('');
       loadStatus(selectedSourceId);
     }
   }, [selectedSourceId]);
@@ -808,6 +1086,10 @@ function DatabaseSourcePanel({
   const canSync = syncTargetMode === 'external'
     ? Boolean(targetExternalId.trim())
     : Boolean(selectedDatasetId);
+  const selectedSchemaTable = schema?.tables?.find((table) => (
+    (table.table || table.name) === selectedTableName
+  )) || null;
+  const selectedProfileTable = profile?.tables?.find((table) => table.table === selectedTableName) || null;
 
   useEffect(() => {
     if (!selectedSourceId || !liveSync) return undefined;
@@ -959,28 +1241,31 @@ function DatabaseSourcePanel({
           ) : null}
 
           {schema?.tables?.length ? (
-            <div className="database-source-table-list">
-              {schema.tables.slice(0, 6).map((table) => (
-                <article key={table.table || table.name}>
-                  <strong>{table.table || table.name}</strong>
-                  <span>列 {table.columnCount} · 预估行 {table.approximateRowCount}</span>
-                  {table.columns?.length ? (
-                    <div className="database-schema-fields" aria-label={`${table.table || table.name}字段`}>
-                      {table.columns.slice(0, 12).map((column) => (
-                        <span className="database-schema-field" key={column.name}>
-                          <strong>{column.name}</strong>
-                          <em>{column.dataType || 'unknown'}</em>
-                        </span>
-                      ))}
-                      {table.columns.length > 12 ? <span className="database-schema-field more">+{table.columns.length - 12} 字段</span> : null}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
+            <div className="database-schema-browser">
+              <div className="database-schema-tabs" aria-label="数据库表选择">
+                {schema.tables.slice(0, 12).map((table) => {
+                  const tableName = table.table || table.name;
+                  return (
+                    <button
+                      key={tableName}
+                      type="button"
+                      className={tableName === selectedTableName ? 'active' : ''}
+                      onClick={() => setSelectedTableName(tableName)}
+                    >
+                      <strong>{tableName}</strong>
+                      <span>字段 {table.columnCount} · 预估行 {table.approximateRowCount}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <DatabaseTableInspector
+                table={selectedSchemaTable}
+                profileTable={selectedProfileTable}
+              />
             </div>
           ) : null}
 
-          {profile?.tables?.length ? (
+          {profile?.tables?.length && !schema?.tables?.length ? (
             <div className="database-source-table-list">
               {profile.tables.slice(0, 6).map((table) => (
                 <article key={table.table}>
@@ -1169,6 +1454,24 @@ function DocumentDetailPage({
     selectedDocumentId,
     selectedDocumentDetail,
   });
+  const tabularSourceText = orderedChunks
+    .map((chunk) => String(chunk?.content || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const tabularPreview = useMemo(
+    () => buildTabularDocumentPreview(selectedDocument || {}, tabularSourceText || rawText, { maxRows: 20, maxColumns: 40 }),
+    [
+      selectedDocument?.id,
+      selectedDocument?.title,
+      selectedDocument?.content_type,
+      selectedDocument?.contentType,
+      selectedDocument?.object_key,
+      selectedDocument?.objectKey,
+      tabularSourceText,
+      rawText,
+    ],
+  );
+  const hideTabularDocumentText = isTabularDocument(selectedDocument || {});
   const [documentTitleDraft, setDocumentTitleDraft] = useState('');
 
   useEffect(() => {
@@ -1233,12 +1536,45 @@ function DocumentDetailPage({
               <MiniMetric label="证据" value={evidences.length} />
               <MiniMetric label="状态" value={formatSnakeCaseLabel(selectedDocument.lifecycle)} />
             </div>
+            {tabularPreview ? (
+              <div className="document-table-preview">
+                <div className="document-block-title">
+                  <strong>表格明细预览</strong>
+                  <span>
+                    字段 {tabularPreview.columns.length} · 展示前 {tabularPreview.rows.length} 行
+                    {tabularPreview.hasSensitiveData ? ' · 敏感值已隐藏' : ''}
+                  </span>
+                </div>
+                <div className="source-dictionary-table-wrap">
+                  <table className="source-detail-table document-preview-table">
+                    <thead>
+                      <tr>{tabularPreview.columns.map((column) => <th key={column}>{column}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {tabularPreview.rows.map((row, rowIndex) => (
+                        <tr key={`document-row:${rowIndex}`}>
+                          {tabularPreview.columns.map((column, columnIndex) => (
+                            <td key={`${rowIndex}:${column}`} title={row[columnIndex] || '—'}>
+                              {truncateText(row[columnIndex] || '—', 160)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
             <div className="document-original-block">
               <div className="document-block-title">
                 <strong>Markdown 原文</strong>
                 <span>{rawText ? `${rawText.length} 字符 · 可下滑查看全文` : '暂无可展示原文'}</span>
               </div>
-              {rawText ? (
+              {hideTabularDocumentText ? (
+                <div className="document-sensitive-guard">
+                  公开页面仅展示经过字段级安全检查的表格样例，不展开表格原始全文；身份标识、联系方式和凭证形态值会自动隐藏。
+                </div>
+              ) : rawText ? (
                 <>
                   {markdownSectionHints.length ? (
                     <div className="document-md-hints" aria-label="段落标题线索">
@@ -1337,7 +1673,9 @@ function DocumentDetailPage({
               </div>
             </div>
             <div className="document-chunk-list">
-              {orderedChunks.length ? orderedChunks.map((chunk) => {
+              {hideTabularDocumentText ? (
+                <div className="document-sensitive-guard">表格解析切片可能包含后续行原值，已在公开页面隐藏。</div>
+              ) : orderedChunks.length ? orderedChunks.map((chunk) => {
                 const hints = chunkSectionHints(chunk);
                 return (
                   <article key={chunk.id} className="document-chunk-card">
@@ -1363,7 +1701,9 @@ function DocumentDetailPage({
               </div>
             </div>
             <div className="document-evidence-list">
-              {evidences.length ? evidences.map((evidence) => (
+              {hideTabularDocumentText ? (
+                <div className="document-sensitive-guard">表格检索证据可能包含原始值，已在公开页面隐藏。</div>
+              ) : evidences.length ? evidences.map((evidence) => (
                 <article key={evidence.id} className="document-evidence-card">
                   <div>
                     <strong>Rank {evidence.evidence_manifest_view?.recall?.rank_hint ?? evidence.chunk_index}</strong>
@@ -1390,8 +1730,11 @@ function DocumentDetailPage({
 function SourcesPage({
   documents,
   datasets,
+  selectedDatasetId,
+  datasetUnderstandingState,
   documentsLoading = false,
   onRefreshDocuments,
+  onOpenDocumentPage,
 }) {
   const [sourceAliases, setSourceAliases] = useState({});
   const [editingSourceId, setEditingSourceId] = useState('');
@@ -1402,6 +1745,7 @@ function SourcesPage({
   const refreshInFlightRef = useRef(false);
   const sources = buildConnectedSourceCards(datasets, documents).filter((source) => source.documentCount > 0);
   const uniqueConnectedDocuments = connectedDocumentCount(datasets, documents);
+  const groups = sourceGroups(documents);
 
   useEffect(() => {
     setSourceAliases(readSourceDisplayAliases());
@@ -1476,17 +1820,28 @@ function SourcesPage({
     },
     onReset: resetSourceAlias,
   };
-
   return (
     <div className="source-workspace-layout">
       <div className="source-workspace-main">
-        <ConnectedDataSummary
+        <SourceLiveMonitor
           sources={sources}
           uniqueConnectedDocumentCount={uniqueConnectedDocuments}
           loading={documentsLoading}
           lastCheckedAt={lastCheckedAt}
           onRefresh={refreshSourceChanges}
           {...aliasEditorProps}
+        />
+        <ConnectedObjectDirectory
+          groups={groups}
+          datasets={datasets}
+          loading={documentsLoading}
+          onOpenDocumentPage={onOpenDocumentPage}
+        />
+        <DatasetDictionaryPanel
+          datasets={datasets}
+          documents={documents}
+          selectedDatasetId={selectedDatasetId}
+          understandingState={datasetUnderstandingState}
         />
         <DatabaseSourcePanel datasets={datasets} {...aliasEditorProps} />
       </div>
@@ -1705,8 +2060,11 @@ export default function WorkspaceDirectoryPanel({
         <SourcesPage
           documents={documents}
           datasets={datasets}
+          selectedDatasetId={selectedDatasetId}
+          datasetUnderstandingState={datasetUnderstandingState}
           documentsLoading={documentsLoading}
           onRefreshDocuments={onRefreshDocuments}
+          onOpenDocumentPage={onOpenDocumentPage}
         />
       ) : null}
       {activePage === 'members' ? <MembersPage accountStatusSummary={accountStatusSummary} /> : null}

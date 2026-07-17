@@ -4721,7 +4721,8 @@ body {
 }
 
 .source-guide-card,
-.connected-source-card {
+.connected-source-card,
+.source-dictionary-card {
   grid-column: 1 / -1;
 }
 
@@ -5322,6 +5323,157 @@ body {
   max-height: min(520px, 62vh);
   overflow: auto;
   padding: 10px;
+}
+
+.connected-source-document {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 0;
+  border-radius: 17px;
+  background: rgba(10, 15, 22, 0.3);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.connected-source-document + .connected-source-document {
+  margin-top: 8px;
+}
+
+.connected-source-document:hover,
+.connected-source-document:focus-visible {
+  background: rgba(33, 214, 165, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(94, 234, 212, 0.22);
+}
+
+.connected-source-document:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.42);
+  outline-offset: 2px;
+}
+
+.connected-source-document:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.connected-source-document > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.connected-source-document strong {
+  color: #f8fbff;
+  font-size: 13px;
+}
+
+.connected-source-document span,
+.connected-source-document small {
+  color: #9aa7b9;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.connected-source-document small {
+  color: #7c8ba3;
+  font-size: 11px;
+}
+
+.connected-source-document em {
+  flex: none;
+  color: #5eead4;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.source-dictionary-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.source-dictionary-table-wrap {
+  min-width: 0;
+  overflow: auto;
+  border-radius: 16px;
+  background: rgba(7, 12, 19, 0.36);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.1);
+  scrollbar-gutter: stable;
+}
+
+.source-detail-table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+  color: #dce6f4;
+  font-size: 12px;
+}
+
+.source-detail-table th,
+.source-detail-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  text-align: left;
+  vertical-align: top;
+}
+
+.source-detail-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: rgba(15, 23, 34, 0.97);
+  color: #9aa7b9;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.source-detail-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.source-detail-table tbody tr:hover td {
+  background: rgba(94, 234, 212, 0.035);
+}
+
+.source-detail-table strong,
+.source-detail-table span,
+.source-detail-table small,
+.source-detail-table code {
+  display: block;
+}
+
+.source-detail-table strong {
+  color: #f8fbff;
+  font-size: 12px;
+}
+
+.source-detail-table code {
+  margin-top: 3px;
+  color: #7dd3fc;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.source-detail-table small {
+  margin-top: 3px;
+  color: #7c8ba3;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.source-dictionary-table {
+  min-width: 1080px;
 }
 
 .directory-source-list article em {
@@ -7533,6 +7685,111 @@ body {
   box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.18);
 }
 
+.database-schema-browser,
+.database-table-inspector {
+  display: grid;
+  gap: 12px;
+}
+
+.database-schema-browser {
+  padding-top: 4px;
+}
+
+.database-schema-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.database-schema-tabs button {
+  flex: none;
+  min-width: 170px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 14px;
+  background: rgba(10, 15, 22, 0.3);
+  color: #dce6f4;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.database-schema-tabs button.active {
+  border-color: rgba(94, 234, 212, 0.34);
+  background: rgba(20, 184, 166, 0.1);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.18);
+}
+
+.database-schema-tabs strong {
+  color: #f8fbff;
+  font-size: 12px;
+}
+
+.database-schema-tabs span {
+  color: #7c8ba3;
+  font-size: 11px;
+}
+
+.database-table-inspector {
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(10, 15, 22, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.1);
+}
+
+.database-table-inspector-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.database-table-inspector-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.database-table-inspector-head strong {
+  color: #f8fbff;
+  font-size: 14px;
+}
+
+.database-table-inspector-head span {
+  color: #9aa7b9;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.database-table-inspector-head .database-table-access-note {
+  flex: none;
+  max-width: 280px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.database-dictionary-table {
+  min-width: 1080px;
+}
+
+.document-preview-table {
+  min-width: max(860px, 100%);
+  white-space: nowrap;
+}
+
+.document-preview-table td {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .database-source-error {
   background: rgba(239, 68, 68, 0.12);
   color: #fecaca;
@@ -7600,6 +7857,7 @@ body {
 }
 
 .document-original-block,
+.document-table-preview,
 .document-chunk-card,
 .document-evidence-card,
 .document-model-facing,
@@ -7609,6 +7867,20 @@ body {
   padding: 12px;
   border-radius: 17px;
   background: rgba(10, 15, 22, 0.3);
+}
+
+.document-table-preview {
+  min-width: 0;
+}
+
+.document-sensitive-guard {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(251, 191, 36, 0.09);
+  color: #fde68a;
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.18);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .document-block-title,
@@ -8861,6 +9133,7 @@ body {
   .audit-layout .directory-card:first-child,
   .source-guide-card,
   .connected-source-card,
+  .source-dictionary-card,
   .database-source-card,
   .document-analysis-card {
     grid-column: auto;
@@ -8909,7 +9182,8 @@ body {
   }
 
   .source-method-grid,
-  .source-guide-summary {
+  .source-guide-summary,
+  .source-dictionary-summary {
     grid-template-columns: 1fr;
   }
 
@@ -8963,6 +9237,16 @@ body {
 
   .connected-source-group summary {
     align-items: flex-start;
+  }
+
+  .connected-source-document,
+  .database-table-inspector-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .connected-source-document em {
+    align-self: flex-start;
   }
 
   .document-detail-meta-grid {
