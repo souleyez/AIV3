@@ -17,8 +17,14 @@ import {
   graphNodeLabelVisible,
   layoutDatasetUnderstandingGraph,
 } from '../lib/dataset-understanding-graph-layout';
-import { normalizeDatasetIds } from '../lib/dataset-record-scope';
-import { buildKnowledgeGraphLenses } from '../lib/knowledge-graph-lenses';
+import {
+  crossDatasetAutoNeighborCount,
+  normalizeDatasetIds,
+} from '../lib/dataset-record-scope';
+import {
+  buildKnowledgeGraphLenses,
+  knowledgeGraphLensPreferredViewMode,
+} from '../lib/knowledge-graph-lenses';
 
 const DATASET_GRAPH_SERIES_ID = 'dataset-understanding-graph';
 let echartsModulePromise = null;
@@ -878,7 +884,7 @@ export default function DatasetUnderstandingGraph({
     if (nextMode !== 'cross') return;
     const selection = preferredCrossDatasetIds;
     setCrossDatasetIds(selection);
-    requestCrossGraph(selection, selection.length > 1 ? 0 : 3);
+    requestCrossGraph(selection, crossDatasetAutoNeighborCount(selection));
   };
 
   const toggleCrossDataset = (datasetId) => {
@@ -893,7 +899,7 @@ export default function DatasetUnderstandingGraph({
     setFocusDatasetId('');
     setActiveLensKey('');
     setActiveKnowledgeLensKey('');
-    requestCrossGraph(normalized, 0);
+    requestCrossGraph(normalized, crossDatasetAutoNeighborCount(normalized));
   };
 
   const focusDatasetCluster = (datasetId) => {
@@ -956,6 +962,9 @@ export default function DatasetUnderstandingGraph({
     setFocusDatasetId('');
     setActiveCategory('all');
     setActiveRelationType('all');
+    if (nextKey && knowledgeGraphLensPreferredViewMode(model, lens) === 'technical') {
+      setViewMode('technical');
+    }
     setFocusDepth('all');
     setSelectedLinkId('');
     setSelectedStageKey('');
@@ -1006,7 +1015,12 @@ export default function DatasetUnderstandingGraph({
   useEffect(() => {
     if (graphMode !== 'cross') return;
     setCrossDatasetIds(preferredCrossDatasetIds);
-    if (preferredCrossDatasetIds.length) requestCrossGraph(preferredCrossDatasetIds, 0);
+    if (preferredCrossDatasetIds.length) {
+      requestCrossGraph(
+        preferredCrossDatasetIds,
+        crossDatasetAutoNeighborCount(preferredCrossDatasetIds),
+      );
+    }
   }, [preferredCrossDatasetIdsKey]);
 
   useEffect(() => {

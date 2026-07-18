@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildKnowledgeGraphLenses,
   KNOWLEDGE_GRAPH_LENS_PROFILES,
+  knowledgeGraphLensPreferredViewMode,
   resolveKnowledgeGraphLensProfile,
 } from './knowledge-graph-lenses.js';
 
@@ -101,6 +102,17 @@ test('resume lenses cover existing semantic nodes without carrying raw personal 
   const inputIds = new Set(resumeModel().nodes.map((item) => item.id));
   result.facets.flatMap((facet) => facet.nodeIds)
     .forEach((id) => assert.equal(inputIds.has(id), true));
+});
+
+test('quality lenses reveal unresolved nodes while ordinary lenses stay in business view', () => {
+  const model = resumeModel();
+  const result = buildKnowledgeGraphLenses(model);
+  const quality = result.facets.find((facet) => facet.key === 'quality');
+  const experience = result.facets.find((facet) => facet.key === 'experience');
+
+  assert.equal(knowledgeGraphLensPreferredViewMode(model, quality), 'technical');
+  assert.equal(knowledgeGraphLensPreferredViewMode(model, experience), 'business');
+  assert.equal(knowledgeGraphLensPreferredViewMode(model, null), 'business');
 });
 
 test('resume fallback exposes only safe structure nodes while semantic snapshot is pending', () => {

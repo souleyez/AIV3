@@ -72,7 +72,9 @@ All view controls form one graph-view state: scope, dataset cluster, lens, categ
 - The UI shows active filters and visible node/relation counts.
 - A reset action restores a documented default.
 - If a filter hides the selected node or relation, the inspector clears or moves to a visible object.
+- A lens that includes unresolved or technical-only nodes must switch to a view that can actually render them; its advertised count must match the visible result.
 - Dataset selection used by the workspace and dataset selection used by the graph must not silently diverge.
+- When a cross-dataset selection collapses to one root dataset, restore the documented automatic-neighbor policy instead of silently degrading to a single-dataset graph.
 
 ## 7. Make dense labels distinguishable
 

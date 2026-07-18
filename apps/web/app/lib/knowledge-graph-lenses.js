@@ -152,6 +152,18 @@ function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export function knowledgeGraphLensPreferredViewMode(model, lens) {
+  const nodeIds = new Set((Array.isArray(lens?.nodeIds) ? lens.nodeIds : [])
+    .map(text)
+    .filter(Boolean));
+  if (!nodeIds.size) return 'business';
+  const requiresTechnicalView = (Array.isArray(model?.nodes) ? model.nodes : []).some((node) => (
+    nodeIds.has(text(node?.id))
+      && (text(node?.kind).toLowerCase() === 'unresolved' || node?.technicalOnly === true)
+  ));
+  return requiresTechnicalView ? 'technical' : 'business';
+}
+
 function stableTextCompare(left, right) {
   return text(left).localeCompare(text(right), 'en');
 }

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   combinedDatasetIds,
+  crossDatasetAutoNeighborCount,
   datasetIdsAfterCatalogRefresh,
   datasetRecordIds,
   datasetSelectionStateAfterToggle,
@@ -35,6 +36,13 @@ describe('dataset record scope helpers', () => {
       ['ds-a', 'ds-b', '0'],
     );
     assert.deepEqual(normalizeDatasetIds(' single '), ['single']);
+  });
+
+  it('discovers neighboring datasets only when cross-graph scope has one dataset', () => {
+    assert.equal(crossDatasetAutoNeighborCount([]), 0);
+    assert.equal(crossDatasetAutoNeighborCount(['root']), 3);
+    assert.equal(crossDatasetAutoNeighborCount(['root', 'root']), 3);
+    assert.equal(crossDatasetAutoNeighborCount(['root', 'related']), 0);
   });
 
   it('keeps existing dataset id equality order-sensitive', () => {

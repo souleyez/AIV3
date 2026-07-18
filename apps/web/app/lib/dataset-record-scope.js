@@ -18,6 +18,10 @@ export function normalizeDatasetIds(ids) {
     .filter(Boolean))];
 }
 
+export function crossDatasetAutoNeighborCount(datasetIds) {
+  return normalizeDatasetIds(datasetIds).length === 1 ? 3 : 0;
+}
+
 export function toggleSelectedDatasetIds(currentDatasetIds, datasetId) {
   const currentIds = normalizeDatasetIds(currentDatasetIds);
   return currentIds.includes(datasetId)
