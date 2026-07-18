@@ -10,6 +10,7 @@ export function formatConversationTitleTime(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
   const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
   return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

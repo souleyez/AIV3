@@ -19,6 +19,7 @@ test('compactConversationSummary truncates long prompts with ellipsis', () => {
 
 test('formatConversationTitleTime formats stable zh-CN month day and time', () => {
   assert.equal(formatConversationTitleTime(new Date('2026-06-12T08:09:00+08:00')), '06-12 08:09');
+  assert.equal(formatConversationTitleTime(new Date('2026-06-12T00:09:00Z')), '06-12 08:09');
 });
 
 test('formatConversationTitleTime tolerates invalid dates', () => {
