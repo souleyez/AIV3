@@ -1496,6 +1496,7 @@ function DatasetsPage({
         dataset={selectedDataset}
         documents={documents}
         understandingState={datasetUnderstandingState}
+        initialDatasetIds={selectedDatasetIds}
       />
 
       <section className="directory-card dataset-page-documents-card">

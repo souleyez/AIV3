@@ -17,6 +17,8 @@ import {
   graphNodeLabelVisible,
   layoutDatasetUnderstandingGraph,
 } from '../lib/dataset-understanding-graph-layout';
+import { normalizeDatasetIds } from '../lib/dataset-record-scope';
+import { buildKnowledgeGraphLenses } from '../lib/knowledge-graph-lenses';
 
 const DATASET_GRAPH_SERIES_ID = 'dataset-understanding-graph';
 let echartsModulePromise = null;
@@ -76,6 +78,43 @@ function semanticRoleLabel(value) {
     text: '文本',
     unknown: '待判断',
   }[value] || value || '待判断';
+}
+
+function normalizedKnowledgeGraphLenses(value) {
+  const input = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.lenses)
+      ? value.lenses
+      : Array.isArray(value?.facets)
+        ? value.facets
+        : [];
+  const lenses = input.map((lens, index) => {
+    const focusNodeId = String(lens?.focusNodeId || '').trim();
+    const nodeIds = [...new Set([
+      ...(Array.isArray(lens?.nodeIds) ? lens.nodeIds : []),
+      ...(Array.isArray(lens?.nodes) ? lens.nodes.map((node) => (
+        typeof node === 'string' ? node : node?.id
+      )) : []),
+      focusNodeId,
+    ].map((id) => String(id || '').trim()).filter(Boolean))];
+    const label = String(lens?.label || lens?.name || lens?.title || '').trim();
+    const declaredCount = Number(lens?.count ?? lens?.nodeCount);
+    return {
+      key: String(lens?.key || lens?.id || `lens-${index + 1}`).trim(),
+      label: label || `领域镜头 ${index + 1}`,
+      description: String(lens?.description || lens?.detail || lens?.summary || '').trim(),
+      nodeIds,
+      focusNodeId: focusNodeId || nodeIds[0] || '',
+      count: Number.isFinite(declaredCount) ? Math.max(0, declaredCount) : nodeIds.length,
+      color: String(lens?.color || '').trim(),
+    };
+  }).filter((lens) => lens.key && lens.nodeIds.length);
+  return {
+    lenses,
+    description: Array.isArray(value)
+      ? ''
+      : String(value?.description || value?.summary || '').trim(),
+  };
 }
 
 function staticLayoutExtentAnchors(nodes) {
@@ -656,7 +695,12 @@ function StageInspector({ stage, onSelectNode }) {
   );
 }
 
-export default function DatasetUnderstandingGraph({ dataset, documents = [], understandingState = null }) {
+export default function DatasetUnderstandingGraph({
+  dataset,
+  documents = [],
+  understandingState = null,
+  initialDatasetIds = [],
+}) {
   const panelRef = useRef(null);
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
@@ -666,9 +710,16 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const graphCenterRef = useRef(null);
   const resizeFrameRef = useRef(null);
   const [graphMode, setGraphMode] = useState('single');
-  const [crossDatasetIds, setCrossDatasetIds] = useState(() => dataset?.id ? [dataset.id] : []);
+  const preferredCrossDatasetIds = normalizeDatasetIds([
+    dataset?.id,
+    ...initialDatasetIds,
+  ]).slice(0, 8);
+  const preferredCrossDatasetIdsKey = preferredCrossDatasetIds.join('|');
+  const [crossDatasetIds, setCrossDatasetIds] = useState(() => preferredCrossDatasetIds);
   const [focusDatasetId, setFocusDatasetId] = useState('');
   const [activeLensKey, setActiveLensKey] = useState('');
+  const [activeKnowledgeLensKey, setActiveKnowledgeLensKey] = useState('');
+  const [nodeSearch, setNodeSearch] = useState('');
   const singleModel = useMemo(
     () => buildDatasetUnderstandingGraph(dataset, documents, understandingState?.data || null),
     [dataset, documents, understandingState?.data],
@@ -681,6 +732,10 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     [crossGraphState?.data, crossGraphState?.rootDatasetId, dataset?.id],
   );
   const model = graphMode === 'cross' && crossModel.hasDataset ? crossModel : singleModel;
+  const knowledgeLensModel = useMemo(
+    () => normalizedKnowledgeGraphLenses(buildKnowledgeGraphLenses(model, { profile: 'auto' })),
+    [model],
+  );
   const [activeCategory, setActiveCategory] = useState('all');
   const [activeRelationType, setActiveRelationType] = useState('all');
   const [viewMode, setViewMode] = useState('business');
@@ -730,10 +785,15 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     observed: overviewGraph.links.filter((link) => link.type === 'observed').length,
     inferred: overviewGraph.links.filter((link) => link.type === 'inferred').length,
   }), [overviewGraph.links]);
+  const activeKnowledgeLens = useMemo(
+    () => knowledgeLensModel.lenses.find((lens) => lens.key === activeKnowledgeLensKey) || null,
+    [activeKnowledgeLensKey, knowledgeLensModel.lenses],
+  );
   const activeLensNodeIds = useMemo(() => {
     const facet = model.analysisFacets?.find((item) => item.key === activeLensKey);
-    return facet ? facet.nodes.map((node) => node.id) : [];
-  }, [model.analysisFacets, activeLensKey]);
+    if (facet) return facet.nodes.map((node) => node.id);
+    return activeKnowledgeLens?.nodeIds || [];
+  }, [model.analysisFacets, activeLensKey, activeKnowledgeLens]);
   const activeGraph = useMemo(() => filterDatasetUnderstandingGraph(model, {
     activeCategory,
     activeRelationType,
@@ -778,6 +838,22 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
       activeGraph,
     ],
   );
+  const nodeSearchResults = useMemo(() => {
+    const query = nodeSearch.trim().toLocaleLowerCase();
+    if (!query) return [];
+    return model.nodes.filter((node) => {
+      if (
+        model.mode === 'semantic'
+        && viewMode === 'business'
+        && node.kind !== 'dataset'
+        && (node.kind === 'unresolved' || node.technicalOnly)
+      ) return false;
+      // Search only user-visible semantic labels. Raw values and technical fields may
+      // contain resume PII and must not become a side-channel through search results.
+      return [node.name, node.shortLabel, semanticRoleLabel(node.semanticRole)]
+        .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    }).slice(0, 10);
+  }, [model.mode, model.nodes, nodeSearch, viewMode]);
   chartOptionRef.current = chartOption;
   selectedNodeIdRef.current = selectedNodeId;
 
@@ -798,11 +874,11 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setGraphMode(nextMode);
     setFocusDatasetId('');
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     if (nextMode !== 'cross') return;
-    const rootDatasetId = String(dataset?.id || '').trim();
-    const selection = rootDatasetId ? [rootDatasetId] : [];
+    const selection = preferredCrossDatasetIds;
     setCrossDatasetIds(selection);
-    requestCrossGraph(selection, 3);
+    requestCrossGraph(selection, selection.length > 1 ? 0 : 3);
   };
 
   const toggleCrossDataset = (datasetId) => {
@@ -816,6 +892,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setCrossDatasetIds(normalized);
     setFocusDatasetId('');
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     requestCrossGraph(normalized, 0);
   };
 
@@ -823,6 +900,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     const nextDatasetId = focusDatasetId === datasetId ? '' : datasetId;
     setFocusDatasetId(nextDatasetId);
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     if (!nextDatasetId) return;
     const datasetNode = model.nodes.find((node) => (
       node.kind === 'dataset' && node.datasetRefs?.includes(nextDatasetId)
@@ -837,6 +915,7 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   const selectAnalysisLens = (facet) => {
     const nextKey = facet?.key && facet.key !== activeLensKey ? facet.key : '';
     setActiveLensKey(nextKey);
+    setActiveKnowledgeLensKey('');
     setFocusDatasetId('');
     setActiveCategory('all');
     setActiveRelationType('all');
@@ -854,26 +933,81 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
 
   const selectCategory = (category) => {
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     setActiveCategory(category);
   };
 
   const selectRelationType = (relationType) => {
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     setActiveRelationType(relationType);
   };
 
   const selectFocusDepth = (depth) => {
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
     setFocusDepth(depth);
   };
 
-  useEffect(() => {
-    const rootDatasetId = String(dataset?.id || '').trim();
-    setGraphMode('single');
-    setCrossDatasetIds(rootDatasetId ? [rootDatasetId] : []);
+  const selectKnowledgeLens = (lens) => {
+    const nextKey = lens?.key && lens.key !== activeKnowledgeLensKey ? lens.key : '';
+    setActiveKnowledgeLensKey(nextKey);
+    setActiveLensKey('');
+    setFocusDatasetId('');
+    setActiveCategory('all');
+    setActiveRelationType('all');
+    setFocusDepth('all');
+    setSelectedLinkId('');
+    setSelectedStageKey('');
+    const root = model.nodes.find((node) => node.rootDataset || node.kind === 'dataset');
+    setSelectedNodeId(nextKey ? lens.focusNodeId : root?.id || model.nodes[0]?.id || '');
+  };
+
+  const quickFocusNode = (node) => {
+    if (!node?.id) return;
+    setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
+    setFocusDatasetId('');
+    setActiveCategory('all');
+    setActiveRelationType('all');
+    setFocusDepth(1);
+    setSelectedNodeId(node.id);
+    setSelectedLinkId('');
+    setSelectedStageKey('');
+  };
+
+  const resetGraphView = () => {
+    const root = model.nodes.find((node) => node.rootDataset || node.kind === 'dataset');
+    setActiveCategory('all');
+    setActiveRelationType('all');
+    setViewMode('business');
+    setFocusDepth('all');
     setFocusDatasetId('');
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
+    setNodeSearch('');
+    setSelectedNodeId(root?.id || model.nodes[0]?.id || '');
+    setSelectedLinkId('');
+    setSelectedStageKey('overview');
+    setDensityPreference('auto');
+    graphZoomRef.current = 1;
+    graphCenterRef.current = null;
+  };
+
+  useEffect(() => {
+    setGraphMode('single');
+    setCrossDatasetIds(preferredCrossDatasetIds);
+    setFocusDatasetId('');
+    setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
+    setNodeSearch('');
   }, [dataset?.id]);
+
+  useEffect(() => {
+    if (graphMode !== 'cross') return;
+    setCrossDatasetIds(preferredCrossDatasetIds);
+    if (preferredCrossDatasetIds.length) requestCrossGraph(preferredCrossDatasetIds, 0);
+  }, [preferredCrossDatasetIdsKey]);
 
   useEffect(() => {
     if (!crossGraphAvailable && graphMode === 'cross') setGraphMode('single');
@@ -897,6 +1031,8 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
     setViewMode('business');
     setFocusDepth('all');
     setActiveLensKey('');
+    setActiveKnowledgeLensKey('');
+    setNodeSearch('');
     setDensityPreference('auto');
     setFocusMode(false);
     graphZoomRef.current = 1;
@@ -906,6 +1042,18 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
   useEffect(() => {
     setSelectedLinkId('');
   }, [activeCategory, activeRelationType]);
+
+  useEffect(() => {
+    const visibleNodeIds = new Set(activeGraph.nodes.map((node) => node.id));
+    const visibleLinkIds = new Set(activeGraph.links.map((link) => link.id));
+    if (selectedLinkId && !visibleLinkIds.has(selectedLinkId)) setSelectedLinkId('');
+    if (selectedNodeId && visibleNodeIds.has(selectedNodeId)) return;
+    if (focusDepth !== 'all') setFocusDepth('all');
+    const fallback = activeGraph.nodes.find((node) => node.rootDataset || node.kind === 'dataset')
+      || activeGraph.nodes[0]
+      || null;
+    setSelectedNodeId(fallback?.id || '');
+  }, [activeGraph.links, activeGraph.nodes, focusDepth, selectedLinkId, selectedNodeId]);
 
   useEffect(() => {
     if (!focusMode) return undefined;
@@ -1160,6 +1308,39 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
         <div className="dataset-understanding-cross-empty">{model.emptyCrossMessage}</div>
       ) : null}
 
+      {knowledgeLensModel.lenses.length ? (
+        <section aria-label="领域知识镜头">
+          <div className="dataset-understanding-analysis-lenses" role="group" aria-label="领域知识镜头">
+            <span>领域镜头</span>
+            <button
+              type="button"
+              className={!activeKnowledgeLensKey ? 'active' : ''}
+              aria-pressed={!activeKnowledgeLensKey}
+              onClick={() => selectKnowledgeLens(null)}
+            >
+              全部概览 <small>{model.nodes.length}</small>
+            </button>
+            {knowledgeLensModel.lenses.map((lens) => (
+              <button
+                key={lens.key}
+                type="button"
+                className={activeKnowledgeLensKey === lens.key ? 'active' : ''}
+                aria-pressed={activeKnowledgeLensKey === lens.key}
+                style={lens.color ? { '--lens-color': lens.color } : undefined}
+                onClick={() => selectKnowledgeLens(lens)}
+              >
+                {lens.label} <small>{lens.count}</small>
+              </button>
+            ))}
+          </div>
+          <small className="dataset-understanding-joint-guardrail">
+            {activeKnowledgeLens?.description
+              || knowledgeLensModel.description
+              || '领域镜头只改变当前图谱的观察范围，不会把推断关系升级为已确认事实。'}
+          </small>
+        </section>
+      ) : null}
+
       <div className={`dataset-understanding-snapshot-state ${graphRequestStatus} ${model.stale ? 'stale' : ''}`.trim()}>
         <i />
         <span>
@@ -1215,6 +1396,39 @@ export default function DatasetUnderstandingGraph({ dataset, documents = [], und
           <small>点击图中节点查看关联依据</small>
         </button>
       </div>
+
+      <div className="dataset-understanding-local-toolbar dataset-understanding-search-toolbar" aria-label="节点搜索与视图操作">
+        <span>节点搜索</span>
+        <input
+          className="dataset-understanding-node-search"
+          type="search"
+          value={nodeSearch}
+          onChange={(event) => setNodeSearch(event.target.value)}
+          placeholder="搜索对象、字段、概念或经历"
+          aria-label="搜索图谱节点"
+        />
+        <small aria-live="polite">
+          当前可见 {activeGraph.nodes.length} 个节点 · {activeGraph.links.length} 条关系
+        </small>
+        <button type="button" onClick={resetGraphView}>重置视图</button>
+      </div>
+      {nodeSearch.trim() ? (
+        <div className="dataset-understanding-cluster-toolbar dataset-understanding-search-results" aria-label="节点搜索结果">
+          {nodeSearchResults.length ? nodeSearchResults.map((node) => (
+            <button
+              key={node.id}
+              type="button"
+              className={selectedNodeId === node.id ? 'active' : ''}
+              aria-pressed={selectedNodeId === node.id}
+              onClick={() => quickFocusNode(node)}
+            >
+              <i style={{ background: model.mode === 'cross' ? node.clusterColor : graphCategory(model, node.kind).color }} />
+              {node.name}
+              <small>{graphCategory(model, node.kind).name}</small>
+            </button>
+          )) : <small>没有匹配的可见业务节点。</small>}
+        </div>
+      ) : null}
 
       <div className="dataset-understanding-filter" aria-label="图谱类型筛选">
         <button
